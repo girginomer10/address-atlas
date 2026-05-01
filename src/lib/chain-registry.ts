@@ -10,6 +10,17 @@ export const BITCOIN_CHAIN: ChainConfig = {
   decimals: 8
 };
 
+export const SOLANA_CHAIN: ChainConfig = {
+  id: "solana",
+  name: "Solana",
+  family: "solana",
+  symbol: "SOL",
+  coinGeckoId: "solana",
+  rpcUrl: "https://api.mainnet-beta.solana.com",
+  explorerUrl: "https://solscan.io/account/",
+  decimals: 9
+};
+
 export const EVM_CHAINS: ChainConfig[] = [
   {
     id: "ethereum",
@@ -284,6 +295,7 @@ export const ERC20_TOKENS_BY_CHAIN: Record<string, TokenConfig[]> = {
 
 export const SUPPORTED_CHAINS: ChainConfig[] = [
   BITCOIN_CHAIN,
+  SOLANA_CHAIN,
   ...EVM_CHAINS,
   ...COSMOS_CHAINS
 ];
@@ -303,6 +315,10 @@ export function detectChainsForAddress(address: string): ChainConfig[] {
   if (cosmosMatch) {
     const prefix = cosmosMatch[1].toLowerCase();
     return COSMOS_CHAINS.filter((chain) => chain.addressPrefix === prefix);
+  }
+
+  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(trimmed)) {
+    return [SOLANA_CHAIN];
   }
 
   return [];

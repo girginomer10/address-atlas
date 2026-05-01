@@ -7,6 +7,7 @@ import {
   ArrowUpRight,
   ClipboardPaste,
   Database,
+  Download,
   Loader2,
   Map as MapIcon,
   RefreshCcw,
@@ -74,12 +75,54 @@ export function PortfolioApp() {
       [
         "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
         "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
-        "cosmos1p8s5k7eyed68x2qplfw0e5a8svjqx39g7yr82m"
+        "cosmos1p8s5k7eyed68x2qplfw0e5a8svjqx39g7yr82m",
+        "So11111111111111111111111111111111111111112"
       ].join("\n")
     );
   }
 
+  function exportJson() {
+    if (!data) return;
+    downloadFile(
+      `address-atlas-${timestampForFile(data.generatedAt)}.json`,
+      "application/json",
+      JSON.stringify(data, null, 2)
+    );
+  }
+
+  function exportCsv() {
+    if (!data) return;
+    const headers = [
+      "address",
+      "chain",
+      "asset",
+      "amount",
+      "price_usd",
+      "value_usd",
+      "change_24h",
+      "source",
+      "explorer_url"
+    ];
+    const rows = data.assets.map((asset) => [
+      asset.address,
+      asset.chainName,
+      asset.symbol,
+      asset.amount,
+      asset.priceUsd,
+      asset.valueUsd,
+      asset.change24h ?? "",
+      asset.source,
+      asset.explorerUrl
+    ]);
+    const csv = [headers, ...rows]
+      .map((row) => row.map((value) => csvCell(value)).join(","))
+      .join("\n");
+
+    downloadFile(`address-atlas-${timestampForFile(data.generatedAt)}.csv`, "text/csv;charset=utf-8", csv);
+  }
+
   const total = data?.summary.totalUsd ?? 0;
+  const canExport = Boolean(data && data.assets.length > 0);
 
   return (
     <main className="shell">
@@ -104,7 +147,7 @@ export function PortfolioApp() {
           <div className="panelHeader">
             <div>
               <h2>Wallet Scan</h2>
-              <p>BTC, EVM and Cosmos addresses</p>
+              <p>BTC, EVM, Cosmos and Solana addresses</p>
             </div>
             <button className="iconButton" type="button" onClick={loadSample} aria-label="Load sample">
               <ClipboardPaste size={18} />
@@ -115,7 +158,7 @@ export function PortfolioApp() {
             value={input}
             onChange={(event) => setInput(event.target.value)}
             spellCheck={false}
-            placeholder={"0x...\nbc1...\ncosmos1..."}
+            placeholder={"0x...\nbc1...\ncosmos1...\nSolana base58..."}
             className="addressInput"
           />
 
@@ -175,8 +218,20 @@ export function PortfolioApp() {
 
       <section className="results">
         <div className="sectionTitle">
-          <h2>Assets</h2>
-          <span>{data?.generatedAt ? new Date(data.generatedAt).toLocaleTimeString() : "Ready"}</span>
+          <div>
+            <h2>Assets</h2>
+            <span>{data?.generatedAt ? new Date(data.generatedAt).toLocaleTimeString() : "Ready"}</span>
+          </div>
+          <div className="resultActions">
+            <button className="miniButton" type="button" onClick={exportCsv} disabled={!canExport}>
+              <Download size={15} />
+              <span>CSV</span>
+            </button>
+            <button className="miniButton" type="button" onClick={exportJson} disabled={!data}>
+              <Download size={15} />
+              <span>JSON</span>
+            </button>
+          </div>
         </div>
 
         <AssetTable assets={data?.assets ?? []} />
@@ -194,6 +249,28 @@ export function PortfolioApp() {
       </section>
     </main>
   );
+}
+
+function downloadFile(filename: string, type: string, content: string) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function timestampForFile(value: string) {
+  return value.replace(/[:.]/g, "-");
+}
+
+function csvCell(value: string | number) {
+  const text = String(value);
+  if (!/[",\n]/.test(text)) return text;
+  return `"${text.replace(/"/g, '""')}"`;
 }
 
 function Metric({

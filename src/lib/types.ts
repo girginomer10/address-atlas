@@ -1,4 +1,4 @@
-export type ChainFamily = "bitcoin" | "cosmos" | "evm";
+export type ChainFamily = "bitcoin" | "cosmos" | "evm" | "solana";
 
 export type ScanStatus = "ok" | "empty" | "failed";
 

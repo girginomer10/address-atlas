@@ -120,6 +120,10 @@ async function scanChain(
     return scanCosmos(address, chain, prices);
   }
 
+  if (chain.family === "solana") {
+    return scanSolana(address, chain, prices);
+  }
+
   return scanEvm(address, chain, prices);
 }
 
@@ -176,6 +180,35 @@ async function scanCosmos(
     assets: [],
     warnings: [`${chain.name} balance fetch failed: ${lastError || "all REST endpoints failed"}.`]
   };
+}
+
+async function scanSolana(
+  address: string,
+  chain: ChainConfig,
+  prices: Record<string, PricePoint>
+): Promise<{ assets: TrackedAsset[]; warnings: string[] }> {
+  if (!chain.rpcUrl) {
+    return { assets: [], warnings: [`${chain.name} has no RPC endpoint configured.`] };
+  }
+
+  try {
+    const result = await rpcCall<{ value: number }>(chain.rpcUrl, "getBalance", [
+      address,
+      { commitment: "confirmed" }
+    ]);
+    const amount = result.value / Math.pow(10, chain.decimals);
+    if (amount <= 0) return { assets: [], warnings: [] };
+
+    return {
+      assets: [assetFromAmount(address, chain, chain.symbol, chain.name, amount, prices, "native")],
+      warnings: []
+    };
+  } catch (error) {
+    return {
+      assets: [],
+      warnings: [`${chain.name} balance fetch failed: ${readError(error)}.`]
+    };
+  }
 }
 
 async function scanEvm(

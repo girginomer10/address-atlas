@@ -13,10 +13,12 @@ This repo is a cleaner follow-up to earlier hackathon experiments:
 ## Current scope
 
 - Bitcoin native balance via Blockstream.
+- Solana native SOL balance via public Solana RPC.
 - EVM native balances across Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, and Avalanche.
 - Common ERC-20 stablecoins on supported EVM chains.
 - Cosmos-native balances for Cosmos Hub, Osmosis, Celestia, Stargaze, and Stride.
 - USD prices through CoinGecko.
+- CSV and JSON export after a scan.
 - Browser-local pasted address memory.
 
 ## Local development

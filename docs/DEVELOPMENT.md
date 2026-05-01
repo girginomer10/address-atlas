@@ -25,7 +25,6 @@ The first version avoids account creation, exchange API keys, automated rebalanc
 ## Next Useful Milestones
 
 - Add staked and reward balances for Cosmos chains.
-- Add Solana native and SPL token support.
-- Add CSV/JSON export.
+- Add SPL token support for Solana.
 - Add token allowlist editing in the UI.
 - Add optional historical snapshots in local storage.

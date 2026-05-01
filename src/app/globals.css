@@ -149,6 +149,11 @@ a {
   gap: 12px;
 }
 
+.sectionTitle > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
 .panelHeader h2,
 .sectionTitle h2 {
   font-size: 18px;
@@ -229,6 +234,30 @@ a {
   color: var(--ink);
   background: white;
   border-color: var(--line);
+}
+
+.resultActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.miniButton {
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+  color: var(--ink);
+  padding: 0 10px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.miniButton:disabled {
+  opacity: 0.48;
 }
 
 .spin {
@@ -487,8 +516,22 @@ tbody tr:last-child td {
     flex-direction: column;
   }
 
-  .primaryButton,
-  .secondaryButton {
+  .sectionTitle {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .resultActions {
     width: 100%;
+  }
+
+  .primaryButton,
+  .secondaryButton,
+  .miniButton {
+    width: 100%;
+  }
+
+  .miniButton {
+    justify-content: center;
   }
 }
