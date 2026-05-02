@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectAddressKind } from "./address-utils";
+import { detectAddressKind, isSupportedPublicAddress, supportedPublicAddresses } from "./address-utils";
 import { parseAddressInput } from "./scanner";
 
 describe("address parsing", () => {
@@ -15,5 +15,13 @@ describe("address parsing", () => {
     expect(detectAddressKind(parsed[0])).toBe("evm");
     expect(detectAddressKind(parsed[1])).toBe("bitcoin");
     expect(detectAddressKind(parsed[2])).toBe("cosmos");
+  });
+
+  it("separates supported public addresses from arbitrary public strings", () => {
+    const evmAddress = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
+
+    expect(isSupportedPublicAddress(evmAddress)).toBe(true);
+    expect(isSupportedPublicAddress("not-a-wallet")).toBe(false);
+    expect(supportedPublicAddresses(["not-a-wallet", evmAddress])).toEqual([evmAddress]);
   });
 });

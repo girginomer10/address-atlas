@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseAddressInput, scanAddresses } from "@/lib/scanner";
-import { assertSafePublicAddresses } from "@/lib/address-utils";
+import { assertSafePublicAddresses, supportedPublicAddresses, unsupportedPublicAddresses } from "@/lib/address-utils";
 import { fetchExchangeSnapshot } from "@/lib/exchanges";
 import {
   latestScanResponse,
@@ -45,24 +45,42 @@ export async function POST(request: NextRequest) {
     ]);
 
     assertSafePublicAddresses(addresses);
+    const supportedAddresses = supportedPublicAddresses(addresses);
+    const skippedAddresses = unsupportedPublicAddresses(addresses);
+    const skippedWarnings = skippedAddresses.map((address) => `Unsupported address skipped: ${address}.`);
 
-    if (addresses.length === 0 && !body.includeExchanges) {
+    if (supportedAddresses.length === 0 && !body.includeExchanges) {
       return NextResponse.json(
-        { error: "At least one wallet address or exchange connection is required." },
+        {
+          error: "At least one supported wallet address or exchange connection is required.",
+          warnings: skippedWarnings
+        },
         { status: 400 }
       );
     }
 
-    if (addresses.length > 0) {
-      await upsertWallets(addresses);
+    if (supportedAddresses.length > 0) {
+      await upsertWallets(supportedAddresses);
     }
 
-    const onchain = addresses.length > 0 ? await scanAddresses(addresses) : emptyScan();
+    const onchain = supportedAddresses.length > 0 ? await scanAddresses(supportedAddresses) : emptyScan();
     const exchangeSnapshots = body.includeExchanges
       ? await scanExchangeConnections(body.vaultPassphrase)
       : [];
+
+    if (supportedAddresses.length === 0 && exchangeSnapshots.length === 0) {
+      return NextResponse.json(
+        {
+          error: "At least one supported wallet address or exchange connection is required.",
+          warnings: skippedWarnings
+        },
+        { status: 400 }
+      );
+    }
+
     const assets = [...onchain.assets, ...exchangeSnapshots.flatMap((snapshot) => snapshot.holdings)];
     const warnings = [
+      ...skippedWarnings,
       ...onchain.warnings,
       ...exchangeSnapshots.flatMap((snapshot) => snapshot.error ? [`${snapshot.label}: ${snapshot.error}`] : [])
     ];
@@ -71,9 +89,9 @@ export async function POST(request: NextRequest) {
     const result: ScanResponse = {
       ...onchain,
       generatedAt: new Date().toISOString(),
-      inputCount: addresses.length,
+      inputCount: supportedAddresses.length,
       assets,
-      summary: summarize(addresses.length, assets),
+      summary: summarize(supportedAddresses.length, assets),
       warnings,
       sources,
       exchangeSnapshots

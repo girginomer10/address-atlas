@@ -1,5 +1,5 @@
 import { prisma } from "./db";
-import { defaultWalletLabel, detectAddressKind } from "./address-utils";
+import { defaultWalletLabel, detectAddressKind, isSupportedPublicAddress } from "./address-utils";
 import {
   AddressScan,
   ExchangeSnapshot,
@@ -50,7 +50,7 @@ export async function listWallets() {
 export async function upsertWallets(addresses: string[]) {
   const wallets: WalletRecord[] = [];
 
-  for (const address of addresses) {
+  for (const address of addresses.filter(isSupportedPublicAddress)) {
     const wallet = await prisma.walletAddress.upsert({
       where: { address },
       create: {
@@ -123,51 +123,53 @@ export async function saveScanResponse(scan: ScanResponse) {
   const warningsJson = JSON.stringify(scan.warnings);
   const sourcesJson = JSON.stringify(scan.sources ?? []);
 
-  const run = await prisma.scanRun.create({
-    data: {
-      generatedAt: new Date(scan.generatedAt),
-      totalUsd: scan.summary.totalUsd,
-      inputCount: scan.inputCount,
-      summaryJson,
-      warningsJson,
-      sourcesJson
-    }
-  });
-
-  const wallets = await prisma.walletAddress.findMany();
-  const walletByAddress = new Map(wallets.map((wallet) => [wallet.address.toLowerCase(), wallet.id]));
-
-  for (const asset of scan.assets.filter((item) => item.source !== "exchange")) {
-    await prisma.holding.create({
-      data: holdingData(asset, run.id, walletByAddress.get(asset.address.toLowerCase()))
-    });
-  }
-
-  for (const snapshot of scan.exchangeSnapshots ?? []) {
-    const storedSnapshot = await prisma.exchangeSnapshot.create({
+  return prisma.$transaction(async (tx) => {
+    const run = await tx.scanRun.create({
       data: {
-        connectionId: snapshot.connectionId,
-        scanRunId: run.id,
-        provider: snapshot.provider,
-        label: snapshot.label,
-        generatedAt: new Date(snapshot.generatedAt),
-        totalUsd: snapshot.totalUsd,
-        status: snapshot.status,
-        rawSummaryJson: JSON.stringify({
-          error: snapshot.error,
-          holdingCount: snapshot.holdings.length
-        })
+        generatedAt: new Date(scan.generatedAt),
+        totalUsd: scan.summary.totalUsd,
+        inputCount: scan.inputCount,
+        summaryJson,
+        warningsJson,
+        sourcesJson
       }
     });
 
-    for (const holding of snapshot.holdings) {
-      await prisma.holding.create({
-        data: holdingData(holding, run.id, undefined, storedSnapshot.id)
+    const wallets = await tx.walletAddress.findMany();
+    const walletByAddress = new Map(wallets.map((wallet) => [wallet.address.toLowerCase(), wallet.id]));
+
+    for (const asset of scan.assets.filter((item) => item.source !== "exchange")) {
+      await tx.holding.create({
+        data: holdingData(asset, run.id, walletByAddress.get(asset.address.toLowerCase()))
       });
     }
-  }
 
-  return run.id;
+    for (const snapshot of scan.exchangeSnapshots ?? []) {
+      const storedSnapshot = await tx.exchangeSnapshot.create({
+        data: {
+          connectionId: snapshot.connectionId,
+          scanRunId: run.id,
+          provider: snapshot.provider,
+          label: snapshot.label,
+          generatedAt: new Date(snapshot.generatedAt),
+          totalUsd: snapshot.totalUsd,
+          status: snapshot.status,
+          rawSummaryJson: JSON.stringify({
+            error: snapshot.error,
+            holdingCount: snapshot.holdings.length
+          })
+        }
+      });
+
+      for (const holding of snapshot.holdings) {
+        await tx.holding.create({
+          data: holdingData(holding, run.id, undefined, storedSnapshot.id)
+        });
+      }
+    }
+
+    return run.id;
+  });
 }
 
 export async function latestScanResponse(): Promise<ScanResponse | null> {
@@ -189,8 +191,22 @@ export async function latestScanResponse(): Promise<ScanResponse | null> {
 
   const wallets = await prisma.walletAddress.findMany();
   const walletById = new Map(wallets.map((wallet) => [wallet.id, wallet]));
-  const assets = run.holdings.map((holding) => holdingToAsset(holding, walletById.get(holding.walletId ?? "")));
-  const exchangeSnapshots: ExchangeSnapshot[] = run.exchangeSnapshots.map((snapshot) => ({
+  const activeWalletAddresses = new Set(wallets.map((wallet) => wallet.address.toLowerCase()));
+  const connections = await prisma.exchangeConnection.findMany({ select: { id: true } });
+  const activeConnectionIds = new Set(connections.map((connection) => connection.id));
+  const snapshotById = new Map(run.exchangeSnapshots.map((snapshot) => [snapshot.id, snapshot]));
+  const visibleHoldings = run.holdings.filter((holding) => {
+    if (holding.source === "exchange") {
+      const snapshot = snapshotById.get(holding.exchangeSnapshotId ?? "");
+      return Boolean(snapshot && activeConnectionIds.has(snapshot.connectionId));
+    }
+
+    return Boolean(holding.walletId && walletById.has(holding.walletId));
+  });
+  const assets = visibleHoldings.map((holding) => holdingToAsset(holding, walletById.get(holding.walletId ?? "")));
+  const exchangeSnapshots: ExchangeSnapshot[] = run.exchangeSnapshots
+    .filter((snapshot) => activeConnectionIds.has(snapshot.connectionId))
+    .map((snapshot) => ({
     id: snapshot.id,
     connectionId: snapshot.connectionId,
     provider: snapshot.provider as ExchangeSnapshot["provider"],
@@ -200,6 +216,10 @@ export async function latestScanResponse(): Promise<ScanResponse | null> {
     status: snapshot.status as ExchangeSnapshot["status"],
     holdings: snapshot.holdings.map((holding) => holdingToAsset(holding, undefined))
   }));
+  const sources = (JSON.parse(run.sourcesJson) as ScanSource[]).filter((source) => {
+    if (source.kind === "exchange") return activeConnectionIds.has(source.id);
+    return activeWalletAddresses.has(source.id.toLowerCase());
+  });
 
   return {
     generatedAt: run.generatedAt.toISOString(),
@@ -213,9 +233,9 @@ export async function latestScanResponse(): Promise<ScanResponse | null> {
       errors: []
     } satisfies AddressScan)),
     assets,
-    summary: JSON.parse(run.summaryJson) as ScanSummary,
+    summary: summarizeAssets(wallets.length, assets),
     warnings: JSON.parse(run.warningsJson) as string[],
-    sources: JSON.parse(run.sourcesJson) as ScanSource[],
+    sources,
     exchangeSnapshots
   };
 }
@@ -300,4 +320,13 @@ function holdingToAsset(
     status: holding.status as TrackedAsset["status"],
     walletLabel: wallet?.label
   } satisfies TrackedAsset;
+}
+
+function summarizeAssets(addressCount: number, assets: TrackedAsset[]) {
+  return {
+    totalUsd: assets.reduce((sum, asset) => sum + asset.valueUsd, 0),
+    addressCount,
+    chainCount: new Set(assets.map((asset) => asset.chainId)).size,
+    assetCount: assets.length
+  } satisfies ScanSummary;
 }

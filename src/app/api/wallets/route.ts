@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { assertSafePublicAddresses, defaultWalletLabel, detectAddressKind } from "@/lib/address-utils";
+import { assertSafePublicAddresses, defaultWalletLabel, detectAddressKind, isSupportedPublicAddress } from "@/lib/address-utils";
 import { listWallets } from "@/lib/local-store";
 import { parseAddressInput } from "@/lib/scanner";
 
@@ -26,6 +26,10 @@ export async function POST(request: NextRequest) {
     }
 
     const address = addresses[0];
+    if (!isSupportedPublicAddress(address)) {
+      return NextResponse.json({ error: "A supported public wallet address is required." }, { status: 400 });
+    }
+
     const wallet = await prisma.walletAddress.upsert({
       where: { address },
       create: {

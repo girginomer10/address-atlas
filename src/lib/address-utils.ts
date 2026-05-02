@@ -9,6 +9,18 @@ export function detectAddressKind(address: string) {
   return first.family;
 }
 
+export function isSupportedPublicAddress(address: string) {
+  return detectChainsForAddress(address).length > 0;
+}
+
+export function supportedPublicAddresses(addresses: string[]) {
+  return addresses.filter(isSupportedPublicAddress);
+}
+
+export function unsupportedPublicAddresses(addresses: string[]) {
+  return addresses.filter((address) => !isSupportedPublicAddress(address));
+}
+
 export function defaultWalletLabel(address: string) {
   const kind = detectAddressKind(address);
   if (kind === "bitcoin") return "Bitcoin wallet";

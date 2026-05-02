@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { clearVault, containsSensitiveSecret, decryptFromVault, encryptForVault } from "./security";
+import { containsSensitiveSecret, decryptFromVault, encryptForVault } from "./security";
+import { clearTestDatabase } from "./test-db";
 
 describe("vault security", () => {
   afterEach(async () => {
-    await clearVault();
+    await clearTestDatabase();
   });
 
   it("encrypts credentials and rejects the wrong passphrase", async () => {
