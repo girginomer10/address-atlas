@@ -29,11 +29,17 @@ Address Atlas avoids account creation, automated rebalancing, signing, and fund-
 - Prisma Client is generated into `src/generated/prisma` during `npm run dev`, `npm run build`, and `npm test`; generated output is ignored by git.
 - Exchange connections use ccxt adapters for Binance, Coinbase, and Kraken. Only `fetchBalance` is used.
 - Vault encryption uses AES-256-GCM with a PBKDF2-derived key. The passphrase is verified, not stored.
+- Scan history is read from persisted `ScanRun` rows and exposed via `/api/scan/history`.
+- Manual exchange entries live in `ManualExchangeHolding` and are merged into the latest scan response at read time; they are not persisted as historical `Holding` rows.
+- Custom EVM token allowlist entries live in `CustomToken` and are merged with built-in token registries during EVM scans. Built-in registry entries win on duplicate addresses.
+- Solana scanning includes classic SPL Token Program balances from the registry. Cosmos scanning includes native liquid balances, delegations, and distribution rewards.
+
+## Gotchas
+
+- Restart the dev server after Prisma schema/model changes. The dev process caches a global Prisma client, so newly generated delegates such as `customToken` and `manualExchangeHolding` may be missing until restart.
 
 ## Next Useful Milestones
 
-- Add staked and reward balances for Cosmos chains.
-- Add SPL token support for Solana.
-- Add token allowlist editing in the UI.
-- Add historical charting from stored `ScanRun` rows.
-- Add manual CEX fallback snapshots for users who do not want API keys.
+- Add Token-2022 support for Solana mints that do not use the classic SPL Token Program.
+- Consider auto-filling token decimals and CoinGecko ids from contract metadata where possible.
+- Make manual exchange entries easier to reconcile against historical snapshots if users want time-specific manual values later.

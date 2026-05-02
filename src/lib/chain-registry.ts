@@ -1,4 +1,6 @@
-import { ChainConfig, TokenConfig } from "./types";
+import { ChainConfig, SplTokenConfig, TokenConfig } from "./types";
+
+export const SOLANA_TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 
 export const BITCOIN_CHAIN: ChainConfig = {
   id: "bitcoin",
@@ -293,6 +295,25 @@ export const ERC20_TOKENS_BY_CHAIN: Record<string, TokenConfig[]> = {
   ]
 };
 
+export const SPL_TOKENS_BY_CHAIN: Record<string, SplTokenConfig[]> = {
+  solana: [
+    {
+      symbol: "USDC",
+      name: "USD Coin",
+      mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      decimals: 6,
+      coinGeckoId: "usd-coin"
+    },
+    {
+      symbol: "USDT",
+      name: "Tether",
+      mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+      decimals: 6,
+      coinGeckoId: "tether"
+    }
+  ]
+};
+
 export const SUPPORTED_CHAINS: ChainConfig[] = [
   BITCOIN_CHAIN,
   SOLANA_CHAIN,
@@ -328,6 +349,9 @@ export function getAllCoinGeckoIds(): string[] {
   const ids = new Set<string>();
   SUPPORTED_CHAINS.forEach((chain) => ids.add(chain.coinGeckoId));
   Object.values(ERC20_TOKENS_BY_CHAIN).forEach((tokens) => {
+    tokens.forEach((token) => ids.add(token.coinGeckoId));
+  });
+  Object.values(SPL_TOKENS_BY_CHAIN).forEach((tokens) => {
     tokens.forEach((token) => ids.add(token.coinGeckoId));
   });
   return Array.from(ids);

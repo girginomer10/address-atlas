@@ -8,6 +8,11 @@ import {
   upsertWallets,
   walletAddressesByIds
 } from "@/lib/local-store";
+import {
+  listEnabledManualHoldings,
+  manualHoldingToTrackedAsset,
+  ManualHoldingRecord
+} from "@/lib/manual-exchanges";
 import { prisma } from "@/lib/db";
 import { ExchangeSnapshot, ScanResponse, ScanSource, TrackedAsset } from "@/lib/types";
 
@@ -49,10 +54,12 @@ export async function POST(request: NextRequest) {
     const skippedAddresses = unsupportedPublicAddresses(addresses);
     const skippedWarnings = skippedAddresses.map((address) => `Unsupported address skipped: ${address}.`);
 
-    if (supportedAddresses.length === 0 && !body.includeExchanges) {
+    const manualHoldings = await listEnabledManualHoldings();
+
+    if (supportedAddresses.length === 0 && !body.includeExchanges && manualHoldings.length === 0) {
       return NextResponse.json(
         {
-          error: "At least one supported wallet address or exchange connection is required.",
+          error: "At least one supported wallet address, exchange connection, or manual entry is required.",
           warnings: skippedWarnings
         },
         { status: 400 }
@@ -68,23 +75,31 @@ export async function POST(request: NextRequest) {
       ? await scanExchangeConnections(body.vaultPassphrase)
       : [];
 
-    if (supportedAddresses.length === 0 && exchangeSnapshots.length === 0) {
+    if (supportedAddresses.length === 0 && exchangeSnapshots.length === 0 && manualHoldings.length === 0) {
       return NextResponse.json(
         {
-          error: "At least one supported wallet address or exchange connection is required.",
+          error: "At least one supported wallet address, exchange connection, or manual entry is required.",
           warnings: skippedWarnings
         },
         { status: 400 }
       );
     }
 
-    const assets = [...onchain.assets, ...exchangeSnapshots.flatMap((snapshot) => snapshot.holdings)];
+    const manualAssets = manualHoldings.map(manualHoldingToTrackedAsset);
+    const assets = [
+      ...onchain.assets,
+      ...exchangeSnapshots.flatMap((snapshot) => snapshot.holdings),
+      ...manualAssets
+    ];
     const warnings = [
       ...skippedWarnings,
       ...onchain.warnings,
       ...exchangeSnapshots.flatMap((snapshot) => snapshot.error ? [`${snapshot.label}: ${snapshot.error}`] : [])
     ];
-    const sources = buildSources(onchain, exchangeSnapshots);
+    const sources = [
+      ...buildSources(onchain, exchangeSnapshots),
+      ...buildManualSources(manualHoldings)
+    ];
 
     const result: ScanResponse = {
       ...onchain,
@@ -194,4 +209,13 @@ function buildSources(scan: ScanResponse, exchangeSnapshots: ExchangeSnapshot[])
   }));
 
   return [...onchainSources, ...exchangeSources];
+}
+
+function buildManualSources(holdings: ManualHoldingRecord[]): ScanSource[] {
+  return holdings.map((holding) => ({
+    id: `manual:${holding.id}`,
+    label: `${holding.label} (manual)`,
+    kind: "exchange",
+    status: "ok"
+  }));
 }

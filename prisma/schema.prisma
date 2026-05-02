@@ -105,3 +105,41 @@ model Vault {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+model CustomToken {
+  id          String   @id @default(cuid())
+  chainKind   String
+  chainId     String
+  address     String
+  symbol      String
+  name        String
+  decimals    Int
+  coinGeckoId String
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([chainKind, chainId, address])
+  @@index([chainId])
+  @@index([enabled])
+}
+
+model ManualExchangeHolding {
+  id          String   @id @default(cuid())
+  label       String
+  provider    String
+  customVenue String?
+  symbol      String
+  name        String
+  amount      Float
+  priceUsd    Float?
+  valueUsd    Float
+  notes       String?
+  enabled     Boolean  @default(true)
+  generatedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([provider])
+  @@index([enabled])
+}

@@ -1,7 +1,7 @@
 export type ChainFamily = "bitcoin" | "cosmos" | "evm" | "solana" | "exchange";
 
 export type ScanStatus = "ok" | "empty" | "failed";
-export type AssetSource = "native" | "erc20" | "exchange";
+export type AssetSource = "native" | "erc20" | "spl" | "exchange" | "staked" | "rewards";
 export type ExchangeProvider = "binance" | "coinbase" | "kraken";
 
 export interface PricePoint {
@@ -28,6 +28,14 @@ export interface TokenConfig {
   symbol: string;
   name: string;
   address: `0x${string}`;
+  decimals: number;
+  coinGeckoId: string;
+}
+
+export interface SplTokenConfig {
+  symbol: string;
+  name: string;
+  mint: string;
   decimals: number;
   coinGeckoId: string;
 }

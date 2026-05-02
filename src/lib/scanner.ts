@@ -1,15 +1,20 @@
 import {
   detectChainsForAddress,
   ERC20_TOKENS_BY_CHAIN,
-  getAllCoinGeckoIds
+  getAllCoinGeckoIds,
+  SOLANA_TOKEN_PROGRAM_ID,
+  SPL_TOKENS_BY_CHAIN
 } from "./chain-registry";
 import { formatUnits, hexToBigInt } from "./format";
+import { listEnabledCustomTokens } from "./local-store";
 import { getPrices } from "./prices";
 import {
   AddressScan,
+  AssetSource,
   ChainConfig,
   PricePoint,
   ScanResponse,
+  SplTokenConfig,
   TokenConfig,
   TrackedAsset
 } from "./types";
@@ -37,10 +42,12 @@ export function parseAddressInput(input: string | string[]): string[] {
 
 export async function scanAddresses(input: string | string[]): Promise<ScanResponse> {
   const addresses = parseAddressInput(input);
-  const prices = await getPrices(getAllCoinGeckoIds());
+  const customTokens = await loadCustomEvmTokens();
+  const tokensByChain = mergeTokensByChain(customTokens);
+  const prices = await getPrices(allCoinGeckoIds(tokensByChain));
 
   const scans = await Promise.all(
-    addresses.map((address) => scanAddress(address, prices))
+    addresses.map((address) => scanAddress(address, prices, tokensByChain))
   );
   const assets = scans.flatMap((scan) => scan.assets);
   const chains = new Set(assets.map((asset) => asset.chainId));
@@ -63,7 +70,8 @@ export async function scanAddresses(input: string | string[]): Promise<ScanRespo
 
 async function scanAddress(
   address: string,
-  prices: Record<string, PricePoint>
+  prices: Record<string, PricePoint>,
+  tokensByChain: Record<string, TokenConfig[]>
 ): Promise<AddressScan> {
   const detectedChains = detectChainsForAddress(address);
   if (detectedChains.length === 0) {
@@ -77,7 +85,7 @@ async function scanAddress(
   }
 
   const results = await Promise.allSettled(
-    detectedChains.map((chain) => scanChain(address, chain, prices))
+    detectedChains.map((chain) => scanChain(address, chain, prices, tokensByChain))
   );
 
   const assets: TrackedAsset[] = [];
@@ -110,7 +118,8 @@ async function scanAddress(
 async function scanChain(
   address: string,
   chain: ChainConfig,
-  prices: Record<string, PricePoint>
+  prices: Record<string, PricePoint>,
+  tokensByChain: Record<string, TokenConfig[]>
 ): Promise<{ assets: TrackedAsset[]; warnings: string[] }> {
   if (chain.family === "bitcoin") {
     return scanBitcoin(address, chain, prices);
@@ -124,7 +133,7 @@ async function scanChain(
     return scanSolana(address, chain, prices);
   }
 
-  return scanEvm(address, chain, prices);
+  return scanEvm(address, chain, prices, tokensByChain[chain.id] ?? []);
 }
 
 async function scanBitcoin(
@@ -150,36 +159,147 @@ async function scanBitcoin(
   };
 }
 
+interface CosmosBankResponse {
+  balances?: { denom: string; amount: string }[];
+}
+
+interface CosmosDelegationResponse {
+  delegation_responses?: {
+    balance?: { denom: string; amount: string };
+  }[];
+}
+
+interface CosmosRewardsResponse {
+  total?: { denom: string; amount: string }[];
+}
+
+export function parseCosmosLiquid(
+  data: CosmosBankResponse,
+  denom: string,
+  decimals: number
+): number {
+  const balance = data.balances?.find((item) => item.denom === denom);
+  return balance ? amountToNumber(balance.amount, decimals) : 0;
+}
+
+export function parseCosmosDelegations(
+  data: CosmosDelegationResponse,
+  denom: string,
+  decimals: number
+): number {
+  const responses = data.delegation_responses ?? [];
+  const totalMicro = responses.reduce((sum, item) => {
+    if (!item.balance || item.balance.denom !== denom) return sum;
+    return sum + parseDecimalString(item.balance.amount);
+  }, 0);
+  return totalMicro / Math.pow(10, decimals);
+}
+
+export function parseCosmosRewards(
+  data: CosmosRewardsResponse,
+  denom: string,
+  decimals: number
+): number {
+  const entry = (data.total ?? []).find((item) => item.denom === denom);
+  return entry ? amountToNumber(entry.amount, decimals) : 0;
+}
+
+function amountToNumber(value: string, decimals: number): number {
+  return parseDecimalString(value) / Math.pow(10, decimals);
+}
+
+function parseDecimalString(value: string): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 async function scanCosmos(
   address: string,
   chain: ChainConfig,
   prices: Record<string, PricePoint>
 ): Promise<{ assets: TrackedAsset[]; warnings: string[] }> {
   const endpoints = [chain.restUrl, ...(chain.fallbackRestUrls ?? [])].filter(Boolean) as string[];
-  let lastError = "";
+  const denom = chain.nativeDenom ?? "";
+  let liquidAmount = 0;
+  let activeEndpoint: string | null = null;
+  let liquidError = "";
 
   for (const endpoint of endpoints) {
     try {
-      const data = await fetchJson<{ balances?: { denom: string; amount: string }[] }>(
+      const data = await fetchJson<CosmosBankResponse>(
         `${endpoint.replace(/\/$/, "")}/cosmos/bank/v1beta1/balances/${address}`
       );
-      const balance = data.balances?.find((item) => item.denom === chain.nativeDenom);
-      const amount = balance ? Number(balance.amount) / Math.pow(10, chain.decimals) : 0;
-      if (amount <= 0) return { assets: [], warnings: [] };
-
-      return {
-        assets: [assetFromAmount(address, chain, chain.symbol, chain.name, amount, prices, "native")],
-        warnings: []
-      };
+      liquidAmount = parseCosmosLiquid(data, denom, chain.decimals);
+      activeEndpoint = endpoint.replace(/\/$/, "");
+      liquidError = "";
+      break;
     } catch (error) {
-      lastError = readError(error);
+      liquidError = readError(error);
     }
   }
 
-  return {
-    assets: [],
-    warnings: [`${chain.name} balance fetch failed: ${lastError || "all REST endpoints failed"}.`]
-  };
+  if (!activeEndpoint) {
+    return {
+      assets: [],
+      warnings: [`${chain.name} balance fetch failed: ${liquidError || "all REST endpoints failed"}.`]
+    };
+  }
+
+  const assets: TrackedAsset[] = [];
+  const warnings: string[] = [];
+
+  if (liquidAmount > 0) {
+    assets.push(assetFromAmount(address, chain, chain.symbol, chain.name, liquidAmount, prices, "native"));
+  }
+
+  const [stakedResult, rewardsResult] = await Promise.allSettled([
+    fetchJson<CosmosDelegationResponse>(
+      `${activeEndpoint}/cosmos/staking/v1beta1/delegations/${address}?pagination.limit=500`
+    ),
+    fetchJson<CosmosRewardsResponse>(
+      `${activeEndpoint}/cosmos/distribution/v1beta1/delegators/${address}/rewards`
+    )
+  ]);
+
+  if (stakedResult.status === "fulfilled") {
+    const stakedAmount = parseCosmosDelegations(stakedResult.value, denom, chain.decimals);
+    if (stakedAmount > 0) {
+      assets.push(
+        assetFromAmount(
+          address,
+          chain,
+          chain.symbol,
+          `${chain.name} (Staked)`,
+          stakedAmount,
+          prices,
+          "staked"
+        )
+      );
+    }
+  } else {
+    warnings.push(`${chain.name} delegations fetch failed: ${readError(stakedResult.reason)}.`);
+  }
+
+  if (rewardsResult.status === "fulfilled") {
+    const rewardsAmount = parseCosmosRewards(rewardsResult.value, denom, chain.decimals);
+    if (rewardsAmount > 0) {
+      assets.push(
+        assetFromAmount(
+          address,
+          chain,
+          chain.symbol,
+          `${chain.name} (Rewards)`,
+          rewardsAmount,
+          prices,
+          "rewards"
+        )
+      );
+    }
+  } else {
+    warnings.push(`${chain.name} rewards fetch failed: ${readError(rewardsResult.reason)}.`);
+  }
+
+  return { assets, warnings };
 }
 
 async function scanSolana(
@@ -191,30 +311,151 @@ async function scanSolana(
     return { assets: [], warnings: [`${chain.name} has no RPC endpoint configured.`] };
   }
 
+  const assets: TrackedAsset[] = [];
+  const warnings: string[] = [];
+
   try {
     const result = await rpcCall<{ value: number }>(chain.rpcUrl, "getBalance", [
       address,
       { commitment: "confirmed" }
     ]);
     const amount = result.value / Math.pow(10, chain.decimals);
-    if (amount <= 0) return { assets: [], warnings: [] };
-
-    return {
-      assets: [assetFromAmount(address, chain, chain.symbol, chain.name, amount, prices, "native")],
-      warnings: []
-    };
+    if (amount > 0) {
+      assets.push(
+        assetFromAmount(address, chain, chain.symbol, chain.name, amount, prices, "native")
+      );
+    }
   } catch (error) {
-    return {
-      assets: [],
-      warnings: [`${chain.name} balance fetch failed: ${readError(error)}.`]
-    };
+    warnings.push(`${chain.name} native balance failed: ${readError(error)}.`);
   }
+
+  const splTokens = SPL_TOKENS_BY_CHAIN[chain.id] ?? [];
+  if (splTokens.length > 0) {
+    try {
+      const tokens = await fetchSolanaSplBalances(chain.rpcUrl, address, splTokens);
+      tokens.forEach(({ token, amount }) => {
+        if (amount <= 0) return;
+        assets.push(splAssetFromAmount(address, chain, token, amount, prices));
+      });
+    } catch (error) {
+      warnings.push(`${chain.name} SPL token balances failed: ${readError(error)}.`);
+    }
+  }
+
+  return { assets, warnings };
+}
+
+interface ParsedSplAccount {
+  mint: string;
+  rawAmount: string;
+  decimals: number;
+}
+
+async function fetchSolanaSplBalances(
+  rpcUrl: string,
+  owner: string,
+  registry: SplTokenConfig[]
+): Promise<{ token: SplTokenConfig; amount: number }[]> {
+  const result = await rpcCall<{
+    value?: {
+      account?: {
+        data?: {
+          parsed?: {
+            info?: {
+              mint?: unknown;
+              tokenAmount?: { amount?: unknown; decimals?: unknown };
+            };
+          };
+        };
+      };
+    }[];
+  }>(rpcUrl, "getTokenAccountsByOwner", [
+    owner,
+    { programId: SOLANA_TOKEN_PROGRAM_ID },
+    { encoding: "jsonParsed", commitment: "confirmed" }
+  ]);
+
+  const parsed = parseSplTokenAccounts(result?.value ?? []);
+  const byMint = new Map<string, SplTokenConfig>();
+  registry.forEach((token) => byMint.set(token.mint, token));
+
+  const totals = new Map<string, bigint>();
+  for (const account of parsed) {
+    const token = byMint.get(account.mint);
+    if (!token) continue;
+    if (account.decimals !== token.decimals) continue;
+    const previous = totals.get(account.mint) ?? 0n;
+    totals.set(account.mint, previous + safeBigInt(account.rawAmount));
+  }
+
+  return Array.from(totals.entries()).map(([mint, raw]) => {
+    const token = byMint.get(mint) as SplTokenConfig;
+    return { token, amount: formatUnits(raw, token.decimals) };
+  });
+}
+
+export function parseSplTokenAccounts(value: unknown): ParsedSplAccount[] {
+  if (!Array.isArray(value)) return [];
+
+  const accounts: ParsedSplAccount[] = [];
+  for (const entry of value) {
+    const info = (entry as { account?: { data?: { parsed?: { info?: unknown } } } })?.account?.data?.parsed?.info;
+    if (!info || typeof info !== "object") continue;
+
+    const record = info as {
+      mint?: unknown;
+      tokenAmount?: { amount?: unknown; decimals?: unknown };
+    };
+    const mint = typeof record.mint === "string" ? record.mint : null;
+    const rawAmount = typeof record.tokenAmount?.amount === "string" ? record.tokenAmount.amount : null;
+    const decimals = typeof record.tokenAmount?.decimals === "number" ? record.tokenAmount.decimals : null;
+    if (!mint || rawAmount === null || decimals === null) continue;
+
+    accounts.push({ mint, rawAmount, decimals });
+  }
+  return accounts;
+}
+
+function safeBigInt(value: string): bigint {
+  if (!/^\d+$/.test(value)) return 0n;
+  try {
+    return BigInt(value);
+  } catch {
+    return 0n;
+  }
+}
+
+function splAssetFromAmount(
+  address: string,
+  chain: ChainConfig,
+  token: SplTokenConfig,
+  amount: number,
+  prices: Record<string, PricePoint>
+): TrackedAsset {
+  const price = prices[token.coinGeckoId];
+  return {
+    id: `${address}-${chain.id}-${token.symbol}-${token.mint}`,
+    address,
+    chainId: chain.id,
+    chainName: chain.name,
+    family: chain.family,
+    symbol: token.symbol,
+    name: token.name,
+    amount,
+    priceUsd: price?.usd ?? 0,
+    valueUsd: amount * (price?.usd ?? 0),
+    change24h: price?.usd_24h_change,
+    explorerUrl: `${chain.explorerUrl}${address}`,
+    source: "spl",
+    status: "ok"
+  };
 }
 
 async function scanEvm(
   address: string,
   chain: ChainConfig,
-  prices: Record<string, PricePoint>
+  prices: Record<string, PricePoint>,
+  tokens: TokenConfig[]
 ): Promise<{ assets: TrackedAsset[]; warnings: string[] }> {
   if (!chain.rpcUrl) {
     return { assets: [], warnings: [`${chain.name} has no RPC endpoint configured.`] };
@@ -234,9 +475,7 @@ async function scanEvm(
   }
 
   const tokenResults = await Promise.allSettled(
-    (ERC20_TOKENS_BY_CHAIN[chain.id] ?? []).map((token) =>
-      scanErc20(address, chain, token, prices)
-    )
+    tokens.map((token) => scanErc20(address, chain, token, prices))
   );
 
   tokenResults.forEach((result) => {
@@ -296,7 +535,7 @@ function assetFromAmount(
   name: string,
   amount: number,
   prices: Record<string, PricePoint>,
-  source: "native" | "erc20"
+  source: AssetSource
 ): TrackedAsset {
   const price = prices[chain.coinGeckoId];
   return {
@@ -371,4 +610,54 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 function readError(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+async function loadCustomEvmTokens(): Promise<
+  { chainId: string; token: TokenConfig }[]
+> {
+  try {
+    const tokens = await listEnabledCustomTokens();
+    return tokens
+      .filter((token) => token.chainKind === "evm")
+      .map((token) => ({
+        chainId: token.chainId,
+        token: {
+          symbol: token.symbol,
+          name: token.name,
+          address: token.address as `0x${string}`,
+          decimals: token.decimals,
+          coinGeckoId: token.coinGeckoId
+        } satisfies TokenConfig
+      }));
+  } catch {
+    return [];
+  }
+}
+
+export function mergeTokensByChain(
+  customTokens: { chainId: string; token: TokenConfig }[]
+): Record<string, TokenConfig[]> {
+  const merged: Record<string, TokenConfig[]> = {};
+
+  for (const [chainId, tokens] of Object.entries(ERC20_TOKENS_BY_CHAIN)) {
+    merged[chainId] = tokens.slice();
+  }
+
+  for (const { chainId, token } of customTokens) {
+    const list = merged[chainId] ?? (merged[chainId] = []);
+    const isDuplicate = list.some(
+      (existing) => existing.address.toLowerCase() === token.address.toLowerCase()
+    );
+    if (!isDuplicate) list.push(token);
+  }
+
+  return merged;
+}
+
+function allCoinGeckoIds(tokensByChain: Record<string, TokenConfig[]>): string[] {
+  const ids = new Set<string>(getAllCoinGeckoIds());
+  Object.values(tokensByChain).forEach((tokens) =>
+    tokens.forEach((token) => ids.add(token.coinGeckoId))
+  );
+  return Array.from(ids);
 }

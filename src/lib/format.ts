@@ -19,11 +19,25 @@ export function hexToBigInt(hex: string | null | undefined): bigint {
 }
 
 export function toUsd(value: number): string {
+  return toMoney(value, "USD");
+}
+
+export function toMoney(
+  usdValue: number,
+  currency: string = "USD",
+  rates: Record<string, number> = { USD: 1 }
+): string {
+  const requested = (currency || "USD").toUpperCase();
+  const rate = rates[requested];
+  const hasRate = Number.isFinite(rate) && (rate as number) > 0;
+  const displayCode = hasRate ? requested : "USD";
+  const value = usdValue * (hasRate ? (rate as number) : 1);
+  const absValue = Math.abs(value);
   return new Intl.NumberFormat("en-US", {
     style: "currency",
-    currency: "USD",
+    currency: displayCode,
     minimumFractionDigits: 2,
-    maximumFractionDigits: value >= 1 ? 2 : 6
+    maximumFractionDigits: absValue >= 1 ? 2 : 6
   }).format(value);
 }
 

@@ -15,8 +15,10 @@ export async function clearTestDatabase() {
     prisma.holding.deleteMany(),
     prisma.exchangeSnapshot.deleteMany(),
     prisma.exchangeConnection.deleteMany(),
+    prisma.manualExchangeHolding.deleteMany(),
     prisma.scanRun.deleteMany(),
     prisma.walletAddress.deleteMany(),
+    prisma.customToken.deleteMany(),
     prisma.preference.deleteMany(),
     prisma.vault.deleteMany()
   ]);
