@@ -1,5 +1,5 @@
-import { PortfolioApp } from "@/components/PortfolioApp";
+import { AddressAtlasApp } from "@/components/AddressAtlasApp";
 
 export default function Home() {
-  return <PortfolioApp />;
+  return <AddressAtlasApp active="portfolio" />;
 }

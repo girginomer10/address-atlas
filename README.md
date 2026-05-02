@@ -1,6 +1,6 @@
 # Address Atlas
 
-Address Atlas is a read-only multi-chain portfolio tracker. Paste wallet addresses once, then scan balances across Bitcoin, EVM chains, and Cosmos-style addresses without API keys or private keys.
+Address Atlas is a local-first, read-only crypto portfolio tracker. Paste public wallet addresses, connect read-only exchange API keys, and keep a private portfolio ledger on your own machine.
 
 ## Why this exists
 
@@ -17,19 +17,29 @@ This repo is a cleaner follow-up to earlier hackathon experiments:
 - EVM native balances across Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, and Avalanche.
 - Common ERC-20 stablecoins on supported EVM chains.
 - Cosmos-native balances for Cosmos Hub, Osmosis, Celestia, Stargaze, and Stride.
+- Read-only exchange balances through Binance, Coinbase, and Kraken via ccxt.
+- Local SQLite persistence for watched wallets, scan runs, holdings, exchange connections, preferences, and vault metadata.
+- AES-256-GCM encryption for exchange API credentials using a local vault passphrase that is never stored.
 - USD prices through CoinGecko.
-- CSV and JSON export after a scan.
-- Browser-local pasted address memory.
+- CSV and JSON export from the latest local snapshot.
+- Route-based UI: Portfolio, Wallets, Assets, Snapshots, Export, and Settings.
 
 ## Local development
 
 ```bash
 npm install
+npm run db:push
 npm run dev
 ```
 
-Then open `http://localhost:3000`.
+Then open `http://localhost:3000` or the port printed by Next.js.
 
-## Production notes
+The default SQLite database is `.data/address-atlas.db`. You can override it with `DATABASE_URL`, for example:
 
-Address Atlas is read-only and never asks for seed phrases, private keys, exchange API keys, or signing permissions. Public RPC and indexer endpoints can rate-limit or fail, so scan results should be treated as portfolio visibility, not accounting-grade proof.
+```bash
+DATABASE_URL="file:./.data/address-atlas.db"
+```
+
+## Security notes
+
+Address Atlas is designed for local or trusted self-hosted use, not public multi-user deployment. It never asks for seed phrases, private keys, signing permissions, trading permissions, or withdrawal permissions. Exchange API keys should be created with balance/read permission only; stored credentials are encrypted with your vault passphrase. Public RPC, exchange, and price endpoints can rate-limit or fail, so scan results should be treated as portfolio visibility, not accounting-grade proof.

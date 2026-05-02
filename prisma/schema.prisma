@@ -1,0 +1,107 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model WalletAddress {
+  id        String    @id @default(cuid())
+  label     String
+  address   String    @unique
+  chainKind String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  holdings  Holding[]
+}
+
+model ScanRun {
+  id                String             @id @default(cuid())
+  generatedAt       DateTime           @default(now())
+  totalUsd          Float              @default(0)
+  inputCount        Int                @default(0)
+  summaryJson       String
+  warningsJson      String
+  sourcesJson       String
+  createdAt         DateTime           @default(now())
+  holdings          Holding[]
+  exchangeSnapshots ExchangeSnapshot[]
+}
+
+model Holding {
+  id                 String            @id @default(cuid())
+  scanRunId          String?
+  walletId           String?
+  exchangeSnapshotId String?
+  address            String?
+  chainId            String?
+  chainName          String
+  family             String?
+  symbol             String
+  name               String
+  amount             Float
+  priceUsd           Float             @default(0)
+  valueUsd           Float             @default(0)
+  change24h          Float?
+  explorerUrl        String?
+  source             String
+  status             String            @default("ok")
+  createdAt          DateTime          @default(now())
+  scanRun            ScanRun?          @relation(fields: [scanRunId], references: [id], onDelete: Cascade)
+  wallet             WalletAddress?    @relation(fields: [walletId], references: [id], onDelete: SetNull)
+  exchangeSnapshot   ExchangeSnapshot? @relation(fields: [exchangeSnapshotId], references: [id], onDelete: Cascade)
+
+  @@index([scanRunId])
+  @@index([walletId])
+  @@index([exchangeSnapshotId])
+}
+
+model ExchangeConnection {
+  id                   String             @id @default(cuid())
+  provider             String
+  label                String
+  encryptedCredentials String
+  status               String             @default("untested")
+  lastTestedAt         DateTime?
+  lastSyncAt           DateTime?
+  lastError            String?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+  snapshots            ExchangeSnapshot[]
+
+  @@index([provider])
+}
+
+model ExchangeSnapshot {
+  id             String             @id @default(cuid())
+  connectionId   String
+  scanRunId      String?
+  provider       String
+  label          String
+  generatedAt    DateTime           @default(now())
+  totalUsd       Float              @default(0)
+  status         String             @default("ok")
+  rawSummaryJson String
+  connection     ExchangeConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  scanRun        ScanRun?           @relation(fields: [scanRunId], references: [id], onDelete: Cascade)
+  holdings       Holding[]
+
+  @@index([connectionId])
+  @@index([scanRunId])
+}
+
+model Preference {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model Vault {
+  id        String   @id @default("local")
+  salt      String
+  verifier  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

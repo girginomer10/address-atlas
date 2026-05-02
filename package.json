@@ -4,9 +4,12 @@
   "private": false,
   "description": "Read-only multi-chain crypto portfolio tracker from pasted wallet addresses.",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start"
+    "dev": "prisma generate && next dev",
+    "build": "prisma generate && next build",
+    "start": "next start",
+    "db:push": "prisma db push",
+    "db:generate": "prisma generate",
+    "test": "prisma generate && prisma db push && vitest run"
   },
   "keywords": [
     "crypto",
@@ -20,8 +23,13 @@
   "author": "Omer Girgin",
   "license": "MIT",
   "dependencies": {
+    "@prisma/adapter-better-sqlite3": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "better-sqlite3": "^12.9.0",
+    "ccxt": "^4.5.51",
     "lucide-react": "^1.14.0",
     "next": "^16.2.4",
+    "protobufjs": "^8.0.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
@@ -29,7 +37,10 @@
     "@types/node": "^20.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "typescript": "^5.3.0"
+    "playwright-core": "^1.59.1",
+    "prisma": "^7.8.0",
+    "typescript": "^5.3.0",
+    "vitest": "^4.1.5"
   },
   "overrides": {
     "postcss": "^8.5.10"

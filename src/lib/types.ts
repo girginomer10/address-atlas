@@ -1,6 +1,8 @@
-export type ChainFamily = "bitcoin" | "cosmos" | "evm" | "solana";
+export type ChainFamily = "bitcoin" | "cosmos" | "evm" | "solana" | "exchange";
 
 export type ScanStatus = "ok" | "empty" | "failed";
+export type AssetSource = "native" | "erc20" | "exchange";
+export type ExchangeProvider = "binance" | "coinbase" | "kraken";
 
 export interface PricePoint {
   usd: number;
@@ -43,8 +45,11 @@ export interface TrackedAsset {
   valueUsd: number;
   change24h?: number;
   explorerUrl: string;
-  source: "native" | "erc20";
+  source: AssetSource;
   status: ScanStatus;
+  walletLabel?: string;
+  exchangeId?: string;
+  exchangeProvider?: ExchangeProvider;
 }
 
 export interface AddressScan {
@@ -64,9 +69,50 @@ export interface ScanSummary {
 
 export interface ScanResponse {
   generatedAt: string;
+  scanRunId?: string;
   inputCount: number;
   addresses: AddressScan[];
   assets: TrackedAsset[];
   summary: ScanSummary;
   warnings: string[];
+  sources?: ScanSource[];
+  exchangeSnapshots?: ExchangeSnapshot[];
+}
+
+export interface ScanSource {
+  id: string;
+  label: string;
+  kind: "onchain" | "exchange";
+  status: ScanStatus;
+  message?: string;
+}
+
+export interface ExchangeSnapshot {
+  id?: string;
+  connectionId: string;
+  provider: ExchangeProvider;
+  label: string;
+  generatedAt: string;
+  totalUsd: number;
+  status: ScanStatus;
+  holdings: TrackedAsset[];
+  error?: string;
+}
+
+export interface ExchangeCredentialInput {
+  provider: ExchangeProvider;
+  label: string;
+  apiKey: string;
+  secret: string;
+  passphrase?: string;
+  vaultPassphrase?: string;
+}
+
+export interface NormalizedHolding {
+  symbol: string;
+  name: string;
+  amount: number;
+  priceUsd: number;
+  valueUsd: number;
+  change24h?: number;
 }

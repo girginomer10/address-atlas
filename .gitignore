@@ -10,6 +10,7 @@ dist
 build
 
 # local state
+.data
 .env
 .env.*
 !.env.example
@@ -24,3 +25,5 @@ pnpm-debug.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+/src/generated/prisma
