@@ -27,6 +27,8 @@ export function defaultWalletLabel(address: string) {
   if (kind === "evm") return "EVM wallet";
   if (kind === "cosmos") return "Cosmos wallet";
   if (kind === "solana") return "Solana wallet";
+  if (kind === "tron") return "TRON wallet";
+  if (kind === "xrp") return "XRP wallet";
   return "Watched wallet";
 }
 

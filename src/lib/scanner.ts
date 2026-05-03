@@ -4,7 +4,8 @@ import {
   getAllCoinGeckoIds,
   SOLANA_TOKEN_2022_PROGRAM_ID,
   SOLANA_TOKEN_PROGRAM_ID,
-  SPL_TOKENS_BY_CHAIN
+  SPL_TOKENS_BY_CHAIN,
+  TRC20_TOKENS_BY_CHAIN
 } from "./chain-registry";
 import { formatUnits, hexToBigInt } from "./format";
 import { listEnabledCustomTokens } from "./local-store";
@@ -17,7 +18,8 @@ import {
   ScanResponse,
   SplTokenConfig,
   TokenConfig,
-  TrackedAsset
+  TrackedAsset,
+  Trc20TokenConfig
 } from "./types";
 
 const REQUEST_TIMEOUT_MS = 9_000;
@@ -135,6 +137,14 @@ async function scanChain(
 
   if (chain.family === "solana") {
     return scanSolana(address, chain, prices, splTokensByChain[chain.id] ?? []);
+  }
+
+  if (chain.family === "tron") {
+    return scanTron(address, chain, prices);
+  }
+
+  if (chain.family === "xrp") {
+    return scanXrp(address, chain, prices);
   }
 
   return scanEvm(address, chain, prices, tokensByChain[chain.id] ?? []);
@@ -350,6 +360,97 @@ async function scanSolana(
   return { assets, warnings };
 }
 
+interface TronAccountResponse {
+  data?: {
+    balance?: number;
+    trc20?: Record<string, string>[];
+  }[];
+}
+
+async function scanTron(
+  address: string,
+  chain: ChainConfig,
+  prices: Record<string, PricePoint>
+): Promise<{ assets: TrackedAsset[]; warnings: string[] }> {
+  if (!chain.restUrl) {
+    return { assets: [], warnings: [`${chain.name} has no API endpoint configured.`] };
+  }
+
+  const data = await fetchJson<TronAccountResponse>(
+    `${chain.restUrl.replace(/\/$/, "")}/v1/accounts/${address}`
+  );
+  const account = data.data?.[0];
+  if (!account) return { assets: [], warnings: [] };
+
+  const assets: TrackedAsset[] = [];
+  const trxAmount = (account.balance ?? 0) / Math.pow(10, chain.decimals);
+  if (trxAmount > 0) {
+    assets.push(assetFromAmount(address, chain, chain.symbol, chain.name, trxAmount, prices, "native"));
+  }
+
+  const tokens = TRC20_TOKENS_BY_CHAIN[chain.id] ?? [];
+  const trc20Balances = account.trc20 ?? [];
+  for (const token of tokens) {
+    const raw = trc20Balances.reduce((sum, item) => {
+      const value = item[token.address];
+      return sum + (value && /^\d+$/.test(value) ? BigInt(value) : 0n);
+    }, 0n);
+    if (raw <= 0n) continue;
+    assets.push(trc20AssetFromAmount(address, chain, token, formatUnits(raw, token.decimals), prices));
+  }
+
+  return { assets, warnings: [] };
+}
+
+interface XrpAccountInfoResponse {
+  result?: {
+    status?: string;
+    error?: string;
+    error_message?: string;
+    account_data?: {
+      Balance?: string;
+    };
+  };
+}
+
+async function scanXrp(
+  address: string,
+  chain: ChainConfig,
+  prices: Record<string, PricePoint>
+): Promise<{ assets: TrackedAsset[]; warnings: string[] }> {
+  if (!chain.rpcUrl) {
+    return { assets: [], warnings: [`${chain.name} has no RPC endpoint configured.`] };
+  }
+
+  const body = await fetchJson<XrpAccountInfoResponse>(chain.rpcUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      method: "account_info",
+      params: [
+        {
+          account: address,
+          ledger_index: "validated"
+        }
+      ]
+    })
+  });
+  const result = body.result;
+  if (!result || result.status === "error") {
+    if (result?.error === "actNotFound") return { assets: [], warnings: [] };
+    throw new Error(result?.error_message || result?.error || "XRP account lookup failed");
+  }
+
+  const drops = safeBigInt(result.account_data?.Balance ?? "0");
+  const amount = formatUnits(drops, chain.decimals);
+  if (amount <= 0) return { assets: [], warnings: [] };
+
+  return {
+    assets: [assetFromAmount(address, chain, chain.symbol, chain.name, amount, prices, "native")],
+    warnings: []
+  };
+}
+
 interface ParsedSplAccount {
   mint: string;
   rawAmount: string;
@@ -472,6 +573,33 @@ function splAssetFromAmount(
     change24h: token.coinGeckoId ? price?.usd_24h_change : undefined,
     explorerUrl: `${chain.explorerUrl}${address}`,
     source: "spl",
+    status: "ok"
+  };
+}
+
+function trc20AssetFromAmount(
+  address: string,
+  chain: ChainConfig,
+  token: Trc20TokenConfig,
+  amount: number,
+  prices: Record<string, PricePoint>
+): TrackedAsset {
+  const price = token.coinGeckoId ? prices[token.coinGeckoId] : undefined;
+  const priceUsd = token.coinGeckoId ? price?.usd ?? token.priceUsd ?? 0 : token.priceUsd ?? 0;
+  return {
+    id: `${address}-${chain.id}-${token.symbol}-${token.address}`,
+    address,
+    chainId: chain.id,
+    chainName: chain.name,
+    family: chain.family,
+    symbol: token.symbol,
+    name: token.name,
+    amount,
+    priceUsd,
+    valueUsd: amount * priceUsd,
+    change24h: token.coinGeckoId ? price?.usd_24h_change : undefined,
+    explorerUrl: `${chain.explorerUrl}${address}`,
+    source: "trc20",
     status: "ok"
   };
 }
@@ -725,6 +853,11 @@ function allCoinGeckoIds(
     })
   );
   Object.values(splTokensByChain).forEach((tokens) =>
+    tokens.forEach((token) => {
+      if (token.coinGeckoId) ids.add(token.coinGeckoId);
+    })
+  );
+  Object.values(TRC20_TOKENS_BY_CHAIN).forEach((tokens) =>
     tokens.forEach((token) => {
       if (token.coinGeckoId) ids.add(token.coinGeckoId);
     })

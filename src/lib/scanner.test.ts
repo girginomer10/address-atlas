@@ -356,6 +356,83 @@ describe("cosmos scan integration", () => {
   });
 });
 
+describe("TRON and XRP scan integration", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("emits native TRX and tracked TRC20 balances", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("api.coingecko.com")) {
+          return jsonResponse({
+            tron: { usd: 0.1, usd_24h_change: 2 },
+            tether: { usd: 1, usd_24h_change: 0 }
+          });
+        }
+        if (url.includes("api.trongrid.io/v1/accounts/")) {
+          return jsonResponse({
+            data: [
+              {
+                balance: 1_234_567,
+                trc20: [
+                  {
+                    TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t: "2500000"
+                  }
+                ]
+              }
+            ]
+          });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      })
+    );
+
+    const response = await scanAddresses("TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7");
+    const assetsBySymbol = Object.fromEntries(response.assets.map((asset) => [asset.symbol, asset]));
+
+    expect(response.addresses[0]?.detectedChains).toEqual(["tron"]);
+    expect(assetsBySymbol.TRX).toMatchObject({ source: "native", amount: 1.234567 });
+    expect(assetsBySymbol.USDT).toMatchObject({ source: "trc20", amount: 2.5 });
+  });
+
+  it("emits native XRP balances from account_info drops", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("api.coingecko.com")) return jsonResponse({ ripple: { usd: 2 } });
+        if (url.includes("s1.ripple.com")) {
+          const body = JSON.parse(String(init?.body ?? "{}"));
+          expect(body.method).toBe("account_info");
+          return jsonResponse({
+            result: {
+              status: "success",
+              account_data: {
+                Balance: "12345678"
+              }
+            }
+          });
+        }
+        throw new Error(`Unexpected fetch ${url}`);
+      })
+    );
+
+    const response = await scanAddresses("rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn");
+
+    expect(response.addresses[0]?.detectedChains).toEqual(["xrp"]);
+    expect(response.assets[0]).toMatchObject({
+      chainId: "xrp",
+      symbol: "XRP",
+      source: "native",
+      amount: 12.345678
+    });
+  });
+});
+
 function jsonResponse(body: unknown) {
   return new Response(JSON.stringify(body), {
     status: 200,

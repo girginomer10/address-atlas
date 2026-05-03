@@ -1,7 +1,7 @@
-export type ChainFamily = "bitcoin" | "cosmos" | "evm" | "solana" | "exchange";
+export type ChainFamily = "bitcoin" | "cosmos" | "evm" | "solana" | "tron" | "xrp" | "exchange";
 
 export type ScanStatus = "ok" | "empty" | "failed";
-export type AssetSource = "native" | "erc20" | "spl" | "exchange" | "staked" | "rewards";
+export type AssetSource = "native" | "erc20" | "spl" | "trc20" | "exchange" | "staked" | "rewards";
 export type ExchangeProvider = "binance" | "coinbase" | "kraken";
 
 export interface PricePoint {
@@ -37,6 +37,15 @@ export interface SplTokenConfig {
   symbol: string;
   name: string;
   mint: string;
+  decimals: number;
+  coinGeckoId?: string | null;
+  priceUsd?: number | null;
+}
+
+export interface Trc20TokenConfig {
+  symbol: string;
+  name: string;
+  address: string;
   decimals: number;
   coinGeckoId?: string | null;
   priceUsd?: number | null;

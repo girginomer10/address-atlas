@@ -1,4 +1,4 @@
-import { ChainConfig, SplTokenConfig, TokenConfig } from "./types";
+import { ChainConfig, SplTokenConfig, TokenConfig, Trc20TokenConfig } from "./types";
 
 export const SOLANA_TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 export const SOLANA_TOKEN_2022_PROGRAM_ID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
@@ -22,6 +22,28 @@ export const SOLANA_CHAIN: ChainConfig = {
   rpcUrl: "https://api.mainnet-beta.solana.com",
   explorerUrl: "https://solscan.io/account/",
   decimals: 9
+};
+
+export const TRON_CHAIN: ChainConfig = {
+  id: "tron",
+  name: "TRON",
+  family: "tron",
+  symbol: "TRX",
+  coinGeckoId: "tron",
+  restUrl: "https://api.trongrid.io",
+  explorerUrl: "https://tronscan.org/#/address/",
+  decimals: 6
+};
+
+export const XRP_CHAIN: ChainConfig = {
+  id: "xrp",
+  name: "XRP Ledger",
+  family: "xrp",
+  symbol: "XRP",
+  coinGeckoId: "ripple",
+  rpcUrl: "https://s1.ripple.com:51234/",
+  explorerUrl: "https://xrpscan.com/account/",
+  decimals: 6
 };
 
 export const EVM_CHAINS: ChainConfig[] = [
@@ -637,9 +659,23 @@ export const SPL_TOKENS_BY_CHAIN: Record<string, SplTokenConfig[]> = {
   ]
 };
 
+export const TRC20_TOKENS_BY_CHAIN: Record<string, Trc20TokenConfig[]> = {
+  tron: [
+    {
+      symbol: "USDT",
+      name: "Tether",
+      address: "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+      decimals: 6,
+      coinGeckoId: "tether"
+    }
+  ]
+};
+
 export const SUPPORTED_CHAINS: ChainConfig[] = [
   BITCOIN_CHAIN,
   SOLANA_CHAIN,
+  TRON_CHAIN,
+  XRP_CHAIN,
   ...EVM_CHAINS,
   ...COSMOS_CHAINS
 ];
@@ -653,6 +689,14 @@ export function detectChainsForAddress(address: string): ChainConfig[] {
 
   if (/^(bc1|[13])[a-zA-HJ-NP-Z0-9]{25,90}$/i.test(trimmed)) {
     return [BITCOIN_CHAIN];
+  }
+
+  if (/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(trimmed)) {
+    return [TRON_CHAIN];
+  }
+
+  if (/^r[1-9A-HJ-NP-Za-km-z]{24,34}$/.test(trimmed)) {
+    return [XRP_CHAIN];
   }
 
   const cosmosMatch = trimmed.match(/^([a-z][a-z0-9]{1,20})1[023456789acdefghjklmnpqrstuvwxyz]{20,}$/i);
@@ -677,6 +721,11 @@ export function getAllCoinGeckoIds(): string[] {
     });
   });
   Object.values(SPL_TOKENS_BY_CHAIN).forEach((tokens) => {
+    tokens.forEach((token) => {
+      if (token.coinGeckoId) ids.add(token.coinGeckoId);
+    });
+  });
+  Object.values(TRC20_TOKENS_BY_CHAIN).forEach((tokens) => {
     tokens.forEach((token) => {
       if (token.coinGeckoId) ids.add(token.coinGeckoId);
     });
