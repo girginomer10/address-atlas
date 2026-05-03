@@ -1634,6 +1634,7 @@ function AssetTable({ assets, wallets, hideControls }: { assets: TrackedAsset[];
   const [sortKey, setSortKey] = useState<"name" | "chain" | "amount" | "change" | "value">("value");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const walletByAddress = useMemo(() => new Map(wallets.map((wallet) => [wallet.address.toLowerCase(), wallet])), [wallets]);
+  const unpricedAssets = assets.filter(isUnpricedAsset);
   const filtered = useMemo(() => {
     const q = query.toLowerCase();
     return assets
@@ -1655,6 +1656,12 @@ function AssetTable({ assets, wallets, hideControls }: { assets: TrackedAsset[];
   return (
     <div className="aa-table-wrap">
       {!hideControls && <Toolbar query={query} setQuery={setQuery} meta={`${filtered.length} of ${assets.length}`} placeholder="Filter by symbol, name, chain..." />}
+      {!hideControls && unpricedAssets.length > 0 && (
+        <div className="aa-unpriced-note">
+          <ShieldCheck size={15} />
+          <span>{unpricedAssets.length} unpriced asset{unpricedAssets.length === 1 ? "" : "s"} excluded from totals.</span>
+        </div>
+      )}
       <div className="aa-table-scroll">
         <table className="aa-table">
           <thead>
@@ -1678,7 +1685,7 @@ function AssetTable({ assets, wallets, hideControls }: { assets: TrackedAsset[];
                   <td><span className="aa-addr-cell">{asset.walletLabel || wallet?.label || shortAddress(asset.address)}</span></td>
                   <td className="right mono">{formatAmount(asset.amount)} {asset.symbol}</td>
                   <td className={`right ${asset.change24h && asset.change24h < 0 ? "loss" : "gain"}`}>{percent(asset.change24h)}</td>
-                  <td className="right strong">{money.format(asset.valueUsd)}</td>
+                  <td className="right strong">{isUnpricedAsset(asset) ? <span className="aa-unpriced-value">Unpriced</span> : money.format(asset.valueUsd)}</td>
                   <td className="right">{asset.explorerUrl && <a className="aa-text-link" href={asset.explorerUrl} target="_blank" rel="noreferrer">view</a>}</td>
                 </tr>
               );
@@ -1692,7 +1699,7 @@ function AssetTable({ assets, wallets, hideControls }: { assets: TrackedAsset[];
           return (
             <article className="aa-asset-card" key={asset.id}>
               <AssetIdentity asset={asset} />
-              <strong>{money.format(asset.valueUsd)}</strong>
+              <strong>{isUnpricedAsset(asset) ? "Unpriced" : money.format(asset.valueUsd)}</strong>
               <small>{asset.chainName} · {asset.walletLabel || wallet?.label || shortAddress(asset.address)}</small>
               <span>{formatAmount(asset.amount)} {asset.symbol} · {percent(asset.change24h)}</span>
             </article>
@@ -1705,14 +1712,18 @@ function AssetTable({ assets, wallets, hideControls }: { assets: TrackedAsset[];
 
 function AssetIdentity({ asset }: { asset: TrackedAsset }) {
   return (
-    <div className="aa-asset-id">
+    <div className={`aa-asset-id ${isUnpricedAsset(asset) ? "unpriced" : ""}`}>
       <span>{asset.symbol.slice(0, 3)}</span>
       <div>
         <strong>{asset.name}</strong>
-        <small>{asset.symbol}</small>
+        <small>{asset.symbol}{isUnpricedAsset(asset) ? " · unpriced" : ""}</small>
       </div>
     </div>
   );
+}
+
+function isUnpricedAsset(asset: TrackedAsset) {
+  return asset.amount > 0 && asset.priceUsd <= 0 && asset.valueUsd <= 0;
 }
 
 function Toolbar({ query, setQuery, meta, placeholder }: { query: string; setQuery: (value: string) => void; meta: string; placeholder: string }) {

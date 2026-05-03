@@ -751,6 +751,11 @@ table {
   font-size: 9px;
 }
 
+.aa-asset-id.unpriced > span {
+  border-style: dashed;
+  color: var(--warn);
+}
+
 .aa-asset-id div {
   min-width: 0;
 }
@@ -793,6 +798,33 @@ table {
   font-family: var(--mono);
   font-size: 11px;
   letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.aa-unpriced-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px dashed var(--rule);
+  background: var(--paper-2);
+  color: var(--ink-2);
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.aa-unpriced-note svg {
+  color: var(--warn);
+}
+
+.aa-unpriced-value {
+  color: var(--warn);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
