@@ -202,6 +202,56 @@ describe("scanAddresses Solana SPL", () => {
     expect(response.assets.map((asset) => asset.symbol)).toEqual(["SOL"]);
     expect(response.warnings.some((message) => message.includes("SPL token balances failed"))).toBe(true);
   });
+
+  it("keeps classic SPL balances when the Token-2022 lookup fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("api.coingecko.com")) return { ok: true, json: async () => ({}) };
+
+        if (url.includes("api.mainnet-beta.solana.com")) {
+          const body = JSON.parse(String(init?.body ?? "{}"));
+          if (body.method === "getBalance") {
+            return jsonResponse({ jsonrpc: "2.0", id: body.id, result: { value: 0 } });
+          }
+          if (body.method === "getTokenAccountsByOwner") {
+            if (body.params?.[1]?.programId === "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb") {
+              return jsonResponse({ jsonrpc: "2.0", id: body.id, error: { message: "token-2022-down" } });
+            }
+            return jsonResponse({
+              jsonrpc: "2.0",
+              id: body.id,
+              result: {
+                value: [
+                  {
+                    account: {
+                      data: {
+                        parsed: {
+                          info: {
+                            mint: USDC_MINT,
+                            tokenAmount: { amount: "3000000", decimals: 6 }
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            });
+          }
+        }
+
+        throw new Error(`Unexpected fetch ${url}`);
+      })
+    );
+
+    const response = await scanAddresses(SOLANA_ADDRESS);
+
+    expect(response.assets.map((asset) => asset.symbol)).toEqual(["USDC"]);
+    expect(response.assets[0]).toMatchObject({ amount: 3, source: "spl" });
+    expect(response.warnings.some((message) => message.includes("Token-2022"))).toBe(true);
+  });
 });
 
 describe("cosmos parsers", () => {

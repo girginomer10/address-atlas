@@ -336,7 +336,8 @@ async function scanSolana(
 
   if (tokens.length > 0) {
     try {
-      const balances = await fetchSolanaSplBalances(chain.rpcUrl, address, tokens);
+      const { balances, warnings: tokenWarnings } = await fetchSolanaSplBalances(chain.rpcUrl, address, tokens);
+      warnings.push(...tokenWarnings.map((warning) => `${chain.name} ${warning}`));
       balances.forEach(({ token, amount }) => {
         if (amount <= 0) return;
         assets.push(splAssetFromAmount(address, chain, token, amount, prices));
@@ -359,9 +360,13 @@ async function fetchSolanaSplBalances(
   rpcUrl: string,
   owner: string,
   registry: SplTokenConfig[]
-): Promise<{ token: SplTokenConfig; amount: number }[]> {
-  const tokenAccounts = await Promise.all(
-    [SOLANA_TOKEN_PROGRAM_ID, SOLANA_TOKEN_2022_PROGRAM_ID].map((programId) =>
+): Promise<{ balances: { token: SplTokenConfig; amount: number }[]; warnings: string[] }> {
+  const programs = [
+    { id: SOLANA_TOKEN_PROGRAM_ID, label: "classic SPL token accounts" },
+    { id: SOLANA_TOKEN_2022_PROGRAM_ID, label: "Token-2022 token accounts" }
+  ];
+  const tokenAccounts = await Promise.allSettled(
+    programs.map((program) =>
       rpcCall<{
         value?: {
           account?: {
@@ -377,12 +382,21 @@ async function fetchSolanaSplBalances(
         }[];
       }>(rpcUrl, "getTokenAccountsByOwner", [
         owner,
-        { programId },
+        { programId: program.id },
         { encoding: "jsonParsed", commitment: "confirmed" }
       ])
     )
   );
-  const parsed = tokenAccounts.flatMap((result) => parseSplTokenAccounts(result?.value ?? []));
+  const warnings: string[] = [];
+  const parsed = tokenAccounts.flatMap((result, index) => {
+    if (result.status === "fulfilled") return parseSplTokenAccounts(result.value?.value ?? []);
+    warnings.push(`${programs[index].label} failed: ${readError(result.reason)}.`);
+    return [];
+  });
+  if (parsed.length === 0 && tokenAccounts.every((result) => result.status === "rejected")) {
+    throw new Error(warnings.join(" "));
+  }
+
   const byMint = new Map<string, SplTokenConfig>();
   registry.forEach((token) => byMint.set(token.mint, token));
 
@@ -395,10 +409,13 @@ async function fetchSolanaSplBalances(
     totals.set(account.mint, previous + safeBigInt(account.rawAmount));
   }
 
-  return Array.from(totals.entries()).map(([mint, raw]) => {
-    const token = byMint.get(mint) as SplTokenConfig;
-    return { token, amount: formatUnits(raw, token.decimals) };
-  });
+  return {
+    balances: Array.from(totals.entries()).map(([mint, raw]) => {
+      const token = byMint.get(mint) as SplTokenConfig;
+      return { token, amount: formatUnits(raw, token.decimals) };
+    }),
+    warnings
+  };
 }
 
 export function parseSplTokenAccounts(value: unknown): ParsedSplAccount[] {

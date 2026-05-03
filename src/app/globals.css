@@ -1355,6 +1355,33 @@ table {
   color: var(--loss);
 }
 
+.aa-token-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.aa-token-suggestions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--rule);
+  background: var(--paper);
+  color: var(--ink);
+  padding: 7px 9px;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.aa-token-suggestions button:hover {
+  border-color: var(--accent);
+}
+
+.aa-token-suggestions span {
+  color: var(--ink-3);
+  font-size: 10px;
+}
+
 .aa-token-empty {
   margin: 0;
   border: 1px dashed var(--rule);

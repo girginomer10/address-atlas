@@ -33,7 +33,7 @@ Address Atlas avoids account creation, automated rebalancing, signing, and fund-
 - Manual exchange entries live in `ManualExchangeHolding` and are merged into the latest scan response at read time; they are not persisted as historical `Holding` rows.
 - Custom token allowlist entries live in `CustomToken` and can target either EVM contracts or Solana mints. They are merged with built-in token registries during scans, and built-in registry entries win on duplicate addresses/mints.
 - Custom tokens can use either a CoinGecko id, a manual USD price, both, or neither. If both are present, live CoinGecko prices win and manual price is the fallback.
-- `/api/tokens/metadata` reads ERC-20 symbol/name/decimals from the selected chain RPC and reads Solana mint decimals from parsed account info. Solana symbol/name still need user input unless we add a metadata-program/DAS lookup later.
+- `/api/tokens/metadata` prefers the built-in registry, can read ERC-20 symbol/name/decimals from the selected chain RPC, returns CoinGecko id suggestions, and reads Solana mint decimals from parsed account info. If `JUPITER_API_KEY` is configured, it also uses Jupiter Tokens API for arbitrary Solana mint symbol/name/USD price hints.
 - Solana scanning includes classic SPL Token Program and Token-2022 balances from the registry. Cosmos scanning includes native liquid balances, delegations, and distribution rewards.
 
 ## Gotchas
@@ -42,6 +42,5 @@ Address Atlas avoids account creation, automated rebalancing, signing, and fund-
 
 ## Next Useful Milestones
 
-- Consider auto-suggesting CoinGecko ids from token symbol/name after metadata lookup.
-- Add Solana metadata-program or DAS lookup if we want symbol/name autofill for arbitrary Solana mints.
+- Add Solana metadata-program or DAS lookup if we want no-key symbol/name autofill for arbitrary Solana mints.
 - Make manual exchange entries easier to reconcile against historical snapshots if users want time-specific manual values later.

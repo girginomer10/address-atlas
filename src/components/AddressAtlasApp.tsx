@@ -143,6 +143,13 @@ type TokenChainOption = {
   family: string;
 };
 
+type CoinGeckoSuggestion = {
+  id: string;
+  name: string;
+  symbol: string;
+  marketCapRank: number | null;
+};
+
 const EMPTY_TOKEN_FORM = {
   chainId: "ethereum",
   address: "",
@@ -1335,6 +1342,7 @@ function TokenAllowlistManager({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const [suggestions, setSuggestions] = useState<CoinGeckoSuggestion[]>([]);
 
   const chainOptions = chains.length > 0 ? chains : [{ id: "ethereum", name: "Ethereum", family: "evm" }];
   const selectedChain = chainOptions.find((chain) => chain.id === form.chainId) ?? chainOptions[0];
@@ -1355,6 +1363,7 @@ function TokenAllowlistManager({
     setAutofilling(true);
     setMessage("");
     setErrorMessage("");
+    setSuggestions([]);
     try {
       const body = await fetchJson<{
         metadata: {
@@ -1362,6 +1371,8 @@ function TokenAllowlistManager({
           symbol: string;
           name: string;
           decimals: number;
+          priceUsd?: number | null;
+          coinGeckoSuggestions?: CoinGeckoSuggestion[];
         };
       }>(
         `/api/tokens/metadata?chainKind=${encodeURIComponent(selectedChainKind)}&chainId=${encodeURIComponent(form.chainId)}&address=${encodeURIComponent(form.address.trim())}`
@@ -1371,8 +1382,10 @@ function TokenAllowlistManager({
         address: body.metadata.address || current.address,
         symbol: body.metadata.symbol || current.symbol,
         name: body.metadata.name || current.name,
-        decimals: String(body.metadata.decimals)
+        decimals: String(body.metadata.decimals),
+        priceUsd: current.priceUsd || (body.metadata.priceUsd ? String(body.metadata.priceUsd) : "")
       }));
+      setSuggestions(body.metadata.coinGeckoSuggestions ?? []);
       setMessage("Metadata loaded.");
     } catch (lookupError) {
       setErrorMessage(readError(lookupError));
@@ -1405,6 +1418,7 @@ function TokenAllowlistManager({
         chainId: form.chainId,
         decimals: selectedChainKind === "solana" ? "9" : "18"
       });
+      setSuggestions([]);
       setMessage(`Added ${form.symbol.trim()}.`);
       await onChange();
     } catch (addError) {
@@ -1492,6 +1506,20 @@ function TokenAllowlistManager({
           {message && <span className="aa-token-message ok">{message}</span>}
           {errorMessage && <span className="aa-token-message err">{errorMessage}</span>}
         </div>
+        {suggestions.length > 0 && (
+          <div className="aa-token-suggestions" aria-label="CoinGecko id suggestions">
+            {suggestions.map((suggestion) => (
+              <button
+                key={suggestion.id}
+                type="button"
+                onClick={() => setForm({ ...form, coinGeckoId: suggestion.id })}
+              >
+                {suggestion.id}
+                <span>{suggestion.symbol}{suggestion.marketCapRank ? ` #${suggestion.marketCapRank}` : ""}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       {tokens.length === 0 ? (
         <p className="aa-token-empty">No custom tokens yet. Built-in stablecoins still scan as usual.</p>
