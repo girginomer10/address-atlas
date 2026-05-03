@@ -1,7 +1,7 @@
 export type ChainFamily = "bitcoin" | "cosmos" | "evm" | "solana" | "tron" | "xrp" | "exchange";
 
 export type ScanStatus = "ok" | "empty" | "failed";
-export type AssetSource = "native" | "erc20" | "spl" | "trc20" | "exchange" | "staked" | "rewards";
+export type AssetSource = "native" | "erc20" | "spl" | "trc20" | "issued" | "exchange" | "staked" | "rewards";
 export type ExchangeProvider = "binance" | "coinbase" | "kraken";
 
 export interface PricePoint {

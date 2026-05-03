@@ -413,6 +413,19 @@ interface XrpAccountInfoResponse {
   };
 }
 
+interface XrpAccountLinesResponse {
+  result?: {
+    status?: string;
+    error?: string;
+    error_message?: string;
+    lines?: {
+      account?: string;
+      balance?: string;
+      currency?: string;
+    }[];
+  };
+}
+
 async function scanXrp(
   address: string,
   chain: ChainConfig,
@@ -422,18 +435,9 @@ async function scanXrp(
     return { assets: [], warnings: [`${chain.name} has no RPC endpoint configured.`] };
   }
 
-  const body = await fetchJson<XrpAccountInfoResponse>(chain.rpcUrl, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      method: "account_info",
-      params: [
-        {
-          account: address,
-          ledger_index: "validated"
-        }
-      ]
-    })
+  const body = await xrpRpc<XrpAccountInfoResponse>(chain.rpcUrl, "account_info", {
+    account: address,
+    ledger_index: "validated"
   });
   const result = body.result;
   if (!result || result.status === "error") {
@@ -441,14 +445,47 @@ async function scanXrp(
     throw new Error(result?.error_message || result?.error || "XRP account lookup failed");
   }
 
+  const assets: TrackedAsset[] = [];
+  const warnings: string[] = [];
   const drops = safeBigInt(result.account_data?.Balance ?? "0");
   const amount = formatUnits(drops, chain.decimals);
-  if (amount <= 0) return { assets: [], warnings: [] };
+  if (amount > 0) {
+    assets.push(assetFromAmount(address, chain, chain.symbol, chain.name, amount, prices, "native"));
+  }
 
-  return {
-    assets: [assetFromAmount(address, chain, chain.symbol, chain.name, amount, prices, "native")],
-    warnings: []
-  };
+  try {
+    const linesBody = await xrpRpc<XrpAccountLinesResponse>(chain.rpcUrl, "account_lines", {
+      account: address,
+      ledger_index: "validated",
+      limit: 200
+    });
+    const linesResult = linesBody.result;
+    if (!linesResult || linesResult.status === "error") {
+      throw new Error(linesResult?.error_message || linesResult?.error || "XRP trust lines lookup failed");
+    }
+    for (const line of linesResult.lines ?? []) {
+      const lineAmount = Number(line.balance ?? "0");
+      if (!Number.isFinite(lineAmount) || lineAmount <= 0) continue;
+      const currency = decodeXrplCurrency(line.currency ?? "");
+      const issuer = line.account ?? "";
+      assets.push(xrpIssuedAssetFromAmount(address, chain, currency, issuer, lineAmount));
+    }
+  } catch (error) {
+    warnings.push(`${chain.name} trust lines fetch failed: ${readError(error)}.`);
+  }
+
+  return { assets, warnings };
+}
+
+async function xrpRpc<T>(rpcUrl: string, method: string, params: Record<string, unknown>): Promise<T> {
+  return fetchJson<T>(rpcUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      method,
+      params: [params]
+    })
+  });
 }
 
 interface ParsedSplAccount {
@@ -602,6 +639,43 @@ function trc20AssetFromAmount(
     source: "trc20",
     status: "ok"
   };
+}
+
+function xrpIssuedAssetFromAmount(
+  address: string,
+  chain: ChainConfig,
+  currency: string,
+  issuer: string,
+  amount: number
+): TrackedAsset {
+  const symbol = currency || "XRPL-IOU";
+  return {
+    id: `${address}-${chain.id}-${symbol}-${issuer}`,
+    address,
+    chainId: chain.id,
+    chainName: chain.name,
+    family: chain.family,
+    symbol,
+    name: issuer ? `${symbol} (${issuer.slice(0, 6)}...${issuer.slice(-6)})` : symbol,
+    amount,
+    priceUsd: 0,
+    valueUsd: 0,
+    explorerUrl: `${chain.explorerUrl}${address}`,
+    source: "issued",
+    status: "ok"
+  };
+}
+
+export function decodeXrplCurrency(value: string): string {
+  const trimmed = value.trim();
+  if (!/^[a-fA-F0-9]{40}$/.test(trimmed)) return trimmed;
+
+  const bytes = trimmed
+    .match(/.{1,2}/g)
+    ?.map((part) => Number.parseInt(part, 16))
+    .filter((byte) => byte >= 32 && byte <= 126) ?? [];
+  const decoded = new TextDecoder().decode(new Uint8Array(bytes)).trim();
+  return decoded || `${trimmed.slice(0, 8)}...`;
 }
 
 async function scanEvm(

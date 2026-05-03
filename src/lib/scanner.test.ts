@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  decodeXrplCurrency,
   parseCosmosDelegations,
   parseCosmosRewards,
   parseSplTokenAccounts,
@@ -399,7 +400,7 @@ describe("TRON and XRP scan integration", () => {
     expect(assetsBySymbol.USDT).toMatchObject({ source: "trc20", amount: 2.5 });
   });
 
-  it("emits native XRP balances from account_info drops", async () => {
+  it("emits native XRP balances and positive issued-currency trust lines", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -407,6 +408,25 @@ describe("TRON and XRP scan integration", () => {
         if (url.includes("api.coingecko.com")) return jsonResponse({ ripple: { usd: 2 } });
         if (url.includes("s1.ripple.com")) {
           const body = JSON.parse(String(init?.body ?? "{}"));
+          if (body.method === "account_lines") {
+            return jsonResponse({
+              result: {
+                status: "success",
+                lines: [
+                  {
+                    account: "rIssuer111111111111111111111111111111",
+                    currency: "USD",
+                    balance: "42.5"
+                  },
+                  {
+                    account: "rIssuer222222222222222222222222222222",
+                    currency: "EUR",
+                    balance: "-1"
+                  }
+                ]
+              }
+            });
+          }
           expect(body.method).toBe("account_info");
           return jsonResponse({
             result: {
@@ -424,12 +444,30 @@ describe("TRON and XRP scan integration", () => {
     const response = await scanAddresses("rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn");
 
     expect(response.addresses[0]?.detectedChains).toEqual(["xrp"]);
-    expect(response.assets[0]).toMatchObject({
+    const assetsBySymbol = Object.fromEntries(response.assets.map((asset) => [asset.symbol, asset]));
+    expect(assetsBySymbol.XRP).toMatchObject({
       chainId: "xrp",
       symbol: "XRP",
       source: "native",
       amount: 12.345678
     });
+    expect(assetsBySymbol.USD).toMatchObject({
+      chainId: "xrp",
+      symbol: "USD",
+      source: "issued",
+      amount: 42.5,
+      priceUsd: 0
+    });
+  });
+});
+
+describe("decodeXrplCurrency", () => {
+  it("keeps standard currency codes unchanged", () => {
+    expect(decodeXrplCurrency("USD")).toBe("USD");
+  });
+
+  it("decodes printable 160-bit currency codes", () => {
+    expect(decodeXrplCurrency("534F4C4F00000000000000000000000000000000")).toBe("SOLO");
   });
 });
 
