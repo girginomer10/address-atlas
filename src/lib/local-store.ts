@@ -1,6 +1,6 @@
 import { prisma } from "./db";
 import { defaultWalletLabel, detectAddressKind, isSupportedPublicAddress } from "./address-utils";
-import { EVM_CHAINS } from "./chain-registry";
+import { EVM_CHAINS, SOLANA_CHAIN } from "./chain-registry";
 import {
   listEnabledManualHoldings,
   manualHoldingToTrackedAsset
@@ -51,7 +51,8 @@ export interface CustomTokenRecord {
   symbol: string;
   name: string;
   decimals: number;
-  coinGeckoId: string;
+  coinGeckoId: string | null;
+  priceUsd: number | null;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -65,6 +66,7 @@ export interface CustomTokenInput {
   name?: string;
   decimals?: number | string;
   coinGeckoId?: string;
+  priceUsd?: number | string | null;
   enabled?: boolean;
 }
 
@@ -72,7 +74,8 @@ export interface CustomTokenUpdate {
   symbol?: string;
   name?: string;
   decimals?: number | string;
-  coinGeckoId?: string;
+  coinGeckoId?: string | null;
+  priceUsd?: number | string | null;
   enabled?: boolean;
 }
 
@@ -85,8 +88,9 @@ export class CustomTokenValidationError extends Error {
   }
 }
 
-const SUPPORTED_TOKEN_CHAIN_KINDS = new Set(["evm"]);
+const SUPPORTED_TOKEN_CHAIN_KINDS = new Set(["evm", "solana"]);
 const EVM_CHAIN_IDS = new Set(EVM_CHAINS.map((chain) => chain.id));
+const SOLANA_CHAIN_IDS = new Set([SOLANA_CHAIN.id]);
 
 interface NormalizedToken {
   chainKind: string;
@@ -95,7 +99,8 @@ interface NormalizedToken {
   symbol: string;
   name: string;
   decimals: number;
-  coinGeckoId: string;
+  coinGeckoId: string | null;
+  priceUsd: number | null;
   enabled: boolean;
 }
 
@@ -104,7 +109,7 @@ export function normalizeCustomTokenInput(input: CustomTokenInput): NormalizedTo
   if (!SUPPORTED_TOKEN_CHAIN_KINDS.has(chainKind)) {
     throw new CustomTokenValidationError(
       "chainKind",
-      `Unsupported chainKind "${chainKind}". Only "evm" is supported.`
+      `Unsupported chainKind "${chainKind}". Use "evm" or "solana".`
     );
   }
 
@@ -118,12 +123,21 @@ export function normalizeCustomTokenInput(input: CustomTokenInput): NormalizedTo
       `Unknown EVM chainId "${chainId}". Use one of: ${[...EVM_CHAIN_IDS].join(", ")}.`
     );
   }
+  if (chainKind === "solana" && !SOLANA_CHAIN_IDS.has(chainId)) {
+    throw new CustomTokenValidationError("chainId", "Solana tokens must use chainId \"solana\".");
+  }
 
   const rawAddress = (input.address ?? "").trim();
   if (chainKind === "evm" && !/^0x[a-fA-F0-9]{40}$/.test(rawAddress)) {
     throw new CustomTokenValidationError(
       "address",
       "address must be a 0x-prefixed 40-character hex string."
+    );
+  }
+  if (chainKind === "solana" && !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(rawAddress)) {
+    throw new CustomTokenValidationError(
+      "address",
+      "address must be a valid Solana mint address."
     );
   }
   const address = chainKind === "evm" ? rawAddress.toLowerCase() : rawAddress;
@@ -159,14 +173,25 @@ export function normalizeCustomTokenInput(input: CustomTokenInput): NormalizedTo
   }
 
   const coinGeckoId = (input.coinGeckoId ?? "").trim().toLowerCase();
-  if (!coinGeckoId) {
-    throw new CustomTokenValidationError("coinGeckoId", "coinGeckoId is required.");
-  }
-  if (!/^[a-z0-9-]{1,64}$/.test(coinGeckoId)) {
+  if (coinGeckoId && !/^[a-z0-9-]{1,64}$/.test(coinGeckoId)) {
     throw new CustomTokenValidationError(
       "coinGeckoId",
       "coinGeckoId must contain only lowercase letters, digits, or hyphens (max 64 chars)."
     );
+  }
+
+  const trimmedPrice = typeof input.priceUsd === "string" ? input.priceUsd.trim() : input.priceUsd;
+  const priceValue =
+    trimmedPrice === null || trimmedPrice === undefined || trimmedPrice === ""
+      ? null
+      : typeof trimmedPrice === "string"
+        ? Number(trimmedPrice)
+        : trimmedPrice;
+  if (
+    priceValue !== null &&
+    (!Number.isFinite(priceValue) || priceValue < 0)
+  ) {
+    throw new CustomTokenValidationError("priceUsd", "priceUsd must be a non-negative number.");
   }
 
   return {
@@ -176,7 +201,8 @@ export function normalizeCustomTokenInput(input: CustomTokenInput): NormalizedTo
     symbol,
     name,
     decimals: decimalsValue,
-    coinGeckoId,
+    coinGeckoId: coinGeckoId || null,
+    priceUsd: priceValue,
     enabled: input.enabled === undefined ? true : Boolean(input.enabled)
   };
 }
@@ -234,7 +260,8 @@ export async function updateCustomToken(id: string, update: CustomTokenUpdate) {
     symbol: update.symbol ?? existing.symbol,
     name: update.name ?? existing.name,
     decimals: update.decimals ?? existing.decimals,
-    coinGeckoId: update.coinGeckoId ?? existing.coinGeckoId,
+    coinGeckoId: update.coinGeckoId === undefined ? existing.coinGeckoId ?? "" : update.coinGeckoId ?? "",
+    priceUsd: update.priceUsd === undefined ? existing.priceUsd : update.priceUsd,
     enabled: update.enabled === undefined ? existing.enabled : update.enabled
   };
   const normalized = normalizeCustomTokenInput(merged);
@@ -245,6 +272,7 @@ export async function updateCustomToken(id: string, update: CustomTokenUpdate) {
       name: normalized.name,
       decimals: normalized.decimals,
       coinGeckoId: normalized.coinGeckoId,
+      priceUsd: normalized.priceUsd,
       enabled: normalized.enabled
     }
   });
@@ -266,7 +294,8 @@ function serializeCustomToken(token: {
   symbol: string;
   name: string;
   decimals: number;
-  coinGeckoId: string;
+  coinGeckoId: string | null;
+  priceUsd: number | null;
   enabled: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -280,6 +309,7 @@ function serializeCustomToken(token: {
     name: token.name,
     decimals: token.decimals,
     coinGeckoId: token.coinGeckoId,
+    priceUsd: token.priceUsd,
     enabled: token.enabled,
     createdAt: token.createdAt.toISOString(),
     updatedAt: token.updatedAt.toISOString()

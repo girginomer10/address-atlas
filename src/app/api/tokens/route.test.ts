@@ -11,7 +11,8 @@ const VALID_TOKEN_BODY = {
   symbol: "AAVE",
   name: "Aave",
   decimals: 18,
-  coinGeckoId: "aave"
+  coinGeckoId: "aave",
+  priceUsd: null
 };
 
 describe("tokens API route", () => {
@@ -34,6 +35,7 @@ describe("tokens API route", () => {
     const body = await list.json();
     expect(body.tokens).toHaveLength(1);
     expect(body.chainOptions.length).toBeGreaterThan(0);
+    expect(body.chainOptions.some((option: { id: string }) => option.id === "solana")).toBe(true);
     expect(body.chainOptions.every((option: { id: string }) => Boolean(option.id))).toBe(true);
   });
 
@@ -56,6 +58,7 @@ describe("tokens API route", () => {
         name: "Aave",
         decimals: 18,
         coinGeckoId: "aave",
+        priceUsd: null,
         enabled: true
       }
     });
@@ -77,6 +80,7 @@ describe("tokens API route", () => {
         name: "Aave",
         decimals: 18,
         coinGeckoId: "aave",
+        priceUsd: null,
         enabled: true
       }
     });

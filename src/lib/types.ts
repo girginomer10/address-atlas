@@ -29,7 +29,8 @@ export interface TokenConfig {
   name: string;
   address: `0x${string}`;
   decimals: number;
-  coinGeckoId: string;
+  coinGeckoId?: string | null;
+  priceUsd?: number | null;
 }
 
 export interface SplTokenConfig {
@@ -37,7 +38,8 @@ export interface SplTokenConfig {
   name: string;
   mint: string;
   decimals: number;
-  coinGeckoId: string;
+  coinGeckoId?: string | null;
+  priceUsd?: number | null;
 }
 
 export interface TrackedAsset {

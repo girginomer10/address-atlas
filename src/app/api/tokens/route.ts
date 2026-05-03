@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { EVM_CHAINS } from "@/lib/chain-registry";
+import { EVM_CHAINS, SOLANA_CHAIN } from "@/lib/chain-registry";
 import {
   CustomTokenInput,
   CustomTokenUpdate,
@@ -13,7 +13,7 @@ import {
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const CHAIN_OPTIONS = EVM_CHAINS.map((chain) => ({
+const CHAIN_OPTIONS = [...EVM_CHAINS, SOLANA_CHAIN].map((chain) => ({
   id: chain.id,
   name: chain.name,
   family: chain.family

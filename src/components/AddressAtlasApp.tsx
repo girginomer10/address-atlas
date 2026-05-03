@@ -130,7 +130,8 @@ type CustomTokenRecord = {
   symbol: string;
   name: string;
   decimals: number;
-  coinGeckoId: string;
+  coinGeckoId: string | null;
+  priceUsd: number | null;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -148,7 +149,8 @@ const EMPTY_TOKEN_FORM = {
   symbol: "",
   name: "",
   decimals: "18",
-  coinGeckoId: ""
+  coinGeckoId: "",
+  priceUsd: ""
 };
 
 type ManualProvider = ExchangeProvider | "custom";
@@ -1329,11 +1331,55 @@ function TokenAllowlistManager({
 }) {
   const [form, setForm] = useState(EMPTY_TOKEN_FORM);
   const [submitting, setSubmitting] = useState(false);
+  const [autofilling, setAutofilling] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
 
   const chainOptions = chains.length > 0 ? chains : [{ id: "ethereum", name: "Ethereum", family: "evm" }];
+  const selectedChain = chainOptions.find((chain) => chain.id === form.chainId) ?? chainOptions[0];
+  const selectedChainKind = selectedChain.family === "solana" ? "solana" : "evm";
+  const addressLabel = selectedChainKind === "solana" ? "Mint address" : "Contract address";
+  const addressPlaceholder = selectedChainKind === "solana" ? "Solana mint..." : "0x...";
+
+  function changeChain(chainId: string) {
+    const nextChain = chainOptions.find((chain) => chain.id === chainId) ?? chainOptions[0];
+    setForm({
+      ...form,
+      chainId,
+      decimals: nextChain.family === "solana" ? "9" : "18"
+    });
+  }
+
+  async function autofillToken() {
+    setAutofilling(true);
+    setMessage("");
+    setErrorMessage("");
+    try {
+      const body = await fetchJson<{
+        metadata: {
+          address: string;
+          symbol: string;
+          name: string;
+          decimals: number;
+        };
+      }>(
+        `/api/tokens/metadata?chainKind=${encodeURIComponent(selectedChainKind)}&chainId=${encodeURIComponent(form.chainId)}&address=${encodeURIComponent(form.address.trim())}`
+      );
+      setForm((current) => ({
+        ...current,
+        address: body.metadata.address || current.address,
+        symbol: body.metadata.symbol || current.symbol,
+        name: body.metadata.name || current.name,
+        decimals: String(body.metadata.decimals)
+      }));
+      setMessage("Metadata loaded.");
+    } catch (lookupError) {
+      setErrorMessage(readError(lookupError));
+    } finally {
+      setAutofilling(false);
+    }
+  }
 
   async function addToken() {
     setSubmitting(true);
@@ -1344,16 +1390,21 @@ function TokenAllowlistManager({
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          chainKind: "evm",
+          chainKind: selectedChainKind,
           chainId: form.chainId,
           address: form.address.trim(),
           symbol: form.symbol.trim(),
           name: form.name.trim(),
           decimals: Number(form.decimals),
-          coinGeckoId: form.coinGeckoId.trim()
+          coinGeckoId: form.coinGeckoId.trim() || null,
+          priceUsd: form.priceUsd.trim() === "" ? null : Number(form.priceUsd)
         })
       });
-      setForm({ ...EMPTY_TOKEN_FORM, chainId: form.chainId });
+      setForm({
+        ...EMPTY_TOKEN_FORM,
+        chainId: form.chainId,
+        decimals: selectedChainKind === "solana" ? "9" : "18"
+      });
       setMessage(`Added ${form.symbol.trim()}.`);
       await onChange();
     } catch (addError) {
@@ -1400,11 +1451,15 @@ function TokenAllowlistManager({
         <div className="aa-token-form-grid">
           <label>
             <span>Chain</span>
-            <select value={form.chainId} onChange={(event) => setForm({ ...form, chainId: event.target.value })}>
+            <select value={form.chainId} onChange={(event) => changeChain(event.target.value)}>
               {chainOptions.map((chain) => (
                 <option key={chain.id} value={chain.id}>{chain.name}</option>
               ))}
             </select>
+          </label>
+          <label className="span-2">
+            <span>{addressLabel}</span>
+            <input value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} placeholder={addressPlaceholder} spellCheck={false} />
           </label>
           <label>
             <span>Symbol</span>
@@ -1414,10 +1469,6 @@ function TokenAllowlistManager({
             <span>Name</span>
             <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="e.g. Aave" />
           </label>
-          <label className="span-2">
-            <span>Contract address</span>
-            <input value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} placeholder="0x..." spellCheck={false} />
-          </label>
           <label>
             <span>Decimals</span>
             <input value={form.decimals} onChange={(event) => setForm({ ...form, decimals: event.target.value })} placeholder="18" inputMode="numeric" />
@@ -1426,8 +1477,15 @@ function TokenAllowlistManager({
             <span>CoinGecko id</span>
             <input value={form.coinGeckoId} onChange={(event) => setForm({ ...form, coinGeckoId: event.target.value })} placeholder="aave" spellCheck={false} />
           </label>
+          <label>
+            <span>Manual USD price</span>
+            <input value={form.priceUsd} onChange={(event) => setForm({ ...form, priceUsd: event.target.value })} placeholder="optional" inputMode="decimal" />
+          </label>
         </div>
         <div className="aa-form-actions">
+          <button className="aa-btn ghost" type="button" onClick={autofillToken} disabled={autofilling || form.address.trim() === ""}>
+            {autofilling ? <Loader2 className="spin" size={15} /> : <Search size={15} />} Autofill
+          </button>
           <button className="aa-btn primary" type="button" onClick={addToken} disabled={submitting}>
             {submitting ? <Loader2 className="spin" size={15} /> : <Plus size={15} />} Add token
           </button>
@@ -1450,7 +1508,11 @@ function TokenAllowlistManager({
                 <div className="aa-token-meta">
                   <span className="chain">{chainLabel}</span>
                   <code>{token.address}</code>
-                  <small>{token.decimals} decimals · cg:{token.coinGeckoId}</small>
+                  <small>
+                    {token.decimals} decimals
+                    {token.coinGeckoId ? ` · cg:${token.coinGeckoId}` : ""}
+                    {token.priceUsd !== null ? ` · manual:$${token.priceUsd}` : ""}
+                  </small>
                 </div>
                 <div className="aa-token-actions">
                   <Toggle on={token.enabled} onClick={() => toggleEnabled(token)} />

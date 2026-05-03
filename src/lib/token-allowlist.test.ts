@@ -8,7 +8,7 @@ import {
   normalizeCustomTokenInput,
   updateCustomToken
 } from "./local-store";
-import { mergeTokensByChain } from "./scanner";
+import { mergeSplTokensByChain, mergeTokensByChain } from "./scanner";
 import { clearTestDatabase } from "./test-db";
 import { ERC20_TOKENS_BY_CHAIN } from "./chain-registry";
 import type { TokenConfig } from "./types";
@@ -20,7 +20,8 @@ const VALID_TOKEN = {
   symbol: "AAVE",
   name: "Aave",
   decimals: 18,
-  coinGeckoId: "aave"
+  coinGeckoId: "aave",
+  priceUsd: null
 };
 
 describe("custom token persistence", () => {
@@ -54,10 +55,12 @@ describe("custom token persistence", () => {
       symbol: "AAVE2",
       name: "Aave V2",
       decimals: 18,
-      coinGeckoId: "aave"
+      coinGeckoId: "aave",
+      priceUsd: 99
     });
     expect(renamed.symbol).toBe("AAVE2");
     expect(renamed.name).toBe("Aave V2");
+    expect(renamed.priceUsd).toBe(99);
 
     await deleteCustomToken(created.id);
     expect(await listCustomTokens()).toHaveLength(0);
@@ -91,10 +94,21 @@ describe("custom token validation", () => {
     ).toThrow(CustomTokenValidationError);
   });
 
-  it("rejects non-evm chainKind for now", () => {
-    expect(() =>
-      normalizeCustomTokenInput({ ...VALID_TOKEN, chainKind: "solana" })
-    ).toThrow(CustomTokenValidationError);
+  it("supports Solana mint allowlist entries", () => {
+    const normalized = normalizeCustomTokenInput({
+      chainKind: "solana",
+      chainId: "solana",
+      address: "DezXAZ8z7PnrnRJjz3JpPZsM1pPB263KGg1W53WZyQb",
+      symbol: "BONK",
+      name: "Bonk",
+      decimals: 5,
+      coinGeckoId: "",
+      priceUsd: "0.00001"
+    });
+
+    expect(normalized.chainKind).toBe("solana");
+    expect(normalized.coinGeckoId).toBeNull();
+    expect(normalized.priceUsd).toBe(0.00001);
   });
 
   it("rejects non-integer or out-of-range decimals", () => {
@@ -116,9 +130,7 @@ describe("custom token validation", () => {
     expect(() =>
       normalizeCustomTokenInput({ ...VALID_TOKEN, name: "" })
     ).toThrow(CustomTokenValidationError);
-    expect(() =>
-      normalizeCustomTokenInput({ ...VALID_TOKEN, coinGeckoId: "" })
-    ).toThrow(CustomTokenValidationError);
+    expect(normalizeCustomTokenInput({ ...VALID_TOKEN, coinGeckoId: "" }).coinGeckoId).toBeNull();
   });
 
   it("rejects invalid CoinGecko ids", () => {
@@ -126,16 +138,25 @@ describe("custom token validation", () => {
       normalizeCustomTokenInput({ ...VALID_TOKEN, coinGeckoId: "Bad ID!" })
     ).toThrow(CustomTokenValidationError);
   });
+
+  it("rejects invalid manual prices", () => {
+    expect(() =>
+      normalizeCustomTokenInput({ ...VALID_TOKEN, priceUsd: -1 })
+    ).toThrow(CustomTokenValidationError);
+    expect(() =>
+      normalizeCustomTokenInput({ ...VALID_TOKEN, priceUsd: "nope" })
+    ).toThrow(CustomTokenValidationError);
+  });
 });
 
 describe("scanner token merge", () => {
   it("merges custom tokens after the built-in registry", () => {
     const custom: TokenConfig = {
-      symbol: "AAVE",
-      name: "Aave",
-      address: "0x7fc66500c84a76ad7e9c93437bfc5ac33e2ddae9",
+      symbol: "CRV",
+      name: "Curve DAO",
+      address: "0xd533a949740bb3306d119cc777fa900ba034cd52",
       decimals: 18,
-      coinGeckoId: "aave"
+      coinGeckoId: "curve-dao-token"
     };
 
     const merged = mergeTokensByChain([{ chainId: "ethereum", token: custom }]);
@@ -143,7 +164,7 @@ describe("scanner token merge", () => {
     const ethereum = merged.ethereum ?? [];
     const builtin = ERC20_TOKENS_BY_CHAIN.ethereum ?? [];
     expect(ethereum.length).toBe(builtin.length + 1);
-    expect(ethereum[ethereum.length - 1].symbol).toBe("AAVE");
+    expect(ethereum[ethereum.length - 1].symbol).toBe("CRV");
   });
 
   it("does not duplicate when a custom token shares an address with a built-in token", () => {
@@ -159,7 +180,8 @@ describe("scanner token merge", () => {
           symbol: "USDC-CUSTOM",
           name: "Custom USDC",
           decimals: 4,
-          coinGeckoId: "fake-id"
+          coinGeckoId: "fake-id",
+          priceUsd: null
         }
       }
     ]);
@@ -180,10 +202,29 @@ describe("scanner token merge", () => {
           name: "Wrapped Ether",
           address: "0x4200000000000000000000000000000000000006",
           decimals: 18,
-          coinGeckoId: "weth"
+          coinGeckoId: "weth",
+          priceUsd: null
         }
       }
     ]);
     expect(merged.base?.some((token) => token.symbol === "WETH")).toBe(true);
+  });
+
+  it("merges custom Solana mints after the built-in SPL registry", () => {
+    const merged = mergeSplTokensByChain([
+      {
+        chainId: "solana",
+        token: {
+          symbol: "MYCOIN",
+          name: "My Coin",
+          mint: "So11111111111111111111111111111111111111112",
+          decimals: 9,
+          coinGeckoId: null,
+          priceUsd: 0.25
+        }
+      }
+    ]);
+
+    expect(merged.solana?.some((token) => token.symbol === "MYCOIN")).toBe(true);
   });
 });

@@ -89,6 +89,12 @@ describe("scanAddresses Solana SPL", () => {
           }
 
           if (body.method === "getTokenAccountsByOwner") {
+            if (body.params?.[1]?.programId === "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb") {
+              return {
+                ok: true,
+                json: async () => ({ jsonrpc: "2.0", id: body.id, result: { value: [] } })
+              };
+            }
             return {
               ok: true,
               json: async () => ({

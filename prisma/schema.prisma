@@ -114,7 +114,8 @@ model CustomToken {
   symbol      String
   name        String
   decimals    Int
-  coinGeckoId String
+  coinGeckoId String?
+  priceUsd    Float?
   enabled     Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
