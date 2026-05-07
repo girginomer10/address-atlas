@@ -55,6 +55,14 @@ swift test
 swift run AddressAtlasMac
 ```
 
+To build a local `.app` bundle on a Mac with full Xcode selected:
+
+```bash
+cd native/AddressAtlasMac
+./build-mac-app.sh
+open "dist/Address Atlas.app"
+```
+
 The app stores its local vault in `~/Library/Application Support/AddressAtlas/vault.sqlite`. The SQLite table stores encrypted envelope JSON only; wallet addresses, exchange credentials, scan history, token lists, and preferences are encrypted before persistence.
 
 The encrypted sync server uses these environment variables:

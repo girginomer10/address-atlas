@@ -39,6 +39,7 @@ Address Atlas avoids account creation, automated rebalancing, signing, and fund-
 ## Native Mac Track
 
 - `native/AddressAtlasMac` is the new native SwiftUI implementation. The Next app remains a reference while the Mac app grows toward full replacement.
+- `native/AddressAtlasMac/build-mac-app.sh` builds a local `dist/Address Atlas.app` bundle on Macs with full Xcode selected.
 - The native vault key is a random 256-bit key stored in macOS Keychain with this-device-only accessibility. Users do not type or memorize an encryption password.
 - The native local store uses SQLite as an envelope table: the app serializes `VaultDocument`, encrypts it with an HKDF-derived local database key, and stores only envelope JSON (`nonce`, `ciphertext`, checksums, versions).
 - The vault key derives separate subkeys for local database encryption, encrypted server sync blobs, and field-level exchange credential encryption.

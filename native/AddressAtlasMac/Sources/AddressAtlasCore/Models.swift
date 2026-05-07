@@ -313,17 +313,23 @@ public struct ScanRunRecord: Codable, Identifiable, Hashable, Sendable {
 
 public struct SyncState: Codable, Equatable, Sendable {
   public var accountId: String?
+  public var serverURL: String
+  public var sessionToken: String
   public var latestRemoteVersion: Int
   public var lastSyncedAt: Date?
   public var lastChecksum: String?
 
   public init(
     accountId: String? = nil,
+    serverURL: String = "",
+    sessionToken: String = "",
     latestRemoteVersion: Int = 0,
     lastSyncedAt: Date? = nil,
     lastChecksum: String? = nil
   ) {
     self.accountId = accountId
+    self.serverURL = serverURL
+    self.sessionToken = sessionToken
     self.latestRemoteVersion = latestRemoteVersion
     self.lastSyncedAt = lastSyncedAt
     self.lastChecksum = lastChecksum
