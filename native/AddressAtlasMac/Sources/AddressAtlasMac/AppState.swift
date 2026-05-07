@@ -166,6 +166,11 @@ final class AppState: ObservableObject {
     save()
   }
 
+  func removeScanRun(id: UUID) {
+    document.scanRuns.removeAll { $0.id == id }
+    save()
+  }
+
   func saveExchangeConnection(provider: ExchangeProvider, label: String, credentials: ExchangeCredentials) {
     guard let vaultKey else {
       error = "Vault must be unlocked before saving exchange credentials."

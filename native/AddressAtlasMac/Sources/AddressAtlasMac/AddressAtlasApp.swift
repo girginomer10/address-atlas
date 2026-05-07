@@ -1,5 +1,7 @@
 import AddressAtlasCore
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 @main
 struct AddressAtlasMacApp: App {
@@ -146,7 +148,12 @@ struct WalletsView: View {
         ForEach(state.document.wallets) { wallet in
           HStack {
             VStack(alignment: .leading, spacing: 4) {
-              Text(wallet.label).font(.headline)
+              TextField("Label", text: Binding(get: {
+                state.document.wallets.first(where: { $0.id == wallet.id })?.label ?? wallet.label
+              }, set: { newValue in
+                state.updateWalletLabel(id: wallet.id, label: newValue)
+              }))
+              .font(.headline)
               Text(wallet.address).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
             }
             Spacer()
@@ -314,6 +321,12 @@ struct SnapshotsView: View {
               Spacer()
               Text(money(run.totalUsd))
               Text("\(run.holdings.count) assets").foregroundStyle(.secondary)
+              Button(role: .destructive) {
+                state.removeScanRun(id: run.id)
+              } label: {
+                Image(systemName: "trash")
+              }
+              .buttonStyle(.borderless)
             }
           }
         }
@@ -494,14 +507,45 @@ struct ExportView: View {
         Button("Generate CSV") {
           exported = AddressAtlasExporter.csv(for: state.latestScan?.holdings ?? [])
         }
+        Button("Save CSV") {
+          let csv = AddressAtlasExporter.csv(for: state.latestScan?.holdings ?? [])
+          exported = csv
+          save(text: csv, suggestedName: "address-atlas-holdings.csv", contentType: .commaSeparatedText)
+        }
         Button("Generate JSON") {
           if let data = try? AddressAtlasExporter.json(for: state.document) {
             exported = String(decoding: data, as: UTF8.self)
           }
         }
+        Button("Save JSON") {
+          do {
+            let data = try AddressAtlasExporter.json(for: state.document)
+            let json = String(decoding: data, as: UTF8.self)
+            exported = json
+            save(text: json, suggestedName: "address-atlas-vault.json", contentType: .json)
+          } catch {
+            state.error = error.localizedDescription
+          }
+        }
       }
       TextEditor(text: $exported)
         .font(.system(.body, design: .monospaced))
+    }
+  }
+
+  private func save(text: String, suggestedName: String, contentType: UTType) {
+    let panel = NSSavePanel()
+    panel.nameFieldStringValue = suggestedName
+    panel.allowedContentTypes = [contentType]
+    panel.canCreateDirectories = true
+    if panel.runModal() == .OK, let url = panel.url {
+      do {
+        try text.write(to: url, atomically: true, encoding: .utf8)
+        state.notice = "Export saved."
+        state.error = ""
+      } catch {
+        state.error = error.localizedDescription
+      }
     }
   }
 }
