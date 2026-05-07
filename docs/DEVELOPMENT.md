@@ -36,12 +36,30 @@ Address Atlas avoids account creation, automated rebalancing, signing, and fund-
 - `/api/tokens/metadata` prefers the built-in registry, can read ERC-20 symbol/name/decimals from the selected chain RPC, returns CoinGecko id suggestions, and reads Solana mint decimals from parsed account info. If `JUPITER_API_KEY` is configured, it also uses Jupiter Tokens API for arbitrary Solana mint symbol/name/USD price hints.
 - Solana scanning includes classic SPL Token Program and Token-2022 balances from the registry. TRON scanning includes native TRX plus tracked TRC20 tokens, currently USDT. XRP Ledger scanning includes native XRP plus positive issued-currency trustline balances as unpriced `issued` assets. Cosmos scanning includes native liquid balances, delegations, and distribution rewards.
 
+## Native Mac Track
+
+- `native/AddressAtlasMac` is the new native SwiftUI implementation. The Next app remains a reference while the Mac app grows toward full replacement.
+- The native vault key is a random 256-bit key stored in macOS Keychain with this-device-only accessibility. Users do not type or memorize an encryption password.
+- The native local store uses SQLite as an envelope table: the app serializes `VaultDocument`, encrypts it with an HKDF-derived local database key, and stores only envelope JSON (`nonce`, `ciphertext`, checksums, versions).
+- The vault key derives separate subkeys for local database encryption, encrypted server sync blobs, and field-level exchange credential encryption.
+- Native scanners make public RPC/API requests directly from the Mac app. The server sync layer is not a portfolio API and cannot decrypt user data.
+- Native exchange support should use deterministic Swift request builders and mocked signing tests before live balance calls. Do not reintroduce `ccxt` into the Mac runtime.
+
+## Encrypted Sync Server
+
+- The zero-knowledge sync surface is `POST /auth/passkey/options`, `POST /auth/passkey/verify`, `GET /vault/latest`, and `PUT /vault/latest`.
+- Sync requires Postgres through `SYNC_DATABASE_URL`; keep this separate from the legacy local Prisma SQLite `DATABASE_URL`.
+- Server tables are `users`, `passkey_credentials`, and `vault_snapshots`. Plain wallet addresses, balances, exchange credentials, token allowlists, preferences, and scan history must not be added to sync tables.
+- Passkeys authenticate accounts. They are not encryption keys; encrypted vault blobs are produced and opened only by the native client.
+
 ## Gotchas
 
 - Restart the dev server after Prisma schema/model changes. The dev process caches a global Prisma client, so newly generated delegates such as `customToken` and `manualExchangeHolding` may be missing until restart.
+- This workspace currently has only Command Line Tools, not full Xcode. `swift test` can fail before compiling package sources with a PackageDescription linker error; verify the native package on a Mac with full Xcode selected via `xcode-select`.
 
 ## Next Useful Milestones
 
 - Add Solana metadata-program or DAS lookup if we want no-key symbol/name autofill for arbitrary Solana mints.
 - Consider adding more TRC20 tokens and price mappings for well-known XRPL issued currencies.
 - Make manual exchange entries easier to reconcile against historical snapshots if users want time-specific manual values later.
+- Expand the native scanner from native balances to full token parity: SPL Token/Token-2022, ERC-20 allowlist probing, TRC20 registry entries, XRP issued-asset pricing rules, and Cosmos staking/rewards.

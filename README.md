@@ -2,6 +2,11 @@
 
 Address Atlas is a local-first, read-only crypto portfolio tracker. Paste public wallet addresses, connect read-only exchange API keys, and keep a private portfolio ledger on your own machine.
 
+The repo now contains two tracks:
+
+- The existing Next.js app remains as the web/reference implementation.
+- `native/AddressAtlasMac` is the new native macOS implementation. It uses a random vault key stored in macOS Keychain, writes only encrypted vault documents to local SQLite, runs RPC/API requests from the Mac app, and syncs only opaque encrypted vault snapshots to the server.
+
 ## Why this exists
 
 This repo is a cleaner follow-up to earlier hackathon experiments:
@@ -40,6 +45,30 @@ The default SQLite database is `.data/address-atlas.db`. You can override it wit
 DATABASE_URL="file:./.data/address-atlas.db"
 ```
 
+## Native macOS development
+
+The native app lives in `native/AddressAtlasMac` as a Swift Package with an executable SwiftUI target and testable core library:
+
+```bash
+cd native/AddressAtlasMac
+swift test
+swift run AddressAtlasMac
+```
+
+The app stores its local vault in `~/Library/Application Support/AddressAtlas/vault.sqlite`. The SQLite table stores encrypted envelope JSON only; wallet addresses, exchange credentials, scan history, token lists, and preferences are encrypted before persistence.
+
+The encrypted sync server uses these environment variables:
+
+```bash
+SYNC_DATABASE_URL="postgres://..."
+SYNC_SESSION_SECRET="long-random-secret"
+PASSKEY_RP_ID="example.com"
+PASSKEY_RP_NAME="Address Atlas"
+PASSKEY_ORIGIN="https://example.com"
+```
+
+Sync endpoints are intentionally narrow: `POST /auth/passkey/options`, `POST /auth/passkey/verify`, `GET /vault/latest`, and `PUT /vault/latest`. The server stores passkey public keys plus encrypted vault snapshot metadata; it does not store decryptable keys or plaintext portfolio data.
+
 ## Security notes
 
-Address Atlas is designed for local or trusted self-hosted use, not public multi-user deployment. It never asks for seed phrases, private keys, signing permissions, trading permissions, or withdrawal permissions. Exchange API keys should be created with balance/read permission only; stored credentials are encrypted with your vault passphrase. Public RPC, exchange, and price endpoints can rate-limit or fail, so scan results should be treated as portfolio visibility, not accounting-grade proof.
+Address Atlas is designed for local or trusted self-hosted use, not public multi-user deployment. It never asks for seed phrases, private keys, signing permissions, trading permissions, or withdrawal permissions. Exchange API keys should be created with balance/read permission only. In the native app, credentials are encrypted with a vault subkey before local persistence and sync. Public RPC, exchange, and price endpoints can rate-limit or fail, so scan results should be treated as portfolio visibility, not accounting-grade proof.

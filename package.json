@@ -9,6 +9,8 @@
     "start": "next start",
     "db:push": "node scripts/ensure-sqlite-db.mjs && prisma db push",
     "db:generate": "prisma generate",
+    "typecheck": "tsc --noEmit",
+    "native:test": "cd native/AddressAtlasMac && swift test",
     "test": "node scripts/run-tests.mjs"
   },
   "keywords": [
@@ -25,16 +27,19 @@
   "dependencies": {
     "@prisma/adapter-better-sqlite3": "^7.8.0",
     "@prisma/client": "^7.8.0",
+    "@simplewebauthn/server": "^13.3.0",
     "better-sqlite3": "^12.9.0",
     "ccxt": "^4.5.51",
     "lucide-react": "^1.14.0",
     "next": "^16.2.4",
+    "pg": "^8.20.0",
     "protobufjs": "^8.0.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
+    "@types/pg": "^8.20.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "playwright-core": "^1.59.1",
