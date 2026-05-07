@@ -88,6 +88,32 @@ final class AppState: ObservableObject {
     save()
   }
 
+  func saveExchangeConnection(provider: ExchangeProvider, label: String, credentials: ExchangeCredentials) {
+    guard let vaultKey else {
+      error = "Vault must be unlocked before saving exchange credentials."
+      return
+    }
+    let connectionId = UUID()
+    do {
+      let encrypted = try ExchangeCredentialVault(crypto: crypto).seal(
+        credentials,
+        vaultKey: vaultKey,
+        connectionId: connectionId
+      )
+      document.exchangeConnections.append(
+        ExchangeConnectionRecord(
+          id: connectionId,
+          provider: provider,
+          label: label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? provider.label : label,
+          encryptedCredentials: encrypted
+        )
+      )
+      save()
+    } catch {
+      self.error = error.localizedDescription
+    }
+  }
+
   func scanSavedWallets() async {
     scanning = true
     error = ""

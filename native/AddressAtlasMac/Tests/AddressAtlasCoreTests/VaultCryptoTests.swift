@@ -75,3 +75,93 @@ final class ExchangeRequestSigningTests: XCTestCase {
     XCTAssertFalse(AddressDetection.isSafePublicAddress(phrase))
   }
 }
+
+final class NativeScannerTokenTests: XCTestCase {
+  func testErc20BalanceOfDataPadsOwnerAddress() {
+    let data = NativeScanner.erc20BalanceOfData("0x000000000000000000000000000000000000dEaD")
+
+    XCTAssertEqual(data.count, 74)
+    XCTAssertTrue(data.hasPrefix("0x70a08231"))
+    XCTAssertTrue(data.hasSuffix("000000000000000000000000000000000000dead"))
+  }
+
+  func testCustomTokenRegistryKeepsBuiltinOnDuplicate() {
+    let duplicateUsdc = CustomTokenRecord(
+      chainKind: .evm,
+      chainId: "ethereum",
+      address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+      symbol: "FAKE",
+      name: "Fake USDC",
+      decimals: 6
+    )
+    let custom = CustomTokenRecord(
+      chainKind: .evm,
+      chainId: "ethereum",
+      address: "0x0000000000000000000000000000000000000001",
+      symbol: "ONE",
+      name: "One",
+      decimals: 18,
+      priceUsd: 1
+    )
+
+    let registries = NativeScanner.tokenRegistries(customTokens: [duplicateUsdc, custom])
+    let ethereum = registries.evm["ethereum"] ?? []
+
+    XCTAssertEqual(ethereum.filter { $0.address.lowercased() == duplicateUsdc.address.lowercased() }.count, 1)
+    XCTAssertTrue(ethereum.contains { $0.symbol == "USDC" })
+    XCTAssertTrue(ethereum.contains { $0.symbol == "ONE" })
+  }
+
+  func testSolanaTokenAccountParserReadsJsonParsedBalances() throws {
+    let json = """
+    {
+      "result": {
+        "value": [
+          {
+            "account": {
+              "data": {
+                "parsed": {
+                  "info": {
+                    "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                    "tokenAmount": {
+                      "amount": "1234500",
+                      "decimals": 6
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+    """
+    let response = try JSONDecoder.addressAtlas.decode(SolanaTokenAccountsResponse.self, from: Data(json.utf8))
+    let parsed = NativeScanner.parseSolanaTokenAccounts(response.result?.value ?? [])
+
+    XCTAssertEqual(parsed, [
+      ParsedSplAccount(
+        mint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        rawAmount: 1_234_500,
+        decimals: 6
+      )
+    ])
+  }
+}
+
+final class ExchangeCredentialVaultTests: XCTestCase {
+  func testExchangeCredentialsUseDedicatedSubkey() throws {
+    let crypto = VaultCrypto()
+    let vaultKey = try crypto.generateVaultKey()
+    let credentialVault = ExchangeCredentialVault(crypto: crypto)
+    let credentials = ExchangeCredentials(apiKey: "api", secret: "secret", passphrase: "pass")
+
+    let envelope = try credentialVault.seal(credentials, vaultKey: vaultKey, connectionId: UUID())
+    let opened = try credentialVault.open(envelope, vaultKey: vaultKey)
+
+    XCTAssertEqual(opened, credentials)
+
+    let localKey = try crypto.deriveKey(from: vaultKey, purpose: .localDatabase)
+    XCTAssertThrowsError(try crypto.openJSON(ExchangeCredentials.self, envelope: envelope, with: localKey))
+  }
+}

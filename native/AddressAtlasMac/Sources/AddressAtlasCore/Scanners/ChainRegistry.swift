@@ -137,6 +137,39 @@ public enum ChainRegistry {
     ]
   ]
 
+  public static let commonSplTokens: [String: [TokenConfig]] = [
+    "solana": [
+      TokenConfig(
+        symbol: "USDC",
+        name: "USD Coin",
+        address: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        decimals: 6,
+        coinGeckoId: "usd-coin"
+      ),
+      TokenConfig(
+        symbol: "USDT",
+        name: "Tether",
+        address: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkYgkNaQx4nFqL1dT",
+        decimals: 6,
+        coinGeckoId: "tether"
+      ),
+      TokenConfig(
+        symbol: "BONK",
+        name: "Bonk",
+        address: "DezXAZ8z7PnrnRJjz3sqfB8mVD5JYhwpGfT7TVKPa6i",
+        decimals: 5,
+        coinGeckoId: "bonk"
+      ),
+      TokenConfig(
+        symbol: "JUP",
+        name: "Jupiter",
+        address: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+        decimals: 6,
+        coinGeckoId: "jupiter-exchange-solana"
+      )
+    ]
+  ]
+
   public static var allChains: [ChainConfig] {
     [bitcoin, solana, tron, xrp] + evmChains + cosmosChains
   }
