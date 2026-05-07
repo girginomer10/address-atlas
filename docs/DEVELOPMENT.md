@@ -20,7 +20,7 @@ From FluxTranche:
 
 ## Product Constraint
 
-Address Atlas avoids account creation, automated rebalancing, signing, and fund-management claims. Exchange keys are allowed only for read-only balance fetching and are encrypted locally with a vault passphrase. The app should answer one question well: "What do these public wallets and read-only exchange accounts appear to hold?"
+Address Atlas avoids account creation, automated rebalancing, signing, and fund-management claims. Exchange keys are allowed only for read-only balance fetching and are encrypted locally: the legacy web reference uses a vault passphrase, while the native Mac app uses a random Keychain-backed vault key. The app should answer one question well: "What do these public wallets and read-only exchange accounts appear to hold?"
 
 ## Local-First Architecture
 
@@ -43,8 +43,8 @@ Address Atlas avoids account creation, automated rebalancing, signing, and fund-
 - The native vault key is a random 256-bit key stored in macOS Keychain with this-device-only accessibility. Users do not type or memorize an encryption password.
 - The native local store uses SQLite as an envelope table: the app serializes `VaultDocument`, encrypts it with an HKDF-derived local database key, and stores only envelope JSON (`nonce`, `ciphertext`, checksums, versions).
 - The vault key derives separate subkeys for local database encryption, encrypted server sync blobs, and field-level exchange credential encryption.
-- Native scanners make public RPC/API requests directly from the Mac app. EVM scanning includes native balances plus built-in/custom ERC-20 `balanceOf` probes; Solana scanning includes native SOL plus built-in/custom SPL Token and Token-2022 account parsing. The server sync layer is not a portfolio API and cannot decrypt user data.
-- Native exchange support should use deterministic Swift request builders and mocked signing tests before live balance calls. Do not reintroduce `ccxt` into the Mac runtime.
+- Native scanners make public RPC/API requests directly from the Mac app. EVM scanning includes native balances plus built-in/custom ERC-20 `balanceOf` probes; Solana scanning includes native SOL plus built-in/custom SPL Token and Token-2022 account parsing. Binance, Coinbase, and Kraken balances use native Swift REST clients with read-only credentials decrypted only in memory for the scan. The server sync layer is not a portfolio API and cannot decrypt user data.
+- Native exchange support uses deterministic Swift request builders and mocked signing/balance tests before live balance calls. Do not reintroduce `ccxt` into the Mac runtime.
 
 ## Encrypted Sync Server
 

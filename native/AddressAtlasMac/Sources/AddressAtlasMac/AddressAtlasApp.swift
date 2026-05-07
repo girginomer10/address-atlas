@@ -391,12 +391,30 @@ struct ExchangesView: View {
       .background(.thinMaterial)
       .clipShape(RoundedRectangle(cornerRadius: 8))
 
+      HStack {
+        Button {
+          Task { await state.scanSavedWallets() }
+        } label: {
+          if state.scanning {
+            ProgressView()
+          } else {
+            Text("Scan exchange balances")
+          }
+        }
+        .buttonStyle(.borderedProminent)
+        Text("\(state.document.exchangeConnections.count) encrypted connections")
+          .foregroundStyle(.secondary)
+      }
+
       List {
         ForEach(state.document.exchangeConnections) { connection in
           HStack {
             VStack(alignment: .leading) {
               Text(connection.label).font(.headline)
               Text("\(connection.provider.label) · \(connection.status.rawValue)").foregroundStyle(.secondary)
+              if let error = connection.lastError, !error.isEmpty {
+                Text(error).font(.caption).foregroundStyle(.red)
+              }
             }
             Spacer()
             if let lastSync = connection.lastSyncAt {
@@ -432,7 +450,11 @@ struct SyncView: View {
           Button {
             Task { await state.uploadEncryptedVault() }
           } label: {
-            state.syncing ? AnyView(ProgressView()) : AnyView(Text("Upload encrypted vault"))
+            if state.syncing {
+              ProgressView()
+            } else {
+              Text("Upload encrypted vault")
+            }
           }
           .buttonStyle(.borderedProminent)
           Button {

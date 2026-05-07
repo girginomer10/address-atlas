@@ -22,9 +22,9 @@ This repo is a cleaner follow-up to earlier hackathon experiments:
 - EVM native balances across Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, and Avalanche.
 - Common ERC-20 stablecoins on supported EVM chains.
 - Cosmos-native balances for Cosmos Hub, Osmosis, Celestia, Stargaze, and Stride.
-- Read-only exchange balances through Binance, Coinbase, and Kraken via ccxt.
+- Read-only exchange balances through Binance, Coinbase, and Kraken. The web reference uses ccxt; the native Mac app uses Swift REST clients.
 - Local SQLite persistence for watched wallets, scan runs, holdings, exchange connections, preferences, and vault metadata.
-- AES-256-GCM encryption for exchange API credentials using a local vault passphrase that is never stored.
+- AES-256-GCM encryption for exchange API credentials. The web reference uses a local vault passphrase; the native Mac app uses a Keychain-backed vault subkey.
 - USD prices through CoinGecko.
 - CSV and JSON export from the latest local snapshot.
 - Route-based UI: Portfolio, Wallets, Assets, Snapshots, Export, and Settings.
@@ -51,6 +51,7 @@ The native app lives in `native/AddressAtlasMac` as a Swift Package with an exec
 
 ```bash
 cd native/AddressAtlasMac
+./check-toolchain.sh
 swift test
 swift run AddressAtlasMac
 ```

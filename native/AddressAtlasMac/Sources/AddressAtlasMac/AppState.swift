@@ -263,6 +263,10 @@ final class AppState: ObservableObject {
   }
 
   func scanSavedWallets() async {
+    guard let vaultKey else {
+      error = "Vault must be unlocked before scanning."
+      return
+    }
     scanning = true
     error = ""
     defer { scanning = false }
@@ -270,6 +274,10 @@ final class AppState: ObservableObject {
       let input = document.wallets.map(\.address).joined(separator: "\n")
       let scanner = NativeScanner()
       var scan = try await scanner.scan(addresses: input, customTokens: document.customTokens)
+      let exchangeScan = await NativeExchangeScanner().scan(
+        connections: document.exchangeConnections,
+        vaultKey: vaultKey
+      )
       let manualAssets = document.manualHoldings.filter(\.enabled).map { holding in
         TrackedAsset(
           id: "manual-\(holding.id.uuidString)",
@@ -285,11 +293,14 @@ final class AppState: ObservableObject {
           source: .exchange
         )
       }
+      document.exchangeConnections = exchangeScan.connections
+      scan.holdings.append(contentsOf: exchangeScan.holdings)
       scan.holdings.append(contentsOf: manualAssets)
+      scan.warnings.append(contentsOf: exchangeScan.warnings)
       scan.totalUsd = scan.holdings.reduce(0) { $0 + $1.valueUsd }
       document.scanRuns.append(scan)
       save()
-      notice = "Snapshot saved."
+      notice = exchangeScan.warnings.isEmpty ? "Snapshot saved." : "Snapshot saved with exchange warnings."
     } catch {
       self.error = error.localizedDescription
     }

@@ -5,6 +5,7 @@ Native SwiftUI macOS app for Address Atlas.
 ## Run In Development
 
 ```bash
+./check-toolchain.sh
 swift run AddressAtlasMac
 ```
 
@@ -30,3 +31,5 @@ The app stores its encrypted local vault at:
 ```
 
 SQLite stores encrypted envelope JSON only. The vault key is random, 256-bit, and stored in macOS Keychain with this-device-only accessibility.
+
+The native app performs wallet RPC, price, token, and exchange balance requests directly from macOS. Exchange credentials are sealed with a dedicated vault subkey before being saved, then decrypted only in memory when a local scan runs.

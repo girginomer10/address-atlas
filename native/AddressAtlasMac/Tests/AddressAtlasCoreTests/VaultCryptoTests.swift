@@ -165,3 +165,109 @@ final class ExchangeCredentialVaultTests: XCTestCase {
     XCTAssertThrowsError(try crypto.openJSON(ExchangeCredentials.self, envelope: envelope, with: localKey))
   }
 }
+
+final class NativeExchangeClientTests: XCTestCase {
+  func testBinanceClientSignsRequestAndParsesBalances() async throws {
+    let http = StubHTTPClient { request in
+      XCTAssertEqual(request.url?.path, "/api/v3/account")
+      XCTAssertEqual(request.value(forHTTPHeaderField: "X-MBX-APIKEY"), "key")
+      XCTAssertTrue(request.url?.query?.contains("timestamp=1700000000000") == true)
+      XCTAssertTrue(request.url?.query?.contains("signature=") == true)
+      let json = """
+      {
+        "balances": [
+          { "asset": "BTC", "free": "0.25", "locked": "0.25" },
+          { "asset": "EMPTY", "free": "0", "locked": "0" }
+        ]
+      }
+      """
+      return (Data(json.utf8), httpResponse(for: request))
+    }
+    let client = NativeExchangeBalanceClient(
+      http: http,
+      now: { Date(timeIntervalSince1970: 1_700_000_000) }
+    )
+
+    let balance = try await client.fetchBalance(
+      provider: .binance,
+      credentials: ExchangeCredentials(apiKey: "key", secret: "secret")
+    )
+
+    XCTAssertEqual(balance.total["BTC"], 0.5)
+    XCTAssertEqual(balance.free["BTC"], 0.25)
+    XCTAssertNil(balance.total["EMPTY"])
+  }
+
+  func testExchangeBalanceNormalizerPricesStablecoinsAndKnownAssets() {
+    let id = UUID()
+    let holdings = ExchangeBalanceNormalizer.normalize(
+      balance: ExchangeBalance(total: ["USDC": 42, "XBT": 0.5]),
+      id: id,
+      provider: .kraken,
+      label: "Kraken main",
+      prices: ["bitcoin": PricePoint(usd: 100_000, usd24hChange: 1.5)]
+    )
+
+    XCTAssertEqual(holdings.map(\.symbol), ["BTC", "USDC"])
+    XCTAssertEqual(holdings.first(where: { $0.symbol == "BTC" })?.valueUsd, 50_000)
+    XCTAssertEqual(holdings.first(where: { $0.symbol == "USDC" })?.valueUsd, 42)
+    XCTAssertEqual(holdings.first?.source, .exchange)
+  }
+
+  func testNativeExchangeScannerDecryptsCredentialsAndUpdatesConnection() async throws {
+    let http = StubHTTPClient { request in
+      let json = """
+      {
+        "balances": [
+          { "asset": "USDC", "free": "10", "locked": "0" }
+        ]
+      }
+      """
+      return (Data(json.utf8), httpResponse(for: request))
+    }
+    let crypto = VaultCrypto()
+    let vaultKey = try crypto.generateVaultKey()
+    let connectionId = UUID()
+    let credentials = try ExchangeCredentialVault(crypto: crypto).seal(
+      ExchangeCredentials(apiKey: "key", secret: "secret"),
+      vaultKey: vaultKey,
+      connectionId: connectionId
+    )
+    let connection = ExchangeConnectionRecord(
+      id: connectionId,
+      provider: .binance,
+      label: "Binance main",
+      encryptedCredentials: credentials
+    )
+    let scanner = NativeExchangeScanner(
+      client: NativeExchangeBalanceClient(http: http, now: { Date(timeIntervalSince1970: 1_700_000_000) }),
+      credentialVault: ExchangeCredentialVault(crypto: crypto),
+      priceProvider: StaticPriceProvider(values: [:])
+    )
+
+    let result = await scanner.scan(connections: [connection], vaultKey: vaultKey)
+
+    XCTAssertEqual(result.holdings.first?.symbol, "USDC")
+    XCTAssertEqual(result.holdings.first?.valueUsd, 10)
+    XCTAssertEqual(result.connections.first?.status, .ok)
+    XCTAssertNil(result.connections.first?.lastError)
+    XCTAssertTrue(result.warnings.isEmpty)
+  }
+}
+
+private struct StubHTTPClient: HTTPClient, @unchecked Sendable {
+  let handler: (URLRequest) throws -> (Data, HTTPURLResponse)
+
+  func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    try handler(request)
+  }
+}
+
+private func httpResponse(for request: URLRequest, statusCode: Int = 200) -> HTTPURLResponse {
+  HTTPURLResponse(
+    url: request.url ?? URL(string: "https://example.com")!,
+    statusCode: statusCode,
+    httpVersion: "HTTP/1.1",
+    headerFields: ["content-type": "application/json"]
+  )!
+}

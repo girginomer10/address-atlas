@@ -9,6 +9,7 @@ APP_DIR="$DIST_DIR/$APP_NAME.app"
 
 cd "$ROOT"
 
+"$ROOT/check-toolchain.sh"
 swift build -c release --product AddressAtlasMac
 
 rm -rf "$APP_DIR"
