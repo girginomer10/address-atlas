@@ -21,7 +21,9 @@ This repo is a cleaner follow-up to earlier hackathon experiments:
 - Solana native SOL balance via public Solana RPC.
 - EVM native balances across Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, and Avalanche.
 - Common ERC-20 stablecoins on supported EVM chains.
-- Cosmos-native balances for Cosmos Hub, Osmosis, Celestia, Stargaze, and Stride.
+- TRON native TRX plus tracked TRC20 tokens.
+- XRP Ledger native XRP plus positive issued-currency trustline balances.
+- Cosmos liquid, delegated, and reward balances for Cosmos Hub, Osmosis, Celestia, Stargaze, and Stride.
 - Read-only exchange balances through Binance, Coinbase, and Kraken. The web reference uses ccxt; the native Mac app uses Swift REST clients.
 - Local SQLite persistence for watched wallets, scan runs, holdings, exchange connections, preferences, and vault metadata.
 - AES-256-GCM encryption for exchange API credentials. The web reference uses a local vault passphrase; the native Mac app uses a Keychain-backed vault subkey.

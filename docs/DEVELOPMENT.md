@@ -63,6 +63,6 @@ Address Atlas avoids account creation, automated rebalancing, signing, and fund-
 ## Next Useful Milestones
 
 - Add Solana metadata-program or DAS lookup if we want no-key symbol/name autofill for arbitrary Solana mints.
-- Consider adding more TRC20 tokens and price mappings for well-known XRPL issued currencies.
+- Add more TRC20 registry entries and price mappings for well-known XRPL issued currencies.
 - Make manual exchange entries easier to reconcile against historical snapshots if users want time-specific manual values later.
-- Continue native scanner parity: TRC20 registry entries, XRP issued-asset pricing rules, Cosmos staking/rewards, broader built-in token registries, and token metadata autofill.
+- Continue native scanner parity with broader built-in token registries, XRP issued-asset pricing rules, token metadata autofill, and chain-specific warning surfacing.

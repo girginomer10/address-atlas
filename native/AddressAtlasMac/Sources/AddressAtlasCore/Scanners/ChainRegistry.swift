@@ -170,6 +170,18 @@ public enum ChainRegistry {
     ]
   ]
 
+  public static let commonTrc20Tokens: [String: [TokenConfig]] = [
+    "tron": [
+      TokenConfig(
+        symbol: "USDT",
+        name: "Tether",
+        address: "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+        decimals: 6,
+        coinGeckoId: "tether"
+      )
+    ]
+  ]
+
   public static var allChains: [ChainConfig] {
     [bitcoin, solana, tron, xrp] + evmChains + cosmosChains
   }

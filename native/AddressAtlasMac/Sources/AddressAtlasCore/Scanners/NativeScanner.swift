@@ -15,6 +15,7 @@ public struct NativeScanner: Sendable {
     let registries = Self.tokenRegistries(customTokens: customTokens)
     let tokenIds = Array(registries.evm.values.joined()).compactMap(\.coinGeckoId)
       + Array(registries.spl.values.joined()).compactMap(\.coinGeckoId)
+      + Array(registries.trc20.values.joined()).compactMap(\.coinGeckoId)
     let prices = try await priceProvider.prices(for: Array(Set(detectedChains.map(\.coinGeckoId) + tokenIds)))
 
     var assets: [TrackedAsset] = []
@@ -78,7 +79,12 @@ public struct NativeScanner: Sendable {
     case .cosmos:
       return try await scanCosmos(address: address, chain: chain, prices: prices)
     case .tron:
-      return try await scanTron(address: address, chain: chain, prices: prices)
+      return try await scanTron(
+        address: address,
+        chain: chain,
+        tokens: registries.trc20[chain.id] ?? [],
+        prices: prices
+      )
     case .xrp:
       return try await scanXRP(address: address, chain: chain, prices: prices)
     case .exchange:
@@ -196,36 +202,72 @@ public struct NativeScanner: Sendable {
   }
 
   private func scanCosmos(address: String, chain: ChainConfig, prices: [String: PricePoint]) async throws -> [TrackedAsset] {
-    struct Response: Decodable {
-      var balances: [Balance]?
-      struct Balance: Decodable {
-        var denom: String
-        var amount: String
-      }
-    }
     guard let rest = chain.restUrl, let denom = chain.nativeDenom else { return [] }
     let url = rest.appending(path: "cosmos/bank/v1beta1/balances/\(address)")
-    let response = try await http.get(url, as: Response.self)
-    let raw = Double(response.balances?.first(where: { $0.denom == denom })?.amount ?? "0") ?? 0
-    return assetIfPositive(amount: raw / pow(10, Double(chain.decimals)), address: address, chain: chain, prices: prices)
+    let response = try await http.get(url, as: CosmosBankResponse.self)
+    var assets = assetIfPositive(
+      amount: Self.parseCosmosLiquid(response, denom: denom, decimals: chain.decimals),
+      address: address,
+      chain: chain,
+      prices: prices
+    )
+
+    let delegationURL = Self.cosmosURL(
+      rest: rest,
+      path: "cosmos/staking/v1beta1/delegations/\(address)",
+      queryItems: [URLQueryItem(name: "pagination.limit", value: "500")]
+    )
+    if let delegationResponse = try? await http.get(delegationURL, as: CosmosDelegationResponse.self) {
+      assets.append(contentsOf: assetIfPositive(
+        amount: Self.parseCosmosDelegations(delegationResponse, denom: denom, decimals: chain.decimals),
+        address: address,
+        chain: chain,
+        prices: prices,
+        name: "\(chain.name) Staked",
+        source: .staked
+      ))
+    }
+
+    let rewardsURL = rest.appending(path: "cosmos/distribution/v1beta1/delegators/\(address)/rewards")
+    if let rewardsResponse = try? await http.get(rewardsURL, as: CosmosRewardsResponse.self) {
+      assets.append(contentsOf: assetIfPositive(
+        amount: Self.parseCosmosRewards(rewardsResponse, denom: denom, decimals: chain.decimals),
+        address: address,
+        chain: chain,
+        prices: prices,
+        name: "\(chain.name) Rewards",
+        source: .rewards
+      ))
+    }
+
+    return assets
   }
 
-  private func scanTron(address: String, chain: ChainConfig, prices: [String: PricePoint]) async throws -> [TrackedAsset] {
-    struct Response: Decodable {
-      var data: [Account]?
-      struct Account: Decodable { var balance: Double? }
-    }
+  private func scanTron(
+    address: String,
+    chain: ChainConfig,
+    tokens: [TokenConfig],
+    prices: [String: PricePoint]
+  ) async throws -> [TrackedAsset] {
     guard let rest = chain.restUrl else { return [] }
     let url = rest.appending(path: "v1/accounts/\(address)")
-    let response = try await http.get(url, as: Response.self)
-    return assetIfPositive(amount: (response.data?.first?.balance ?? 0) / pow(10, Double(chain.decimals)), address: address, chain: chain, prices: prices)
+    let response = try await http.get(url, as: TronAccountResponse.self)
+    let account = response.data?.first
+    var assets = assetIfPositive(
+      amount: (account?.balance ?? 0) / pow(10, Double(chain.decimals)),
+      address: address,
+      chain: chain,
+      prices: prices
+    )
+
+    let tokenAmounts = Self.parseTronTrc20Balances(account?.trc20 ?? [], tokens: tokens)
+    assets.append(contentsOf: tokenAmounts.compactMap { entry in
+      tokenAsset(amount: entry.amount, address: address, chain: chain, token: entry.token, prices: prices, source: .trc20)
+    })
+    return assets
   }
 
   private func scanXRP(address: String, chain: ChainConfig, prices: [String: PricePoint]) async throws -> [TrackedAsset] {
-    struct Request: Encodable {
-      var method = "account_info"
-      var params: [[String: String]]
-    }
     struct Response: Decodable {
       var result: Result?
       struct Result: Decodable {
@@ -243,30 +285,62 @@ public struct NativeScanner: Sendable {
       struct Account: Decodable { var Balance: String? }
     }
     guard let rpc = chain.rpcUrl else { return [] }
-    let response = try await http.post(rpc, body: Request(params: [["account": address, "ledger_index": "validated"]]), as: Response.self)
+    let response = try await http.post(
+      rpc,
+      body: XRPRequest(
+        method: "account_info",
+        params: [[
+          "account": .string(address),
+          "ledger_index": .string("validated")
+        ]]
+      ),
+      as: Response.self
+    )
     if response.result?.error == "actNotFound" { return [] }
     let drops = Double(response.result?.accountData?.Balance ?? "0") ?? 0
-    return assetIfPositive(amount: drops / pow(10, Double(chain.decimals)), address: address, chain: chain, prices: prices)
+    var assets = assetIfPositive(amount: drops / pow(10, Double(chain.decimals)), address: address, chain: chain, prices: prices)
+
+    let linesResponse = try? await http.post(
+      rpc,
+      body: XRPRequest(
+        method: "account_lines",
+        params: [[
+          "account": .string(address),
+          "ledger_index": .string("validated"),
+          "limit": .number(200)
+        ]]
+      ),
+      as: XrpAccountLinesResponse.self
+    )
+    assets.append(contentsOf: Self.parseXrpTrustLines(linesResponse?.result?.lines ?? [], address: address, chain: chain))
+    return assets
   }
 
-  private func assetIfPositive(amount: Double, address: String, chain: ChainConfig, prices: [String: PricePoint]) -> [TrackedAsset] {
+  private func assetIfPositive(
+    amount: Double,
+    address: String,
+    chain: ChainConfig,
+    prices: [String: PricePoint],
+    name: String? = nil,
+    source: AssetSource = .native
+  ) -> [TrackedAsset] {
     guard amount > 0 else { return [] }
     let price = prices[chain.coinGeckoId] ?? PricePoint(usd: 0)
     return [
       TrackedAsset(
-        id: "\(address)-\(chain.id)-\(chain.symbol)-native",
+        id: "\(address)-\(chain.id)-\(chain.symbol)-\(source.rawValue)",
         address: address,
         chainId: chain.id,
         chainName: chain.name,
         family: chain.family,
         symbol: chain.symbol,
-        name: chain.name,
+        name: name ?? chain.name,
         amount: amount,
         priceUsd: price.usd,
         valueUsd: amount * price.usd,
         change24h: price.usd24hChange,
         explorerUrl: chain.explorerUrl.appending(path: address).absoluteString,
-        source: .native
+        source: source
       )
     ]
   }
@@ -359,6 +433,86 @@ public struct NativeScanner: Sendable {
     }
   }
 
+  public static func parseCosmosLiquid(_ response: CosmosBankResponse, denom: String, decimals: Int) -> Double {
+    let raw = Double(response.balances?.first(where: { $0.denom == denom })?.amount ?? "0") ?? 0
+    return raw / pow(10, Double(decimals))
+  }
+
+  public static func parseCosmosDelegations(_ response: CosmosDelegationResponse, denom: String, decimals: Int) -> Double {
+    let raw = response.delegationResponses?.reduce(0.0) { sum, item in
+      guard item.balance?.denom == denom else { return sum }
+      return sum + (Double(item.balance?.amount ?? "0") ?? 0)
+    } ?? 0
+    return raw / pow(10, Double(decimals))
+  }
+
+  public static func parseCosmosRewards(_ response: CosmosRewardsResponse, denom: String, decimals: Int) -> Double {
+    let raw = response.total?.reduce(0.0) { sum, balance in
+      guard balance.denom == denom else { return sum }
+      return sum + (Double(balance.amount) ?? 0)
+    } ?? 0
+    return raw / pow(10, Double(decimals))
+  }
+
+  public static func parseTronTrc20Balances(_ balances: [[String: String]], tokens: [TokenConfig]) -> [(token: TokenConfig, amount: Double)] {
+    tokens.compactMap { token in
+      let raw = balances.reduce(0.0) { sum, entry in
+        sum + (Double(entry[token.address] ?? "0") ?? 0)
+      }
+      let amount = raw / pow(10, Double(token.decimals))
+      guard amount > 0 else { return nil }
+      return (token, amount)
+    }
+  }
+
+  public static func parseXrpTrustLines(_ lines: [XrpTrustLine], address: String, chain: ChainConfig) -> [TrackedAsset] {
+    lines.compactMap { line in
+      guard
+        let amount = Double(line.balance),
+        amount > 0
+      else {
+        return nil
+      }
+      let symbol = decodeXrplCurrency(line.currency)
+      let issuer = line.account
+      let shortIssuer = String(issuer.prefix(6)) + "..." + String(issuer.suffix(4))
+      return TrackedAsset(
+        id: "\(address)-\(chain.id)-\(symbol)-\(issuer)",
+        address: address,
+        chainId: chain.id,
+        chainName: chain.name,
+        family: chain.family,
+        symbol: symbol,
+        name: "\(symbol) issued by \(shortIssuer)",
+        amount: amount,
+        priceUsd: 0,
+        valueUsd: 0,
+        change24h: nil,
+        explorerUrl: chain.explorerUrl.appending(path: address).absoluteString,
+        source: .issued
+      )
+    }
+  }
+
+  public static func decodeXrplCurrency(_ value: String) -> String {
+    let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard normalized.count == 40, normalized.allSatisfy(\.isHexDigit) else {
+      return normalized
+    }
+    var bytes: [UInt8] = []
+    var index = normalized.startIndex
+    while index < normalized.endIndex {
+      let next = normalized.index(index, offsetBy: 2)
+      let byteString = String(normalized[index..<next])
+      if let byte = UInt8(byteString, radix: 16), byte >= 32, byte <= 126 {
+        bytes.append(byte)
+      }
+      index = next
+    }
+    let decoded = String(bytes: bytes, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return decoded.isEmpty ? "\(normalized.prefix(8))..." : decoded
+  }
+
   public static func erc20BalanceOfData(_ owner: String) -> String {
     let normalized = owner.replacingOccurrences(of: "0x", with: "").lowercased()
     return "0x70a08231\(String(repeating: "0", count: max(0, 64 - normalized.count)))\(normalized)"
@@ -367,6 +521,7 @@ public struct NativeScanner: Sendable {
   public static func tokenRegistries(customTokens: [CustomTokenRecord]) -> TokenRegistries {
     var evm = ChainRegistry.commonErc20Tokens
     var spl = ChainRegistry.commonSplTokens
+    var trc20 = ChainRegistry.commonTrc20Tokens
 
     for token in customTokens where token.enabled {
       let config = TokenConfig(
@@ -381,10 +536,12 @@ public struct NativeScanner: Sendable {
         appendUnique(config, to: &evm[token.chainId, default: []])
       } else if token.chainKind == .solana {
         appendUnique(config, to: &spl[token.chainId, default: []])
+      } else if token.chainKind == .tron {
+        appendUnique(config, to: &trc20[token.chainId, default: []])
       }
     }
 
-    return TokenRegistries(evm: evm, spl: spl)
+    return TokenRegistries(evm: evm, spl: spl, trc20: trc20)
   }
 
   private static func appendUnique(_ token: TokenConfig, to tokens: inout [TokenConfig]) {
@@ -400,11 +557,21 @@ public struct NativeScanner: Sendable {
     let raw = data.reduce(0.0) { $0 * 256 + Double($1) }
     return raw / pow(10, Double(decimals))
   }
+
+  private static func cosmosURL(rest: URL, path: String, queryItems: [URLQueryItem]) -> URL {
+    let url = rest.appending(path: path)
+    guard !queryItems.isEmpty, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+      return url
+    }
+    components.queryItems = queryItems
+    return components.url ?? url
+  }
 }
 
 public struct TokenRegistries: Sendable {
   public var evm: [String: [TokenConfig]]
   public var spl: [String: [TokenConfig]]
+  public var trc20: [String: [TokenConfig]]
 }
 
 public struct ParsedSplAccount: Equatable, Sendable {
@@ -444,6 +611,74 @@ public struct SolanaTokenAccount: Decodable, Sendable {
   public struct TokenAmount: Decodable, Sendable {
     public var amount: String
     public var decimals: Int
+  }
+}
+
+public struct CosmosBankResponse: Decodable, Sendable {
+  public var balances: [CosmosBalance]?
+}
+
+public struct CosmosDelegationResponse: Decodable, Sendable {
+  public var delegationResponses: [CosmosDelegation]?
+
+  enum CodingKeys: String, CodingKey {
+    case delegationResponses = "delegation_responses"
+  }
+}
+
+public struct CosmosRewardsResponse: Decodable, Sendable {
+  public var total: [CosmosBalance]?
+}
+
+public struct CosmosDelegation: Decodable, Sendable {
+  public var balance: CosmosBalance?
+}
+
+public struct CosmosBalance: Decodable, Sendable {
+  public var denom: String
+  public var amount: String
+}
+
+public struct TronAccountResponse: Decodable, Sendable {
+  public var data: [Account]?
+
+  public struct Account: Decodable, Sendable {
+    public var balance: Double?
+    public var trc20: [[String: String]]?
+  }
+}
+
+public struct XrpAccountLinesResponse: Decodable, Sendable {
+  public var result: Result?
+
+  public struct Result: Decodable, Sendable {
+    public var lines: [XrpTrustLine]?
+  }
+}
+
+public struct XrpTrustLine: Decodable, Sendable {
+  public var account: String
+  public var balance: String
+  public var currency: String
+}
+
+private struct XRPRequest: Encodable {
+  var method: String
+  var params: [[String: XRPValue]]
+}
+
+private enum XRPValue: Encodable {
+  case string(String)
+  case number(Int)
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.singleValueContainer()
+    switch self {
+    case .string(let value):
+      try container.encode(value)
+    case .number(let value):
+      try container.encode(value)
+    }
   }
 }
 

@@ -147,6 +147,80 @@ final class NativeScannerTokenTests: XCTestCase {
       )
     ])
   }
+
+  func testCosmosParsersReadLiquidStakedAndRewardsBalances() throws {
+    let bankJSON = """
+    { "balances": [{ "denom": "uatom", "amount": "1200000" }] }
+    """
+    let delegationJSON = """
+    {
+      "delegation_responses": [
+        { "balance": { "denom": "uatom", "amount": "2500000" } },
+        { "balance": { "denom": "uother", "amount": "9999999" } }
+      ]
+    }
+    """
+    let rewardsJSON = """
+    { "total": [{ "denom": "uatom", "amount": "340000" }] }
+    """
+
+    let bank = try JSONDecoder.addressAtlas.decode(CosmosBankResponse.self, from: Data(bankJSON.utf8))
+    let delegations = try JSONDecoder.addressAtlas.decode(CosmosDelegationResponse.self, from: Data(delegationJSON.utf8))
+    let rewards = try JSONDecoder.addressAtlas.decode(CosmosRewardsResponse.self, from: Data(rewardsJSON.utf8))
+
+    XCTAssertEqual(NativeScanner.parseCosmosLiquid(bank, denom: "uatom", decimals: 6), 1.2)
+    XCTAssertEqual(NativeScanner.parseCosmosDelegations(delegations, denom: "uatom", decimals: 6), 2.5)
+    XCTAssertEqual(NativeScanner.parseCosmosRewards(rewards, denom: "uatom", decimals: 6), 0.34)
+  }
+
+  func testTronTrc20ParserReadsRegisteredBalances() {
+    let token = TokenConfig(
+      symbol: "USDT",
+      name: "Tether",
+      address: "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+      decimals: 6,
+      coinGeckoId: "tether"
+    )
+
+    let parsed = NativeScanner.parseTronTrc20Balances(
+      [
+        ["TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t": "1250000"],
+        ["other": "999999"]
+      ],
+      tokens: [token]
+    )
+
+    XCTAssertEqual(parsed.count, 1)
+    XCTAssertEqual(parsed.first?.token.symbol, "USDT")
+    XCTAssertEqual(parsed.first?.amount, 1.25)
+  }
+
+  func testXrpTrustLineParserDecodesIssuedAssets() {
+    let lines = [
+      XrpTrustLine(
+        account: "rIssuer111111111111111111111111111111111",
+        balance: "42.5",
+        currency: "5553440000000000000000000000000000000000"
+      ),
+      XrpTrustLine(
+        account: "rIssuer222222222222222222222222222222222",
+        balance: "-1",
+        currency: "IGNORED"
+      )
+    ]
+
+    let parsed = NativeScanner.parseXrpTrustLines(
+      lines,
+      address: "rWallet111111111111111111111111111111111",
+      chain: ChainRegistry.xrp
+    )
+
+    XCTAssertEqual(NativeScanner.decodeXrplCurrency("5553440000000000000000000000000000000000"), "USD")
+    XCTAssertEqual(parsed.count, 1)
+    XCTAssertEqual(parsed.first?.symbol, "USD")
+    XCTAssertEqual(parsed.first?.source, .issued)
+    XCTAssertEqual(parsed.first?.amount, 42.5)
+  }
 }
 
 final class ExchangeCredentialVaultTests: XCTestCase {
