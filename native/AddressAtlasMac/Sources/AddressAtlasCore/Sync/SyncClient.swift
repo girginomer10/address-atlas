@@ -134,10 +134,7 @@ public actor ZeroKnowledgeSyncClient {
       request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "authorization")
     }
     let client = URLSession.shared
-    let (data, response) = try await client.data(for: request)
-    guard let http = response as? HTTPURLResponse else {
-      throw URLError(.badServerResponse)
-    }
+    let (data, http) = try await client.data(for: request)
     if http.statusCode == 404 {
       return nil
     }
@@ -156,8 +153,8 @@ public actor ZeroKnowledgeSyncClient {
       request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "authorization")
     }
     request.httpBody = try JSONEncoder.addressAtlas.encode(snapshot)
-    let (data, response) = try await URLSession.shared.data(for: request)
-    guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+    let (data, http) = try await URLSession.shared.data(for: request)
+    guard (200..<300).contains(http.statusCode) else {
       throw URLError(.badServerResponse)
     }
     _ = data

@@ -10,6 +10,10 @@ APP_DIR="$DIST_DIR/$APP_NAME.app"
 cd "$ROOT"
 
 "$ROOT/check-toolchain.sh"
+if [[ -x "/opt/homebrew/opt/swift/bin/swift" && -d "/Library/Developer/CommandLineTools" ]]; then
+  export PATH="/opt/homebrew/opt/swift/bin:$PATH"
+  export DEVELOPER_DIR="/Library/Developer/CommandLineTools"
+fi
 swift build -c release --product AddressAtlasMac
 
 rm -rf "$APP_DIR"

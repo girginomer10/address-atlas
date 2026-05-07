@@ -52,11 +52,10 @@ The native app lives in `native/AddressAtlasMac` as a Swift Package with an exec
 ```bash
 cd native/AddressAtlasMac
 ./check-toolchain.sh
-swift test
-swift run AddressAtlasMac
+PATH="/opt/homebrew/opt/swift/bin:$PATH" swift run AddressAtlasMac
 ```
 
-To build a local `.app` bundle on a Mac with full Xcode selected:
+`swift test` requires full Xcode for XCTest. The local `.app` bundle can be built with either full Xcode or the Homebrew Swift.org toolchain:
 
 ```bash
 cd native/AddressAtlasMac

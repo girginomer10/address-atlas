@@ -3,18 +3,21 @@ import Foundation
 public enum AddressDetection {
   public static func parse(_ input: String, maxCount: Int = 24) -> [String] {
     var seen = Set<String>()
-    return input
+    var addresses: [String] = []
+    let tokens = input
       .split(whereSeparator: { $0.isWhitespace || $0 == "," || $0 == ";" })
-      .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-      .filter { !$0.isEmpty }
-      .filter { value in
-        let key = value.lowercased()
-        guard !seen.contains(key) else { return false }
-        seen.insert(key)
-        return true
+      .map { (token: Substring) in
+        String(token).trimmingCharacters(in: .whitespacesAndNewlines)
       }
-      .prefix(maxCount)
-      .map(String.init)
+
+    for value in tokens where !value.isEmpty {
+      let key = value.lowercased()
+      guard !seen.contains(key) else { continue }
+      seen.insert(key)
+      addresses.append(value)
+      if addresses.count >= maxCount { break }
+    }
+    return addresses
   }
 
   public static func detectChains(for address: String) -> [ChainConfig] {

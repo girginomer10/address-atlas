@@ -6,7 +6,7 @@ Native SwiftUI macOS app for Address Atlas.
 
 ```bash
 ./check-toolchain.sh
-swift run AddressAtlasMac
+PATH="/opt/homebrew/opt/swift/bin:$PATH" swift run AddressAtlasMac
 ```
 
 ## Test
@@ -16,6 +16,7 @@ swift test
 ```
 
 This requires full Xcode selected with `xcode-select`, not only Command Line Tools.
+The Homebrew Swift fallback can build the app, but it does not provide XCTest.
 
 ## Build A Local App Bundle
 
