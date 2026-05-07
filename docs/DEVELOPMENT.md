@@ -50,6 +50,7 @@ Address Atlas avoids account creation, automated rebalancing, signing, and fund-
 
 - The zero-knowledge sync surface is `POST /auth/passkey/options`, `POST /auth/passkey/verify`, `GET /vault/latest`, and `PUT /vault/latest`.
 - Sync requires Postgres through `SYNC_DATABASE_URL`; keep this separate from the legacy local Prisma SQLite `DATABASE_URL`.
+- Local sync development can use `npm run sync:db:up`, which starts `compose.sync.yml` with the same default URL shown in `.env.example`.
 - Server tables are `users`, `passkey_credentials`, and `vault_snapshots`. Plain wallet addresses, balances, exchange credentials, token allowlists, preferences, and scan history must not be added to sync tables.
 - Passkeys authenticate accounts. They are not encryption keys; encrypted vault blobs are produced and opened only by the native client.
 - The native Mac app uses `ASWebAuthenticationSession` to open `/auth/native`, complete WebAuthn on the server origin, and receive the short-lived sync session token through `address-atlas://sync-auth`. The app-bundle build script registers that URL scheme.

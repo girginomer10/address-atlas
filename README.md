@@ -76,6 +76,12 @@ PASSKEY_RP_NAME="Address Atlas"
 PASSKEY_ORIGIN="https://example.com"
 ```
 
+For local sync development, start the bundled Postgres service first:
+
+```bash
+npm run sync:db:up
+```
+
 Sync endpoints are intentionally narrow: `POST /auth/passkey/options`, `POST /auth/passkey/verify`, `GET /vault/latest`, and `PUT /vault/latest`. The server stores passkey public keys plus encrypted vault snapshot metadata; it does not store decryptable keys or plaintext portfolio data.
 
 The Mac app opens `/auth/native` in a system web authentication session for passkey account creation/sign-in, then receives only a short-lived sync session token through the `address-atlas://sync-auth` callback URL.

@@ -9,6 +9,8 @@
     "start": "next start",
     "db:push": "node scripts/ensure-sqlite-db.mjs && prisma db push",
     "db:generate": "prisma generate",
+    "sync:db:up": "docker compose -f compose.sync.yml up -d",
+    "sync:db:down": "docker compose -f compose.sync.yml down",
     "typecheck": "tsc --noEmit",
     "native:test": "cd native/AddressAtlasMac && swift test",
     "test": "node scripts/run-tests.mjs"
