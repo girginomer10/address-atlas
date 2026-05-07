@@ -457,6 +457,28 @@ struct SyncView: View {
         TextField("Sync server URL", text: $serverURL)
         SecureField("Session token", text: $sessionToken)
         HStack {
+          Button {
+            Task {
+              await state.createPasskeyAccount(serverURL: serverURL)
+              serverURL = state.document.syncState.serverURL
+              sessionToken = state.document.syncState.sessionToken
+            }
+          } label: {
+            Text("Create passkey account")
+          }
+          .buttonStyle(.bordered)
+          Button {
+            Task {
+              await state.signInWithPasskey(serverURL: serverURL)
+              serverURL = state.document.syncState.serverURL
+              sessionToken = state.document.syncState.sessionToken
+            }
+          } label: {
+            Text("Sign in with passkey")
+          }
+          .buttonStyle(.bordered)
+        }
+        HStack {
           Button("Save sync settings") {
             state.saveSyncSettings(serverURL: serverURL, sessionToken: sessionToken)
           }
@@ -484,6 +506,7 @@ struct SyncView: View {
       VStack(alignment: .leading, spacing: 8) {
         Text("Sync State").font(.headline)
         Text("Remote version: \(state.document.syncState.latestRemoteVersion)")
+        Text("Account: \(state.document.syncState.accountId ?? "not connected")")
         Text("Last synced: \(state.document.syncState.lastSyncedAt?.formatted(date: .abbreviated, time: .shortened) ?? "never")")
         Text("Checksum: \(state.document.syncState.lastChecksum ?? "none")")
           .font(.system(.caption, design: .monospaced))

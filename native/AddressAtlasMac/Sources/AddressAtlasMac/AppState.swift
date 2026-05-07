@@ -14,6 +14,7 @@ final class AppState: ObservableObject {
   private let crypto = VaultCrypto()
   private let keyStore = KeychainVaultKeyStore()
   private let syncCodec = VaultSyncCodec()
+  private let passkeyAuthenticator = PasskeyWebAuthenticator()
   private var vaultKey: Data?
   private var store: EncryptedSQLiteVaultStore?
 
@@ -206,6 +207,34 @@ final class AppState: ObservableObject {
     document.syncState.serverURL = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
     document.syncState.sessionToken = sessionToken.trimmingCharacters(in: .whitespacesAndNewlines)
     save()
+  }
+
+  func createPasskeyAccount(serverURL: String) async {
+    await authenticateWithPasskey(serverURL: serverURL, mode: .register)
+  }
+
+  func signInWithPasskey(serverURL: String) async {
+    await authenticateWithPasskey(serverURL: serverURL, mode: .authenticate)
+  }
+
+  private func authenticateWithPasskey(serverURL: String, mode: PasskeyWebMode) async {
+    guard let url = URL(string: serverURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+      error = "Sync server URL is required."
+      return
+    }
+    syncing = true
+    defer { syncing = false }
+    do {
+      let session = try await passkeyAuthenticator.authenticate(serverURL: url, mode: mode)
+      document.syncState.accountId = session.userId
+      document.syncState.serverURL = session.serverURL
+      document.syncState.sessionToken = session.sessionToken
+      save()
+      notice = mode == .register ? "Passkey account connected." : "Passkey sign-in complete."
+      error = ""
+    } catch {
+      self.error = error.localizedDescription
+    }
   }
 
   func uploadEncryptedVault() async {

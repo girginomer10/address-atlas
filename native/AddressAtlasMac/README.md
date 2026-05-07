@@ -24,6 +24,8 @@ This requires full Xcode selected with `xcode-select`, not only Command Line Too
 open "dist/Address Atlas.app"
 ```
 
+The app bundle registers the `address-atlas://sync-auth` callback URL used by the encrypted sync passkey flow.
+
 The app stores its encrypted local vault at:
 
 ```text
