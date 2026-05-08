@@ -112,6 +112,28 @@ final class NativeScannerTokenTests: XCTestCase {
     XCTAssertTrue(ethereum.contains { $0.symbol == "ONE" })
   }
 
+  func testBuiltinRegistriesCoverReferenceTokenSet() {
+    let registries = NativeScanner.tokenRegistries(customTokens: [])
+
+    XCTAssertTrue(registries.evm["base"]?.contains { $0.symbol == "cbBTC" } == true)
+    XCTAssertTrue(registries.evm["arbitrum"]?.contains { $0.symbol == "ARB" } == true)
+    XCTAssertTrue(registries.evm["optimism"]?.contains { $0.symbol == "OP" } == true)
+    XCTAssertTrue(registries.evm["bsc"]?.contains { $0.symbol == "CAKE" } == true)
+    XCTAssertTrue(registries.evm["avalanche"]?.contains { $0.symbol == "BTC.b" } == true)
+
+    let solana = registries.spl["solana"] ?? []
+    XCTAssertEqual(
+      solana.first(where: { $0.symbol == "USDT" })?.address,
+      "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
+    )
+    XCTAssertEqual(
+      solana.first(where: { $0.symbol == "BONK" })?.address,
+      "DezXAZ8z7PnrnRJjz3JpPZsM1pPB263KGg1W53WZyQb"
+    )
+    XCTAssertTrue(solana.contains { $0.symbol == "JitoSOL" })
+    XCTAssertTrue(solana.contains { $0.symbol == "WIF" })
+  }
+
   func testSolanaTokenAccountParserReadsJsonParsedBalances() throws {
     let json = """
     {
