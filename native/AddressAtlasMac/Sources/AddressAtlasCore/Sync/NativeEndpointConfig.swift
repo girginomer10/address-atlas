@@ -65,9 +65,9 @@ public struct NativeEndpointConfig: Codable, Equatable, Sendable {
       "stride": ChainEndpointOverride(restURL: URL(string: "https://stride-api.polkachu.com"))
     ],
     exchanges: [
-      ExchangeProvider.binance.rawValue: ExchangeEndpointOverride(baseURL: URL(string: "https://api.binance.com")!),
-      ExchangeProvider.coinbase.rawValue: ExchangeEndpointOverride(baseURL: URL(string: "https://api.coinbase.com")!),
-      ExchangeProvider.kraken.rawValue: ExchangeEndpointOverride(baseURL: URL(string: "https://api.kraken.com")!)
+      ExchangeProvider.binance.rawValue: ExchangeEndpointOverride(baseURL: URL(string: "https://api.binance.com")!, accountPath: "/api/v3/account"),
+      ExchangeProvider.coinbase.rawValue: ExchangeEndpointOverride(baseURL: URL(string: "https://api.coinbase.com")!, accountPath: "/api/v3/brokerage/accounts"),
+      ExchangeProvider.kraken.rawValue: ExchangeEndpointOverride(baseURL: URL(string: "https://api.kraken.com")!, accountPath: "/0/private/Balance")
     ]
   )
 
@@ -82,6 +82,39 @@ public struct NativeEndpointConfig: Codable, Equatable, Sendable {
 
   public func exchangeBaseURL(for provider: ExchangeProvider) -> URL? {
     exchanges[provider.rawValue]?.baseURL
+  }
+
+  public func exchangeAccountPath(for provider: ExchangeProvider) -> String? {
+    exchanges[provider.rawValue]?.accountPath
+  }
+
+  public func validated() throws -> NativeEndpointConfig {
+    try Self.validateHTTPURL(priceBaseURL, field: "priceBaseUrl")
+    for (chainId, override) in chains {
+      try Self.validateHTTPURL(override.rpcURL, field: "\(chainId).rpcUrl")
+      try Self.validateHTTPURL(override.restURL, field: "\(chainId).restUrl")
+      try Self.validateHTTPURL(override.explorerURL, field: "\(chainId).explorerUrl")
+    }
+    for (provider, override) in exchanges {
+      try Self.validateHTTPURL(override.baseURL, field: "\(provider).baseUrl")
+      try Self.validatePath(override.accountPath, field: "\(provider).accountPath")
+    }
+    return self
+  }
+
+  private static func validateHTTPURL(_ url: URL?, field: String) throws {
+    guard let url else { return }
+    let scheme = url.scheme?.lowercased()
+    guard scheme == "https" || scheme == "http" else {
+      throw NativeEndpointConfigError.invalidEndpoint(field)
+    }
+  }
+
+  private static func validatePath(_ path: String?, field: String) throws {
+    guard let path else { return }
+    guard path.hasPrefix("/"), !path.contains("://") else {
+      throw NativeEndpointConfigError.invalidEndpoint(field)
+    }
   }
 }
 
@@ -105,24 +138,30 @@ public struct ChainEndpointOverride: Codable, Equatable, Sendable {
 
 public struct ExchangeEndpointOverride: Codable, Equatable, Sendable {
   public var baseURL: URL
+  public var accountPath: String?
 
   enum CodingKeys: String, CodingKey {
     case baseURL = "baseUrl"
+    case accountPath
   }
 
-  public init(baseURL: URL) {
+  public init(baseURL: URL, accountPath: String? = nil) {
     self.baseURL = baseURL
+    self.accountPath = accountPath
   }
 }
 
 public enum NativeEndpointConfigError: Error, Equatable, LocalizedError {
   case invalidSchema
+  case invalidEndpoint(String)
   case requestFailed(Int, String)
 
   public var errorDescription: String? {
     switch self {
     case .invalidSchema:
       return "Endpoint config is not supported by this app version."
+    case .invalidEndpoint(let field):
+      return "Endpoint config contains an invalid URL or path: \(field)."
     case .requestFailed(_, let message):
       return message
     }
@@ -150,6 +189,6 @@ public struct NativeEndpointConfigClient: Sendable {
     guard config.schemaVersion == 1 else {
       throw NativeEndpointConfigError.invalidSchema
     }
-    return config
+    return try config.validated()
   }
 }

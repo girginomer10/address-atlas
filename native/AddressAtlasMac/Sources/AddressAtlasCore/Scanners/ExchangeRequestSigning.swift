@@ -30,20 +30,27 @@ public struct SignedExchangeRequest: Equatable, Sendable {
 }
 
 public enum ExchangeRequestSigner {
-  public static func binanceAccountRequest(credentials: ExchangeCredentials, timestampMs: Int64) -> SignedExchangeRequest {
+  public static func binanceAccountRequest(
+    credentials: ExchangeCredentials,
+    timestampMs: Int64,
+    path: String = "/api/v3/account"
+  ) -> SignedExchangeRequest {
     let query = "timestamp=\(timestampMs)"
     let signature = hmacSHA256Hex(message: query, secret: credentials.secret)
     return SignedExchangeRequest(
       method: "GET",
-      path: "/api/v3/account",
+      path: path,
       query: "\(query)&signature=\(signature)",
       headers: ["X-MBX-APIKEY": credentials.apiKey]
     )
   }
 
-  public static func coinbaseAccountsRequest(credentials: ExchangeCredentials, timestamp: String) -> SignedExchangeRequest {
+  public static func coinbaseAccountsRequest(
+    credentials: ExchangeCredentials,
+    timestamp: String,
+    path: String = "/api/v3/brokerage/accounts"
+  ) -> SignedExchangeRequest {
     let method = "GET"
-    let path = "/api/v3/brokerage/accounts"
     let body = ""
     let prehash = "\(timestamp)\(method)\(path)\(body)"
     let signature = hmacSHA256Base64(message: prehash, secret: credentials.secret)
@@ -60,8 +67,11 @@ public enum ExchangeRequestSigner {
     )
   }
 
-  public static func krakenBalanceRequest(credentials: ExchangeCredentials, nonce: String) throws -> SignedExchangeRequest {
-    let path = "/0/private/Balance"
+  public static func krakenBalanceRequest(
+    credentials: ExchangeCredentials,
+    nonce: String,
+    path: String = "/0/private/Balance"
+  ) throws -> SignedExchangeRequest {
     let body = "nonce=\(nonce)"
     let bodyHash = SHA256.hash(data: Data("\(nonce)\(body)".utf8))
     var message = Data(path.utf8)

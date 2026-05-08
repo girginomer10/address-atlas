@@ -89,6 +89,9 @@ public struct NativeExchangeBalanceClient: Sendable {
   private let binanceBaseURL: URL
   private let coinbaseBaseURL: URL
   private let krakenBaseURL: URL
+  private let binanceAccountPath: String
+  private let coinbaseAccountsPath: String
+  private let krakenBalancePath: String
   private let now: @Sendable () -> Date
 
   public init(
@@ -97,6 +100,9 @@ public struct NativeExchangeBalanceClient: Sendable {
     binanceBaseURL: URL? = nil,
     coinbaseBaseURL: URL? = nil,
     krakenBaseURL: URL? = nil,
+    binanceAccountPath: String? = nil,
+    coinbaseAccountsPath: String? = nil,
+    krakenBalancePath: String? = nil,
     now: @escaping @Sendable () -> Date = { Date() }
   ) {
     self.http = http
@@ -109,6 +115,15 @@ public struct NativeExchangeBalanceClient: Sendable {
     self.krakenBaseURL = krakenBaseURL
       ?? endpointConfig.exchangeBaseURL(for: .kraken)
       ?? URL(string: "https://api.kraken.com")!
+    self.binanceAccountPath = binanceAccountPath
+      ?? endpointConfig.exchangeAccountPath(for: .binance)
+      ?? "/api/v3/account"
+    self.coinbaseAccountsPath = coinbaseAccountsPath
+      ?? endpointConfig.exchangeAccountPath(for: .coinbase)
+      ?? "/api/v3/brokerage/accounts"
+    self.krakenBalancePath = krakenBalancePath
+      ?? endpointConfig.exchangeAccountPath(for: .kraken)
+      ?? "/0/private/Balance"
     self.now = now
   }
 
@@ -125,7 +140,11 @@ public struct NativeExchangeBalanceClient: Sendable {
 
   private func fetchBinanceBalance(credentials: ExchangeCredentials) async throws -> ExchangeBalance {
     let timestampMs = Int64(now().timeIntervalSince1970 * 1000)
-    let signed = ExchangeRequestSigner.binanceAccountRequest(credentials: credentials, timestampMs: timestampMs)
+    let signed = ExchangeRequestSigner.binanceAccountRequest(
+      credentials: credentials,
+      timestampMs: timestampMs,
+      path: binanceAccountPath
+    )
     let data = try await sendSignedRequest(signed, baseURL: binanceBaseURL)
     let response = try JSONDecoder.addressAtlas.decode(BinanceAccountResponse.self, from: data)
     var totals: [String: Double] = [:]
@@ -143,7 +162,11 @@ public struct NativeExchangeBalanceClient: Sendable {
 
   private func fetchCoinbaseBalance(credentials: ExchangeCredentials) async throws -> ExchangeBalance {
     let timestamp = String(format: "%.0f", now().timeIntervalSince1970)
-    let signed = ExchangeRequestSigner.coinbaseAccountsRequest(credentials: credentials, timestamp: timestamp)
+    let signed = ExchangeRequestSigner.coinbaseAccountsRequest(
+      credentials: credentials,
+      timestamp: timestamp,
+      path: coinbaseAccountsPath
+    )
     let data = try await sendSignedRequest(signed, baseURL: coinbaseBaseURL)
     let response = try JSONDecoder.addressAtlas.decode(CoinbaseAccountsResponse.self, from: data)
     var totals: [String: Double] = [:]
@@ -162,7 +185,11 @@ public struct NativeExchangeBalanceClient: Sendable {
 
   private func fetchKrakenBalance(credentials: ExchangeCredentials) async throws -> ExchangeBalance {
     let nonce = String(Int64(now().timeIntervalSince1970 * 1000))
-    let signed = try ExchangeRequestSigner.krakenBalanceRequest(credentials: credentials, nonce: nonce)
+    let signed = try ExchangeRequestSigner.krakenBalanceRequest(
+      credentials: credentials,
+      nonce: nonce,
+      path: krakenBalancePath
+    )
     let data = try await sendSignedRequest(signed, baseURL: krakenBaseURL, contentType: "application/x-www-form-urlencoded")
     let response = try JSONDecoder.addressAtlas.decode(KrakenBalanceResponse.self, from: data)
     guard response.error.isEmpty else {

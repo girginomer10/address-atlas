@@ -6,6 +6,7 @@ export interface NativeChainEndpointConfig {
 
 export interface NativeExchangeEndpointConfig {
   baseUrl: string;
+  accountPath?: string;
 }
 
 export interface NativeEndpointConfig {
@@ -45,21 +46,21 @@ export const DEFAULT_NATIVE_ENDPOINT_CONFIG: NativeEndpointConfig = {
     stride: { restUrl: "https://stride-api.polkachu.com" }
   },
   exchanges: {
-    binance: { baseUrl: "https://api.binance.com" },
-    coinbase: { baseUrl: "https://api.coinbase.com" },
-    kraken: { baseUrl: "https://api.kraken.com" }
+    binance: { baseUrl: "https://api.binance.com", accountPath: "/api/v3/account" },
+    coinbase: { baseUrl: "https://api.coinbase.com", accountPath: "/api/v3/brokerage/accounts" },
+    kraken: { baseUrl: "https://api.kraken.com", accountPath: "/0/private/Balance" }
   }
 };
 
 export function getNativeEndpointConfig(): NativeEndpointConfig {
   const envOverride = parseNativeConfigOverride(process.env.NATIVE_ENDPOINT_CONFIG_JSON);
   const config = mergeNativeConfig(DEFAULT_NATIVE_ENDPOINT_CONFIG, envOverride);
-  return {
+  return sanitizeNativeConfig({
     ...config,
     configVersion: numberFromEnv("NATIVE_ENDPOINT_CONFIG_VERSION", config.configVersion),
     updatedAt: process.env.NATIVE_ENDPOINT_CONFIG_UPDATED_AT || config.updatedAt,
     message: process.env.NATIVE_ENDPOINT_CONFIG_MESSAGE || config.message
-  };
+  });
 }
 
 function parseNativeConfigOverride(raw: string | undefined) {
@@ -86,13 +87,69 @@ function mergeNativeConfig(base: NativeEndpointConfig, override: Partial<NativeE
     priceBaseUrl: override.priceBaseUrl ?? base.priceBaseUrl,
     chains: {
       ...base.chains,
-      ...override.chains
+      ...mergeRecord(base.chains, override.chains)
     },
     exchanges: {
       ...base.exchanges,
-      ...override.exchanges
+      ...mergeRecord(base.exchanges, override.exchanges)
     }
   };
+}
+
+function mergeRecord<T>(base: Record<string, T>, override?: Record<string, Partial<T>>): Record<string, T> {
+  if (!override) return {};
+  return Object.fromEntries(
+    Object.entries(override).map(([key, value]) => [key, { ...(base[key] ?? {}), ...value }])
+  ) as Record<string, T>;
+}
+
+function sanitizeNativeConfig(config: NativeEndpointConfig): NativeEndpointConfig {
+  return {
+    ...config,
+    priceBaseUrl: httpURL(config.priceBaseUrl, DEFAULT_NATIVE_ENDPOINT_CONFIG.priceBaseUrl),
+    chains: Object.fromEntries(
+      Object.entries(config.chains).map(([chainId, value]) => {
+        const fallback = DEFAULT_NATIVE_ENDPOINT_CONFIG.chains[chainId] ?? {};
+        return [chainId, {
+          rpcUrl: optionalHTTPURL(value.rpcUrl, fallback.rpcUrl),
+          restUrl: optionalHTTPURL(value.restUrl, fallback.restUrl),
+          explorerUrl: optionalHTTPURL(value.explorerUrl, fallback.explorerUrl)
+        }];
+      })
+    ),
+    exchanges: Object.fromEntries(
+      Object.entries(config.exchanges).map(([provider, value]) => {
+        const fallback = DEFAULT_NATIVE_ENDPOINT_CONFIG.exchanges[provider] ?? value;
+        return [provider, {
+          baseUrl: httpURL(value.baseUrl, fallback.baseUrl),
+          accountPath: pathValue(value.accountPath, fallback.accountPath)
+        }];
+      })
+    )
+  };
+}
+
+function optionalHTTPURL(value: string | undefined, fallback: string | undefined) {
+  if (!value) return fallback;
+  return httpURL(value, fallback);
+}
+
+function httpURL(value: string | undefined, fallback: string | undefined) {
+  if (!value) return fallback ?? "";
+  try {
+    const url = new URL(value);
+    if (url.protocol === "https:" || url.protocol === "http:") {
+      return value;
+    }
+  } catch {
+    // Fall through to fallback.
+  }
+  return fallback ?? "";
+}
+
+function pathValue(value: string | undefined, fallback: string | undefined) {
+  if (!value) return fallback;
+  return value.startsWith("/") && !value.includes("://") ? value : fallback;
 }
 
 function numberFromEnv(name: string, fallback: number) {

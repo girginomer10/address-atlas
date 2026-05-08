@@ -20,6 +20,7 @@ Public v1 must not ship unsigned or unnotarized. If no Developer ID Application 
 
 ## Mac Release
 
+- Run `npm run release:doctor`; strict release environments should run `./scripts/release-doctor.sh --strict`.
 - Run `swift test`.
 - Run `npm test`, `npm run build`, and `npx tsc --noEmit`.
 - Run `ADDRESS_ATLAS_CODESIGN_IDENTITY="Developer ID Application: ..." ./native/AddressAtlasMac/build-dmg.sh`.

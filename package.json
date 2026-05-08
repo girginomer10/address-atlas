@@ -9,14 +9,16 @@
     "start": "next start",
     "db:push": "node scripts/ensure-sqlite-db.mjs && prisma db push",
     "db:generate": "prisma generate",
+    "clean:local-dupes": "node scripts/clean-local-duplicates.mjs",
     "sync:db:up": "docker compose -f compose.sync.yml up -d",
     "sync:db:down": "docker compose -f compose.sync.yml down",
     "sync:prod:up": "docker compose --env-file server/sync/.env.production -f server/sync/compose.prod.yml up -d --build",
     "sync:prod:down": "docker compose --env-file server/sync/.env.production -f server/sync/compose.prod.yml down",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "prisma generate && node scripts/clean-local-duplicates.mjs && tsc --noEmit",
     "native:test": "cd native/AddressAtlasMac && swift test",
     "native:dmg": "cd native/AddressAtlasMac && ./build-dmg.sh",
     "native:notarize": "cd native/AddressAtlasMac && ./notarize-mac-app.sh",
+    "release:doctor": "./scripts/release-doctor.sh",
     "test": "node scripts/run-tests.mjs"
   },
   "keywords": [

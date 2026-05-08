@@ -83,7 +83,10 @@ final class NativeEndpointConfigTests: XCTestCase {
         "ethereum": ChainEndpointOverride(rpcURL: URL(string: "https://eth.example/rpc"))
       ],
       exchanges: [
-        ExchangeProvider.binance.rawValue: ExchangeEndpointOverride(baseURL: URL(string: "https://binance.example")!)
+        ExchangeProvider.binance.rawValue: ExchangeEndpointOverride(
+          baseURL: URL(string: "https://binance.example")!,
+          accountPath: "/api/v4/account"
+        )
       ]
     )
 
@@ -92,6 +95,7 @@ final class NativeEndpointConfigTests: XCTestCase {
     XCTAssertEqual(config.configVersion, 3)
     XCTAssertEqual(chain.rpcUrl?.absoluteString, "https://eth.example/rpc")
     XCTAssertEqual(config.exchangeBaseURL(for: .binance)?.absoluteString, "https://binance.example")
+    XCTAssertEqual(config.exchangeAccountPath(for: .binance), "/api/v4/account")
     XCTAssertEqual(config.exchangeBaseURL(for: .coinbase), nil)
   }
 
@@ -101,7 +105,12 @@ final class NativeEndpointConfigTests: XCTestCase {
       updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
       priceBaseURL: URL(string: "https://prices.example/simple/price")!,
       chains: ["solana": ChainEndpointOverride(rpcURL: URL(string: "https://solana.example"))],
-      exchanges: [ExchangeProvider.kraken.rawValue: ExchangeEndpointOverride(baseURL: URL(string: "https://kraken.example")!)]
+      exchanges: [
+        ExchangeProvider.kraken.rawValue: ExchangeEndpointOverride(
+          baseURL: URL(string: "https://kraken.example")!,
+          accountPath: "/private/balance"
+        )
+      ]
     )
     let http = StubHTTPClient { request in
       XCTAssertEqual(request.url?.path, "/config/native")
@@ -112,6 +121,29 @@ final class NativeEndpointConfigTests: XCTestCase {
     let config = try await client.fetch(from: URL(string: "https://sync.example")!)
 
     XCTAssertEqual(config, expected)
+  }
+
+  func testEndpointConfigClientRejectsUnsafeURLsAndPaths() async throws {
+    let invalid = NativeEndpointConfig(
+      priceBaseURL: URL(string: "file:///tmp/prices")!,
+      exchanges: [
+        ExchangeProvider.binance.rawValue: ExchangeEndpointOverride(
+          baseURL: URL(string: "https://binance.example")!,
+          accountPath: "https://bad.example/account"
+        )
+      ]
+    )
+    let http = StubHTTPClient { request in
+      (try JSONEncoder.addressAtlas.encode(invalid), httpResponse(for: request))
+    }
+    let client = NativeEndpointConfigClient(http: http)
+
+    do {
+      _ = try await client.fetch(from: URL(string: "https://sync.example")!)
+      XCTFail("Expected unsafe endpoint config to fail.")
+    } catch NativeEndpointConfigError.invalidEndpoint(_) {
+      // Expected.
+    }
   }
 }
 
@@ -406,6 +438,32 @@ final class NativeExchangeClientTests: XCTestCase {
     XCTAssertEqual(balance.total["BTC"], 0.5)
     XCTAssertEqual(balance.free["BTC"], 0.25)
     XCTAssertNil(balance.total["EMPTY"])
+  }
+
+  func testExchangeClientUsesEndpointConfigPathOverrides() async throws {
+    let config = NativeEndpointConfig(
+      exchanges: [
+        ExchangeProvider.binance.rawValue: ExchangeEndpointOverride(
+          baseURL: URL(string: "https://binance.example")!,
+          accountPath: "/api/v4/account"
+        )
+      ]
+    )
+    let http = StubHTTPClient { request in
+      XCTAssertEqual(request.url?.host, "binance.example")
+      XCTAssertEqual(request.url?.path, "/api/v4/account")
+      return (Data("{\"balances\":[]}".utf8), httpResponse(for: request))
+    }
+    let client = NativeExchangeBalanceClient(
+      http: http,
+      endpointConfig: config,
+      now: { Date(timeIntervalSince1970: 1_700_000_000) }
+    )
+
+    _ = try await client.fetchBalance(
+      provider: .binance,
+      credentials: ExchangeCredentials(apiKey: "key", secret: "secret")
+    )
   }
 
   func testExchangeClientReportsHTTPErrorBody() async throws {

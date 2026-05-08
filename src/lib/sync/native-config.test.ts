@@ -13,6 +13,7 @@ describe("native endpoint config", () => {
     expect(config.priceBaseUrl).toBe("https://api.coingecko.com/api/v3/simple/price");
     expect(config.chains.ethereum.rpcUrl).toBe("https://eth.llamarpc.com");
     expect(config.exchanges.binance.baseUrl).toBe("https://api.binance.com");
+    expect(config.exchanges.binance.accountPath).toBe("/api/v3/account");
   });
 
   it("allows server-side endpoint overrides without changing the Mac app", () => {
@@ -24,7 +25,7 @@ describe("native endpoint config", () => {
         ethereum: { rpcUrl: "https://eth.example/rpc" }
       },
       exchanges: {
-        binance: { baseUrl: "https://binance.example" }
+        binance: { baseUrl: "https://binance.example", accountPath: "/api/v4/account" }
       }
     }));
 
@@ -36,5 +37,26 @@ describe("native endpoint config", () => {
     expect(config.chains.ethereum.rpcUrl).toBe("https://eth.example/rpc");
     expect(config.chains.solana.rpcUrl).toBe(DEFAULT_NATIVE_ENDPOINT_CONFIG.chains.solana.rpcUrl);
     expect(config.exchanges.binance.baseUrl).toBe("https://binance.example");
+    expect(config.exchanges.binance.accountPath).toBe("/api/v4/account");
+    expect(config.exchanges.coinbase.accountPath).toBe("/api/v3/brokerage/accounts");
+  });
+
+  it("keeps safe defaults when endpoint overrides are malformed", () => {
+    vi.stubEnv("NATIVE_ENDPOINT_CONFIG_JSON", JSON.stringify({
+      priceBaseUrl: "file:///tmp/prices",
+      chains: {
+        ethereum: { rpcUrl: "javascript:alert(1)" }
+      },
+      exchanges: {
+        binance: { baseUrl: "ftp://binance.example", accountPath: "https://bad.example/path" }
+      }
+    }));
+
+    const config = getNativeEndpointConfig();
+
+    expect(config.priceBaseUrl).toBe(DEFAULT_NATIVE_ENDPOINT_CONFIG.priceBaseUrl);
+    expect(config.chains.ethereum.rpcUrl).toBe(DEFAULT_NATIVE_ENDPOINT_CONFIG.chains.ethereum.rpcUrl);
+    expect(config.exchanges.binance.baseUrl).toBe(DEFAULT_NATIVE_ENDPOINT_CONFIG.exchanges.binance.baseUrl);
+    expect(config.exchanges.binance.accountPath).toBe(DEFAULT_NATIVE_ENDPOINT_CONFIG.exchanges.binance.accountPath);
   });
 });

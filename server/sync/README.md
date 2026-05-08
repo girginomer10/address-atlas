@@ -21,3 +21,12 @@ npm run sync:prod:up
 ```
 
 `NATIVE_ENDPOINT_CONFIG_JSON` can be used to update public client endpoint config without shipping a new Mac app. The Mac app still sends blockchain, price, and exchange requests directly from the client; this endpoint only tells it which public providers to use.
+
+Example:
+
+```env
+NATIVE_ENDPOINT_CONFIG_VERSION=2
+NATIVE_ENDPOINT_CONFIG_JSON={"chains":{"ethereum":{"rpcUrl":"https://eth.example/rpc"}},"exchanges":{"coinbase":{"baseUrl":"https://api.coinbase.com","accountPath":"/api/v3/brokerage/accounts"}}}
+```
+
+Only `http` and `https` URLs are accepted by the Mac app, and exchange account paths must be relative paths beginning with `/`.
