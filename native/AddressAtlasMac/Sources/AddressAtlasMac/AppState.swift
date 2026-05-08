@@ -14,6 +14,7 @@ final class AppState: ObservableObject {
   private let crypto = VaultCrypto()
   private let keyStore = KeychainVaultKeyStore()
   private let syncCodec = VaultSyncCodec()
+  private let recoveryKit = RecoveryKitCodec()
   private let passkeyAuthenticator = PasskeyWebAuthenticator()
   private var vaultKey: Data?
   private var store: EncryptedSQLiteVaultStore?
@@ -203,9 +204,8 @@ final class AppState: ObservableObject {
     save()
   }
 
-  func saveSyncSettings(serverURL: String, sessionToken: String) {
+  func saveSyncSettings(serverURL: String) {
     document.syncState.serverURL = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
-    document.syncState.sessionToken = sessionToken.trimmingCharacters(in: .whitespacesAndNewlines)
     save()
   }
 
@@ -243,7 +243,7 @@ final class AppState: ObservableObject {
       return
     }
     guard let serverURL = URL(string: document.syncState.serverURL), !document.syncState.sessionToken.isEmpty else {
-      error = "Sync server URL and session token are required."
+      error = "Sign in with passkey before syncing."
       return
     }
     syncing = true
@@ -260,7 +260,7 @@ final class AppState: ObservableObject {
       save()
       notice = "Encrypted vault uploaded."
     } catch {
-      self.error = error.localizedDescription
+      handleSyncError(error)
     }
   }
 
@@ -270,7 +270,7 @@ final class AppState: ObservableObject {
       return
     }
     guard let serverURL = URL(string: document.syncState.serverURL), !document.syncState.sessionToken.isEmpty else {
-      error = "Sync server URL and session token are required."
+      error = "Sign in with passkey before syncing."
       return
     }
     syncing = true
@@ -292,8 +292,54 @@ final class AppState: ObservableObject {
       save()
       notice = "Encrypted vault downloaded."
     } catch {
+      handleSyncError(error)
+    }
+  }
+
+  func exportRecoveryKit(to url: URL) throws -> String {
+    guard let vaultKey else {
+      throw RecoveryKitError.invalidVaultKey
+    }
+    let output = try recoveryKit.create(vaultKey: vaultKey)
+    let data = try JSONEncoder.addressAtlas.encode(output.document)
+    try data.write(to: url, options: [.atomic])
+    notice = "Recovery kit saved. Store the code separately."
+    error = ""
+    return output.recoveryCode
+  }
+
+  func restoreRecoveryKit(from url: URL, recoveryCode: String) async {
+    do {
+      let data = try Data(contentsOf: url)
+      let document = try JSONDecoder.addressAtlas.decode(RecoveryKitDocument.self, from: data)
+      let restoredKey = try recoveryKit.open(document, recoveryCode: recoveryCode)
+      let sqlite = try EncryptedSQLiteVaultStore(path: appSupportDirectory.appending(path: "vault.sqlite"), vaultKey: restoredKey, crypto: crypto)
+      let loaded = try sqlite.load()
+      try keyStore.saveVaultKey(restoredKey)
+      self.document = loaded
+      vaultKey = restoredKey
+      store = sqlite
+      isUnlocked = true
+      notice = "Recovery kit restored."
+      error = ""
+    } catch {
       self.error = error.localizedDescription
     }
+  }
+
+  private func handleSyncError(_ error: Error) {
+    if case SyncClientError.authenticationRequired = error {
+      document.syncState.sessionToken = ""
+      do {
+        try store?.save(document)
+      } catch {
+        self.error = error.localizedDescription
+        return
+      }
+      self.error = "Sync session expired. Sign in with passkey again."
+      return
+    }
+    self.error = error.localizedDescription
   }
 
   func scanSavedWallets() async {

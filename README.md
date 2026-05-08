@@ -68,7 +68,21 @@ open "dist/Address Atlas.app"
 
 Set `ADDRESS_ATLAS_CODESIGN_IDENTITY` before running `./build-mac-app.sh` when a Developer ID Application identity is available for distribution signing.
 
+Public macOS distribution uses a signed, notarized DMG. A public release is blocked until an Apple Developer ID Application certificate is available:
+
+```bash
+cd native/AddressAtlasMac
+./build-dmg.sh
+ADDRESS_ATLAS_CODESIGN_IDENTITY="Developer ID Application: ..." \
+APPLE_ID="apple-id@example.com" \
+APPLE_TEAM_ID="TEAMID" \
+APPLE_APP_SPECIFIC_PASSWORD="app-specific-password" \
+./notarize-mac-app.sh
+```
+
 The app stores its local vault in `~/Library/Application Support/AddressAtlas/vault.sqlite`. The SQLite table stores encrypted envelope JSON only; wallet addresses, exchange credentials, scan history, token lists, and preferences are encrypted before persistence.
+
+Settings includes a recovery kit flow. Export creates a `.atlas-recovery` file plus a high-entropy recovery code shown once. The file and code are both required to unwrap the Mac vault key; neither is uploaded to the sync server.
 
 The encrypted sync server uses these environment variables:
 
@@ -86,10 +100,34 @@ For local sync development, start the bundled Postgres service first:
 npm run sync:db:up
 ```
 
+For a production VPS, copy `.env.production.example` to `.env.production`, fill the production domain and secrets, keep `POSTGRES_PASSWORD` and `SYNC_DATABASE_URL` in agreement, then start the sync-only stack:
+
+```bash
+npm run sync:prod:up
+curl https://your-domain.example/healthz
+```
+
+`compose.prod.yml` runs Caddy, the Next sync/auth server, and Postgres. `ADDRESS_ATLAS_SYNC_ONLY=true` limits the public VPS to `/auth/native`, `/auth/passkey/*`, `/vault/latest`, and `/healthz`.
+
 Sync endpoints are intentionally narrow: `POST /auth/passkey/options`, `POST /auth/passkey/verify`, `GET /vault/latest`, and `PUT /vault/latest`. The server stores passkey public keys plus encrypted vault snapshot metadata; it does not store decryptable keys or plaintext portfolio data.
 
 The Mac app opens `/auth/native` in a system web authentication session for passkey account creation/sign-in, then receives only a short-lived sync session token through the `address-atlas://sync-auth` callback URL.
 
+Opt-in live exchange smoke tests are available for release QA. They run only when explicitly enabled and credentials are supplied out of band:
+
+```bash
+cd native/AddressAtlasMac
+ADDRESS_ATLAS_LIVE_EXCHANGE_TESTS=1 \
+ADDRESS_ATLAS_BINANCE_API_KEY="..." \
+ADDRESS_ATLAS_BINANCE_SECRET="..." \
+ADDRESS_ATLAS_COINBASE_API_KEY="..." \
+ADDRESS_ATLAS_COINBASE_SECRET="..." \
+ADDRESS_ATLAS_COINBASE_PASSPHRASE="..." \
+ADDRESS_ATLAS_KRAKEN_API_KEY="..." \
+ADDRESS_ATLAS_KRAKEN_SECRET="..." \
+swift test
+```
+
 ## Security notes
 
-Address Atlas is designed for local or trusted self-hosted use, not public multi-user deployment. It never asks for seed phrases, private keys, signing permissions, trading permissions, or withdrawal permissions. Exchange API keys should be created with balance/read permission only. In the native app, credentials are encrypted with a vault subkey before local persistence and sync. Public RPC, exchange, and price endpoints can rate-limit or fail, so scan results should be treated as portfolio visibility, not accounting-grade proof.
+Address Atlas never asks for seed phrases, private keys, signing permissions, trading permissions, or withdrawal permissions. Exchange API keys should be created with balance/read permission only. In the native app, credentials are encrypted with a vault subkey before local persistence and sync. Public RPC, exchange, and price endpoints can rate-limit or fail, so scan results should be treated as portfolio visibility, not accounting-grade proof.

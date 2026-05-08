@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Vault snapshot could not be loaded." },
-      { status: 401 }
+      { status: isAuthError(error) ? 401 : 500 }
     );
   }
 }
@@ -59,7 +59,15 @@ export async function PUT(request: NextRequest) {
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Vault snapshot could not be saved." },
-      { status: 400 }
+      { status: isAuthError(error) ? 401 : 400 }
     );
   }
+}
+
+function isAuthError(error: unknown) {
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  return message.includes("authorization")
+    || message.includes("token")
+    || message.includes("signature")
+    || message.includes("expired");
 }

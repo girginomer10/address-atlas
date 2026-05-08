@@ -34,6 +34,46 @@ final class VaultCryptoTests: XCTestCase {
   }
 }
 
+final class RecoveryKitTests: XCTestCase {
+  func testRecoveryKitWrapsAndRestoresVaultKey() throws {
+    let vaultKey = try VaultCrypto().generateVaultKey()
+    let codec = RecoveryKitCodec()
+
+    let export = try codec.create(vaultKey: vaultKey)
+    let restored = try codec.open(export.document, recoveryCode: export.recoveryCode)
+
+    XCTAssertEqual(restored, vaultKey)
+    XCTAssertEqual(try RecoveryKitCodec.recoveryCodeBytes(export.recoveryCode).count, 32)
+    XCTAssertFalse(export.recoveryCode.isEmpty)
+    XCTAssertFalse(export.document.wrappedVaultKey.contains(vaultKey.hexString))
+  }
+
+  func testRecoveryKitRejectsWrongCodeAndMissingCode() throws {
+    let codec = RecoveryKitCodec()
+    let vaultKey = try VaultCrypto().generateVaultKey()
+    let export = try codec.create(vaultKey: vaultKey)
+    let otherCode = try codec.create(vaultKey: try VaultCrypto().generateVaultKey()).recoveryCode
+
+    XCTAssertThrowsError(try codec.open(export.document, recoveryCode: otherCode))
+    XCTAssertThrowsError(try codec.open(export.document, recoveryCode: ""))
+  }
+
+  func testRecoveryKitRejectsTamperedFile() throws {
+    let codec = RecoveryKitCodec()
+    let vaultKey = try VaultCrypto().generateVaultKey()
+    let export = try codec.create(vaultKey: vaultKey)
+    var document = export.document
+    var wrapped = try Base64URL.decode(document.wrappedVaultKey)
+
+    wrapped[0] ^= 0x01
+    document.wrappedVaultKey = Base64URL.encode(wrapped)
+
+    XCTAssertThrowsError(try codec.open(document, recoveryCode: export.recoveryCode)) { error in
+      XCTAssertEqual(error as? RecoveryKitError, .checksumMismatch)
+    }
+  }
+}
+
 final class EncryptedSQLiteVaultStoreTests: XCTestCase {
   func testStorePersistsEncryptedDocumentWithoutPlaintextWalletLeak() throws {
     let tempDir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -327,6 +367,30 @@ final class NativeExchangeClientTests: XCTestCase {
     XCTAssertNil(balance.total["EMPTY"])
   }
 
+  func testExchangeClientReportsHTTPErrorBody() async throws {
+    let http = StubHTTPClient { request in
+      let json = """
+      { "msg": "Invalid API-key, IP, or permissions for action." }
+      """
+      return (Data(json.utf8), httpResponse(for: request, statusCode: 401))
+    }
+    let client = NativeExchangeBalanceClient(
+      http: http,
+      now: { Date(timeIntervalSince1970: 1_700_000_000) }
+    )
+
+    do {
+      _ = try await client.fetchBalance(
+        provider: .binance,
+        credentials: ExchangeCredentials(apiKey: "key", secret: "secret")
+      )
+      XCTFail("Expected exchange HTTP error.")
+    } catch ExchangeClientError.httpError(let statusCode, let message) {
+      XCTAssertEqual(statusCode, 401)
+      XCTAssertEqual(message, "Invalid API-key, IP, or permissions for action.")
+    }
+  }
+
   func testExchangeBalanceNormalizerPricesStablecoinsAndKnownAssets() {
     let id = UUID()
     let holdings = ExchangeBalanceNormalizer.normalize(
@@ -381,6 +445,100 @@ final class NativeExchangeClientTests: XCTestCase {
     XCTAssertEqual(result.connections.first?.status, .ok)
     XCTAssertNil(result.connections.first?.lastError)
     XCTAssertTrue(result.warnings.isEmpty)
+  }
+
+  func testLiveExchangeReadOnlySmokeWhenConfigured() async throws {
+    let credentials = try liveExchangeCredentials()
+    let client = NativeExchangeBalanceClient()
+
+    for (provider, credential) in credentials {
+      let balance = try await client.fetchBalance(provider: provider, credentials: credential)
+      let entries = ExchangeBalanceNormalizer.balanceEntries(balance)
+      XCTAssertTrue(
+        entries.allSatisfy { _, amount in amount.isFinite && amount > 0 },
+        "\(provider.label) returned non-finite balance entries."
+      )
+    }
+  }
+
+  func testLiveInvalidExchangeCredentialsFailCleanlyWhenConfigured() async throws {
+    _ = try liveExchangeCredentials()
+    let client = NativeExchangeBalanceClient()
+    let invalidCredentials: [(ExchangeProvider, ExchangeCredentials)] = [
+      (.binance, ExchangeCredentials(apiKey: "invalid", secret: "invalid")),
+      (.coinbase, ExchangeCredentials(apiKey: "invalid", secret: "invalid", passphrase: "invalid")),
+      (.kraken, ExchangeCredentials(apiKey: "invalid", secret: Data("invalid".utf8).base64EncodedString()))
+    ]
+
+    for (provider, credentials) in invalidCredentials {
+      do {
+        _ = try await client.fetchBalance(provider: provider, credentials: credentials)
+        XCTFail("Expected \(provider.label) invalid credentials to fail.")
+      } catch {
+        XCTAssertFalse(error.localizedDescription.isEmpty)
+      }
+    }
+  }
+
+  private func liveExchangeCredentials() throws -> [(ExchangeProvider, ExchangeCredentials)] {
+    let environment = ProcessInfo.processInfo.environment
+    guard environment["ADDRESS_ATLAS_LIVE_EXCHANGE_TESTS"] == "1" else {
+      throw XCTSkip("Set ADDRESS_ATLAS_LIVE_EXCHANGE_TESTS=1 to run live exchange smoke tests.")
+    }
+
+    var missing: [String] = []
+    func require(_ name: String) -> String {
+      guard let value = environment[name], !value.isEmpty else {
+        missing.append(name)
+        return ""
+      }
+      return value
+    }
+
+    let binance = ExchangeCredentials(
+      apiKey: require("ADDRESS_ATLAS_BINANCE_API_KEY"),
+      secret: require("ADDRESS_ATLAS_BINANCE_SECRET")
+    )
+    let coinbase = ExchangeCredentials(
+      apiKey: require("ADDRESS_ATLAS_COINBASE_API_KEY"),
+      secret: require("ADDRESS_ATLAS_COINBASE_SECRET"),
+      passphrase: environment["ADDRESS_ATLAS_COINBASE_PASSPHRASE"]
+    )
+    let kraken = ExchangeCredentials(
+      apiKey: require("ADDRESS_ATLAS_KRAKEN_API_KEY"),
+      secret: require("ADDRESS_ATLAS_KRAKEN_SECRET")
+    )
+
+    guard missing.isEmpty else {
+      throw XCTSkip("Missing live exchange smoke credentials: \(missing.sorted().joined(separator: ", ")).")
+    }
+
+    return [
+      (.binance, binance),
+      (.coinbase, coinbase),
+      (.kraken, kraken)
+    ]
+  }
+}
+
+final class SyncClientTests: XCTestCase {
+  func testSyncClientSurfacesExpiredSession() async throws {
+    let http = StubHTTPClient { request in
+      XCTAssertEqual(request.value(forHTTPHeaderField: "authorization"), "Bearer expired")
+      let json = """
+      { "error": "Token expired." }
+      """
+      return (Data(json.utf8), httpResponse(for: request, statusCode: 401))
+    }
+    let client = ZeroKnowledgeSyncClient(baseURL: URL(string: "https://sync.example")!, http: http)
+    await client.setBearerToken("expired")
+
+    do {
+      _ = try await client.latestVault()
+      XCTFail("Expected expired session to throw.")
+    } catch SyncClientError.authenticationRequired(let message) {
+      XCTAssertEqual(message, "Token expired.")
+    }
   }
 }
 

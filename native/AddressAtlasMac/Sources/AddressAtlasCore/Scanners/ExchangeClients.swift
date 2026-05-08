@@ -22,6 +22,17 @@ public struct ExchangeScanResult: Sendable {
   }
 }
 
+public enum ExchangeClientError: Error, Equatable, LocalizedError, Sendable {
+  case httpError(statusCode: Int, message: String)
+
+  public var errorDescription: String? {
+    switch self {
+    case .httpError(let statusCode, let message):
+      return "Exchange request failed (\(statusCode)): \(message)"
+    }
+  }
+}
+
 public struct NativeExchangeScanner: Sendable {
   private let client: NativeExchangeBalanceClient
   private let credentialVault: ExchangeCredentialVault
@@ -192,9 +203,54 @@ public struct NativeExchangeBalanceClient: Sendable {
 
     let (data, response) = try await http.data(for: request)
     guard (200..<300).contains(response.statusCode) else {
-      throw URLError(.badServerResponse)
+      throw ExchangeClientError.httpError(
+        statusCode: response.statusCode,
+        message: Self.responseMessage(from: data, statusCode: response.statusCode)
+      )
     }
     return data
+  }
+
+  private static func responseMessage(from data: Data, statusCode: Int) -> String {
+    let fallback = HTTPURLResponse.localizedString(forStatusCode: statusCode)
+    guard !data.isEmpty else {
+      return fallback
+    }
+
+    if
+      let json = try? JSONSerialization.jsonObject(with: data),
+      let message = jsonMessage(json)
+    {
+      return message
+    }
+
+    if let text = String(data: data, encoding: .utf8)?
+      .trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+      return text
+    }
+    return fallback
+  }
+
+  private static func jsonMessage(_ value: Any) -> String? {
+    if let dictionary = value as? [String: Any] {
+      for key in ["msg", "message", "error", "reason", "detail"] {
+        if let message = dictionary[key] as? String, !message.isEmpty {
+          return message
+        }
+      }
+      if
+        let errors = dictionary["errors"] as? [Any],
+        let message = errors.compactMap(jsonMessage).first
+      {
+        return message
+      }
+    }
+
+    if let array = value as? [Any] {
+      return array.compactMap(jsonMessage).first
+    }
+
+    return nil
   }
 }
 

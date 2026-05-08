@@ -779,7 +779,6 @@ struct ExchangeRow: View {
 struct SyncView: View {
   @EnvironmentObject private var state: AppState
   @State private var serverURL = ""
-  @State private var sessionToken = ""
 
   var body: some View {
     Page(
@@ -794,14 +793,11 @@ struct SyncView: View {
           SectionHeader(title: "Passkey account", meta: "Authentication only")
           TextField("Sync server URL", text: $serverURL)
             .textFieldStyle(AtlasTextFieldStyle())
-          SecureField("Session token", text: $sessionToken)
-            .textFieldStyle(AtlasTextFieldStyle())
           HStack(spacing: 10) {
             Button("Create passkey account") {
               Task {
                 await state.createPasskeyAccount(serverURL: serverURL)
                 serverURL = state.document.syncState.serverURL
-                sessionToken = state.document.syncState.sessionToken
               }
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
@@ -809,12 +805,11 @@ struct SyncView: View {
               Task {
                 await state.signInWithPasskey(serverURL: serverURL)
                 serverURL = state.document.syncState.serverURL
-                sessionToken = state.document.syncState.sessionToken
               }
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
-            Button("Save settings") {
-              state.saveSyncSettings(serverURL: serverURL, sessionToken: sessionToken)
+            Button("Save server") {
+              state.saveSyncSettings(serverURL: serverURL)
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
           }
@@ -842,6 +837,7 @@ struct SyncView: View {
           SectionHeader(title: "Sync state", meta: "Plain metadata only")
           KeyValueGrid(rows: [
             ("Account", state.document.syncState.accountId ?? "not connected"),
+            ("Session", state.document.syncState.sessionToken.isEmpty ? "sign in required" : "active"),
             ("Last synced", state.document.syncState.lastSyncedAt?.formatted(date: .abbreviated, time: .shortened) ?? "never"),
             ("Checksum", state.document.syncState.lastChecksum ?? "none")
           ])
@@ -850,7 +846,6 @@ struct SyncView: View {
     }
     .onAppear {
       serverURL = state.document.syncState.serverURL
-      sessionToken = state.document.syncState.sessionToken
     }
   }
 }
@@ -924,6 +919,8 @@ struct ExportView: View {
 
 struct SettingsView: View {
   @EnvironmentObject private var state: AppState
+  @State private var recoveryCode = ""
+  @State private var restoreCode = ""
 
   var body: some View {
     Page(
@@ -965,6 +962,65 @@ struct SettingsView: View {
             .textFieldStyle(AtlasTextFieldStyle())
           }
         }
+      }
+
+      Surface {
+        VStack(alignment: .leading, spacing: 16) {
+          SectionHeader(title: "Recovery kit", meta: "File plus code")
+          Text("Export a recovery file and store the recovery code separately. Both are required to restore the Mac vault key.")
+            .font(.system(size: 13))
+            .foregroundStyle(AtlasTheme.ink2)
+          HStack(spacing: 10) {
+            Button("Export recovery kit") {
+              exportRecoveryKit()
+            }
+            .buttonStyle(AtlasPrimaryButtonStyle())
+            TextField("Recovery code for restore", text: $restoreCode)
+              .textFieldStyle(AtlasTextFieldStyle())
+            Button("Restore from kit") {
+              restoreRecoveryKit()
+            }
+            .buttonStyle(AtlasSecondaryButtonStyle())
+          }
+          if !recoveryCode.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+              AtlasLabel("Store this code separately")
+              Text(recoveryCode)
+                .font(.system(size: 13, design: .monospaced))
+                .textSelection(.enabled)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(AtlasTheme.paper2)
+                .overlay(Rectangle().stroke(AtlasTheme.ruleSoft, lineWidth: 1))
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private func exportRecoveryKit() {
+    let panel = NSSavePanel()
+    panel.nameFieldStringValue = "address-atlas.atlas-recovery"
+    panel.allowedContentTypes = [UTType(filenameExtension: "atlas-recovery") ?? .data]
+    panel.canCreateDirectories = true
+    if panel.runModal() == .OK, let url = panel.url {
+      do {
+        recoveryCode = try state.exportRecoveryKit(to: url)
+      } catch {
+        state.error = error.localizedDescription
+      }
+    }
+  }
+
+  private func restoreRecoveryKit() {
+    let panel = NSOpenPanel()
+    panel.allowedContentTypes = [UTType(filenameExtension: "atlas-recovery") ?? .data]
+    panel.allowsMultipleSelection = false
+    panel.canChooseDirectories = false
+    if panel.runModal() == .OK, let url = panel.url {
+      Task {
+        await state.restoreRecoveryKit(from: url, recoveryCode: restoreCode)
       }
     }
   }

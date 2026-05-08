@@ -1,0 +1,10 @@
+.data
+.env
+.env.production
+.git
+.next
+native/AddressAtlasMac/.build
+native/AddressAtlasMac/dist
+node_modules
+src/generated
+tsconfig.tsbuildinfo

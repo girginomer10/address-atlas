@@ -113,12 +113,26 @@ public enum SendableValue: Equatable, Sendable {
   case object([String: SendableValue])
 }
 
+public enum SyncClientError: Error, Equatable, LocalizedError {
+  case authenticationRequired(String)
+  case requestFailed(Int, String)
+
+  public var errorDescription: String? {
+    switch self {
+    case .authenticationRequired(let message):
+      message
+    case .requestFailed(_, let message):
+      message
+    }
+  }
+}
+
 public actor ZeroKnowledgeSyncClient {
   private let baseURL: URL
-  private let http: JSONHTTPClient
+  private let http: HTTPClient
   private var bearerToken: String?
 
-  public init(baseURL: URL, http: JSONHTTPClient = JSONHTTPClient()) {
+  public init(baseURL: URL, http: HTTPClient = URLSession.shared) {
     self.baseURL = baseURL
     self.http = http
   }
@@ -133,13 +147,12 @@ public actor ZeroKnowledgeSyncClient {
     if let bearerToken {
       request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "authorization")
     }
-    let client = URLSession.shared
-    let (data, http) = try await client.data(for: request)
-    if http.statusCode == 404 {
+    let (data, response) = try await http.data(for: request)
+    if response.statusCode == 404 {
       return nil
     }
-    guard (200..<300).contains(http.statusCode) else {
-      throw URLError(.badServerResponse)
+    guard (200..<300).contains(response.statusCode) else {
+      throw Self.error(statusCode: response.statusCode, data: data)
     }
     return try JSONDecoder.addressAtlas.decode(RemoteVaultSnapshot.self, from: data)
   }
@@ -153,10 +166,23 @@ public actor ZeroKnowledgeSyncClient {
       request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "authorization")
     }
     request.httpBody = try JSONEncoder.addressAtlas.encode(snapshot)
-    let (data, http) = try await URLSession.shared.data(for: request)
-    guard (200..<300).contains(http.statusCode) else {
-      throw URLError(.badServerResponse)
+    let (data, response) = try await http.data(for: request)
+    guard (200..<300).contains(response.statusCode) else {
+      throw Self.error(statusCode: response.statusCode, data: data)
     }
     _ = data
   }
+
+  private static func error(statusCode: Int, data: Data) -> SyncClientError {
+    let message = (try? JSONDecoder.addressAtlas.decode(ServerError.self, from: data).error)
+      ?? HTTPURLResponse.localizedString(forStatusCode: statusCode)
+    if statusCode == 401 {
+      return .authenticationRequired(message)
+    }
+    return .requestFailed(statusCode, message)
+  }
+}
+
+private struct ServerError: Decodable {
+  var error: String
 }

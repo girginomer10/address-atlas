@@ -11,8 +11,12 @@
     "db:generate": "prisma generate",
     "sync:db:up": "docker compose -f compose.sync.yml up -d",
     "sync:db:down": "docker compose -f compose.sync.yml down",
+    "sync:prod:up": "docker compose --env-file .env.production -f compose.prod.yml up -d --build",
+    "sync:prod:down": "docker compose --env-file .env.production -f compose.prod.yml down",
     "typecheck": "tsc --noEmit",
     "native:test": "cd native/AddressAtlasMac && swift test",
+    "native:dmg": "cd native/AddressAtlasMac && ./build-dmg.sh",
+    "native:notarize": "cd native/AddressAtlasMac && ./notarize-mac-app.sh",
     "test": "node scripts/run-tests.mjs"
   },
   "keywords": [

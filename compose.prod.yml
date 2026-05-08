@@ -1,0 +1,51 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      ADDRESS_ATLAS_DOMAIN: "${ADDRESS_ATLAS_DOMAIN}"
+      ACME_EMAIL: "${ACME_EMAIL}"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - web
+
+  web:
+    build: .
+    restart: unless-stopped
+    environment:
+      ADDRESS_ATLAS_SYNC_ONLY: "true"
+      NODE_ENV: "production"
+      SYNC_DATABASE_URL: "${SYNC_DATABASE_URL}"
+      SYNC_SESSION_SECRET: "${SYNC_SESSION_SECRET}"
+      PASSKEY_RP_ID: "${PASSKEY_RP_ID}"
+      PASSKEY_RP_NAME: "${PASSKEY_RP_NAME}"
+      PASSKEY_ORIGIN: "${PASSKEY_ORIGIN}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: address_atlas
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      POSTGRES_DB: address_atlas_sync
+    volumes:
+      - address-atlas-prod-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U address_atlas -d address_atlas_sync"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  address-atlas-prod-postgres:
+  caddy-data:
+  caddy-config:
