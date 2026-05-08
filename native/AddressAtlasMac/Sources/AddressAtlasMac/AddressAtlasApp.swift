@@ -46,6 +46,8 @@ struct RootView: View {
     }
     .background(AtlasTheme.paper)
     .foregroundStyle(AtlasTheme.ink)
+    .preferredColorScheme(.light)
+    .tint(AtlasTheme.accent)
   }
 }
 
@@ -197,7 +199,7 @@ struct Sidebar: View {
           Circle().stroke(AtlasTheme.gain, lineWidth: 1).frame(width: 8, height: 8)
           Text("LOCAL VAULT")
         }
-        Text("Keychain unlocked")
+        Text("Encrypted locally")
         Text("RPC/API from Mac")
         Text("Server cannot decrypt")
       }
@@ -1056,7 +1058,7 @@ struct QuickActionsPanel: View {
         }
       }
       .buttonStyle(AtlasPrimaryButtonStyle())
-      SidebarTrustLine(title: "Vault", copy: "Keychain backed")
+      SidebarTrustLine(title: "Storage", copy: "Encrypted on device")
       SidebarTrustLine(title: "Sync", copy: "Encrypted blobs only")
       SidebarTrustLine(title: "Network", copy: "RPC/API from Mac")
     }
@@ -1193,6 +1195,7 @@ struct Surface<Content: View>: View {
       .padding(padding)
       .frame(maxWidth: .infinity, alignment: .leading)
       .background(AtlasTheme.paper)
+      .foregroundStyle(AtlasTheme.ink)
       .overlay(Rectangle().stroke(AtlasTheme.rule, lineWidth: 1))
   }
 }
@@ -1373,6 +1376,7 @@ struct AtlasTextFieldStyle: TextFieldStyle {
   func _body(configuration: TextField<Self._Label>) -> some View {
     configuration
       .textFieldStyle(.plain)
+      .foregroundStyle(AtlasTheme.ink)
       .padding(.horizontal, 12)
       .frame(height: 40)
       .background(AtlasTheme.paper)

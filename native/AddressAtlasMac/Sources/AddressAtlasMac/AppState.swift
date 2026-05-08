@@ -36,7 +36,7 @@ final class AppState: ObservableObject {
       vaultKey = key
       store = sqlite
       isUnlocked = true
-      notice = "Vault unlocked from macOS Keychain."
+      notice = ""
       error = ""
     } catch {
       self.error = error.localizedDescription
