@@ -39,7 +39,7 @@ Address Atlas avoids account creation, automated rebalancing, signing, and fund-
 ## Native Mac Track
 
 - `native/AddressAtlasMac` is the new native SwiftUI implementation. The Next app remains a reference while the Mac app grows toward full replacement.
-- `native/AddressAtlasMac/build-mac-app.sh` builds a local `dist/Address Atlas.app` bundle on Macs with full Xcode selected, or with the Homebrew Swift.org toolchain fallback when full Xcode is unavailable.
+- `native/AddressAtlasMac/build-mac-app.sh` builds a local `dist/Address Atlas.app` bundle on Macs with full Xcode selected, or with the Homebrew Swift.org toolchain fallback when full Xcode is unavailable. The script prefers full Xcode, ad-hoc signs local app bundles by default, and can use `ADDRESS_ATLAS_CODESIGN_IDENTITY` when a Developer ID Application identity is available.
 - The native vault key is a random 256-bit key stored in macOS Keychain with this-device-only accessibility. Users do not type or memorize an encryption password.
 - The native local store uses SQLite as an envelope table: the app serializes `VaultDocument`, encrypts it with an HKDF-derived local database key, and stores only envelope JSON (`nonce`, `ciphertext`, checksums, versions).
 - The vault key derives separate subkeys for local database encryption, encrypted server sync blobs, and field-level exchange credential encryption.
@@ -58,7 +58,7 @@ Address Atlas avoids account creation, automated rebalancing, signing, and fund-
 ## Gotchas
 
 - Restart the dev server after Prisma schema/model changes. The dev process caches a global Prisma client, so newly generated delegates such as `customToken` and `manualExchangeHolding` may be missing until restart.
-- This workspace currently has only Command Line Tools, not full Xcode. Homebrew Swift 6.2.4 can build the app bundle, but `swift test` still needs full Xcode because XCTest is not available from the fallback toolchain.
+- Full Xcode 26.4.1 is selected and licensed in this workspace. `swift test` now runs; keep using full Xcode for native verification. The Homebrew Swift fallback remains useful only when another machine has Command Line Tools but no full Xcode/XCTest.
 
 ## Next Useful Milestones
 

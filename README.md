@@ -58,13 +58,15 @@ cd native/AddressAtlasMac
 PATH="/opt/homebrew/opt/swift/bin:$PATH" swift run AddressAtlasMac
 ```
 
-`swift test` requires full Xcode for XCTest. The local `.app` bundle can be built with either full Xcode or the Homebrew Swift.org toolchain:
+`swift test` requires full Xcode for XCTest. The local `.app` bundle is ad-hoc signed by default and can be built with either full Xcode or the Homebrew Swift.org toolchain:
 
 ```bash
 cd native/AddressAtlasMac
 ./build-mac-app.sh
 open "dist/Address Atlas.app"
 ```
+
+Set `ADDRESS_ATLAS_CODESIGN_IDENTITY` before running `./build-mac-app.sh` when a Developer ID Application identity is available for distribution signing.
 
 The app stores its local vault in `~/Library/Application Support/AddressAtlas/vault.sqlite`. The SQLite table stores encrypted envelope JSON only; wallet addresses, exchange credentials, scan history, token lists, and preferences are encrypted before persistence.
 

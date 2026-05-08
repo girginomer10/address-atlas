@@ -5,14 +5,14 @@ DEVELOPER_DIR="$(xcode-select -p 2>/dev/null || true)"
 BREW_SWIFT="/opt/homebrew/opt/swift/bin/swift"
 CLT_DEVELOPER_DIR="/Library/Developer/CommandLineTools"
 
-if [[ -x "$BREW_SWIFT" && -d "$CLT_DEVELOPER_DIR" ]]; then
-  echo "Using Homebrew Swift fallback: $(DEVELOPER_DIR="$CLT_DEVELOPER_DIR" "$BREW_SWIFT" --version | head -1)"
-  echo "Full Xcode is still recommended for XCTest and notarized distribution builds."
+if [[ -n "$DEVELOPER_DIR" && "$DEVELOPER_DIR" != *"CommandLineTools"* ]] && xcodebuild -version >/dev/null 2>&1; then
+  echo "Using $(xcodebuild -version | tr '\n' ' ')"
   exit 0
 fi
 
-if [[ -n "$DEVELOPER_DIR" && "$DEVELOPER_DIR" != *"CommandLineTools"* ]] && xcodebuild -version >/dev/null 2>&1; then
-  echo "Using $(xcodebuild -version | tr '\n' ' ')"
+if [[ -x "$BREW_SWIFT" && -d "$CLT_DEVELOPER_DIR" ]]; then
+  echo "Using Homebrew Swift fallback: $(DEVELOPER_DIR="$CLT_DEVELOPER_DIR" "$BREW_SWIFT" --version | head -1)"
+  echo "Full Xcode is still recommended for XCTest and notarized distribution builds."
   exit 0
 fi
 

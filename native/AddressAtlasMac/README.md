@@ -26,6 +26,7 @@ open "dist/Address Atlas.app"
 ```
 
 The app bundle registers the `address-atlas://sync-auth` callback URL used by the encrypted sync passkey flow.
+It is ad-hoc signed for local testing by default. Set `ADDRESS_ATLAS_CODESIGN_IDENTITY` to a Developer ID Application identity when building a distribution candidate.
 
 The app stores its encrypted local vault at:
 

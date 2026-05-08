@@ -10,7 +10,8 @@ APP_DIR="$DIST_DIR/$APP_NAME.app"
 cd "$ROOT"
 
 "$ROOT/check-toolchain.sh"
-if [[ -x "/opt/homebrew/opt/swift/bin/swift" && -d "/Library/Developer/CommandLineTools" ]]; then
+SELECTED_DEVELOPER_DIR="$(xcode-select -p 2>/dev/null || true)"
+if [[ "$SELECTED_DEVELOPER_DIR" == *"CommandLineTools"* && -x "/opt/homebrew/opt/swift/bin/swift" && -d "/Library/Developer/CommandLineTools" ]]; then
   export PATH="/opt/homebrew/opt/swift/bin:$PATH"
   export DEVELOPER_DIR="/Library/Developer/CommandLineTools"
 fi
@@ -60,5 +61,9 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+SIGN_IDENTITY="${ADDRESS_ATLAS_CODESIGN_IDENTITY:--}"
+codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_DIR" >/dev/null
+codesign --verify --deep --strict --verbose=2 "$APP_DIR"
 
 echo "Built $APP_DIR"
