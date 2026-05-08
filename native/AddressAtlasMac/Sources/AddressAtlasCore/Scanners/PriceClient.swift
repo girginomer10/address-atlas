@@ -21,15 +21,17 @@ public protocol PriceProviding: Sendable {
 
 public struct CoinGeckoPriceClient: PriceProviding {
   private let http: JSONHTTPClient
+  private let baseURL: URL
 
-  public init(http: JSONHTTPClient = JSONHTTPClient()) {
+  public init(baseURL: URL = NativeEndpointConfig.bundled.priceBaseURL, http: JSONHTTPClient = JSONHTTPClient()) {
+    self.baseURL = baseURL
     self.http = http
   }
 
   public func prices(for coinGeckoIds: [String]) async throws -> [String: PricePoint] {
     let ids = Array(Set(coinGeckoIds.filter { !$0.isEmpty })).sorted()
     guard !ids.isEmpty else { return [:] }
-    var components = URLComponents(string: "https://api.coingecko.com/api/v3/simple/price")!
+    var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
     components.queryItems = [
       URLQueryItem(name: "ids", value: ids.joined(separator: ",")),
       URLQueryItem(name: "vs_currencies", value: "usd"),

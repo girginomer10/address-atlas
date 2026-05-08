@@ -74,6 +74,47 @@ final class RecoveryKitTests: XCTestCase {
   }
 }
 
+final class NativeEndpointConfigTests: XCTestCase {
+  func testEndpointConfigOverridesChainAndExchangeEndpoints() throws {
+    let config = NativeEndpointConfig(
+      configVersion: 3,
+      priceBaseURL: URL(string: "https://prices.example/simple/price")!,
+      chains: [
+        "ethereum": ChainEndpointOverride(rpcURL: URL(string: "https://eth.example/rpc"))
+      ],
+      exchanges: [
+        ExchangeProvider.binance.rawValue: ExchangeEndpointOverride(baseURL: URL(string: "https://binance.example")!)
+      ]
+    )
+
+    let chain = config.applying(to: ChainRegistry.evmChains.first { $0.id == "ethereum" }!)
+
+    XCTAssertEqual(config.configVersion, 3)
+    XCTAssertEqual(chain.rpcUrl?.absoluteString, "https://eth.example/rpc")
+    XCTAssertEqual(config.exchangeBaseURL(for: .binance)?.absoluteString, "https://binance.example")
+    XCTAssertEqual(config.exchangeBaseURL(for: .coinbase), nil)
+  }
+
+  func testEndpointConfigClientFetchesNativeConfig() async throws {
+    let expected = NativeEndpointConfig(
+      configVersion: 4,
+      updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
+      priceBaseURL: URL(string: "https://prices.example/simple/price")!,
+      chains: ["solana": ChainEndpointOverride(rpcURL: URL(string: "https://solana.example"))],
+      exchanges: [ExchangeProvider.kraken.rawValue: ExchangeEndpointOverride(baseURL: URL(string: "https://kraken.example")!)]
+    )
+    let http = StubHTTPClient { request in
+      XCTAssertEqual(request.url?.path, "/config/native")
+      return (try JSONEncoder.addressAtlas.encode(expected), httpResponse(for: request))
+    }
+    let client = NativeEndpointConfigClient(http: http)
+
+    let config = try await client.fetch(from: URL(string: "https://sync.example")!)
+
+    XCTAssertEqual(config, expected)
+  }
+}
+
 final class EncryptedSQLiteVaultStoreTests: XCTestCase {
   func testStorePersistsEncryptedDocumentWithoutPlaintextWalletLeak() throws {
     let tempDir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)

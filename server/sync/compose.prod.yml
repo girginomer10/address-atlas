@@ -1,3 +1,5 @@
+name: address-atlas-sync
+
 services:
   caddy:
     image: caddy:2-alpine
@@ -16,7 +18,9 @@ services:
       - web
 
   web:
-    build: .
+    build:
+      context: ../..
+      dockerfile: server/sync/Dockerfile
     restart: unless-stopped
     environment:
       ADDRESS_ATLAS_SYNC_ONLY: "true"
@@ -26,6 +30,10 @@ services:
       PASSKEY_RP_ID: "${PASSKEY_RP_ID}"
       PASSKEY_RP_NAME: "${PASSKEY_RP_NAME}"
       PASSKEY_ORIGIN: "${PASSKEY_ORIGIN}"
+      NATIVE_ENDPOINT_CONFIG_VERSION: "${NATIVE_ENDPOINT_CONFIG_VERSION:-1}"
+      NATIVE_ENDPOINT_CONFIG_UPDATED_AT: "${NATIVE_ENDPOINT_CONFIG_UPDATED_AT:-2026-05-09T00:00:00.000Z}"
+      NATIVE_ENDPOINT_CONFIG_MESSAGE: "${NATIVE_ENDPOINT_CONFIG_MESSAGE:-}"
+      NATIVE_ENDPOINT_CONFIG_JSON: "${NATIVE_ENDPOINT_CONFIG_JSON:-}"
     depends_on:
       postgres:
         condition: service_healthy

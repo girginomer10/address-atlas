@@ -3,15 +3,21 @@ import Foundation
 public struct NativeScanner: Sendable {
   private let http: JSONHTTPClient
   private let priceProvider: PriceProviding
+  private let endpointConfig: NativeEndpointConfig
 
-  public init(http: JSONHTTPClient = JSONHTTPClient(), priceProvider: PriceProviding = CoinGeckoPriceClient()) {
+  public init(
+    http: JSONHTTPClient = JSONHTTPClient(),
+    endpointConfig: NativeEndpointConfig = .bundled,
+    priceProvider: PriceProviding? = nil
+  ) {
     self.http = http
-    self.priceProvider = priceProvider
+    self.endpointConfig = endpointConfig
+    self.priceProvider = priceProvider ?? CoinGeckoPriceClient(baseURL: endpointConfig.priceBaseURL, http: http)
   }
 
   public func scan(addresses input: String, customTokens: [CustomTokenRecord] = []) async throws -> ScanRunRecord {
     let addresses = AddressDetection.parse(input).filter(AddressDetection.isSafePublicAddress)
-    let detectedChains = addresses.flatMap(AddressDetection.detectChains)
+    let detectedChains = addresses.flatMap(AddressDetection.detectChains).map { endpointConfig.applying(to: $0) }
     let registries = Self.tokenRegistries(customTokens: customTokens)
     let tokenIds = Array(registries.evm.values.joined()).compactMap(\.coinGeckoId)
       + Array(registries.spl.values.joined()).compactMap(\.coinGeckoId)
@@ -26,7 +32,8 @@ public struct NativeScanner: Sendable {
         warnings.append("Unsupported address skipped: \(address).")
         continue
       }
-      for chain in chains {
+      for detectedChain in chains {
+        let chain = endpointConfig.applying(to: detectedChain)
         do {
           let scanned = try await scanNative(address: address, chain: chain, prices: prices, registries: registries)
           assets.append(contentsOf: scanned.assets)

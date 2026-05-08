@@ -11,9 +11,10 @@ Public v1 must not ship unsigned or unnotarized. If no Developer ID Application 
 
 ## Backend Release
 
-- Create `.env.production` from `.env.production.example`.
-- Deploy with `docker compose --env-file .env.production -f compose.prod.yml up -d --build`.
+- Create `server/sync/.env.production` from `server/sync/.env.production.example`.
+- Deploy with `docker compose --env-file server/sync/.env.production -f server/sync/compose.prod.yml up -d --build`.
 - Verify `https://<domain>/healthz` returns `{ "ok": true }`.
+- Verify `https://<domain>/config/native` returns the current public endpoint config.
 - Verify sync-only mode returns 404 for `/`, `/api/scan`, `/settings`, and other legacy app routes.
 - Verify passkey registration/authentication uses the production `PASSKEY_RP_ID` and `PASSKEY_ORIGIN`.
 

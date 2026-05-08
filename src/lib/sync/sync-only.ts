@@ -2,6 +2,7 @@ const EXACT_SYNC_PATHS = new Set([
   "/auth/native",
   "/auth/passkey/options",
   "/auth/passkey/verify",
+  "/config/native",
   "/healthz",
   "/vault/latest"
 ]);

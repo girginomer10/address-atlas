@@ -1,6 +1,7 @@
 .data
 .env
 .env.production
+server/sync/.env.production
 .git
 .next
 native/AddressAtlasMac/.build

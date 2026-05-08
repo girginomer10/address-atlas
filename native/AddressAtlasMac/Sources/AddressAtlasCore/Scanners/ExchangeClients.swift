@@ -93,15 +93,22 @@ public struct NativeExchangeBalanceClient: Sendable {
 
   public init(
     http: HTTPClient = URLSession.shared,
-    binanceBaseURL: URL = URL(string: "https://api.binance.com")!,
-    coinbaseBaseURL: URL = URL(string: "https://api.coinbase.com")!,
-    krakenBaseURL: URL = URL(string: "https://api.kraken.com")!,
+    endpointConfig: NativeEndpointConfig = .bundled,
+    binanceBaseURL: URL? = nil,
+    coinbaseBaseURL: URL? = nil,
+    krakenBaseURL: URL? = nil,
     now: @escaping @Sendable () -> Date = { Date() }
   ) {
     self.http = http
     self.binanceBaseURL = binanceBaseURL
+      ?? endpointConfig.exchangeBaseURL(for: .binance)
+      ?? URL(string: "https://api.binance.com")!
     self.coinbaseBaseURL = coinbaseBaseURL
+      ?? endpointConfig.exchangeBaseURL(for: .coinbase)
+      ?? URL(string: "https://api.coinbase.com")!
     self.krakenBaseURL = krakenBaseURL
+      ?? endpointConfig.exchangeBaseURL(for: .kraken)
+      ?? URL(string: "https://api.kraken.com")!
     self.now = now
   }
 

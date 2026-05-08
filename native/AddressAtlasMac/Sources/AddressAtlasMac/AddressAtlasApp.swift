@@ -810,6 +810,15 @@ struct SyncView: View {
             .buttonStyle(AtlasSecondaryButtonStyle())
             Button("Save server") {
               state.saveSyncSettings(serverURL: serverURL)
+              Task {
+                await state.refreshEndpointConfig()
+              }
+            }
+            .buttonStyle(AtlasSecondaryButtonStyle())
+            Button("Refresh endpoints") {
+              Task {
+                await state.refreshEndpointConfig()
+              }
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
           }
@@ -838,6 +847,8 @@ struct SyncView: View {
           KeyValueGrid(rows: [
             ("Account", state.document.syncState.accountId ?? "not connected"),
             ("Session", state.document.syncState.sessionToken.isEmpty ? "sign in required" : "active"),
+            ("Endpoint config", state.endpointConfigStatus),
+            ("Config version", "\(state.endpointConfig.configVersion)"),
             ("Last synced", state.document.syncState.lastSyncedAt?.formatted(date: .abbreviated, time: .shortened) ?? "never"),
             ("Checksum", state.document.syncState.lastChecksum ?? "none")
           ])
@@ -846,6 +857,9 @@ struct SyncView: View {
     }
     .onAppear {
       serverURL = state.document.syncState.serverURL
+      Task {
+        await state.refreshEndpointConfig(silent: true)
+      }
     }
   }
 }

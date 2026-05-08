@@ -2,10 +2,11 @@
 
 Address Atlas is a local-first, read-only crypto portfolio tracker. Paste public wallet addresses, connect read-only exchange API keys, and keep a private portfolio ledger on your own machine.
 
-The repo now contains two tracks:
+The repo is organized as a small monorepo:
 
 - The existing Next.js app remains as the web/reference implementation.
 - `native/AddressAtlasMac` is the new native macOS implementation. It uses a random vault key stored in macOS Keychain, writes only encrypted vault documents to local SQLite, runs RPC/API requests from the Mac app, and syncs only opaque encrypted vault snapshots to the server.
+- `server/sync` is the production deployment target for the public sync/auth server. It packages the Next server with Docker, Caddy TLS, Postgres, and sync-only route exposure.
 
 ## Why this exists
 
@@ -103,15 +104,18 @@ npm run sync:db:up
 For a production VPS, copy `.env.production.example` to `.env.production`, fill the production domain and secrets, keep `POSTGRES_PASSWORD` and `SYNC_DATABASE_URL` in agreement, then start the sync-only stack:
 
 ```bash
+cp server/sync/.env.production.example server/sync/.env.production
 npm run sync:prod:up
 curl https://your-domain.example/healthz
 ```
 
-`compose.prod.yml` runs Caddy, the Next sync/auth server, and Postgres. `ADDRESS_ATLAS_SYNC_ONLY=true` limits the public VPS to `/auth/native`, `/auth/passkey/*`, `/vault/latest`, and `/healthz`.
+`server/sync/compose.prod.yml` runs Caddy, the Next sync/auth server, and Postgres. `ADDRESS_ATLAS_SYNC_ONLY=true` limits the public VPS to `/auth/native`, `/auth/passkey/*`, `/config/native`, `/vault/latest`, and `/healthz`.
 
 Sync endpoints are intentionally narrow: `POST /auth/passkey/options`, `POST /auth/passkey/verify`, `GET /vault/latest`, and `PUT /vault/latest`. The server stores passkey public keys plus encrypted vault snapshot metadata; it does not store decryptable keys or plaintext portfolio data.
 
 The Mac app opens `/auth/native` in a system web authentication session for passkey account creation/sign-in, then receives only a short-lived sync session token through the `address-atlas://sync-auth` callback URL.
+
+`GET /config/native` returns public endpoint config for blockchain RPC, price, and exchange base URLs. This lets the server operator rotate public providers without shipping a new Mac app. The Mac app still sends scan requests client-side; the config endpoint does not receive wallet addresses or vault data. If a provider URL changes, users get it after refreshing endpoint config or before the next scan.
 
 Opt-in live exchange smoke tests are available for release QA. They run only when explicitly enabled and credentials are supplied out of band:
 

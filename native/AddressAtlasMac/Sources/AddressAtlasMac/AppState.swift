@@ -10,11 +10,14 @@ final class AppState: ObservableObject {
   @Published var error = ""
   @Published var scanning = false
   @Published var syncing = false
+  @Published var endpointConfig = NativeEndpointConfig.bundled
+  @Published var endpointConfigStatus = "Bundled endpoints"
 
   private let crypto = VaultCrypto()
   private let keyStore = KeychainVaultKeyStore()
   private let syncCodec = VaultSyncCodec()
   private let recoveryKit = RecoveryKitCodec()
+  private let endpointConfigClient = NativeEndpointConfigClient()
   private let passkeyAuthenticator = PasskeyWebAuthenticator()
   private var vaultKey: Data?
   private var store: EncryptedSQLiteVaultStore?
@@ -209,6 +212,31 @@ final class AppState: ObservableObject {
     save()
   }
 
+  func refreshEndpointConfig(silent: Bool = false) async {
+    guard let serverURL = URL(string: document.syncState.serverURL), !document.syncState.serverURL.isEmpty else {
+      endpointConfig = .bundled
+      endpointConfigStatus = "Bundled endpoints"
+      if !silent {
+        notice = "Using bundled endpoints."
+      }
+      return
+    }
+
+    do {
+      let config = try await endpointConfigClient.fetch(from: serverURL)
+      endpointConfig = config
+      endpointConfigStatus = "Remote v\(config.configVersion)"
+      if !silent {
+        notice = "Endpoint config refreshed."
+      }
+    } catch {
+      endpointConfigStatus = endpointConfig == .bundled ? "Bundled endpoints" : "Remote v\(endpointConfig.configVersion) cached"
+      if !silent {
+        self.error = error.localizedDescription
+      }
+    }
+  }
+
   func createPasskeyAccount(serverURL: String) async {
     await authenticateWithPasskey(serverURL: serverURL, mode: .register)
   }
@@ -230,6 +258,7 @@ final class AppState: ObservableObject {
       document.syncState.serverURL = session.serverURL
       document.syncState.sessionToken = session.sessionToken
       save()
+      await refreshEndpointConfig(silent: true)
       notice = mode == .register ? "Passkey account connected." : "Passkey sign-in complete."
       error = ""
     } catch {
@@ -351,10 +380,15 @@ final class AppState: ObservableObject {
     error = ""
     defer { scanning = false }
     do {
+      await refreshEndpointConfig(silent: true)
       let input = document.wallets.map(\.address).joined(separator: "\n")
-      let scanner = NativeScanner()
+      let scanner = NativeScanner(endpointConfig: endpointConfig)
       var scan = try await scanner.scan(addresses: input, customTokens: document.customTokens)
-      let exchangeScan = await NativeExchangeScanner().scan(
+      let exchangeClient = NativeExchangeBalanceClient(endpointConfig: endpointConfig)
+      let exchangeScan = await NativeExchangeScanner(
+        client: exchangeClient,
+        priceProvider: CoinGeckoPriceClient(baseURL: endpointConfig.priceBaseURL)
+      ).scan(
         connections: document.exchangeConnections,
         vaultKey: vaultKey
       )

@@ -6,6 +6,7 @@ describe("sync-only route allowlist", () => {
     expect(isSyncOnlyPathAllowed("/auth/native")).toBe(true);
     expect(isSyncOnlyPathAllowed("/auth/passkey/options")).toBe(true);
     expect(isSyncOnlyPathAllowed("/auth/passkey/verify")).toBe(true);
+    expect(isSyncOnlyPathAllowed("/config/native")).toBe(true);
     expect(isSyncOnlyPathAllowed("/vault/latest")).toBe(true);
     expect(isSyncOnlyPathAllowed("/healthz")).toBe(true);
     expect(isSyncOnlyPathAllowed("/_next/static/chunk.js")).toBe(true);
