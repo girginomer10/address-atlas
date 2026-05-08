@@ -29,6 +29,7 @@ This repo is a cleaner follow-up to earlier hackathon experiments:
 - AES-256-GCM encryption for exchange API credentials. The web reference uses a local vault passphrase; the native Mac app uses a Keychain-backed vault subkey.
 - USD prices through CoinGecko.
 - CSV and JSON export from the latest local snapshot.
+- Partial scan warnings when optional token, staking, reward, or trustline requests fail.
 - Route-based UI: Portfolio, Wallets, Assets, Snapshots, Export, and Settings.
 
 ## Local development

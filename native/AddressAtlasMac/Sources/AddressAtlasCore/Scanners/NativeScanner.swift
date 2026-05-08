@@ -29,7 +29,8 @@ public struct NativeScanner: Sendable {
       for chain in chains {
         do {
           let scanned = try await scanNative(address: address, chain: chain, prices: prices, registries: registries)
-          assets.append(contentsOf: scanned)
+          assets.append(contentsOf: scanned.assets)
+          warnings.append(contentsOf: scanned.warnings.map { "\(chain.name): \($0)" })
         } catch {
           warnings.append("\(chain.name): \(error.localizedDescription)")
         }
@@ -44,7 +45,7 @@ public struct NativeScanner: Sendable {
     )
   }
 
-  private func scanNative(address: String, chain: ChainConfig, prices: [String: PricePoint]) async throws -> [TrackedAsset] {
+  private func scanNative(address: String, chain: ChainConfig, prices: [String: PricePoint]) async throws -> NativeScanResult {
     try await scanNative(
       address: address,
       chain: chain,
@@ -58,10 +59,10 @@ public struct NativeScanner: Sendable {
     chain: ChainConfig,
     prices: [String: PricePoint],
     registries: TokenRegistries
-  ) async throws -> [TrackedAsset] {
+  ) async throws -> NativeScanResult {
     switch chain.family {
     case .bitcoin:
-      return try await scanBitcoin(address: address, chain: chain, prices: prices)
+      return NativeScanResult(assets: try await scanBitcoin(address: address, chain: chain, prices: prices))
     case .evm:
       return try await scanEVM(
         address: address,
@@ -88,7 +89,7 @@ public struct NativeScanner: Sendable {
     case .xrp:
       return try await scanXRP(address: address, chain: chain, prices: prices)
     case .exchange:
-      return []
+      return NativeScanResult()
     }
   }
 
@@ -121,13 +122,13 @@ public struct NativeScanner: Sendable {
     chain: ChainConfig,
     tokens: [TokenConfig],
     prices: [String: PricePoint]
-  ) async throws -> [TrackedAsset] {
+  ) async throws -> NativeScanResult {
     struct Response: Decodable {
       var result: String?
       var error: RPCError?
       struct RPCError: Decodable { var message: String? }
     }
-    guard let rpc = chain.rpcUrl else { return [] }
+    guard let rpc = chain.rpcUrl else { return NativeScanResult() }
     let response = try await http.post(
       rpc,
       body: JSONRPCRequest(method: "eth_getBalance", params: [.string(address), .string("latest")]),
@@ -136,6 +137,7 @@ public struct NativeScanner: Sendable {
     if let message = response.error?.message { throw NSError(domain: "EVM", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
     let amount = Self.hexQuantityToDouble(response.result ?? "0x0", decimals: chain.decimals)
     var assets = assetIfPositive(amount: amount, address: address, chain: chain, prices: prices)
+    var failedTokens: [String] = []
 
     for token in tokens {
       do {
@@ -143,11 +145,14 @@ public struct NativeScanner: Sendable {
           assets.append(tokenAsset)
         }
       } catch {
-        continue
+        failedTokens.append(token.symbol)
       }
     }
 
-    return assets
+    let warnings = failedTokens.isEmpty
+      ? []
+      : ["ERC-20 token balance checks failed for \(Self.formattedSymbols(failedTokens)); token balances may be incomplete."]
+    return NativeScanResult(assets: assets, warnings: warnings)
   }
 
   private func scanErc20(address: String, chain: ChainConfig, token: TokenConfig, prices: [String: PricePoint]) async throws -> TrackedAsset? {
@@ -171,7 +176,9 @@ public struct NativeScanner: Sendable {
       ),
       as: Response.self
     )
-    if response.error != nil { return nil }
+    if let message = response.error?.message {
+      throw NSError(domain: "EVMToken", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+    }
     let amount = Self.hexQuantityToDouble(response.result ?? "0x0", decimals: token.decimals)
     guard amount > 0 else { return nil }
     return tokenAsset(amount: amount, address: address, chain: chain, token: token, prices: prices, source: .erc20)
@@ -182,27 +189,27 @@ public struct NativeScanner: Sendable {
     chain: ChainConfig,
     tokens: [TokenConfig],
     prices: [String: PricePoint]
-  ) async throws -> [TrackedAsset] {
+  ) async throws -> NativeScanResult {
     struct Response: Decodable {
       var result: NativeBalance?
       struct NativeBalance: Decodable { var value: Double }
     }
-    guard let rpc = chain.rpcUrl else { return [] }
+    guard let rpc = chain.rpcUrl else { return NativeScanResult() }
     let response = try await http.post(
       rpc,
       body: JSONRPCRequest(method: "getBalance", params: [.string(address), .object(["commitment": .string("confirmed")])]),
       as: Response.self
     )
     var assets = assetIfPositive(amount: (response.result?.value ?? 0) / pow(10, Double(chain.decimals)), address: address, chain: chain, prices: prices)
-    let splBalances = try await fetchSolanaTokenBalances(rpc: rpc, owner: address, registry: tokens)
-    assets.append(contentsOf: splBalances.compactMap { balance in
+    let splScan = try await fetchSolanaTokenBalances(rpc: rpc, owner: address, registry: tokens)
+    assets.append(contentsOf: splScan.balances.compactMap { balance in
       tokenAsset(amount: balance.amount, address: address, chain: chain, token: balance.token, prices: prices, source: .spl)
     })
-    return assets
+    return NativeScanResult(assets: assets, warnings: splScan.warnings)
   }
 
-  private func scanCosmos(address: String, chain: ChainConfig, prices: [String: PricePoint]) async throws -> [TrackedAsset] {
-    guard let rest = chain.restUrl, let denom = chain.nativeDenom else { return [] }
+  private func scanCosmos(address: String, chain: ChainConfig, prices: [String: PricePoint]) async throws -> NativeScanResult {
+    guard let rest = chain.restUrl, let denom = chain.nativeDenom else { return NativeScanResult() }
     let url = rest.appending(path: "cosmos/bank/v1beta1/balances/\(address)")
     let response = try await http.get(url, as: CosmosBankResponse.self)
     var assets = assetIfPositive(
@@ -211,13 +218,15 @@ public struct NativeScanner: Sendable {
       chain: chain,
       prices: prices
     )
+    var warnings: [String] = []
 
     let delegationURL = Self.cosmosURL(
       rest: rest,
       path: "cosmos/staking/v1beta1/delegations/\(address)",
       queryItems: [URLQueryItem(name: "pagination.limit", value: "500")]
     )
-    if let delegationResponse = try? await http.get(delegationURL, as: CosmosDelegationResponse.self) {
+    do {
+      let delegationResponse = try await http.get(delegationURL, as: CosmosDelegationResponse.self)
       assets.append(contentsOf: assetIfPositive(
         amount: Self.parseCosmosDelegations(delegationResponse, denom: denom, decimals: chain.decimals),
         address: address,
@@ -226,10 +235,13 @@ public struct NativeScanner: Sendable {
         name: "\(chain.name) Staked",
         source: .staked
       ))
+    } catch {
+      warnings.append("Delegations could not be read; staked balance may be missing.")
     }
 
     let rewardsURL = rest.appending(path: "cosmos/distribution/v1beta1/delegators/\(address)/rewards")
-    if let rewardsResponse = try? await http.get(rewardsURL, as: CosmosRewardsResponse.self) {
+    do {
+      let rewardsResponse = try await http.get(rewardsURL, as: CosmosRewardsResponse.self)
       assets.append(contentsOf: assetIfPositive(
         amount: Self.parseCosmosRewards(rewardsResponse, denom: denom, decimals: chain.decimals),
         address: address,
@@ -238,9 +250,11 @@ public struct NativeScanner: Sendable {
         name: "\(chain.name) Rewards",
         source: .rewards
       ))
+    } catch {
+      warnings.append("Rewards could not be read; claimable rewards may be missing.")
     }
 
-    return assets
+    return NativeScanResult(assets: assets, warnings: warnings)
   }
 
   private func scanTron(
@@ -248,8 +262,8 @@ public struct NativeScanner: Sendable {
     chain: ChainConfig,
     tokens: [TokenConfig],
     prices: [String: PricePoint]
-  ) async throws -> [TrackedAsset] {
-    guard let rest = chain.restUrl else { return [] }
+  ) async throws -> NativeScanResult {
+    guard let rest = chain.restUrl else { return NativeScanResult() }
     let url = rest.appending(path: "v1/accounts/\(address)")
     let response = try await http.get(url, as: TronAccountResponse.self)
     let account = response.data?.first
@@ -264,10 +278,10 @@ public struct NativeScanner: Sendable {
     assets.append(contentsOf: tokenAmounts.compactMap { entry in
       tokenAsset(amount: entry.amount, address: address, chain: chain, token: entry.token, prices: prices, source: .trc20)
     })
-    return assets
+    return NativeScanResult(assets: assets)
   }
 
-  private func scanXRP(address: String, chain: ChainConfig, prices: [String: PricePoint]) async throws -> [TrackedAsset] {
+  private func scanXRP(address: String, chain: ChainConfig, prices: [String: PricePoint]) async throws -> NativeScanResult {
     struct Response: Decodable {
       var result: Result?
       struct Result: Decodable {
@@ -284,7 +298,7 @@ public struct NativeScanner: Sendable {
       }
       struct Account: Decodable { var Balance: String? }
     }
-    guard let rpc = chain.rpcUrl else { return [] }
+    guard let rpc = chain.rpcUrl else { return NativeScanResult() }
     let response = try await http.post(
       rpc,
       body: XRPRequest(
@@ -296,24 +310,29 @@ public struct NativeScanner: Sendable {
       ),
       as: Response.self
     )
-    if response.result?.error == "actNotFound" { return [] }
+    if response.result?.error == "actNotFound" { return NativeScanResult() }
     let drops = Double(response.result?.accountData?.Balance ?? "0") ?? 0
     var assets = assetIfPositive(amount: drops / pow(10, Double(chain.decimals)), address: address, chain: chain, prices: prices)
+    var warnings: [String] = []
 
-    let linesResponse = try? await http.post(
-      rpc,
-      body: XRPRequest(
-        method: "account_lines",
-        params: [[
-          "account": .string(address),
-          "ledger_index": .string("validated"),
-          "limit": .number(200)
-        ]]
-      ),
-      as: XrpAccountLinesResponse.self
-    )
-    assets.append(contentsOf: Self.parseXrpTrustLines(linesResponse?.result?.lines ?? [], address: address, chain: chain))
-    return assets
+    do {
+      let linesResponse = try await http.post(
+        rpc,
+        body: XRPRequest(
+          method: "account_lines",
+          params: [[
+            "account": .string(address),
+            "ledger_index": .string("validated"),
+            "limit": .number(200)
+          ]]
+        ),
+        as: XrpAccountLinesResponse.self
+      )
+      assets.append(contentsOf: Self.parseXrpTrustLines(linesResponse.result?.lines ?? [], address: address, chain: chain))
+    } catch {
+      warnings.append("Issued-currency trustlines could not be read; only native XRP is shown.")
+    }
+    return NativeScanResult(assets: assets, warnings: warnings)
   }
 
   private func assetIfPositive(
@@ -377,13 +396,14 @@ public struct NativeScanner: Sendable {
     rpc: URL,
     owner: String,
     registry: [TokenConfig]
-  ) async throws -> [(token: TokenConfig, amount: Double)] {
-    guard !registry.isEmpty else { return [] }
+  ) async throws -> SolanaTokenBalanceScan {
+    guard !registry.isEmpty else { return SolanaTokenBalanceScan() }
     let programs = [
       "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
       "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
     ]
     var parsedAccounts: [ParsedSplAccount] = []
+    var warnings: [String] = []
     for program in programs {
       do {
         let response = try await http.post(
@@ -403,7 +423,7 @@ public struct NativeScanner: Sendable {
         )
         parsedAccounts.append(contentsOf: Self.parseSolanaTokenAccounts(response.result?.value ?? []))
       } catch {
-        continue
+        warnings.append("\(Self.solanaProgramLabel(program)) token account scan failed; SPL balances may be incomplete.")
       }
     }
 
@@ -415,10 +435,11 @@ public struct NativeScanner: Sendable {
       }
       totals[account.mint, default: 0] += account.rawAmount
     }
-    return totals.compactMap { mint, raw in
+    let balances: [(token: TokenConfig, amount: Double)] = totals.compactMap { mint, raw in
       guard let token = registryByMint[mint] else { return nil }
       return (token, raw / pow(10, Double(token.decimals)))
     }
+    return SolanaTokenBalanceScan(balances: balances, warnings: warnings)
   }
 
   public static func parseSolanaTokenAccounts(_ accounts: [SolanaTokenAccount]) -> [ParsedSplAccount] {
@@ -551,6 +572,23 @@ public struct NativeScanner: Sendable {
     tokens.append(token)
   }
 
+  private static func formattedSymbols(_ symbols: [String]) -> String {
+    let unique = Array(Set(symbols)).sorted()
+    guard unique.count > 5 else { return unique.joined(separator: ", ") }
+    return "\(unique.prefix(5).joined(separator: ", ")) and \(unique.count - 5) more"
+  }
+
+  private static func solanaProgramLabel(_ program: String) -> String {
+    switch program {
+    case "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA":
+      return "SPL Token"
+    case "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb":
+      return "Token-2022"
+    default:
+      return program
+    }
+  }
+
   public static func hexQuantityToDouble(_ value: String, decimals: Int) -> Double {
     let clean = value.replacingOccurrences(of: "0x", with: "")
     guard let data = try? Data(hex: clean.isEmpty ? "00" : clean) else { return 0 }
@@ -572,6 +610,16 @@ public struct TokenRegistries: Sendable {
   public var evm: [String: [TokenConfig]]
   public var spl: [String: [TokenConfig]]
   public var trc20: [String: [TokenConfig]]
+}
+
+private struct NativeScanResult: Sendable {
+  var assets: [TrackedAsset] = []
+  var warnings: [String] = []
+}
+
+private struct SolanaTokenBalanceScan: Sendable {
+  var balances: [(token: TokenConfig, amount: Double)] = []
+  var warnings: [String] = []
 }
 
 public struct ParsedSplAccount: Equatable, Sendable {

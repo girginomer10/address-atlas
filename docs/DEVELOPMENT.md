@@ -43,7 +43,7 @@ Address Atlas avoids account creation, automated rebalancing, signing, and fund-
 - The native vault key is a random 256-bit key stored in macOS Keychain with this-device-only accessibility. Users do not type or memorize an encryption password.
 - The native local store uses SQLite as an envelope table: the app serializes `VaultDocument`, encrypts it with an HKDF-derived local database key, and stores only envelope JSON (`nonce`, `ciphertext`, checksums, versions).
 - The vault key derives separate subkeys for local database encryption, encrypted server sync blobs, and field-level exchange credential encryption.
-- Native scanners make public RPC/API requests directly from the Mac app. EVM scanning includes native balances plus built-in/custom ERC-20 `balanceOf` probes across the same common registry set as the web reference; Solana scanning includes native SOL plus built-in/custom SPL Token and Token-2022 account parsing. Binance, Coinbase, and Kraken balances use native Swift REST clients with read-only credentials decrypted only in memory for the scan. The server sync layer is not a portfolio API and cannot decrypt user data.
+- Native scanners make public RPC/API requests directly from the Mac app. EVM scanning includes native balances plus built-in/custom ERC-20 `balanceOf` probes across the same common registry set as the web reference; Solana scanning includes native SOL plus built-in/custom SPL Token and Token-2022 account parsing. Token, staking, reward, and trustline subrequest failures are surfaced as scan warnings without discarding successfully read native balances. Binance, Coinbase, and Kraken balances use native Swift REST clients with read-only credentials decrypted only in memory for the scan. The server sync layer is not a portfolio API and cannot decrypt user data.
 - Native exchange support uses deterministic Swift request builders and mocked signing/balance tests before live balance calls. Do not reintroduce `ccxt` into the Mac runtime.
 
 ## Encrypted Sync Server
@@ -65,4 +65,4 @@ Address Atlas avoids account creation, automated rebalancing, signing, and fund-
 - Add Solana metadata-program or DAS lookup if we want no-key symbol/name autofill for arbitrary Solana mints.
 - Add more TRC20 registry entries and price mappings for well-known XRPL issued currencies.
 - Make manual exchange entries easier to reconcile against historical snapshots if users want time-specific manual values later.
-- Continue native scanner parity with broader built-in token registries, XRP issued-asset pricing rules, token metadata autofill, and chain-specific warning surfacing.
+- Continue native scanner parity with broader built-in token registries, XRP issued-asset pricing rules, and token metadata autofill.

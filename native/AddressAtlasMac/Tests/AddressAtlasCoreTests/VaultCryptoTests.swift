@@ -170,6 +170,39 @@ final class NativeScannerTokenTests: XCTestCase {
     ])
   }
 
+  func testSolanaScannerSurfacesPartialTokenProgramWarnings() async throws {
+    let address = "So11111111111111111111111111111111111111112"
+    let http = StubHTTPClient { request in
+      let body = request.httpBody.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+      if body.contains("getBalance") {
+        let json = """
+        { "result": { "value": 1000000000 } }
+        """
+        return (Data(json.utf8), httpResponse(for: request))
+      }
+      if body.contains("getTokenAccountsByOwner") {
+        throw URLError(.timedOut)
+      }
+      XCTFail("Unexpected scanner request: \(body)")
+      return (Data("{}".utf8), httpResponse(for: request))
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: StaticPriceProvider(values: ["solana": PricePoint(usd: 10)])
+    )
+
+    let result = try await scanner.scan(addresses: address)
+
+    XCTAssertEqual(result.holdings.first?.symbol, "SOL")
+    XCTAssertEqual(result.holdings.first?.valueUsd, 10)
+    XCTAssertTrue(result.warnings.contains { warning in
+      warning.contains("Solana") && warning.contains("SPL Token token account scan failed")
+    })
+    XCTAssertTrue(result.warnings.contains { warning in
+      warning.contains("Solana") && warning.contains("Token-2022 token account scan failed")
+    })
+  }
+
   func testCosmosParsersReadLiquidStakedAndRewardsBalances() throws {
     let bankJSON = """
     { "balances": [{ "denom": "uatom", "amount": "1200000" }] }
