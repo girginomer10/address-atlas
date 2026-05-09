@@ -75,6 +75,18 @@ final class RecoveryKitTests: XCTestCase {
 }
 
 final class NativeEndpointConfigTests: XCTestCase {
+  func testBundledEndpointConfigCoversExpandedEvmChains() {
+    XCTAssertEqual(NativeEndpointConfig.bundled.configVersion, 2)
+    XCTAssertEqual(
+      NativeEndpointConfig.bundled.chains["scroll"]?.rpcURL?.absoluteString,
+      "https://rpc.scroll.io"
+    )
+    XCTAssertEqual(
+      NativeEndpointConfig.bundled.chains["zksync-era"]?.rpcURL?.absoluteString,
+      "https://mainnet.era.zksync.io"
+    )
+  }
+
   func testEndpointConfigOverridesChainAndExchangeEndpoints() throws {
     let config = NativeEndpointConfig(
       configVersion: 3,
@@ -256,6 +268,23 @@ final class NativeScannerTokenTests: XCTestCase {
     XCTAssertEqual(ethereum.filter { $0.address.lowercased() == duplicateUsdc.address.lowercased() }.count, 1)
     XCTAssertTrue(ethereum.contains { $0.symbol == "USDC" })
     XCTAssertTrue(ethereum.contains { $0.symbol == "ONE" })
+  }
+
+  func testChainRegistryIncludesExpandedNetworksAndAssets() {
+    let evmIds = Set(ChainRegistry.evmChains.map(\.id))
+    XCTAssertTrue(evmIds.isSuperset(of: ["gnosis", "linea", "mantle", "scroll", "zksync-era"]))
+    XCTAssertEqual(ChainRegistry.commonErc20Tokens["gnosis"]?.first { $0.symbol == "GNO" }?.decimals, 18)
+    XCTAssertEqual(
+      ChainRegistry.commonErc20Tokens["scroll"]?.first { $0.symbol == "USDC" }?.address,
+      "0x06eFdBFf2a14a7c8E15944D1F4A48F9F95F663A4"
+    )
+    XCTAssertEqual(
+      ChainRegistry.commonErc20Tokens["zksync-era"]?.first { $0.symbol == "ZK" }?.address,
+      "0x5A7d6b2F92C77FAD6CCaBd7EE0624E64907Eaf3E"
+    )
+    XCTAssertEqual(ChainRegistry.commonSplTokens["solana"]?.first { $0.symbol == "PYTH" }?.decimals, 6)
+    XCTAssertEqual(ExchangeBalanceNormalizer.coinGeckoIds["ZK"], "zksync")
+    XCTAssertEqual(ExchangeBalanceNormalizer.coinGeckoIds["SCR"], "scroll")
   }
 
   func testBuiltinRegistriesCoverReferenceTokenSet() {

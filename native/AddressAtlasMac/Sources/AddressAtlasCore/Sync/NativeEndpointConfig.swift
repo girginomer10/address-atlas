@@ -46,6 +46,7 @@ public struct NativeEndpointConfig: Codable, Equatable, Sendable {
   }
 
   public static let bundled = NativeEndpointConfig(
+    configVersion: 2,
     chains: [
       "bitcoin": ChainEndpointOverride(restURL: URL(string: "https://blockstream.info/api")),
       "solana": ChainEndpointOverride(rpcURL: URL(string: "https://api.mainnet-beta.solana.com")),
@@ -58,6 +59,11 @@ public struct NativeEndpointConfig: Codable, Equatable, Sendable {
       "polygon": ChainEndpointOverride(rpcURL: URL(string: "https://polygon-rpc.com")),
       "bsc": ChainEndpointOverride(rpcURL: URL(string: "https://bsc-dataseed.binance.org")),
       "avalanche": ChainEndpointOverride(rpcURL: URL(string: "https://api.avax.network/ext/bc/C/rpc")),
+      "gnosis": ChainEndpointOverride(rpcURL: URL(string: "https://rpc.gnosischain.com")),
+      "linea": ChainEndpointOverride(rpcURL: URL(string: "https://rpc.linea.build")),
+      "mantle": ChainEndpointOverride(rpcURL: URL(string: "https://rpc.mantle.xyz")),
+      "scroll": ChainEndpointOverride(rpcURL: URL(string: "https://rpc.scroll.io")),
+      "zksync-era": ChainEndpointOverride(rpcURL: URL(string: "https://mainnet.era.zksync.io")),
       "cosmoshub": ChainEndpointOverride(restURL: URL(string: "https://cosmos-api.polkachu.com")),
       "osmosis": ChainEndpointOverride(restURL: URL(string: "https://lcd.osmosis.zone")),
       "celestia": ChainEndpointOverride(restURL: URL(string: "https://celestia-api.polkachu.com")),

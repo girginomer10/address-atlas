@@ -10,8 +10,11 @@ describe("native endpoint config", () => {
     const config = getNativeEndpointConfig();
 
     expect(config.schemaVersion).toBe(1);
+    expect(config.configVersion).toBe(2);
     expect(config.priceBaseUrl).toBe("https://api.coingecko.com/api/v3/simple/price");
     expect(config.chains.ethereum.rpcUrl).toBe("https://eth.llamarpc.com");
+    expect(config.chains.scroll.rpcUrl).toBe("https://rpc.scroll.io");
+    expect(config.chains["zksync-era"].rpcUrl).toBe("https://mainnet.era.zksync.io");
     expect(config.exchanges.binance.baseUrl).toBe("https://api.binance.com");
     expect(config.exchanges.binance.accountPath).toBe("/api/v3/account");
   });

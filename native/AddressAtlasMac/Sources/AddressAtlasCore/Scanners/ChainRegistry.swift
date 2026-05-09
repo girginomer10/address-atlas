@@ -110,7 +110,12 @@ public enum ChainRegistry {
     ChainConfig(id: "optimism", name: "Optimism", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, rpcUrl: URL(string: "https://mainnet.optimism.io"), explorerUrl: URL(string: "https://optimistic.etherscan.io/address/")!),
     ChainConfig(id: "polygon", name: "Polygon PoS", family: .evm, symbol: "MATIC", coinGeckoId: "matic-network", decimals: 18, rpcUrl: URL(string: "https://polygon-rpc.com"), explorerUrl: URL(string: "https://polygonscan.com/address/")!),
     ChainConfig(id: "bsc", name: "BNB Chain", family: .evm, symbol: "BNB", coinGeckoId: "binancecoin", decimals: 18, rpcUrl: URL(string: "https://bsc-dataseed.binance.org"), explorerUrl: URL(string: "https://bscscan.com/address/")!),
-    ChainConfig(id: "avalanche", name: "Avalanche C-Chain", family: .evm, symbol: "AVAX", coinGeckoId: "avalanche-2", decimals: 18, rpcUrl: URL(string: "https://api.avax.network/ext/bc/C/rpc"), explorerUrl: URL(string: "https://snowtrace.io/address/")!)
+    ChainConfig(id: "avalanche", name: "Avalanche C-Chain", family: .evm, symbol: "AVAX", coinGeckoId: "avalanche-2", decimals: 18, rpcUrl: URL(string: "https://api.avax.network/ext/bc/C/rpc"), explorerUrl: URL(string: "https://snowtrace.io/address/")!),
+    ChainConfig(id: "gnosis", name: "Gnosis Chain", family: .evm, symbol: "XDAI", coinGeckoId: "xdai", decimals: 18, rpcUrl: URL(string: "https://rpc.gnosischain.com"), explorerUrl: URL(string: "https://gnosisscan.io/address/")!),
+    ChainConfig(id: "linea", name: "Linea", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, rpcUrl: URL(string: "https://rpc.linea.build"), explorerUrl: URL(string: "https://lineascan.build/address/")!),
+    ChainConfig(id: "mantle", name: "Mantle", family: .evm, symbol: "MNT", coinGeckoId: "mantle", decimals: 18, rpcUrl: URL(string: "https://rpc.mantle.xyz"), explorerUrl: URL(string: "https://explorer.mantle.xyz/address/")!),
+    ChainConfig(id: "scroll", name: "Scroll", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, rpcUrl: URL(string: "https://rpc.scroll.io"), explorerUrl: URL(string: "https://scrollscan.com/address/")!),
+    ChainConfig(id: "zksync-era", name: "ZKsync Era", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, rpcUrl: URL(string: "https://mainnet.era.zksync.io"), explorerUrl: URL(string: "https://explorer.zksync.io/address/")!)
   ]
 
   public static let cosmosChains: [ChainConfig] = [
@@ -131,6 +136,7 @@ public enum ChainRegistry {
       TokenConfig(symbol: "LINK", name: "Chainlink", address: "0x514910771AF9Ca656af840dff83E8264EcF986CA", decimals: 18, coinGeckoId: "chainlink"),
       TokenConfig(symbol: "UNI", name: "Uniswap", address: "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984", decimals: 18, coinGeckoId: "uniswap"),
       TokenConfig(symbol: "AAVE", name: "Aave", address: "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9", decimals: 18, coinGeckoId: "aave"),
+      TokenConfig(symbol: "CRV", name: "Curve DAO", address: "0xD533a949740bb3306d119cc777fa900ba034cd52", decimals: 18, coinGeckoId: "curve-dao-token"),
       TokenConfig(symbol: "SHIB", name: "Shiba Inu", address: "0x95aD61b0a150d79219dCF64E1E6Cc01f0B64C4cE", decimals: 18, coinGeckoId: "shiba-inu"),
       TokenConfig(symbol: "PEPE", name: "Pepe", address: "0x6982508145454Ce325dDbE47a25d4ec3d2311933", decimals: 18, coinGeckoId: "pepe"),
       TokenConfig(symbol: "LDO", name: "Lido DAO", address: "0x5A98FcBEA516Cf06857215779Fd812CA3beF1B32", decimals: 18, coinGeckoId: "lido-dao"),
@@ -190,6 +196,39 @@ public enum ChainRegistry {
       TokenConfig(symbol: "BTC.b", name: "Bitcoin Avalanche Bridged", address: "0x152b9d0FdC40C096757F570A51E494bd4b943E50", decimals: 8, coinGeckoId: "bitcoin-avalanche-bridged-btc-b"),
       TokenConfig(symbol: "DAI.e", name: "Dai", address: "0xd586E7F844cEa2F87f50152665BCbc2C279D8d70", decimals: 18, coinGeckoId: "dai"),
       TokenConfig(symbol: "LINK.e", name: "Chainlink", address: "0x5947BB275c521040051D82396192181b413227A3", decimals: 18, coinGeckoId: "chainlink")
+    ],
+    "gnosis": [
+      TokenConfig(symbol: "USDC", name: "USD Coin", address: "0xddafbb505ad214d7b80b1f830fccc89b60fb7a83", decimals: 6, coinGeckoId: "usd-coin"),
+      TokenConfig(symbol: "USDT", name: "Tether", address: "0x4ECaBa5870353805a9F068101A40E0f32ed605C6", decimals: 6, coinGeckoId: "tether"),
+      TokenConfig(symbol: "WXDAI", name: "Wrapped xDAI", address: "0xe91D153E0b41518A2Ce8Dd3D7944Fa863463a97d", decimals: 18, coinGeckoId: "xdai"),
+      TokenConfig(symbol: "WETH", name: "Wrapped Ether", address: "0x6A023CCd1ff6F2045C3309768eAd9E68F978f6e1", decimals: 18, coinGeckoId: "weth"),
+      TokenConfig(symbol: "WBTC", name: "Wrapped Bitcoin", address: "0x8e5bBbb09Ed1ebdE8674Cda39A0c169401db4252", decimals: 8, coinGeckoId: "wrapped-bitcoin"),
+      TokenConfig(symbol: "GNO", name: "Gnosis", address: "0x9C58BAcC331c9aa871AFD802DB6379a98e80CEdb", decimals: 18, coinGeckoId: "gnosis")
+    ],
+    "linea": [
+      TokenConfig(symbol: "USDC", name: "USD Coin", address: "0x176211869cA2b568f2A7D4EE941E073a821EE1ff", decimals: 6, coinGeckoId: "usd-coin"),
+      TokenConfig(symbol: "USDT", name: "Tether", address: "0xA219439258ca9da29E9Cc4cE5596924745e12B93", decimals: 6, coinGeckoId: "tether"),
+      TokenConfig(symbol: "WETH", name: "Wrapped Ether", address: "0xe5D7C2a44FfDDf6b295A15c148167daaAf5Cf34f", decimals: 18, coinGeckoId: "weth")
+    ],
+    "mantle": [
+      TokenConfig(symbol: "USDC", name: "USD Coin", address: "0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9", decimals: 6, coinGeckoId: "usd-coin"),
+      TokenConfig(symbol: "USDT", name: "Tether", address: "0x201EBa5CC46D216Ce6DC03F6a759e8E766e956aE", decimals: 6, coinGeckoId: "tether"),
+      TokenConfig(symbol: "WETH", name: "Wrapped Ether", address: "0xdEAddEaDdeadDEadDEADDEAddEADDEAddead1111", decimals: 18, coinGeckoId: "weth"),
+      TokenConfig(symbol: "WMNT", name: "Wrapped Mantle", address: "0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8", decimals: 18, coinGeckoId: "mantle")
+    ],
+    "scroll": [
+      TokenConfig(symbol: "USDC", name: "USD Coin", address: "0x06eFdBFf2a14a7c8E15944D1F4A48F9F95F663A4", decimals: 6, coinGeckoId: "usd-coin"),
+      TokenConfig(symbol: "USDT", name: "Tether", address: "0xf55BEC9cafDbE8730f096Aa55dad6D22d44099Df", decimals: 6, coinGeckoId: "tether"),
+      TokenConfig(symbol: "WETH", name: "Wrapped Ether", address: "0x5300000000000000000000000000000000000004", decimals: 18, coinGeckoId: "weth"),
+      TokenConfig(symbol: "WBTC", name: "Wrapped Bitcoin", address: "0x3C1BCa5a656e69edCD0D4E36BEbb3FcDAcA60Cf1", decimals: 8, coinGeckoId: "wrapped-bitcoin"),
+      TokenConfig(symbol: "SCR", name: "Scroll", address: "0xd29687c813D741E2F938F4aC377128810E217b1b", decimals: 18, coinGeckoId: "scroll")
+    ],
+    "zksync-era": [
+      TokenConfig(symbol: "USDC.e", name: "Bridged USDC", address: "0x3355df6D4c9C3035724Fd0e3914dE96A5a83aaf4", decimals: 6, coinGeckoId: "usd-coin"),
+      TokenConfig(symbol: "USDT", name: "Tether", address: "0x493257fd37edb34451f62edf8d2a0c418852ba4c", decimals: 6, coinGeckoId: "tether"),
+      TokenConfig(symbol: "WETH", name: "Wrapped Ether", address: "0x5aea5775959fbc2557cc8789bc1bf90a239d9a91", decimals: 18, coinGeckoId: "weth"),
+      TokenConfig(symbol: "WBTC", name: "Wrapped Bitcoin", address: "0xBBeB516fb02a01611cBBE0453Fe3c580D7281011", decimals: 8, coinGeckoId: "wrapped-bitcoin"),
+      TokenConfig(symbol: "ZK", name: "ZKsync", address: "0x5A7d6b2F92C77FAD6CCaBd7EE0624E64907Eaf3E", decimals: 18, coinGeckoId: "zksync")
     ]
   ]
 
@@ -243,6 +282,34 @@ public enum ChainRegistry {
         address: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
         decimals: 6,
         coinGeckoId: "jupiter-exchange-solana"
+      ),
+      TokenConfig(
+        symbol: "PYTH",
+        name: "Pyth Network",
+        address: "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3",
+        decimals: 6,
+        coinGeckoId: "pyth-network"
+      ),
+      TokenConfig(
+        symbol: "RAY",
+        name: "Raydium",
+        address: "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R",
+        decimals: 6,
+        coinGeckoId: "raydium"
+      ),
+      TokenConfig(
+        symbol: "mSOL",
+        name: "Marinade Staked SOL",
+        address: "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",
+        decimals: 9,
+        coinGeckoId: "msol"
+      ),
+      TokenConfig(
+        symbol: "ORCA",
+        name: "Orca",
+        address: "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE",
+        decimals: 6,
+        coinGeckoId: "orca"
       )
     ]
   ]

@@ -116,6 +116,56 @@ export const EVM_CHAINS: ChainConfig[] = [
     rpcUrl: "https://api.avax.network/ext/bc/C/rpc",
     explorerUrl: "https://snowtrace.io/address/",
     decimals: 18
+  },
+  {
+    id: "gnosis",
+    name: "Gnosis Chain",
+    family: "evm",
+    symbol: "XDAI",
+    coinGeckoId: "xdai",
+    rpcUrl: "https://rpc.gnosischain.com",
+    explorerUrl: "https://gnosisscan.io/address/",
+    decimals: 18
+  },
+  {
+    id: "linea",
+    name: "Linea",
+    family: "evm",
+    symbol: "ETH",
+    coinGeckoId: "ethereum",
+    rpcUrl: "https://rpc.linea.build",
+    explorerUrl: "https://lineascan.build/address/",
+    decimals: 18
+  },
+  {
+    id: "mantle",
+    name: "Mantle",
+    family: "evm",
+    symbol: "MNT",
+    coinGeckoId: "mantle",
+    rpcUrl: "https://rpc.mantle.xyz",
+    explorerUrl: "https://explorer.mantle.xyz/address/",
+    decimals: 18
+  },
+  {
+    id: "scroll",
+    name: "Scroll",
+    family: "evm",
+    symbol: "ETH",
+    coinGeckoId: "ethereum",
+    rpcUrl: "https://rpc.scroll.io",
+    explorerUrl: "https://scrollscan.com/address/",
+    decimals: 18
+  },
+  {
+    id: "zksync-era",
+    name: "ZKsync Era",
+    family: "evm",
+    symbol: "ETH",
+    coinGeckoId: "ethereum",
+    rpcUrl: "https://mainnet.era.zksync.io",
+    explorerUrl: "https://explorer.zksync.io/address/",
+    decimals: 18
   }
 ];
 
@@ -260,6 +310,13 @@ export const ERC20_TOKENS_BY_CHAIN: Record<string, TokenConfig[]> = {
       address: "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9",
       decimals: 18,
       coinGeckoId: "aave"
+    },
+    {
+      symbol: "CRV",
+      name: "Curve DAO",
+      address: "0xD533a949740bb3306d119cc777fa900ba034cd52",
+      decimals: 18,
+      coinGeckoId: "curve-dao-token"
     },
     {
       symbol: "SHIB",
@@ -602,6 +659,177 @@ export const ERC20_TOKENS_BY_CHAIN: Record<string, TokenConfig[]> = {
       decimals: 18,
       coinGeckoId: "chainlink"
     }
+  ],
+  gnosis: [
+    {
+      symbol: "USDC",
+      name: "USD Coin",
+      address: "0xddafbb505ad214d7b80b1f830fccc89b60fb7a83",
+      decimals: 6,
+      coinGeckoId: "usd-coin"
+    },
+    {
+      symbol: "USDT",
+      name: "Tether",
+      address: "0x4ECaBa5870353805a9F068101A40E0f32ed605C6",
+      decimals: 6,
+      coinGeckoId: "tether"
+    },
+    {
+      symbol: "WXDAI",
+      name: "Wrapped xDAI",
+      address: "0xe91D153E0b41518A2Ce8Dd3D7944Fa863463a97d",
+      decimals: 18,
+      coinGeckoId: "xdai"
+    },
+    {
+      symbol: "WETH",
+      name: "Wrapped Ether",
+      address: "0x6A023CCd1ff6F2045C3309768eAd9E68F978f6e1",
+      decimals: 18,
+      coinGeckoId: "weth"
+    },
+    {
+      symbol: "WBTC",
+      name: "Wrapped Bitcoin",
+      address: "0x8e5bBbb09Ed1ebdE8674Cda39A0c169401db4252",
+      decimals: 8,
+      coinGeckoId: "wrapped-bitcoin"
+    },
+    {
+      symbol: "GNO",
+      name: "Gnosis",
+      address: "0x9C58BAcC331c9aa871AFD802DB6379a98e80CEdb",
+      decimals: 18,
+      coinGeckoId: "gnosis"
+    }
+  ],
+  linea: [
+    {
+      symbol: "USDC",
+      name: "USD Coin",
+      address: "0x176211869cA2b568f2A7D4EE941E073a821EE1ff",
+      decimals: 6,
+      coinGeckoId: "usd-coin"
+    },
+    {
+      symbol: "USDT",
+      name: "Tether",
+      address: "0xA219439258ca9da29E9Cc4cE5596924745e12B93",
+      decimals: 6,
+      coinGeckoId: "tether"
+    },
+    {
+      symbol: "WETH",
+      name: "Wrapped Ether",
+      address: "0xe5D7C2a44FfDDf6b295A15c148167daaAf5Cf34f",
+      decimals: 18,
+      coinGeckoId: "weth"
+    }
+  ],
+  mantle: [
+    {
+      symbol: "USDC",
+      name: "USD Coin",
+      address: "0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9",
+      decimals: 6,
+      coinGeckoId: "usd-coin"
+    },
+    {
+      symbol: "USDT",
+      name: "Tether",
+      address: "0x201EBa5CC46D216Ce6DC03F6a759e8E766e956aE",
+      decimals: 6,
+      coinGeckoId: "tether"
+    },
+    {
+      symbol: "WETH",
+      name: "Wrapped Ether",
+      address: "0xdEAddEaDdeadDEadDEADDEAddEADDEAddead1111",
+      decimals: 18,
+      coinGeckoId: "weth"
+    },
+    {
+      symbol: "WMNT",
+      name: "Wrapped Mantle",
+      address: "0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb8",
+      decimals: 18,
+      coinGeckoId: "mantle"
+    }
+  ],
+  scroll: [
+    {
+      symbol: "USDC",
+      name: "USD Coin",
+      address: "0x06eFdBFf2a14a7c8E15944D1F4A48F9F95F663A4",
+      decimals: 6,
+      coinGeckoId: "usd-coin"
+    },
+    {
+      symbol: "USDT",
+      name: "Tether",
+      address: "0xf55BEC9cafDbE8730f096Aa55dad6D22d44099Df",
+      decimals: 6,
+      coinGeckoId: "tether"
+    },
+    {
+      symbol: "WETH",
+      name: "Wrapped Ether",
+      address: "0x5300000000000000000000000000000000000004",
+      decimals: 18,
+      coinGeckoId: "weth"
+    },
+    {
+      symbol: "WBTC",
+      name: "Wrapped Bitcoin",
+      address: "0x3C1BCa5a656e69edCD0D4E36BEbb3FcDAcA60Cf1",
+      decimals: 8,
+      coinGeckoId: "wrapped-bitcoin"
+    },
+    {
+      symbol: "SCR",
+      name: "Scroll",
+      address: "0xd29687c813D741E2F938F4aC377128810E217b1b",
+      decimals: 18,
+      coinGeckoId: "scroll"
+    }
+  ],
+  "zksync-era": [
+    {
+      symbol: "USDC.e",
+      name: "Bridged USDC",
+      address: "0x3355df6D4c9C3035724Fd0e3914dE96A5a83aaf4",
+      decimals: 6,
+      coinGeckoId: "usd-coin"
+    },
+    {
+      symbol: "USDT",
+      name: "Tether",
+      address: "0x493257fd37edb34451f62edf8d2a0c418852ba4c",
+      decimals: 6,
+      coinGeckoId: "tether"
+    },
+    {
+      symbol: "WETH",
+      name: "Wrapped Ether",
+      address: "0x5aea5775959fbc2557cc8789bc1bf90a239d9a91",
+      decimals: 18,
+      coinGeckoId: "weth"
+    },
+    {
+      symbol: "WBTC",
+      name: "Wrapped Bitcoin",
+      address: "0xBBeB516fb02a01611cBBE0453Fe3c580D7281011",
+      decimals: 8,
+      coinGeckoId: "wrapped-bitcoin"
+    },
+    {
+      symbol: "ZK",
+      name: "ZKsync",
+      address: "0x5A7d6b2F92C77FAD6CCaBd7EE0624E64907Eaf3E",
+      decimals: 18,
+      coinGeckoId: "zksync"
+    }
   ]
 };
 
@@ -655,6 +883,34 @@ export const SPL_TOKENS_BY_CHAIN: Record<string, SplTokenConfig[]> = {
       mint: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
       decimals: 6,
       coinGeckoId: "jupiter-exchange-solana"
+    },
+    {
+      symbol: "PYTH",
+      name: "Pyth Network",
+      mint: "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3",
+      decimals: 6,
+      coinGeckoId: "pyth-network"
+    },
+    {
+      symbol: "RAY",
+      name: "Raydium",
+      mint: "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R",
+      decimals: 6,
+      coinGeckoId: "raydium"
+    },
+    {
+      symbol: "mSOL",
+      name: "Marinade Staked SOL",
+      mint: "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",
+      decimals: 9,
+      coinGeckoId: "msol"
+    },
+    {
+      symbol: "ORCA",
+      name: "Orca",
+      mint: "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE",
+      decimals: 6,
+      coinGeckoId: "orca"
     }
   ]
 };

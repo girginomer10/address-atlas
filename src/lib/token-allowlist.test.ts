@@ -152,11 +152,11 @@ describe("custom token validation", () => {
 describe("scanner token merge", () => {
   it("merges custom tokens after the built-in registry", () => {
     const custom: TokenConfig = {
-      symbol: "CRV",
-      name: "Curve DAO",
-      address: "0xd533a949740bb3306d119cc777fa900ba034cd52",
+      symbol: "ENS",
+      name: "Ethereum Name Service",
+      address: "0xc18360217d8f7ab5e7c516566761ea12ce7f9d72",
       decimals: 18,
-      coinGeckoId: "curve-dao-token"
+      coinGeckoId: "ethereum-name-service"
     };
 
     const merged = mergeTokensByChain([{ chainId: "ethereum", token: custom }]);
@@ -164,7 +164,7 @@ describe("scanner token merge", () => {
     const ethereum = merged.ethereum ?? [];
     const builtin = ERC20_TOKENS_BY_CHAIN.ethereum ?? [];
     expect(ethereum.length).toBe(builtin.length + 1);
-    expect(ethereum[ethereum.length - 1].symbol).toBe("CRV");
+    expect(ethereum[ethereum.length - 1].symbol).toBe("ENS");
   });
 
   it("does not duplicate when a custom token shares an address with a built-in token", () => {

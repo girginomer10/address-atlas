@@ -23,7 +23,7 @@ export interface NativeEndpointConfig {
 
 export const DEFAULT_NATIVE_ENDPOINT_CONFIG: NativeEndpointConfig = {
   schemaVersion: 1,
-  configVersion: 1,
+  configVersion: 2,
   updatedAt: "2026-05-09T00:00:00.000Z",
   refreshAfterSeconds: 21_600,
   priceBaseUrl: "https://api.coingecko.com/api/v3/simple/price",
@@ -39,6 +39,11 @@ export const DEFAULT_NATIVE_ENDPOINT_CONFIG: NativeEndpointConfig = {
     polygon: { rpcUrl: "https://polygon-rpc.com" },
     bsc: { rpcUrl: "https://bsc-dataseed.binance.org" },
     avalanche: { rpcUrl: "https://api.avax.network/ext/bc/C/rpc" },
+    gnosis: { rpcUrl: "https://rpc.gnosischain.com" },
+    linea: { rpcUrl: "https://rpc.linea.build" },
+    mantle: { rpcUrl: "https://rpc.mantle.xyz" },
+    scroll: { rpcUrl: "https://rpc.scroll.io" },
+    "zksync-era": { rpcUrl: "https://mainnet.era.zksync.io" },
     cosmoshub: { restUrl: "https://cosmos-api.polkachu.com" },
     osmosis: { restUrl: "https://lcd.osmosis.zone" },
     celestia: { restUrl: "https://celestia-api.polkachu.com" },
