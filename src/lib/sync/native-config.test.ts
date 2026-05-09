@@ -48,7 +48,8 @@ describe("native endpoint config", () => {
         ethereum: { rpcUrl: "javascript:alert(1)" }
       },
       exchanges: {
-        binance: { baseUrl: "ftp://binance.example", accountPath: "https://bad.example/path" }
+        binance: { baseUrl: "http://binance.example", accountPath: "https://bad.example/path" },
+        coinbase: { baseUrl: "ftp://coinbase.example" }
       }
     }));
 
@@ -58,5 +59,6 @@ describe("native endpoint config", () => {
     expect(config.chains.ethereum.rpcUrl).toBe(DEFAULT_NATIVE_ENDPOINT_CONFIG.chains.ethereum.rpcUrl);
     expect(config.exchanges.binance.baseUrl).toBe(DEFAULT_NATIVE_ENDPOINT_CONFIG.exchanges.binance.baseUrl);
     expect(config.exchanges.binance.accountPath).toBe(DEFAULT_NATIVE_ENDPOINT_CONFIG.exchanges.binance.accountPath);
+    expect(config.exchanges.coinbase.baseUrl).toBe(DEFAULT_NATIVE_ENDPOINT_CONFIG.exchanges.coinbase.baseUrl);
   });
 });

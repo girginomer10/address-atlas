@@ -121,7 +121,7 @@ function sanitizeNativeConfig(config: NativeEndpointConfig): NativeEndpointConfi
       Object.entries(config.exchanges).map(([provider, value]) => {
         const fallback = DEFAULT_NATIVE_ENDPOINT_CONFIG.exchanges[provider] ?? value;
         return [provider, {
-          baseUrl: httpURL(value.baseUrl, fallback.baseUrl),
+          baseUrl: httpsURL(value.baseUrl, fallback.baseUrl),
           accountPath: pathValue(value.accountPath, fallback.accountPath)
         }];
       })
@@ -139,6 +139,19 @@ function httpURL(value: string | undefined, fallback: string | undefined) {
   try {
     const url = new URL(value);
     if (url.protocol === "https:" || url.protocol === "http:") {
+      return value;
+    }
+  } catch {
+    // Fall through to fallback.
+  }
+  return fallback ?? "";
+}
+
+function httpsURL(value: string | undefined, fallback: string | undefined) {
+  if (!value) return fallback ?? "";
+  try {
+    const url = new URL(value);
+    if (url.protocol === "https:") {
       return value;
     }
   } catch {

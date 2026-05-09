@@ -23,7 +23,6 @@ public enum AddressDetection {
   public static func detectChains(for address: String) -> [ChainConfig] {
     if isEvm(address) { return ChainRegistry.evmChains }
     if isBitcoin(address) { return [ChainRegistry.bitcoin] }
-    if isSolana(address) { return [ChainRegistry.solana] }
     if isTron(address) { return [ChainRegistry.tron] }
     if isXrp(address) { return [ChainRegistry.xrp] }
     if let cosmos = ChainRegistry.cosmosChains.first(where: { prefix in
@@ -32,6 +31,7 @@ public enum AddressDetection {
     }) {
       return [cosmos]
     }
+    if isSolana(address) { return [ChainRegistry.solana] }
     return []
   }
 

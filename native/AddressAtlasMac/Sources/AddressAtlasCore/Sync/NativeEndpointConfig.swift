@@ -96,7 +96,7 @@ public struct NativeEndpointConfig: Codable, Equatable, Sendable {
       try Self.validateHTTPURL(override.explorerURL, field: "\(chainId).explorerUrl")
     }
     for (provider, override) in exchanges {
-      try Self.validateHTTPURL(override.baseURL, field: "\(provider).baseUrl")
+      try Self.validateHTTPSURL(override.baseURL, field: "\(provider).baseUrl")
       try Self.validatePath(override.accountPath, field: "\(provider).accountPath")
     }
     return self
@@ -106,6 +106,13 @@ public struct NativeEndpointConfig: Codable, Equatable, Sendable {
     guard let url else { return }
     let scheme = url.scheme?.lowercased()
     guard scheme == "https" || scheme == "http" else {
+      throw NativeEndpointConfigError.invalidEndpoint(field)
+    }
+  }
+
+  private static func validateHTTPSURL(_ url: URL?, field: String) throws {
+    guard let url else { return }
+    guard url.scheme?.lowercased() == "https" else {
       throw NativeEndpointConfigError.invalidEndpoint(field)
     }
   }

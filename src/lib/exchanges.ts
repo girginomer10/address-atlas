@@ -104,12 +104,12 @@ export async function fetchExchangeSnapshot(
   vaultPassphrase: string
 ): Promise<ExchangeSnapshot> {
   assertExchangeProvider(connection.provider);
-  const credentials = await decryptFromVault<StoredCredentials>(
-    connection.encryptedCredentials,
-    vaultPassphrase
-  );
 
   try {
+    const credentials = await decryptFromVault<StoredCredentials>(
+      connection.encryptedCredentials,
+      vaultPassphrase
+    );
     const balance = await fetchCcxtBalance(connection.provider, credentials);
     const holdings = await normalizeExchangeBalance({
       id: connection.id,

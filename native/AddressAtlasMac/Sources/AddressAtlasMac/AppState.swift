@@ -278,10 +278,23 @@ final class AppState: ObservableObject {
     syncing = true
     defer { syncing = false }
     do {
-      let nextVersion = max(1, document.syncState.latestRemoteVersion + 1)
-      let snapshot = try syncCodec.seal(document: document, vaultKey: vaultKey, version: nextVersion)
       let client = ZeroKnowledgeSyncClient(baseURL: serverURL)
       await client.setBearerToken(document.syncState.sessionToken)
+      if let remote = try await client.latestVault() {
+        guard
+          let lastChecksum = document.syncState.lastChecksum,
+          !lastChecksum.isEmpty,
+          remote.checksum == lastChecksum
+        else {
+          throw SyncClientError.requestFailed(
+            409,
+            "Remote vault snapshot is newer. Download before uploading again."
+          )
+        }
+        document.syncState.latestRemoteVersion = max(document.syncState.latestRemoteVersion, remote.version)
+      }
+      let nextVersion = max(1, document.syncState.latestRemoteVersion + 1)
+      let snapshot = try syncCodec.seal(document: document, vaultKey: vaultKey, version: nextVersion)
       try await client.upload(snapshot: snapshot)
       document.syncState.latestRemoteVersion = snapshot.version
       document.syncState.lastSyncedAt = Date()

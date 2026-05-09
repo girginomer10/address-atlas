@@ -2,7 +2,7 @@ import { readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 
 const root = process.cwd();
-const duplicatePattern = / 2\.[^/]+$/;
+const duplicatePattern = / \d+\.[^/]+$/;
 const targets = [
   path.join(root, ".next"),
   path.join(root, "src/generated/prisma")

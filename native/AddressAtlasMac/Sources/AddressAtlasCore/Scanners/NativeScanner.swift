@@ -199,20 +199,41 @@ public struct NativeScanner: Sendable {
   ) async throws -> NativeScanResult {
     struct Response: Decodable {
       var result: NativeBalance?
+      var error: JSONRPCError?
       struct NativeBalance: Decodable { var value: Double }
     }
     guard let rpc = chain.rpcUrl else { return NativeScanResult() }
-    let response = try await http.post(
-      rpc,
-      body: JSONRPCRequest(method: "getBalance", params: [.string(address), .object(["commitment": .string("confirmed")])]),
-      as: Response.self
-    )
-    var assets = assetIfPositive(amount: (response.result?.value ?? 0) / pow(10, Double(chain.decimals)), address: address, chain: chain, prices: prices)
-    let splScan = try await fetchSolanaTokenBalances(rpc: rpc, owner: address, registry: tokens)
-    assets.append(contentsOf: splScan.balances.compactMap { balance in
-      tokenAsset(amount: balance.amount, address: address, chain: chain, token: balance.token, prices: prices, source: .spl)
-    })
-    return NativeScanResult(assets: assets, warnings: splScan.warnings)
+    var assets: [TrackedAsset] = []
+    var warnings: [String] = []
+
+    do {
+      let response = try await http.post(
+        rpc,
+        body: JSONRPCRequest(method: "getBalance", params: [.string(address), .object(["commitment": .string("confirmed")])]),
+        as: Response.self
+      )
+      if let error = response.error {
+        throw Self.rpcError(domain: "Solana", error: error, fallback: "Native SOL balance lookup failed.")
+      }
+      guard let lamports = response.result?.value else {
+        throw Self.messageError(domain: "Solana", message: "Native SOL balance lookup returned an empty result.")
+      }
+      assets.append(contentsOf: assetIfPositive(amount: lamports / pow(10, Double(chain.decimals)), address: address, chain: chain, prices: prices))
+    } catch {
+      warnings.append("Native SOL balance could not be read: \(error.localizedDescription)")
+    }
+
+    do {
+      let splScan = try await fetchSolanaTokenBalances(rpc: rpc, owner: address, registry: tokens)
+      assets.append(contentsOf: splScan.balances.compactMap { balance in
+        tokenAsset(amount: balance.amount, address: address, chain: chain, token: balance.token, prices: prices, source: .spl)
+      })
+      warnings.append(contentsOf: splScan.warnings)
+    } catch {
+      warnings.append("SPL token balances failed: \(error.localizedDescription)")
+    }
+
+    return NativeScanResult(assets: assets, warnings: warnings)
   }
 
   private func scanCosmos(address: String, chain: ChainConfig, prices: [String: PricePoint]) async throws -> NativeScanResult {
@@ -317,8 +338,20 @@ public struct NativeScanner: Sendable {
       ),
       as: Response.self
     )
-    if response.result?.error == "actNotFound" { return NativeScanResult() }
-    let drops = Double(response.result?.accountData?.Balance ?? "0") ?? 0
+    guard let result = response.result else {
+      throw Self.messageError(domain: "XRP", message: "XRP account lookup returned an empty result.")
+    }
+    if result.error == "actNotFound" { return NativeScanResult() }
+    if result.status == "error" || result.error != nil {
+      throw Self.messageError(
+        domain: "XRP",
+        message: result.errorMessage ?? result.error ?? "XRP account lookup failed."
+      )
+    }
+    guard let rawBalance = result.accountData?.Balance else {
+      throw Self.messageError(domain: "XRP", message: "XRP account lookup returned no balance.")
+    }
+    let drops = Double(rawBalance) ?? 0
     var assets = assetIfPositive(amount: drops / pow(10, Double(chain.decimals)), address: address, chain: chain, prices: prices)
     var warnings: [String] = []
 
@@ -335,7 +368,22 @@ public struct NativeScanner: Sendable {
         ),
         as: XrpAccountLinesResponse.self
       )
-      assets.append(contentsOf: Self.parseXrpTrustLines(linesResponse.result?.lines ?? [], address: address, chain: chain))
+      if let error = linesResponse.result?.error {
+        throw Self.messageError(
+          domain: "XRP",
+          message: linesResponse.result?.errorMessage ?? error
+        )
+      }
+      if linesResponse.result?.status == "error" {
+        throw Self.messageError(
+          domain: "XRP",
+          message: linesResponse.result?.errorMessage ?? "XRP trust lines lookup failed."
+        )
+      }
+      guard let lines = linesResponse.result?.lines else {
+        throw Self.messageError(domain: "XRP", message: "XRP trust lines lookup returned an empty result.")
+      }
+      assets.append(contentsOf: Self.parseXrpTrustLines(lines, address: address, chain: chain))
     } catch {
       warnings.append("Issued-currency trustlines could not be read; only native XRP is shown.")
     }
@@ -428,7 +476,13 @@ public struct NativeScanner: Sendable {
           ),
           as: SolanaTokenAccountsResponse.self
         )
-        parsedAccounts.append(contentsOf: Self.parseSolanaTokenAccounts(response.result?.value ?? []))
+        if let error = response.error {
+          throw Self.rpcError(domain: "SolanaTokenAccounts", error: error, fallback: "Token account lookup failed.")
+        }
+        guard let accounts = response.result?.value else {
+          throw Self.messageError(domain: "SolanaTokenAccounts", message: "Token account lookup returned an empty result.")
+        }
+        parsedAccounts.append(contentsOf: Self.parseSolanaTokenAccounts(accounts))
       } catch {
         warnings.append("\(Self.solanaProgramLabel(program)) token account scan failed; SPL balances may be incomplete.")
       }
@@ -603,6 +657,14 @@ public struct NativeScanner: Sendable {
     return raw / pow(10, Double(decimals))
   }
 
+  private static func rpcError(domain: String, error: JSONRPCError, fallback: String) -> NSError {
+    messageError(domain: domain, message: error.message ?? fallback, code: error.code ?? 1)
+  }
+
+  private static func messageError(domain: String, message: String, code: Int = 1) -> NSError {
+    NSError(domain: "AddressAtlas.\(domain)", code: code, userInfo: [NSLocalizedDescriptionKey: message])
+  }
+
   private static func cosmosURL(rest: URL, path: String, queryItems: [URLQueryItem]) -> URL {
     let url = rest.appending(path: path)
     guard !queryItems.isEmpty, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
@@ -637,10 +699,16 @@ public struct ParsedSplAccount: Equatable, Sendable {
 
 public struct SolanaTokenAccountsResponse: Decodable, Sendable {
   public var result: Result?
+  public var error: JSONRPCError?
 
   public struct Result: Decodable, Sendable {
     public var value: [SolanaTokenAccount]
   }
+}
+
+public struct JSONRPCError: Decodable, Sendable {
+  public var code: Int?
+  public var message: String?
 }
 
 public struct SolanaTokenAccount: Decodable, Sendable {
@@ -707,7 +775,17 @@ public struct XrpAccountLinesResponse: Decodable, Sendable {
   public var result: Result?
 
   public struct Result: Decodable, Sendable {
+    public var status: String?
+    public var error: String?
+    public var errorMessage: String?
     public var lines: [XrpTrustLine]?
+
+    enum CodingKeys: String, CodingKey {
+      case status
+      case error
+      case errorMessage = "error_message"
+      case lines
+    }
   }
 }
 

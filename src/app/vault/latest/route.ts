@@ -44,7 +44,7 @@ export async function PUT(request: NextRequest) {
     assertRemoteVaultSnapshot(body);
     assertNoPlaintextLeak(body);
     await ensureSyncSchema();
-    await getSyncPool().query(
+    const result = await getSyncPool().query(
       `INSERT INTO vault_snapshots (user_id, version, envelope, byte_size, checksum)
        VALUES ($1, $2, $3::jsonb, $4, $5)
        ON CONFLICT (user_id) DO UPDATE SET
@@ -52,9 +52,21 @@ export async function PUT(request: NextRequest) {
          envelope = excluded.envelope,
          byte_size = excluded.byte_size,
          checksum = excluded.checksum,
-         updated_at = now()`,
+         updated_at = now()
+       WHERE vault_snapshots.version < excluded.version
+          OR (
+            vault_snapshots.version = excluded.version
+            AND vault_snapshots.checksum = excluded.checksum
+          )
+       RETURNING version`,
       [session.userId, body.version, JSON.stringify(body.envelope), body.byteSize, body.checksum]
     );
+    if (result.rowCount === 0) {
+      return NextResponse.json(
+        { error: "Remote vault snapshot is newer. Download before uploading again." },
+        { status: 409 }
+      );
+    }
     return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json(

@@ -145,6 +145,28 @@ final class NativeEndpointConfigTests: XCTestCase {
       // Expected.
     }
   }
+
+  func testEndpointConfigClientRejectsPlainHttpExchangeEndpoints() async throws {
+    let invalid = NativeEndpointConfig(
+      exchanges: [
+        ExchangeProvider.binance.rawValue: ExchangeEndpointOverride(
+          baseURL: URL(string: "http://binance.example")!,
+          accountPath: "/api/v3/account"
+        )
+      ]
+    )
+    let http = StubHTTPClient { request in
+      (try JSONEncoder.addressAtlas.encode(invalid), httpResponse(for: request))
+    }
+    let client = NativeEndpointConfigClient(http: http)
+
+    do {
+      _ = try await client.fetch(from: URL(string: "https://sync.example")!)
+      XCTFail("Expected plain HTTP exchange endpoint config to fail.")
+    } catch NativeEndpointConfigError.invalidEndpoint(let field) {
+      XCTAssertEqual(field, "binance.baseUrl")
+    }
+  }
 }
 
 final class EncryptedSQLiteVaultStoreTests: XCTestCase {
@@ -186,6 +208,17 @@ final class ExchangeRequestSigningTests: XCTestCase {
   func testAddressDetectionRejectsSeedLikeInput() {
     let phrase = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima"
     XCTAssertFalse(AddressDetection.isSafePublicAddress(phrase))
+  }
+
+  func testAddressDetectionPrefersSpecificBase58ChainsBeforeSolana() {
+    XCTAssertEqual(
+      AddressDetection.detectChains(for: "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7").map(\.id),
+      ["tron"]
+    )
+    XCTAssertEqual(
+      AddressDetection.detectChains(for: "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn").map(\.id),
+      ["xrp"]
+    )
   }
 }
 
@@ -313,6 +346,70 @@ final class NativeScannerTokenTests: XCTestCase {
     })
     XCTAssertTrue(result.warnings.contains { warning in
       warning.contains("Solana") && warning.contains("Token-2022 token account scan failed")
+    })
+  }
+
+  func testSolanaJsonRpcErrorsDoNotBecomeZeroBalances() async throws {
+    let address = "So11111111111111111111111111111111111111112"
+    let http = StubHTTPClient { request in
+      let body = request.httpBody.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+      if body.contains("getBalance") {
+        let json = """
+        { "error": { "code": -32000, "message": "node is behind" } }
+        """
+        return (Data(json.utf8), httpResponse(for: request))
+      }
+      if body.contains("getTokenAccountsByOwner") {
+        let json = """
+        { "result": { "value": [] } }
+        """
+        return (Data(json.utf8), httpResponse(for: request))
+      }
+      XCTFail("Unexpected scanner request: \(body)")
+      return (Data("{}".utf8), httpResponse(for: request))
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: StaticPriceProvider(values: ["solana": PricePoint(usd: 10)])
+    )
+
+    let result = try await scanner.scan(addresses: address)
+
+    XCTAssertFalse(result.holdings.contains { $0.symbol == "SOL" })
+    XCTAssertTrue(result.warnings.contains { warning in
+      warning.contains("Solana") && warning.contains("node is behind")
+    })
+  }
+
+  func testXrpJsonRpcErrorsDoNotBecomeZeroBalances() async throws {
+    let address = "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn"
+    let http = StubHTTPClient { request in
+      let body = request.httpBody.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+      if body.contains("account_info") {
+        let json = """
+        {
+          "result": {
+            "status": "error",
+            "error": "internal",
+            "error_message": "ledger unavailable"
+          }
+        }
+        """
+        return (Data(json.utf8), httpResponse(for: request))
+      }
+      XCTFail("Unexpected scanner request: \(body)")
+      return (Data("{}".utf8), httpResponse(for: request))
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: StaticPriceProvider(values: ["ripple": PricePoint(usd: 2)])
+    )
+
+    let result = try await scanner.scan(addresses: address)
+
+    XCTAssertTrue(result.holdings.isEmpty)
+    XCTAssertTrue(result.warnings.contains { warning in
+      warning.contains("XRP Ledger") && warning.contains("ledger unavailable")
     })
   }
 
@@ -637,6 +734,37 @@ final class SyncClientTests: XCTestCase {
       XCTFail("Expected expired session to throw.")
     } catch SyncClientError.authenticationRequired(let message) {
       XCTAssertEqual(message, "Token expired.")
+    }
+  }
+
+  func testSyncClientSurfacesStaleUploadConflict() async throws {
+    let http = StubHTTPClient { request in
+      XCTAssertEqual(request.httpMethod, "PUT")
+      let json = """
+      { "error": "Remote vault snapshot is newer. Download before uploading again." }
+      """
+      return (Data(json.utf8), httpResponse(for: request, statusCode: 409))
+    }
+    let snapshot = RemoteVaultSnapshot(
+      version: 1,
+      envelope: EncryptedVaultEnvelope(
+        keyId: "sync-v1",
+        nonce: "abc",
+        ciphertext: "ciphertext",
+        checksum: String(repeating: "a", count: 64)
+      ),
+      byteSize: 128,
+      checksum: String(repeating: "b", count: 64)
+    )
+    let client = ZeroKnowledgeSyncClient(baseURL: URL(string: "https://sync.example")!, http: http)
+    await client.setBearerToken("current")
+
+    do {
+      try await client.upload(snapshot: snapshot)
+      XCTFail("Expected stale upload conflict.")
+    } catch SyncClientError.requestFailed(let statusCode, let message) {
+      XCTAssertEqual(statusCode, 409)
+      XCTAssertTrue(message.contains("Remote vault snapshot is newer"))
     }
   }
 }
