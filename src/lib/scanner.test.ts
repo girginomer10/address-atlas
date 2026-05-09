@@ -11,6 +11,9 @@ const SOLANA_ADDRESS = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU";
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
 const UNKNOWN_MINT = "So11111111111111111111111111111111111111112";
+const EVM_ADDRESS = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
+const ETHEREUM_USDC = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
+const ETHEREUM_CRV = "0xd533a949740bb3306d119cc777fa900ba034cd52";
 
 describe("parseSplTokenAccounts", () => {
   it("returns mint, raw amount, and decimals from jsonParsed accounts", () => {
@@ -252,6 +255,73 @@ describe("scanAddresses Solana SPL", () => {
     expect(response.assets.map((asset) => asset.symbol)).toEqual(["USDC"]);
     expect(response.assets[0]).toMatchObject({ amount: 3, source: "spl" });
     expect(response.warnings.some((message) => message.includes("Token-2022"))).toBe(true);
+  });
+});
+
+describe("scanAddresses EVM token batching", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("batches ERC-20 balance calls per chain and surfaces partial token failures", async () => {
+    const batchSizes: number[] = [];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("api.coingecko.com")) {
+          return jsonResponse({ "usd-coin": { usd: 1, usd_24h_change: 0 } });
+        }
+
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        if (Array.isArray(body)) {
+          batchSizes.push(body.length);
+          return jsonResponse(body.map((request) => {
+            const tokenAddress = String(request.params?.[0]?.to ?? "").toLowerCase();
+            if (tokenAddress === ETHEREUM_USDC) {
+              return {
+                jsonrpc: "2.0",
+                id: request.id,
+                result: `0x${(42_000_000n).toString(16)}`
+              };
+            }
+            if (tokenAddress === ETHEREUM_CRV) {
+              return {
+                jsonrpc: "2.0",
+                id: request.id,
+                error: { message: "token-rpc-down" }
+              };
+            }
+            return { jsonrpc: "2.0", id: request.id, result: "0x0" };
+          }));
+        }
+
+        if (body.method === "eth_getBalance") {
+          return jsonResponse({ jsonrpc: "2.0", id: body.id, result: "0x0" });
+        }
+
+        throw new Error(`Unexpected fetch ${url}`);
+      })
+    );
+
+    const response = await scanAddresses(EVM_ADDRESS);
+
+    expect(batchSizes.length).toBeGreaterThan(0);
+    expect(batchSizes.some((size) => size > 1)).toBe(true);
+    expect(response.assets).toEqual([
+      expect.objectContaining({
+        chainId: "ethereum",
+        symbol: "USDC",
+        source: "erc20",
+        amount: 42,
+        valueUsd: 42
+      })
+    ]);
+    expect(response.warnings.some((warning) =>
+      warning.includes("Ethereum ERC-20 token balance checks failed for CRV")
+    )).toBe(true);
   });
 });
 

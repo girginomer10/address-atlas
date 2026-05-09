@@ -701,17 +701,82 @@ async function scanEvm(
     warnings.push(`${chain.name} native balance failed: ${readError(error)}.`);
   }
 
-  const tokenResults = await Promise.allSettled(
-    tokens.map((token) => scanErc20(address, chain, token, prices))
-  );
+  const tokenScan = await scanErc20Balances(address, chain, tokens, prices);
+  assets.push(...tokenScan.assets);
+  warnings.push(...tokenScan.warnings);
 
-  tokenResults.forEach((result) => {
-    if (result.status === "fulfilled" && result.value) {
-      assets.push(result.value);
+  return { assets, warnings };
+}
+
+async function scanErc20Balances(
+  address: string,
+  chain: ChainConfig,
+  tokens: TokenConfig[],
+  prices: Record<string, PricePoint>
+): Promise<{ assets: TrackedAsset[]; warnings: string[] }> {
+  if (!chain.rpcUrl || tokens.length === 0) return { assets: [], warnings: [] };
+
+  try {
+    const results = await rpcBatchCall<string>(
+      chain.rpcUrl,
+      tokens.map((token) => ({
+        method: "eth_call",
+        params: [
+          {
+            to: token.address,
+            data: erc20BalanceOfData(address)
+          },
+          "latest"
+        ]
+      }))
+    );
+    return buildErc20TokenScan(address, chain, tokens, results, prices);
+  } catch {
+    const tokenResults = await Promise.allSettled(
+      tokens.map((token) => scanErc20(address, chain, token, prices))
+    );
+    const results = tokenResults.map((result) =>
+      result.status === "fulfilled" ? result.value : new Error(readError(result.reason))
+    );
+    return buildErc20TokenScan(address, chain, tokens, results, prices);
+  }
+}
+
+function buildErc20TokenScan(
+  address: string,
+  chain: ChainConfig,
+  tokens: TokenConfig[],
+  results: (TrackedAsset | string | Error | null)[],
+  prices: Record<string, PricePoint>
+): { assets: TrackedAsset[]; warnings: string[] } {
+  const assets: TrackedAsset[] = [];
+  const failedTokens: string[] = [];
+
+  results.forEach((result, index) => {
+    const token = tokens[index];
+    if (!token) return;
+    if (result instanceof Error) {
+      failedTokens.push(token.symbol);
+      return;
+    }
+    if (result === null) return;
+    if (typeof result !== "string") {
+      assets.push(result);
+      return;
+    }
+
+    const amount = formatUnits(hexToBigInt(result), token.decimals);
+    if (amount > 0) {
+      assets.push(erc20AssetFromAmount(address, chain, token, amount, prices));
     }
   });
 
-  return { assets, warnings };
+  return {
+    assets,
+    warnings: failedTokens.length > 0
+      ? [`${chain.name} ERC-20 token balance checks failed for ${formatSymbols(failedTokens)}; token balances may be incomplete.`]
+      : []
+  };
 }
 
 async function scanErc20(
@@ -736,6 +801,16 @@ async function scanErc20(
   const amount = formatUnits(hexToBigInt(balanceHex), token.decimals);
   if (amount <= 0) return null;
 
+  return erc20AssetFromAmount(address, chain, token, amount, prices);
+}
+
+function erc20AssetFromAmount(
+  address: string,
+  chain: ChainConfig,
+  token: TokenConfig,
+  amount: number,
+  prices: Record<string, PricePoint>
+): TrackedAsset {
   const price = token.coinGeckoId ? prices[token.coinGeckoId] : undefined;
   const priceUsd = token.coinGeckoId ? price?.usd ?? token.priceUsd ?? 0 : token.priceUsd ?? 0;
   return {
@@ -808,6 +883,37 @@ async function rpcCall<T>(rpcUrl: string, method: string, params: unknown[]): Pr
   return result.result as T;
 }
 
+async function rpcBatchCall<T>(
+  rpcUrl: string,
+  calls: { method: string; params: unknown[] }[]
+): Promise<(T | Error)[]> {
+  if (calls.length === 0) return [];
+
+  const payload = calls.map((call, index) => ({
+    jsonrpc: "2.0",
+    id: index + 1,
+    method: call.method,
+    params: call.params
+  }));
+  const result = await fetchJson<Array<{ id?: number; result?: T; error?: { message?: string } }>>(rpcUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!Array.isArray(result)) {
+    throw new Error("RPC batch response was not an array.");
+  }
+
+  const byId = new Map(result.map((item) => [item.id, item]));
+  return payload.map((request) => {
+    const item = byId.get(request.id);
+    if (!item) return new Error("RPC batch response was missing a token result.");
+    if (item.error) return new Error(item.error.message || "RPC error");
+    if (item.result === undefined) return new Error("RPC batch response returned an empty token result.");
+    return item.result;
+  });
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -838,6 +944,12 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 function readError(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function formatSymbols(symbols: string[]): string {
+  const unique = Array.from(new Set(symbols)).sort();
+  if (unique.length <= 5) return unique.join(", ");
+  return `${unique.slice(0, 5).join(", ")} and ${unique.length - 5} more`;
 }
 
 async function loadCustomTokens(): Promise<{

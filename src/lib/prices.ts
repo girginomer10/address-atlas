@@ -39,6 +39,9 @@ export async function getPrices(coinIds: string[]): Promise<Record<string, Price
     }
 
     const data = (await response.json()) as Record<string, PricePoint>;
+    if (Object.keys(data).length === 0) {
+      return cached?.data ?? data;
+    }
     PRICE_CACHE.set(cacheKey, {
       data,
       expiresAt: Date.now() + PRICE_TTL_MS

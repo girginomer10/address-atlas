@@ -144,6 +144,53 @@ public struct NativeScanner: Sendable {
     if let message = response.error?.message { throw NSError(domain: "EVM", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
     let amount = Self.hexQuantityToDouble(response.result ?? "0x0", decimals: chain.decimals)
     var assets = assetIfPositive(amount: amount, address: address, chain: chain, prices: prices)
+    let tokenScan = await scanErc20Balances(address: address, chain: chain, tokens: tokens, prices: prices)
+    assets.append(contentsOf: tokenScan.assets)
+    return NativeScanResult(assets: assets, warnings: tokenScan.warnings)
+  }
+
+  private func scanErc20Balances(
+    address: String,
+    chain: ChainConfig,
+    tokens: [TokenConfig],
+    prices: [String: PricePoint]
+  ) async -> NativeScanResult {
+    guard let rpc = chain.rpcUrl, !tokens.isEmpty else { return NativeScanResult() }
+
+    do {
+      let requests = tokens.enumerated().map { index, token in
+        JSONRPCRequest(
+          id: index + 1,
+          method: "eth_call",
+          params: [
+            .object([
+              "to": .string(token.address),
+              "data": .string(Self.erc20BalanceOfData(address))
+            ]),
+            .string("latest")
+          ]
+        )
+      }
+      let responses = try await http.post(rpc, body: requests, as: [EvmTokenBatchResponse].self)
+      return buildErc20TokenScan(
+        address: address,
+        chain: chain,
+        tokens: tokens,
+        responses: responses,
+        prices: prices
+      )
+    } catch {
+      return await scanErc20Individually(address: address, chain: chain, tokens: tokens, prices: prices)
+    }
+  }
+
+  private func scanErc20Individually(
+    address: String,
+    chain: ChainConfig,
+    tokens: [TokenConfig],
+    prices: [String: PricePoint]
+  ) async -> NativeScanResult {
+    var assets: [TrackedAsset] = []
     var failedTokens: [String] = []
 
     for token in tokens {
@@ -154,6 +201,43 @@ public struct NativeScanner: Sendable {
       } catch {
         failedTokens.append(token.symbol)
       }
+    }
+
+    let warnings = failedTokens.isEmpty
+      ? []
+      : ["ERC-20 token balance checks failed for \(Self.formattedSymbols(failedTokens)); token balances may be incomplete."]
+    return NativeScanResult(assets: assets, warnings: warnings)
+  }
+
+  private func buildErc20TokenScan(
+    address: String,
+    chain: ChainConfig,
+    tokens: [TokenConfig],
+    responses: [EvmTokenBatchResponse],
+    prices: [String: PricePoint]
+  ) -> NativeScanResult {
+    let responsesById = Dictionary(grouping: responses, by: \.id).compactMapValues(\.first)
+    var assets: [TrackedAsset] = []
+    var failedTokens: [String] = []
+
+    for (index, token) in tokens.enumerated() {
+      guard let response = responsesById[index + 1] else {
+        failedTokens.append(token.symbol)
+        continue
+      }
+      if response.error != nil {
+        failedTokens.append(token.symbol)
+        continue
+      }
+      guard let rawResult = response.result else {
+        failedTokens.append(token.symbol)
+        continue
+      }
+      let amount = Self.hexQuantityToDouble(rawResult, decimals: token.decimals)
+      guard let tokenAsset = tokenAsset(amount: amount, address: address, chain: chain, token: token, prices: prices, source: .erc20) else {
+        continue
+      }
+      assets.append(tokenAsset)
     }
 
     let warnings = failedTokens.isEmpty
@@ -652,7 +736,10 @@ public struct NativeScanner: Sendable {
 
   public static func hexQuantityToDouble(_ value: String, decimals: Int) -> Double {
     let clean = value.replacingOccurrences(of: "0x", with: "")
-    guard let data = try? Data(hex: clean.isEmpty ? "00" : clean) else { return 0 }
+    let padded = clean.isEmpty
+      ? "00"
+      : (clean.count.isMultiple(of: 2) ? clean : "0\(clean)")
+    guard let data = try? Data(hex: padded) else { return 0 }
     let raw = data.reduce(0.0) { $0 * 256 + Double($1) }
     return raw / pow(10, Double(decimals))
   }
@@ -709,6 +796,12 @@ public struct SolanaTokenAccountsResponse: Decodable, Sendable {
 public struct JSONRPCError: Decodable, Sendable {
   public var code: Int?
   public var message: String?
+}
+
+private struct EvmTokenBatchResponse: Decodable, Sendable {
+  var id: Int
+  var result: String?
+  var error: JSONRPCError?
 }
 
 public struct SolanaTokenAccount: Decodable, Sendable {
@@ -820,6 +913,12 @@ private struct JSONRPCRequest: Encodable {
   var id = 1
   var method: String
   var params: [RPCValue]
+
+  init(id: Int = 1, method: String, params: [RPCValue]) {
+    self.id = id
+    self.method = method
+    self.params = params
+  }
 }
 
 private enum RPCValue: Encodable {

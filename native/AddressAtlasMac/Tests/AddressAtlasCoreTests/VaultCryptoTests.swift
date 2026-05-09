@@ -243,6 +243,11 @@ final class NativeScannerTokenTests: XCTestCase {
     XCTAssertTrue(data.hasSuffix("000000000000000000000000000000000000dead"))
   }
 
+  func testHexQuantityParserAcceptsOddLengthRpcQuantities() {
+    XCTAssertEqual(NativeScanner.hexQuantityToDouble("0xf", decimals: 0), 15)
+    XCTAssertEqual(NativeScanner.hexQuantityToDouble("0x280de80", decimals: 6), 42)
+  }
+
   func testCustomTokenRegistryKeepsBuiltinOnDuplicate() {
     let duplicateUsdc = CustomTokenRecord(
       chainKind: .evm,
@@ -268,6 +273,56 @@ final class NativeScannerTokenTests: XCTestCase {
     XCTAssertEqual(ethereum.filter { $0.address.lowercased() == duplicateUsdc.address.lowercased() }.count, 1)
     XCTAssertTrue(ethereum.contains { $0.symbol == "USDC" })
     XCTAssertTrue(ethereum.contains { $0.symbol == "ONE" })
+  }
+
+  func testEvmTokenBalancesUseJsonRpcBatchAndWarnOnPartialErrors() async throws {
+    let address = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+    let recorder = BatchRequestRecorder()
+    let http = StubHTTPClient { request in
+      let bodyData = request.httpBody ?? Data()
+      let bodyText = String(data: bodyData, encoding: .utf8) ?? ""
+
+      if bodyText.contains("\"eth_getBalance\"") {
+        return (Data(#"{"result":"0x0"}"#.utf8), httpResponse(for: request))
+      }
+
+      if bodyText.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("[") {
+        let payload = try JSONSerialization.jsonObject(with: bodyData) as? [[String: Any]] ?? []
+        recorder.sizes.append(payload.count)
+        let responses: [[String: Any]] = payload.map { item in
+          let id = item["id"] as? Int ?? 0
+          let params = item["params"] as? [Any] ?? []
+          let call = params.first as? [String: Any] ?? [:]
+          let tokenAddress = (call["to"] as? String ?? "").lowercased()
+
+          if tokenAddress == "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" {
+            return ["jsonrpc": "2.0", "id": id, "result": "0x" + String(42_000_000, radix: 16)]
+          }
+          if tokenAddress == "0xd533a949740bb3306d119cc777fa900ba034cd52" {
+            return ["jsonrpc": "2.0", "id": id, "error": ["message": "token-rpc-down"]]
+          }
+          return ["jsonrpc": "2.0", "id": id, "result": "0x0"]
+        }
+        return (try JSONSerialization.data(withJSONObject: responses), httpResponse(for: request))
+      }
+
+      XCTFail("Unexpected EVM scanner request: \(bodyText)")
+      return (Data("{}".utf8), httpResponse(for: request))
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: StaticPriceProvider(values: ["usd-coin": PricePoint(usd: 1)])
+    )
+
+    let result = try await scanner.scan(addresses: address)
+    let usdc = result.holdings.first { $0.chainId == "ethereum" && $0.symbol == "USDC" }
+
+    XCTAssertTrue(recorder.sizes.contains { $0 > 1 })
+    XCTAssertEqual(usdc?.amount, 42)
+    XCTAssertEqual(usdc?.valueUsd, 42)
+    XCTAssertTrue(result.warnings.contains { warning in
+      warning.contains("Ethereum") && warning.contains("CRV")
+    })
   }
 
   func testChainRegistryIncludesExpandedNetworksAndAssets() {
@@ -804,6 +859,10 @@ private struct StubHTTPClient: HTTPClient, @unchecked Sendable {
   func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
     try handler(request)
   }
+}
+
+private final class BatchRequestRecorder: @unchecked Sendable {
+  var sizes: [Int] = []
 }
 
 private func httpResponse(for request: URLRequest, statusCode: Int = 200) -> HTTPURLResponse {

@@ -34,7 +34,7 @@ Address Atlas avoids account creation, automated rebalancing, signing, and fund-
 - Custom token allowlist entries live in `CustomToken` and can target either EVM contracts or Solana mints. They are merged with built-in token registries during scans, and built-in registry entries win on duplicate addresses/mints.
 - Custom tokens can use either a CoinGecko id, a manual USD price, both, or neither. If both are present, live CoinGecko prices win and manual price is the fallback.
 - `/api/tokens/metadata` prefers the built-in registry, can read ERC-20 symbol/name/decimals from the selected chain RPC, returns CoinGecko id suggestions, and reads Solana mint decimals from parsed account info. If `JUPITER_API_KEY` is configured, it also uses Jupiter Tokens API for arbitrary Solana mint symbol/name/USD price hints.
-- Solana scanning includes classic SPL Token Program and Token-2022 balances from the registry. EVM scanning covers Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, Avalanche, Gnosis, Linea, Mantle, Scroll, and ZKsync Era through the shared registry. TRON scanning includes native TRX plus tracked TRC20 tokens, currently USDT. XRP Ledger scanning includes native XRP plus positive issued-currency trustline balances as unpriced `issued` assets. Cosmos scanning includes native liquid balances, delegations, and distribution rewards.
+- Solana scanning includes classic SPL Token Program and Token-2022 balances from the registry. EVM scanning covers Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, Avalanche, Gnosis, Linea, Mantle, Scroll, and ZKsync Era through the shared registry, and batches ERC-20 `balanceOf` probes per chain with a single-request fallback for RPCs that reject JSON-RPC batches. TRON scanning includes native TRX plus tracked TRC20 tokens, currently USDT. XRP Ledger scanning includes native XRP plus positive issued-currency trustline balances as unpriced `issued` assets. Cosmos scanning includes native liquid balances, delegations, and distribution rewards.
 
 ## Native Mac Track
 
@@ -65,4 +65,4 @@ Address Atlas avoids account creation, automated rebalancing, signing, and fund-
 - Add Solana metadata-program or DAS lookup if we want no-key symbol/name autofill for arbitrary Solana mints.
 - Add more TRC20 registry entries and price mappings for well-known XRPL issued currencies.
 - Make manual exchange entries easier to reconcile against historical snapshots if users want time-specific manual values later.
-- Continue native scanner parity with broader built-in token registries, XRP issued-asset pricing rules, and token metadata autofill.
+- Continue native scanner parity with broader built-in token registries, XRP issued-asset pricing rules, token metadata autofill, and possible Multicall-style aggregation if JSON-RPC batching is not enough for very large EVM token sets.

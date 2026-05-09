@@ -50,6 +50,64 @@ describe("price fetching", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("does not cache empty successful CoinGecko responses", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({})
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          "review-empty-cache-coin": {
+            usd: 3,
+            usd_24h_change: 0
+          }
+        })
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getPrices(["review-empty-cache-coin"])).resolves.toEqual({});
+    await expect(getPrices(["review-empty-cache-coin"])).resolves.toEqual({
+      "review-empty-cache-coin": {
+        usd: 3,
+        usd_24h_change: 0
+      }
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses stale prices when a refresh returns an empty map", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+
+    const stalePrice = {
+      "review-empty-refresh-coin": {
+        usd: 9,
+        usd_24h_change: 2
+      }
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => stalePrice
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({})
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getPrices(["review-empty-refresh-coin"])).resolves.toEqual(stalePrice);
+
+    vi.setSystemTime(new Date("2026-01-01T00:01:00.000Z"));
+
+    await expect(getPrices(["review-empty-refresh-coin"])).resolves.toEqual(stalePrice);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("times out stuck CoinGecko requests", async () => {
     vi.useFakeTimers();
     vi.stubGlobal(
