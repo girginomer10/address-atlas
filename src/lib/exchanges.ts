@@ -268,5 +268,6 @@ function normalizeSymbol(symbol: string) {
 
 function priceForSymbol(symbol: string, price?: PricePoint): PricePoint {
   if (USD_STABLES.has(symbol)) return { usd: 1, usd_24h_change: 0 };
-  return price ?? { usd: 0 };
+  if (price && Number.isFinite(price.usd)) return price;
+  return { usd: 0 };
 }

@@ -476,9 +476,10 @@ export async function saveScanResponse(scan: ScanResponse) {
 
 export async function latestScanResponse(): Promise<ScanResponse | null> {
   const run = await prisma.scanRun.findFirst({
-    orderBy: {
-      generatedAt: "desc"
-    },
+    orderBy: [
+      { generatedAt: "desc" },
+      { createdAt: "desc" }
+    ],
     include: {
       holdings: true,
       exchangeSnapshots: {
@@ -540,9 +541,10 @@ export async function latestScanResponse(): Promise<ScanResponse | null> {
     generatedAt: snapshot.generatedAt.toISOString(),
     totalUsd: snapshot.totalUsd,
     status: snapshot.status as ExchangeSnapshot["status"],
-    holdings: snapshot.holdings.map((holding) => holdingToAsset(holding, undefined))
+    holdings: snapshot.holdings.map((holding) => holdingToAsset(holding, undefined)),
+    error: parseSnapshotError(snapshot.rawSummaryJson)
   }));
-  const persistedSources = (JSON.parse(run.sourcesJson) as ScanSource[]).filter((source) => {
+  const persistedSources = parseSources(run.sourcesJson).filter((source) => {
     if (source.id.startsWith("manual:")) return false;
     if (source.kind === "exchange") return activeConnectionIds.has(source.id);
     return activeWalletAddresses.has(source.id.toLowerCase());
@@ -562,7 +564,7 @@ export async function latestScanResponse(): Promise<ScanResponse | null> {
     } satisfies AddressScan)),
     assets,
     summary: summarizeAssets(wallets.length, assets),
-    warnings: JSON.parse(run.warningsJson) as string[],
+    warnings: parseStringArray(run.warningsJson),
     sources,
     exchangeSnapshots
   };
@@ -676,9 +678,10 @@ function summarizeAssets(addressCount: number, assets: TrackedAsset[]) {
 export async function listScanRunHistory(limit = SCAN_HISTORY_DEFAULT_LIMIT): Promise<ScanHistoryEntry[]> {
   const safeLimit = clampHistoryLimit(limit);
   const runs = await prisma.scanRun.findMany({
-    orderBy: {
-      generatedAt: "desc"
-    },
+    orderBy: [
+      { generatedAt: "desc" },
+      { createdAt: "desc" }
+    ],
     take: safeLimit,
     include: {
       holdings: {
@@ -746,6 +749,15 @@ function parseSources(json: string): ScanSource[] {
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
+  }
+}
+
+function parseSnapshotError(json: string): string | undefined {
+  try {
+    const parsed = JSON.parse(json) as { error?: unknown };
+    return typeof parsed?.error === "string" ? parsed.error : undefined;
+  } catch {
+    return undefined;
   }
 }
 

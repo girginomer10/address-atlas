@@ -312,7 +312,7 @@ function parseValuation(
 
   if (valueUsd !== null) {
     return {
-      priceUsd: priceUsd ?? (amount > 0 ? valueUsd / amount : null),
+      priceUsd: amount > 0 ? valueUsd / amount : priceUsd,
       valueUsd
     };
   }

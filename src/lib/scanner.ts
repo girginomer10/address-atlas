@@ -376,30 +376,36 @@ async function scanTron(
     return { assets: [], warnings: [`${chain.name} has no API endpoint configured.`] };
   }
 
-  const data = await fetchJson<TronAccountResponse>(
-    `${chain.restUrl.replace(/\/$/, "")}/v1/accounts/${address}`
-  );
-  const account = data.data?.[0];
-  if (!account) return { assets: [], warnings: [] };
-
   const assets: TrackedAsset[] = [];
-  const trxAmount = (account.balance ?? 0) / Math.pow(10, chain.decimals);
-  if (trxAmount > 0) {
-    assets.push(assetFromAmount(address, chain, chain.symbol, chain.name, trxAmount, prices, "native"));
+  const warnings: string[] = [];
+
+  try {
+    const data = await fetchJson<TronAccountResponse>(
+      `${chain.restUrl.replace(/\/$/, "")}/v1/accounts/${address}`
+    );
+    const account = data.data?.[0];
+    if (!account) return { assets, warnings };
+
+    const trxAmount = (account.balance ?? 0) / Math.pow(10, chain.decimals);
+    if (trxAmount > 0) {
+      assets.push(assetFromAmount(address, chain, chain.symbol, chain.name, trxAmount, prices, "native"));
+    }
+
+    const tokens = TRC20_TOKENS_BY_CHAIN[chain.id] ?? [];
+    const trc20Balances = account.trc20 ?? [];
+    for (const token of tokens) {
+      const raw = trc20Balances.reduce((sum, item) => {
+        const value = item[token.address];
+        return sum + (value && /^\d+$/.test(value) ? BigInt(value) : 0n);
+      }, 0n);
+      if (raw <= 0n) continue;
+      assets.push(trc20AssetFromAmount(address, chain, token, formatUnits(raw, token.decimals), prices));
+    }
+  } catch (error) {
+    warnings.push(`${chain.name} scan failed: ${readError(error)}.`);
   }
 
-  const tokens = TRC20_TOKENS_BY_CHAIN[chain.id] ?? [];
-  const trc20Balances = account.trc20 ?? [];
-  for (const token of tokens) {
-    const raw = trc20Balances.reduce((sum, item) => {
-      const value = item[token.address];
-      return sum + (value && /^\d+$/.test(value) ? BigInt(value) : 0n);
-    }, 0n);
-    if (raw <= 0n) continue;
-    assets.push(trc20AssetFromAmount(address, chain, token, formatUnits(raw, token.decimals), prices));
-  }
-
-  return { assets, warnings: [] };
+  return { assets, warnings };
 }
 
 interface XrpAccountInfoResponse {
