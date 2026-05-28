@@ -241,6 +241,7 @@ export function AddressAtlasApp({ active }: { active: ActivePage }) {
   const connectionsRef = useRef(connections);
   const vaultPassphraseRef = useRef(vaultPassphrase);
   const rawTextRef = useRef(rawText);
+  const lastScanAtRef = useRef(0);
 
   useEffect(() => {
     scanningRef.current = scanning;
@@ -292,6 +293,17 @@ export function AddressAtlasApp({ active }: { active: ActivePage }) {
     }
   }
 
+  function applyScan(next: ScanResponse | null) {
+    if (!next) {
+      setScan(null);
+      return;
+    }
+    const at = Date.parse(next.generatedAt);
+    if (Number.isFinite(at) && at < lastScanAtRef.current) return;
+    if (Number.isFinite(at)) lastScanAtRef.current = at;
+    setScan(next);
+  }
+
   async function refresh() {
     setLoading(true);
     setError("");
@@ -313,7 +325,7 @@ export function AddressAtlasApp({ active }: { active: ActivePage }) {
         fetchJson<{ entries: ScanHistoryEntry[] }>("/api/scan/history")
       ]);
       setWallets(walletBody.wallets);
-      setScan(scanBody);
+      applyScan(scanBody);
       setPrefs({ ...DEFAULT_PREFS, ...preferenceBody });
       setProviders(exchangeBody.providers);
       setVaultReady(exchangeBody.vaultReady);
@@ -358,7 +370,7 @@ export function AddressAtlasApp({ active }: { active: ActivePage }) {
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body)
         });
-        setScan(nextScan);
+        applyScan(nextScan);
         if (!options?.silent) {
           setNotice(`Scan complete: ${nextScan.summary.assetCount} holdings indexed.`);
         }
@@ -396,6 +408,7 @@ export function AddressAtlasApp({ active }: { active: ActivePage }) {
   }, [prefs.autoRefresh, runScan]);
 
   async function savePrefs(next: Partial<PreferenceRecord>) {
+    const previous = prefs;
     const optimistic = { ...prefs, ...next };
     setPrefs(optimistic);
     try {
@@ -405,6 +418,7 @@ export function AddressAtlasApp({ active }: { active: ActivePage }) {
         body: JSON.stringify(next)
       }));
     } catch (preferenceError) {
+      setPrefs(previous);
       setError(readError(preferenceError));
     }
   }
@@ -607,6 +621,12 @@ function PortfolioPage(props: AppContext) {
         </div>
       </section>
       <StatusLine notice={notice} error={error} scanning={scanning} />
+      {scan && scan.warnings.length > 0 && (
+        <div className="aa-unpriced-note">
+          <ShieldCheck size={15} />
+          <span>{scan.warnings.join(" · ")}</span>
+        </div>
+      )}
       <section className="aa-portfolio-top">
         <div>
           <div className="aa-totalblock">
@@ -1940,7 +1960,9 @@ function relativeTime(value: string) {
 }
 
 function dateOnly(value: string) {
-  return new Date(value).toISOString().slice(0, 10);
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "unknown";
+  return date.toISOString().slice(0, 10);
 }
 
 function explorerForWallet(wallet: WalletRecord) {

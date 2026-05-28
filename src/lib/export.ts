@@ -5,7 +5,11 @@ export function timestampForFile(value: string) {
 }
 
 export function csvCell(value: string | number | null | undefined) {
-  const text = String(value ?? "");
+  if (typeof value === "number") return String(value);
+  let text = String(value ?? "");
+  // Neutralize spreadsheet formula injection: a leading =, +, -, @, tab or
+  // CR makes Excel/Sheets evaluate the cell. Only applies to text fields.
+  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
   if (!/[",\n]/.test(text)) return text;
   return `"${text.replace(/"/g, '""')}"`;
 }
