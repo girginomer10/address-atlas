@@ -54,6 +54,8 @@ export async function PUT(request: NextRequest) {
          byte_size = excluded.byte_size,
          checksum = excluded.checksum,
          updated_at = now()
+       -- Accept only a strictly newer version, or an idempotent re-PUT of the
+       -- same version+checksum (the envelope checksum is verified before this).
        WHERE vault_snapshots.version < excluded.version
           OR (
             vault_snapshots.version = excluded.version

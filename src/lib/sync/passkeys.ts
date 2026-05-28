@@ -89,11 +89,22 @@ export async function verifyPasskey(body: unknown) {
     throw new Error("Challenge mode mismatch.");
   }
   await ensureSyncSchema();
+  await consumeChallenge(challenge.challenge);
 
   if (challenge.mode === "register") {
     return verifyRegistration(challenge, input.response as RegistrationResponseJSON);
   }
   return verifyAuthentication(challenge, input.response as AuthenticationResponseJSON);
+}
+
+async function consumeChallenge(challenge: string) {
+  const result = await getSyncPool().query(
+    "INSERT INTO consumed_challenges (challenge) VALUES ($1) ON CONFLICT (challenge) DO NOTHING",
+    [challenge]
+  );
+  if (result.rowCount === 0) {
+    throw new Error("Challenge has already been used.");
+  }
 }
 
 async function verifyRegistration(challenge: ChallengeToken, response: RegistrationResponseJSON) {
@@ -108,20 +119,29 @@ async function verifyRegistration(challenge: ChallengeToken, response: Registrat
   if (!verification.verified) throw new Error("Passkey registration failed.");
 
   const credential = verification.registrationInfo.credential;
-  const pool = getSyncPool();
-  await pool.query("INSERT INTO users (id) VALUES ($1) ON CONFLICT (id) DO NOTHING", [challenge.pendingUserId]);
-  await pool.query(
-    `INSERT INTO passkey_credentials (id, user_id, public_key_base64url, counter, transports)
-     VALUES ($1, $2, $3, $4, $5::jsonb)
-     ON CONFLICT (id) DO UPDATE SET updated_at = now()`,
-    [
-      credential.id,
-      challenge.pendingUserId,
-      base64urlEncode(credential.publicKey),
-      credential.counter,
-      JSON.stringify(response.response.transports ?? [])
-    ]
-  );
+  const client = await getSyncPool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("INSERT INTO users (id) VALUES ($1) ON CONFLICT (id) DO NOTHING", [challenge.pendingUserId]);
+    await client.query(
+      `INSERT INTO passkey_credentials (id, user_id, public_key_base64url, counter, transports)
+       VALUES ($1, $2, $3, $4, $5::jsonb)
+       ON CONFLICT (id) DO UPDATE SET updated_at = now()`,
+      [
+        credential.id,
+        challenge.pendingUserId,
+        base64urlEncode(credential.publicKey),
+        credential.counter,
+        JSON.stringify(response.response.transports ?? [])
+      ]
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 
   return {
     verified: true,

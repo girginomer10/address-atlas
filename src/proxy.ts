@@ -14,5 +14,7 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!.*\\..*).*)", "/_next/:path*"]
+  // Match every path so the sync-only gate also covers dotted routes
+  // (e.g. /api/foo.json); isSyncOnlyPathAllowed is the sole allowlist.
+  matcher: ["/(.*)"]
 };

@@ -42,6 +42,11 @@ export async function ensureSyncSchema() {
         created_at timestamptz NOT NULL DEFAULT now(),
         updated_at timestamptz NOT NULL DEFAULT now()
       );
+
+      CREATE TABLE IF NOT EXISTS consumed_challenges (
+        challenge text PRIMARY KEY,
+        consumed_at timestamptz NOT NULL DEFAULT now()
+      );
     `).then(() => undefined);
   }
   return schemaReady;
