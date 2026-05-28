@@ -563,7 +563,7 @@ export async function latestScanResponse(): Promise<ScanResponse | null> {
       errors: []
     } satisfies AddressScan)),
     assets,
-    summary: summarizeAssets(wallets.length, assets),
+    summary: summarizeAssets(run.inputCount, assets),
     warnings: parseStringArray(run.warningsJson),
     sources,
     exchangeSnapshots

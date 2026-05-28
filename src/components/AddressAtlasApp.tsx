@@ -569,8 +569,8 @@ function PortfolioPage(props: AppContext) {
   const { scan, wallets, rawText, setRawText, scanning, runScan, notice, error, connections, vaultPassphrase, setVaultPassphrase } = props;
   const money = useMoney();
   const assets = filteredAssets(scan?.assets ?? [], props.prefs);
-  const total = assets.reduce((sum, asset) => sum + asset.valueUsd, 0);
-  const allocation = allocationByChain(assets);
+  const total = scan?.summary.totalUsd ?? 0;
+  const allocation = allocationByChain(scan?.assets ?? []);
 
   return (
     <>
@@ -665,7 +665,7 @@ function WalletsPage(props: AppContext) {
         section="Wallets"
         title="Watched addresses"
         lede="Public addresses saved for tracking. Rename, copy, remove, or jump to the explorer."
-        right={<HeadStats items={[["Watched", wallets.length], [`Combined value (${money.effectiveCurrency})`, money.format(sumValues(scan?.assets ?? []))]]} />}
+        right={<HeadStats items={[["Watched", wallets.length], [`Combined value (${money.effectiveCurrency})`, money.format(scan?.summary.totalUsd ?? 0)]]} />}
         actions={<button className="aa-btn primary" type="button" onClick={() => props.runScan({ savedOnly: true, includeExchanges: false })}>Scan saved wallets</button>}
       />
       <Toolbar query={query} setQuery={setQuery} meta={`${filtered.length} of ${wallets.length}`} placeholder="Filter by label, address or chain..." />
@@ -712,7 +712,7 @@ function AssetsPage(props: AppContext) {
         section="Assets"
         title="Holdings index"
         lede="One row per asset, per chain, per wallet or exchange. Sort, filter, and open explorers where available."
-        right={<HeadStats items={[["Lines", assets.length], [`Sum (${money.effectiveCurrency})`, money.format(sumValues(assets))]]} />}
+        right={<HeadStats items={[["Lines", assets.length], [`Sum (${money.effectiveCurrency})`, money.format(props.scan?.summary.totalUsd ?? 0)]]} />}
         actions={<button className="aa-btn primary" type="button" onClick={() => downloadCsv(assets)}>Export filtered</button>}
       />
       <AssetTable assets={assets} wallets={props.wallets} />
@@ -1262,7 +1262,7 @@ function ExportPage(props: AppContext) {
   const scan = props.scan;
   const csv = assetsToCsv(scan?.assets ?? []);
   const json = scan ? scanToJson(scan) : "{}";
-  const totalUsd = sumValues(scan?.assets ?? []);
+  const totalUsd = scan?.summary.totalUsd ?? 0;
   const csvCopy = money.effectiveCurrency === "USD"
     ? "Spreadsheet-friendly. One row per holding with source, chain, amount, price and USD value."
     : `Spreadsheet-friendly. Values stay USD-faithful in the file even when the app shows ${money.effectiveCurrency}.`;
@@ -1914,10 +1914,6 @@ function totalsByWallet(assets: TrackedAsset[], wallets: WalletRecord[]) {
     if (walletId) totals.set(walletId, (totals.get(walletId) ?? 0) + asset.valueUsd);
   });
   return totals;
-}
-
-function sumValues(assets: TrackedAsset[]) {
-  return assets.reduce((sum, asset) => sum + asset.valueUsd, 0);
 }
 
 function formatAmount(value: number) {
