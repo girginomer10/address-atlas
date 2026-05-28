@@ -46,6 +46,8 @@ model Holding {
   valueUsd           Float             @default(0)
   change24h          Float?
   explorerUrl        String?
+  exchangeId         String?
+  exchangeProvider   String?
   source             String
   status             String            @default("ok")
   createdAt          DateTime          @default(now())

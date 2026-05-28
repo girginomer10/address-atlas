@@ -615,6 +615,8 @@ function holdingData(
     valueUsd: asset.valueUsd,
     change24h: asset.change24h,
     explorerUrl: asset.explorerUrl,
+    exchangeId: asset.exchangeId,
+    exchangeProvider: asset.exchangeProvider,
     source: asset.source,
     status: asset.status
   };
@@ -634,6 +636,8 @@ function holdingToAsset(
     valueUsd: number;
     change24h: number | null;
     explorerUrl: string | null;
+    exchangeId: string | null;
+    exchangeProvider: string | null;
     source: string;
     status: string;
   },
@@ -654,7 +658,9 @@ function holdingToAsset(
     explorerUrl: holding.explorerUrl ?? "",
     source: holding.source as TrackedAsset["source"],
     status: holding.status as TrackedAsset["status"],
-    walletLabel: wallet?.label
+    walletLabel: wallet?.label,
+    exchangeId: holding.exchangeId ?? undefined,
+    exchangeProvider: (holding.exchangeProvider ?? undefined) as TrackedAsset["exchangeProvider"]
   } satisfies TrackedAsset;
 }
 

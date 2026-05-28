@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { base64urlDecode } from "./base64url";
+
 export interface EncryptedVaultEnvelope {
   schemaVersion: number;
   cryptoVersion: number;
@@ -50,6 +53,18 @@ function assertEnvelope(envelope: unknown): asserts envelope is EncryptedVaultEn
   }
   if (typeof value.checksum !== "string" || !HEX_RE.test(value.checksum)) {
     throw new Error("Invalid envelope checksum.");
+  }
+}
+
+export function assertEnvelopeChecksum(envelope: EncryptedVaultEnvelope) {
+  const preimage = Buffer.concat([
+    Buffer.from(`schema:${envelope.schemaVersion}|crypto:${envelope.cryptoVersion}|key:${envelope.keyId}|`, "utf8"),
+    base64urlDecode(envelope.nonce),
+    base64urlDecode(envelope.ciphertext)
+  ]);
+  const expected = createHash("sha256").update(preimage).digest("hex");
+  if (expected !== envelope.checksum) {
+    throw new Error("Envelope checksum does not match ciphertext.");
   }
 }
 

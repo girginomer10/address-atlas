@@ -26,7 +26,8 @@ const SNAPSHOT = {
     keyId: "sync-v1",
     nonce: "abc123_-",
     ciphertext: "opaqueCiphertext_-",
-    checksum: "b".repeat(64)
+    // sha256 of the envelope preimage; must satisfy assertEnvelopeChecksum
+    checksum: "56aaa5ed2a412cb17c3cc2843ce853ccab8259dbc2a43e4d2c63e7195ad821ab"
   }
 };
 

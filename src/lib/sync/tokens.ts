@@ -15,10 +15,10 @@ export interface SessionToken {
 
 function secret() {
   const configured = process.env.SYNC_SESSION_SECRET?.trim();
-  if (!configured && process.env.NODE_ENV === "production") {
-    throw new Error("SYNC_SESSION_SECRET is required in production.");
+  if (!configured) {
+    throw new Error("SYNC_SESSION_SECRET is required.");
   }
-  return configured || "address-atlas-dev-sync-secret";
+  return configured;
 }
 
 export function signToken<T extends object>(payload: T) {
@@ -36,7 +36,10 @@ export function verifyToken<T extends object>(token: string): T {
     throw new Error("Invalid token signature.");
   }
   const parsed = JSON.parse(base64urlDecode(body).toString("utf8")) as T & { expiresAt?: number };
-  if (typeof parsed.expiresAt === "number" && Date.now() > parsed.expiresAt) {
+  if (typeof parsed.expiresAt !== "number") {
+    throw new Error("Token is missing an expiry.");
+  }
+  if (Date.now() > parsed.expiresAt) {
     throw new Error("Token expired.");
   }
   return parsed as T;

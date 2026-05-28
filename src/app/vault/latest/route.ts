@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { assertNoPlaintextLeak, assertRemoteVaultSnapshot } from "@/lib/sync/envelope";
+import { assertEnvelopeChecksum, assertNoPlaintextLeak, assertRemoteVaultSnapshot } from "@/lib/sync/envelope";
 import { ensureSyncSchema, getSyncPool } from "@/lib/sync/postgres";
 import { readBearerToken } from "@/lib/sync/tokens";
 
@@ -43,6 +43,7 @@ export async function PUT(request: NextRequest) {
     const body = await request.json().catch(() => ({}));
     assertRemoteVaultSnapshot(body);
     assertNoPlaintextLeak(body);
+    assertEnvelopeChecksum(body.envelope);
     await ensureSyncSchema();
     const result = await getSyncPool().query(
       `INSERT INTO vault_snapshots (user_id, version, envelope, byte_size, checksum)

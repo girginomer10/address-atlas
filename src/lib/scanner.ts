@@ -538,19 +538,26 @@ async function fetchSolanaSplBalances(
   const byMint = new Map<string, SplTokenConfig>();
   registry.forEach((token) => byMint.set(token.mint, token));
 
-  const totals = new Map<string, bigint>();
+  const totals = new Map<string, { raw: bigint; decimals: number }>();
   for (const account of parsed) {
     const token = byMint.get(account.mint);
     if (!token) continue;
-    if (account.decimals !== token.decimals) continue;
-    const previous = totals.get(account.mint) ?? 0n;
-    totals.set(account.mint, previous + safeBigInt(account.rawAmount));
+    if (account.decimals !== token.decimals) {
+      warnings.push(
+        `${token.symbol} on-chain decimals (${account.decimals}) differ from registry (${token.decimals}); using on-chain value.`
+      );
+    }
+    const previous = totals.get(account.mint);
+    totals.set(account.mint, {
+      raw: (previous?.raw ?? 0n) + safeBigInt(account.rawAmount),
+      decimals: account.decimals
+    });
   }
 
   return {
-    balances: Array.from(totals.entries()).map(([mint, raw]) => {
+    balances: Array.from(totals.entries()).map(([mint, { raw, decimals }]) => {
       const token = byMint.get(mint) as SplTokenConfig;
-      return { token, amount: formatUnits(raw, token.decimals) };
+      return { token, amount: formatUnits(raw, decimals) };
     }),
     warnings
   };
