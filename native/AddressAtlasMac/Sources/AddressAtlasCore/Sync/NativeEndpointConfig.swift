@@ -111,9 +111,12 @@ public struct NativeEndpointConfig: Codable, Equatable, Sendable {
   private static func validateHTTPURL(_ url: URL?, field: String) throws {
     guard let url else { return }
     let scheme = url.scheme?.lowercased()
-    guard scheme == "https" || scheme == "http" else {
-      throw NativeEndpointConfigError.invalidEndpoint(field)
+    if scheme == "https" { return }
+    // Permit plaintext http only for a local node; remote endpoints must be https.
+    if scheme == "http", let host = url.host?.lowercased(), host == "localhost" || host == "127.0.0.1" {
+      return
     }
+    throw NativeEndpointConfigError.invalidEndpoint(field)
   }
 
   private static func validateHTTPSURL(_ url: URL?, field: String) throws {

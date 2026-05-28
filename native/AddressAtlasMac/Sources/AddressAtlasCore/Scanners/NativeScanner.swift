@@ -136,17 +136,24 @@ public struct NativeScanner: Sendable {
       struct RPCError: Decodable { var message: String? }
     }
     guard let rpc = chain.rpcUrl else { return NativeScanResult() }
-    let response = try await http.post(
-      rpc,
-      body: JSONRPCRequest(method: "eth_getBalance", params: [.string(address), .string("latest")]),
-      as: Response.self
-    )
-    if let message = response.error?.message { throw NSError(domain: "EVM", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
-    let amount = Self.hexQuantityToDouble(response.result ?? "0x0", decimals: chain.decimals)
-    var assets = assetIfPositive(amount: amount, address: address, chain: chain, prices: prices)
+    var assets: [TrackedAsset] = []
+    var warnings: [String] = []
+    do {
+      let response = try await http.post(
+        rpc,
+        body: JSONRPCRequest(method: "eth_getBalance", params: [.string(address), .string("latest")]),
+        as: Response.self
+      )
+      if let message = response.error?.message { throw NSError(domain: "EVM", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
+      let amount = Self.hexQuantityToDouble(response.result ?? "0x0", decimals: chain.decimals)
+      assets.append(contentsOf: assetIfPositive(amount: amount, address: address, chain: chain, prices: prices))
+    } catch {
+      warnings.append("\(chain.name) native balance failed: \(error.localizedDescription)")
+    }
     let tokenScan = await scanErc20Balances(address: address, chain: chain, tokens: tokens, prices: prices)
     assets.append(contentsOf: tokenScan.assets)
-    return NativeScanResult(assets: assets, warnings: tokenScan.warnings)
+    warnings.append(contentsOf: tokenScan.warnings)
+    return NativeScanResult(assets: assets, warnings: warnings)
   }
 
   private func scanErc20Balances(
