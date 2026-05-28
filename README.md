@@ -1,12 +1,11 @@
 # Address Atlas
 
-Address Atlas is a local-first, read-only crypto portfolio tracker. Paste public wallet addresses, connect read-only exchange API keys, and keep a private portfolio ledger on your own machine.
+Address Atlas is a local-first, read-only crypto portfolio tracker for macOS. Paste public wallet addresses, connect read-only exchange API keys, and keep a private, encrypted portfolio ledger on your own Mac.
 
 The repo is organized as a small monorepo:
 
-- The existing Next.js app remains as the web/reference implementation.
-- `native/AddressAtlasMac` is the new native macOS implementation. It uses a random vault key stored in macOS Keychain, writes only encrypted vault documents to local SQLite, runs RPC/API requests from the Mac app, and syncs only opaque encrypted vault snapshots to the server.
-- `server/sync` is the production deployment target for the public sync/auth server. It packages the Next server with Docker, Caddy TLS, Postgres, and sync-only route exposure.
+- `native/AddressAtlasMac` is the macOS app — the product users run. It uses a random vault key stored in macOS Keychain, writes only encrypted vault documents to local SQLite, runs RPC/API requests from the Mac app, and syncs only opaque encrypted vault snapshots to the server.
+- The Next.js project at the repo root, together with `server/sync`, is the **encrypted sync-only server** — the backend the Mac app talks to for passkey auth and cross-device vault sync. It exposes only `/auth/native`, `/auth/passkey/*`, `/config/native`, `/vault/latest`, and `/healthz`, stores opaque encrypted snapshots, and never sees plaintext. `server/sync` packages it with Docker, Caddy TLS, and Postgres.
 
 ## Why this exists
 
@@ -25,29 +24,26 @@ This repo is a cleaner follow-up to earlier hackathon experiments:
 - TRON native TRX plus tracked TRC20 tokens.
 - XRP Ledger native XRP plus positive issued-currency trustline balances.
 - Cosmos liquid, delegated, and reward balances for Cosmos Hub, Osmosis, Celestia, Stargaze, and Stride.
-- Read-only exchange balances through Binance, Coinbase, and Kraken. The web reference uses ccxt; the native Mac app uses Swift REST clients.
-- Local SQLite persistence for watched wallets, scan runs, holdings, exchange connections, preferences, and vault metadata.
-- AES-256-GCM encryption for exchange API credentials. The web reference uses a local vault passphrase; the native Mac app uses a Keychain-backed vault subkey.
+- Read-only exchange balances through Binance, Coinbase, and Kraken via native Swift REST clients.
+- A local encrypted SQLite vault for watched wallets, holdings, exchange connections, and preferences.
+- AES-256-GCM encryption for the vault, using a Keychain-backed vault subkey.
 - USD prices through CoinGecko.
 - CSV and JSON export from the latest local snapshot.
 - Partial scan warnings when optional token, staking, reward, or trustline requests fail.
-- Route-based UI: Portfolio, Wallets, Assets, Snapshots, Export, and Settings.
+- Native macOS UI: Portfolio, Wallets, Assets, Snapshots, Export, and Settings.
 
-## Local development
+## Sync server (local) development
+
+The repo root is the encrypted sync-only server (Next.js). For local development, start the bundled Postgres, set the env, and run the server:
 
 ```bash
 npm install
-npm run db:push
+cp .env.example .env   # set SYNC_SESSION_SECRET and the Postgres URL
+npm run sync:db:up
 npm run dev
 ```
 
-Then open `http://localhost:3000` or the port printed by Next.js.
-
-The default SQLite database is `.data/address-atlas.db`. You can override it with `DATABASE_URL`, for example:
-
-```bash
-DATABASE_URL="file:./.data/address-atlas.db"
-```
+`npm test` runs the server unit tests and `npm run typecheck` runs the TypeScript checks. The macOS app (below) is what end users actually run.
 
 ## Native macOS development
 

@@ -7,11 +7,6 @@ const root = dirname(fileURLToPath(import.meta.url));
 const nextConfig = {
   reactStrictMode: true,
   devIndicators: false,
-  serverExternalPackages: [
-    "@prisma/adapter-better-sqlite3",
-    "better-sqlite3",
-    "ccxt"
-  ],
   turbopack: {
     root
   }
