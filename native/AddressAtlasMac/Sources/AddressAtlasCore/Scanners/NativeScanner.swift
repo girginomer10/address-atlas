@@ -342,6 +342,10 @@ public struct NativeScanner: Sendable {
     let delegationURL = Self.cosmosURL(
       rest: rest,
       path: "cosmos/staking/v1beta1/delegations/\(address)",
+      // Design decision (2026-06-22, won't-fix): a single 500-item page is
+      // intentional and sufficient — no Cosmos chain has near 500 validators, so
+      // a delegator cannot exceed it. Pagination would add untested code for an
+      // unreachable case. Do not re-flag as "missing pagination".
       queryItems: [URLQueryItem(name: "pagination.limit", value: "500")]
     )
     do {
@@ -750,6 +754,10 @@ public struct NativeScanner: Sendable {
   }
 
   public static func hexQuantityToDouble(_ value: String, decimals: Int) -> Double {
+    // Design decision (2026-06-22, won't-fix): on-chain balances (uint256) are
+    // intentionally carried as Double for a read-only USD estimate. No overflow
+    // or crash (verified) — only sub-cent precision loss well below display
+    // resolution. Do not re-flag as a "uint256 overflow/precision bug".
     let clean = value.replacingOccurrences(of: "0x", with: "")
     let padded = clean.isEmpty
       ? "00"

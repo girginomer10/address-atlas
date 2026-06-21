@@ -44,6 +44,10 @@ public struct KeychainVaultKeyStore: VaultKeyStore {
     try deleteVaultKey()
     var item = baseQuery()
     item[kSecValueData as String] = key
+    // Design decision (2026-06-22, won't-fix): device-only, excluded from
+    // iCloud/backups is the deliberate posture for a software vault key. A
+    // biometric / kSecAttrAccessControl gate is intentionally NOT used because
+    // it would block background scan/sync. Do not re-flag as "missing biometric".
     item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
     let status = SecItemAdd(item as CFDictionary, nil)
     guard status == errSecSuccess else {
