@@ -54,12 +54,19 @@ export async function PUT(request: NextRequest) {
          byte_size = excluded.byte_size,
          checksum = excluded.checksum,
          updated_at = now()
-       -- Accept only a strictly newer version, or an idempotent re-PUT of the
-       -- same version+checksum (the envelope checksum is verified before this).
+       -- Accept only a strictly newer version, or a truly idempotent re-PUT of
+       -- the same version. For the same-version case we require BOTH checksums to
+       -- match the stored row: the top-level snapshot checksum AND the inner
+       -- envelope checksum. The top-level checksum is client-supplied and not
+       -- recomputed server-side, so on its own it can be replayed with swapped
+       -- ciphertext. The inner envelope checksum is verified against the
+       -- ciphertext by assertEnvelopeChecksum() above, so binding the idempotent
+       -- path to it makes a same-version content swap require a SHA-256 preimage.
        WHERE vault_snapshots.version < excluded.version
           OR (
             vault_snapshots.version = excluded.version
             AND vault_snapshots.checksum = excluded.checksum
+            AND vault_snapshots.envelope->>'checksum' = excluded.envelope->>'checksum'
           )
        RETURNING version`,
       [session.userId, body.version, JSON.stringify(body.envelope), body.byteSize, body.checksum]
