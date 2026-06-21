@@ -109,9 +109,16 @@ public struct VaultCrypto: Sendable {
     }
     let ciphertext = body.dropLast(16)
     let tag = body.suffix(16)
-    let nonce = try AES.GCM.Nonce(data: nonceData)
-    let box = try AES.GCM.SealedBox(nonce: nonce, ciphertext: Data(ciphertext), tag: Data(tag))
-    return try AES.GCM.open(box, using: key)
+    do {
+      let nonce = try AES.GCM.Nonce(data: nonceData)
+      let box = try AES.GCM.SealedBox(nonce: nonce, ciphertext: Data(ciphertext), tag: Data(tag))
+      return try AES.GCM.open(box, using: key)
+    } catch {
+      // Surface the same error as a checksum mismatch so the failure mode can't
+      // be used to tell "wrong key" apart from "corrupt ciphertext" (uniform
+      // decrypt failure, matching RecoveryKit.open).
+      throw VaultCryptoError.authenticationFailed
+    }
   }
 
   public func sealJSON<T: Encodable>(_ value: T, with key: SymmetricKey, keyId: String, encoder: JSONEncoder = .addressAtlas) throws -> EncryptedVaultEnvelope {
