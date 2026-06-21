@@ -95,7 +95,7 @@ public struct NativeExchangeBalanceClient: Sendable {
   private let now: @Sendable () -> Date
 
   public init(
-    http: HTTPClient = URLSession.shared,
+    http: HTTPClient = URLSession.nonRedirecting,
     endpointConfig: NativeEndpointConfig = .bundled,
     binanceBaseURL: URL? = nil,
     coinbaseBaseURL: URL? = nil,
@@ -162,7 +162,7 @@ public struct NativeExchangeBalanceClient: Sendable {
 
   private func fetchCoinbaseBalance(credentials: ExchangeCredentials) async throws -> ExchangeBalance {
     let timestamp = String(format: "%.0f", now().timeIntervalSince1970)
-    let signed = ExchangeRequestSigner.coinbaseAccountsRequest(
+    let signed = try ExchangeRequestSigner.coinbaseAccountsRequest(
       credentials: credentials,
       timestamp: timestamp,
       path: coinbaseAccountsPath
@@ -223,6 +223,7 @@ public struct NativeExchangeBalanceClient: Sendable {
     }
 
     var request = URLRequest(url: url)
+    request.timeoutInterval = 30
     request.httpMethod = signed.method
     request.setValue("application/json", forHTTPHeaderField: "accept")
     if let contentType {
@@ -367,6 +368,7 @@ public enum ExchangeBalanceNormalizer {
     balanceEntries(balance).map { symbol, amount in
       let coinId = coinGeckoIds[symbol]
       let price = pricePoint(symbol: symbol, coinId: coinId, prices: prices)
+      let unitPrice = price.usd.isFinite ? price.usd : 0
       return TrackedAsset(
         id: "\(id.uuidString)-\(provider.rawValue)-\(symbol)",
         address: label,
@@ -376,8 +378,8 @@ public enum ExchangeBalanceNormalizer {
         symbol: symbol,
         name: symbol,
         amount: amount,
-        priceUsd: price.usd,
-        valueUsd: amount * price.usd,
+        priceUsd: unitPrice,
+        valueUsd: amount * unitPrice,
         change24h: price.usd24hChange,
         explorerUrl: "",
         source: .exchange,

@@ -26,6 +26,7 @@ export const DEFAULT_NATIVE_ENDPOINT_CONFIG: NativeEndpointConfig = {
   configVersion: 2,
   updatedAt: "2026-05-09T00:00:00.000Z",
   refreshAfterSeconds: 21_600,
+  minSupportedAppVersion: "0.1.0",
   priceBaseUrl: "https://api.coingecko.com/api/v3/simple/price",
   chains: {
     bitcoin: { restUrl: "https://blockstream.info/api" },
@@ -64,7 +65,9 @@ export function getNativeEndpointConfig(): NativeEndpointConfig {
     ...config,
     configVersion: numberFromEnv("NATIVE_ENDPOINT_CONFIG_VERSION", config.configVersion),
     updatedAt: process.env.NATIVE_ENDPOINT_CONFIG_UPDATED_AT || config.updatedAt,
-    message: process.env.NATIVE_ENDPOINT_CONFIG_MESSAGE || config.message
+    message: process.env.NATIVE_ENDPOINT_CONFIG_MESSAGE || config.message,
+    minSupportedAppVersion:
+      process.env.NATIVE_ENDPOINT_MIN_APP_VERSION || config.minSupportedAppVersion
   });
 }
 
@@ -111,6 +114,7 @@ function mergeRecord<T>(base: Record<string, T>, override?: Record<string, Parti
 function sanitizeNativeConfig(config: NativeEndpointConfig): NativeEndpointConfig {
   return {
     ...config,
+    minSupportedAppVersion: semverOrUndefined(config.minSupportedAppVersion),
     priceBaseUrl: httpURL(config.priceBaseUrl, DEFAULT_NATIVE_ENDPOINT_CONFIG.priceBaseUrl),
     chains: Object.fromEntries(
       Object.entries(config.chains).map(([chainId, value]) => {
@@ -173,4 +177,11 @@ function pathValue(value: string | undefined, fallback: string | undefined) {
 function numberFromEnv(name: string, fallback: number) {
   const parsed = Number(process.env[name]);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+// Only emit a well-formed dotted version (e.g. "1.2.3"); anything else is
+// dropped so the native client never tries to enforce a garbage kill-switch.
+function semverOrUndefined(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  return /^\d+(\.\d+){1,3}$/.test(value.trim()) ? value.trim() : undefined;
 }

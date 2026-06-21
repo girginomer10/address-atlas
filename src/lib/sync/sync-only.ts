@@ -8,7 +8,10 @@ const EXACT_SYNC_PATHS = new Set([
 ]);
 
 export function isSyncOnlyMode() {
-  return process.env.ADDRESS_ATLAS_SYNC_ONLY === "true";
+  // Fail closed: the gate is ON unless explicitly disabled with the exact string
+  // "false". An unset/typo'd value keeps the allowlist active rather than silently
+  // exposing every route. This repo ships only sync routes, so ON is always safe.
+  return process.env.ADDRESS_ATLAS_SYNC_ONLY !== "false";
 }
 
 export function isSyncOnlyPathAllowed(pathname: string) {

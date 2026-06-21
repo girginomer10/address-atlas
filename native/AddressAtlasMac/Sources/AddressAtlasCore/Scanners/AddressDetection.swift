@@ -11,7 +11,11 @@ public enum AddressDetection {
       }
 
     for value in tokens where !value.isEmpty {
-      let key = value.lowercased()
+      // EVM addresses are case-insensitive, so fold case to dedup mixed-case
+      // duplicates (which would otherwise double-count). base58/bech32 addresses
+      // (Solana, TRON, XRP) ARE case-sensitive, so dedup them exactly to avoid
+      // collapsing two genuinely different addresses.
+      let key = isEvm(value) ? value.lowercased() : value
       guard !seen.contains(key) else { continue }
       seen.insert(key)
       addresses.append(value)

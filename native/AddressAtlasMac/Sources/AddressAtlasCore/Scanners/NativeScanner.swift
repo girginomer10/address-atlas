@@ -491,6 +491,7 @@ public struct NativeScanner: Sendable {
   ) -> [TrackedAsset] {
     guard amount > 0 else { return [] }
     let price = prices[chain.coinGeckoId] ?? PricePoint(usd: 0)
+    let unitPrice = price.usd.isFinite ? price.usd : 0
     return [
       TrackedAsset(
         id: "\(address)-\(chain.id)-\(chain.symbol)-\(source.rawValue)",
@@ -501,8 +502,8 @@ public struct NativeScanner: Sendable {
         symbol: chain.symbol,
         name: name ?? chain.name,
         amount: amount,
-        priceUsd: price.usd,
-        valueUsd: amount * price.usd,
+        priceUsd: unitPrice,
+        valueUsd: amount * unitPrice,
         change24h: price.usd24hChange,
         explorerUrl: chain.explorerUrl.appending(path: address).absoluteString,
         source: source
@@ -520,7 +521,8 @@ public struct NativeScanner: Sendable {
   ) -> TrackedAsset? {
     guard amount > 0 else { return nil }
     let price = token.coinGeckoId.flatMap { prices[$0] }
-    let priceUsd = price?.usd ?? token.priceUsd ?? 0
+    let rawPrice = price?.usd ?? token.priceUsd ?? 0
+    let priceUsd = rawPrice.isFinite ? rawPrice : 0
     return TrackedAsset(
       id: "\(address)-\(chain.id)-\(token.symbol)-\(token.address)",
       address: address,
@@ -581,15 +583,21 @@ public struct NativeScanner: Sendable {
 
     let registryByMint = Dictionary(uniqueKeysWithValues: registry.map { ($0.address, $0) })
     var totals: [String: Double] = [:]
+    var warnedMints = Set<String>()
     for account in parsedAccounts {
-      guard let token = registryByMint[account.mint], token.decimals == account.decimals else {
-        continue
+      guard let token = registryByMint[account.mint] else { continue }
+      // Trust the on-chain decimals for the conversion rather than silently
+      // dropping the balance when they differ from the bundled registry value
+      // (which previously made real balances read as zero with no warning).
+      if token.decimals != account.decimals, !warnedMints.contains(account.mint) {
+        warnedMints.insert(account.mint)
+        warnings.append("\(token.symbol) on-chain decimals (\(account.decimals)) differ from the registry (\(token.decimals)); using on-chain decimals.")
       }
-      totals[account.mint, default: 0] += account.rawAmount
+      totals[account.mint, default: 0] += account.rawAmount / pow(10, Double(account.decimals))
     }
-    let balances: [(token: TokenConfig, amount: Double)] = totals.compactMap { mint, raw in
+    let balances: [(token: TokenConfig, amount: Double)] = totals.compactMap { mint, amount in
       guard let token = registryByMint[mint] else { return nil }
-      return (token, raw / pow(10, Double(token.decimals)))
+      return (token, amount)
     }
     return SolanaTokenBalanceScan(balances: balances, warnings: warnings)
   }

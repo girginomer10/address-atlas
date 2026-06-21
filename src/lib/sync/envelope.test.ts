@@ -21,13 +21,13 @@ describe("encrypted sync envelope validation", () => {
     expect(() => assertNoPlaintextLeak(SNAPSHOT)).not.toThrow();
   });
 
-  it("rejects snapshots that smuggle plaintext vault fields", () => {
+  it("rejects snapshots that smuggle extra (potentially plaintext) fields", () => {
     const leaked = {
       ...SNAPSHOT,
       walletAddress: "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
     };
 
-    expect(() => assertNoPlaintextLeak(leaked as unknown as RemoteVaultSnapshot)).toThrow(/plaintext/i);
+    expect(() => assertNoPlaintextLeak(leaked as unknown as RemoteVaultSnapshot)).toThrow(/unexpected field/i);
   });
 
   it("rejects malformed metadata", () => {

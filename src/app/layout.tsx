@@ -2,11 +2,12 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Address Atlas",
-  description: "Read-only multi-chain crypto portfolio tracker from wallet addresses.",
+  title: "Address Atlas Sync",
+  description: "Encrypted sync server for the Address Atlas native macOS app.",
+  robots: { index: false, follow: false },
   openGraph: {
-    title: "Address Atlas",
-    description: "Paste wallet addresses and scan balances across Bitcoin, EVM and Cosmos chains."
+    title: "Address Atlas Sync",
+    description: "Encrypted, zero-knowledge vault sync for the Address Atlas Mac app."
   }
 };
 

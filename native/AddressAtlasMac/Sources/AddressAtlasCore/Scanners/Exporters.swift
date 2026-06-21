@@ -32,9 +32,18 @@ public enum AddressAtlasExporter {
   }
 
   private static func csvEscape(_ value: String) -> String {
-    if value.contains(",") || value.contains("\"") || value.contains("\n") {
-      return "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
+    // Neutralize spreadsheet formula injection: a free-text cell (symbol, name,
+    // wallet label) beginning with =, +, -, @, tab, or CR is executed as a
+    // formula by Excel/Sheets. Prefix it with a single quote so it stays text.
+    // (Numeric columns are written without csvEscape, so negative numbers are
+    // unaffected.)
+    var sanitized = value
+    if let first = value.first, "=+-@\t\r".contains(first) {
+      sanitized = "'" + value
     }
-    return value
+    if sanitized.contains(",") || sanitized.contains("\"") || sanitized.contains("\n") {
+      return "\"\(sanitized.replacingOccurrences(of: "\"", with: "\"\""))\""
+    }
+    return sanitized
   }
 }

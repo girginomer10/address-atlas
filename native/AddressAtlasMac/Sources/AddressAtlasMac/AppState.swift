@@ -31,6 +31,47 @@ final class AppState: ObservableObject {
     return root.appending(path: "AddressAtlas")
   }
 
+  var appVersion: String {
+    Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+  }
+
+  /// False when the server's `minSupportedAppVersion` is newer than this build.
+  /// If the bundle version can't be read (e.g. SPM unit tests) we do not block.
+  var isAppVersionSupported: Bool {
+    guard let minimum = endpointConfig.minSupportedAppVersion, !minimum.isEmpty else { return true }
+    let current = appVersion
+    guard !current.isEmpty else { return true }
+    return AppState.compareVersions(current, minimum) >= 0
+  }
+
+  /// Accepts the sync server URL only if it is https (http allowed for loopback
+  /// dev hosts). Prevents the bearer token / config / vault traffic from ever
+  /// traversing plaintext.
+  static func validatedSyncURL(_ raw: String) -> URL? {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() else {
+      return nil
+    }
+    if scheme == "https" { return url }
+    if scheme == "http", let host = url.host?.lowercased(),
+       host == "localhost" || host == "127.0.0.1" || host == "::1" {
+      return url
+    }
+    return nil
+  }
+
+  /// Numeric dotted-version comparison: -1 if lhs < rhs, 0 if equal, 1 if greater.
+  static func compareVersions(_ lhs: String, _ rhs: String) -> Int {
+    let a = lhs.split(separator: ".").map { Int($0) ?? 0 }
+    let b = rhs.split(separator: ".").map { Int($0) ?? 0 }
+    for index in 0..<max(a.count, b.count) {
+      let x = index < a.count ? a[index] : 0
+      let y = index < b.count ? b[index] : 0
+      if x != y { return x < y ? -1 : 1 }
+    }
+    return 0
+  }
+
   func unlock() async {
     do {
       let manager = VaultKeyManager(store: keyStore, crypto: crypto)
@@ -208,12 +249,17 @@ final class AppState: ObservableObject {
   }
 
   func saveSyncSettings(serverURL: String) {
-    document.syncState.serverURL = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmed = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard AppState.validatedSyncURL(trimmed) != nil else {
+      error = "Sync server URL must use https (http is allowed only for localhost)."
+      return
+    }
+    document.syncState.serverURL = trimmed
     save()
   }
 
   func refreshEndpointConfig(silent: Bool = false) async {
-    guard let serverURL = URL(string: document.syncState.serverURL), !document.syncState.serverURL.isEmpty else {
+    guard let serverURL = AppState.validatedSyncURL(document.syncState.serverURL) else {
       endpointConfig = .bundled
       endpointConfigStatus = "Bundled endpoints"
       if !silent {
@@ -225,9 +271,16 @@ final class AppState: ObservableObject {
     do {
       let config = try await endpointConfigClient.fetch(from: serverURL)
       endpointConfig = config
-      endpointConfigStatus = "Remote v\(config.configVersion)"
-      if !silent {
-        notice = "Endpoint config refreshed."
+      if !isAppVersionSupported {
+        endpointConfigStatus = "Update required"
+        if !silent {
+          self.error = "This app version is no longer supported. Update Address Atlas to keep syncing."
+        }
+      } else {
+        endpointConfigStatus = "Remote v\(config.configVersion)"
+        if !silent {
+          notice = "Endpoint config refreshed."
+        }
       }
     } catch {
       endpointConfigStatus = endpointConfig == .bundled ? "Bundled endpoints" : "Remote v\(endpointConfig.configVersion) cached"
@@ -246,8 +299,8 @@ final class AppState: ObservableObject {
   }
 
   private func authenticateWithPasskey(serverURL: String, mode: PasskeyWebMode) async {
-    guard let url = URL(string: serverURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-      error = "Sync server URL is required."
+    guard let url = AppState.validatedSyncURL(serverURL) else {
+      error = "Sync server URL must use https (http is allowed only for localhost)."
       return
     }
     syncing = true
@@ -271,8 +324,12 @@ final class AppState: ObservableObject {
       error = "Vault must be unlocked before syncing."
       return
     }
-    guard let serverURL = URL(string: document.syncState.serverURL), !document.syncState.sessionToken.isEmpty else {
+    guard let serverURL = AppState.validatedSyncURL(document.syncState.serverURL), !document.syncState.sessionToken.isEmpty else {
       error = "Sign in with passkey before syncing."
+      return
+    }
+    guard isAppVersionSupported else {
+      error = "This app version is no longer supported. Update Address Atlas to keep syncing."
       return
     }
     syncing = true
@@ -311,8 +368,12 @@ final class AppState: ObservableObject {
       error = "Vault must be unlocked before syncing."
       return
     }
-    guard let serverURL = URL(string: document.syncState.serverURL), !document.syncState.sessionToken.isEmpty else {
+    guard let serverURL = AppState.validatedSyncURL(document.syncState.serverURL), !document.syncState.sessionToken.isEmpty else {
       error = "Sign in with passkey before syncing."
+      return
+    }
+    guard isAppVersionSupported else {
+      error = "This app version is no longer supported. Update Address Atlas to keep syncing."
       return
     }
     syncing = true
@@ -322,6 +383,13 @@ final class AppState: ObservableObject {
       await client.setBearerToken(document.syncState.sessionToken)
       guard let snapshot = try await client.latestVault() else {
         notice = "No remote vault snapshot yet."
+        return
+      }
+      // Refuse a server snapshot older than the last version we synced: the
+      // content is end-to-end encrypted (the server can't forge it), but it
+      // could replay a stale-but-authentic snapshot to roll back local data.
+      guard snapshot.version >= document.syncState.latestRemoteVersion else {
+        error = "Remote vault is older than your last sync (possible rollback). Download aborted."
         return
       }
       var opened = try syncCodec.open(snapshot: snapshot, vaultKey: vaultKey)

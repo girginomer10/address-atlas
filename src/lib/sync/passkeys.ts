@@ -89,14 +89,20 @@ export async function verifyPasskey(body: unknown) {
     throw new Error("Challenge mode mismatch.");
   }
   await ensureSyncSchema();
-  await consumeChallenge(challenge.challenge);
+  void pruneConsumedChallenges();
 
+  // The challenge is consumed AFTER the WebAuthn assertion is verified (inside
+  // verifyRegistration/verifyAuthentication), so a malformed or forged response
+  // can no longer burn a legitimate single-use challenge.
   if (challenge.mode === "register") {
     return verifyRegistration(challenge, input.response as RegistrationResponseJSON);
   }
   return verifyAuthentication(challenge, input.response as AuthenticationResponseJSON);
 }
 
+// Single-use enforcement: the PRIMARY KEY conflict makes this atomic, so two
+// concurrent requests with the same challenge race on the unique index and
+// exactly one wins.
 async function consumeChallenge(challenge: string) {
   const result = await getSyncPool().query(
     "INSERT INTO consumed_challenges (challenge) VALUES ($1) ON CONFLICT (challenge) DO NOTHING",
@@ -104,6 +110,18 @@ async function consumeChallenge(challenge: string) {
   );
   if (result.rowCount === 0) {
     throw new Error("Challenge has already been used.");
+  }
+}
+
+// Challenge tokens live 5 minutes; rows older than that are dead weight. Best
+// effort — never block or fail a verification on cleanup.
+async function pruneConsumedChallenges() {
+  try {
+    await getSyncPool().query(
+      "DELETE FROM consumed_challenges WHERE consumed_at < now() - interval '15 minutes'"
+    );
+  } catch {
+    // Ignore: pruning is opportunistic.
   }
 }
 
@@ -120,13 +138,24 @@ async function verifyRegistration(challenge: ChallengeToken, response: Registrat
 
   const credential = verification.registrationInfo.credential;
   const client = await getSyncPool().connect();
+  let effectiveUserId = challenge.pendingUserId;
   try {
     await client.query("BEGIN");
+    // Consume inside the transaction so a later failure rolls the challenge back.
+    const consumed = await client.query(
+      "INSERT INTO consumed_challenges (challenge) VALUES ($1) ON CONFLICT (challenge) DO NOTHING",
+      [challenge.challenge]
+    );
+    if (consumed.rowCount === 0) throw new Error("Challenge has already been used.");
     await client.query("INSERT INTO users (id) VALUES ($1) ON CONFLICT (id) DO NOTHING", [challenge.pendingUserId]);
-    await client.query(
+    // ON CONFLICT keeps the credential's existing user_id, so re-registering an
+    // already-registered passkey returns the ORIGINAL account rather than forking
+    // a new empty user. RETURNING tells us which user_id actually owns it.
+    const credentialResult = await client.query<{ user_id: string }>(
       `INSERT INTO passkey_credentials (id, user_id, public_key_base64url, counter, transports)
        VALUES ($1, $2, $3, $4, $5::jsonb)
-       ON CONFLICT (id) DO UPDATE SET updated_at = now()`,
+       ON CONFLICT (id) DO UPDATE SET updated_at = now()
+       RETURNING user_id`,
       [
         credential.id,
         challenge.pendingUserId,
@@ -135,6 +164,12 @@ async function verifyRegistration(challenge: ChallengeToken, response: Registrat
         JSON.stringify(response.response.transports ?? [])
       ]
     );
+    effectiveUserId = credentialResult.rows[0].user_id;
+    // Drop the freshly-inserted pending user if the credential already belonged
+    // to someone else (otherwise it would be an orphan row with no credential).
+    if (effectiveUserId !== challenge.pendingUserId) {
+      await client.query("DELETE FROM users WHERE id = $1", [challenge.pendingUserId]);
+    }
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");
@@ -145,8 +180,8 @@ async function verifyRegistration(challenge: ChallengeToken, response: Registrat
 
   return {
     verified: true,
-    userId: challenge.pendingUserId,
-    sessionToken: issueSessionToken(challenge.pendingUserId)
+    userId: effectiveUserId,
+    sessionToken: issueSessionToken(effectiveUserId)
   };
 }
 
@@ -162,7 +197,9 @@ async function verifyAuthentication(challenge: ChallengeToken, response: Authent
     [response.id]
   );
   const row = credentialRow.rows[0];
-  if (!row) throw new Error("Unknown passkey credential.");
+  // Same message as a failed assertion below, so the response can't be used to
+  // enumerate which credential IDs are registered.
+  if (!row) throw new Error("Passkey authentication failed.");
 
   const credential: WebAuthnCredential = {
     id: row.id,
@@ -179,6 +216,8 @@ async function verifyAuthentication(challenge: ChallengeToken, response: Authent
     requireUserVerification: true
   });
   if (!verification.verified) throw new Error("Passkey authentication failed.");
+  // Consume only after a valid assertion, so probing with junk can't burn it.
+  await consumeChallenge(challenge.challenge);
   await getSyncPool().query(
     "UPDATE passkey_credentials SET counter = $2, updated_at = now() WHERE id = $1",
     [row.id, verification.authenticationInfo.newCounter]

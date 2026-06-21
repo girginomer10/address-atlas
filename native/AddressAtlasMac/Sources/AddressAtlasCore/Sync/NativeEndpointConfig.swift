@@ -113,7 +113,8 @@ public struct NativeEndpointConfig: Codable, Equatable, Sendable {
     let scheme = url.scheme?.lowercased()
     if scheme == "https" { return }
     // Permit plaintext http only for a local node; remote endpoints must be https.
-    if scheme == "http", let host = url.host?.lowercased(), host == "localhost" || host == "127.0.0.1" {
+    if scheme == "http", let host = url.host?.lowercased(),
+       host == "localhost" || host == "127.0.0.1" || host == "::1" {
       return
     }
     throw NativeEndpointConfigError.invalidEndpoint(field)
@@ -193,6 +194,7 @@ public struct NativeEndpointConfigClient: Sendable {
 
   public func fetch(from serverURL: URL) async throws -> NativeEndpointConfig {
     var request = URLRequest(url: serverURL.appending(path: "config/native"))
+    request.timeoutInterval = 20
     request.setValue("application/json", forHTTPHeaderField: "accept")
     let (data, response) = try await http.data(for: request)
     guard (200..<300).contains(response.statusCode) else {

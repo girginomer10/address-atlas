@@ -47,6 +47,9 @@ export async function ensureSyncSchema() {
         challenge text PRIMARY KEY,
         consumed_at timestamptz NOT NULL DEFAULT now()
       );
+
+      CREATE INDEX IF NOT EXISTS consumed_challenges_consumed_at_idx
+        ON consumed_challenges (consumed_at);
     `).then(() => undefined);
   }
   return schemaReady;

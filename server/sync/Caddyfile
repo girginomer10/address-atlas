@@ -4,5 +4,21 @@
 
 {$ADDRESS_ATLAS_DOMAIN} {
   encode zstd gzip
+
+  # Reject oversized uploads at the edge (vault snapshots are small encrypted
+  # blobs). Backstops the app-level content-length check on /vault/latest.
+  request_body {
+    max_size 9MB
+  }
+
+  header {
+    # HTTPS is terminated here, so HSTS belongs at this layer.
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    Referrer-Policy "no-referrer"
+    -Server
+  }
+
   reverse_proxy web:3000
 }

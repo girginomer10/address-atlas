@@ -143,6 +143,7 @@ public actor ZeroKnowledgeSyncClient {
 
   public func latestVault() async throws -> RemoteVaultSnapshot? {
     var request = URLRequest(url: baseURL.appending(path: "vault/latest"))
+    request.timeoutInterval = 30
     request.setValue("application/json", forHTTPHeaderField: "accept")
     if let bearerToken {
       request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "authorization")
@@ -159,6 +160,7 @@ public actor ZeroKnowledgeSyncClient {
 
   public func upload(snapshot: RemoteVaultSnapshot) async throws {
     var request = URLRequest(url: baseURL.appending(path: "vault/latest"))
+    request.timeoutInterval = 30
     request.httpMethod = "PUT"
     request.setValue("application/json", forHTTPHeaderField: "accept")
     request.setValue("application/json", forHTTPHeaderField: "content-type")

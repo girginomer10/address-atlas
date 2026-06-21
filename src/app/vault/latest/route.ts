@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { assertEnvelopeChecksum, assertNoPlaintextLeak, assertRemoteVaultSnapshot } from "@/lib/sync/envelope";
+import { assertEnvelopeChecksum, assertNoPlaintextLeak, assertRemoteVaultSnapshot, MAX_ENVELOPE_BYTES } from "@/lib/sync/envelope";
 import { ensureSyncSchema, getSyncPool } from "@/lib/sync/postgres";
 import { readBearerToken } from "@/lib/sync/tokens";
 
@@ -40,6 +40,12 @@ export async function GET(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     const session = readBearerToken(request.headers.get("authorization"));
+    // Reject oversized uploads before buffering the body. The proxy enforces a
+    // hard request_body cap too; this is the app-level backstop.
+    const declaredSize = Number(request.headers.get("content-length") ?? 0);
+    if (Number.isFinite(declaredSize) && declaredSize > MAX_ENVELOPE_BYTES + 100_000) {
+      return NextResponse.json({ error: "Snapshot too large." }, { status: 413 });
+    }
     const body = await request.json().catch(() => ({}));
     assertRemoteVaultSnapshot(body);
     assertNoPlaintextLeak(body);

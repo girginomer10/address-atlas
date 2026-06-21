@@ -23,7 +23,7 @@ type VerifyResponse = {
   error?: string;
 };
 
-export function NativePasskeyBridge({ callback }: { callback: string }) {
+export function NativePasskeyBridge({ callback, state }: { callback: string; state: string }) {
   const [accountName, setAccountName] = useState("");
   const [busy, setBusy] = useState<Mode | null>(null);
   const [message, setMessage] = useState("");
@@ -76,6 +76,11 @@ export function NativePasskeyBridge({ callback }: { callback: string }) {
       returnURL.searchParams.set("sessionToken", verified.sessionToken);
       returnURL.searchParams.set("userId", verified.userId);
       returnURL.searchParams.set("serverURL", window.location.origin);
+      // Echo the native-supplied state so the app can bind this callback to the
+      // request it started (CSRF / replay protection).
+      if (state) {
+        returnURL.searchParams.set("state", state);
+      }
       window.location.assign(returnURL.toString());
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Passkey flow failed.");

@@ -49,11 +49,16 @@ public enum ExchangeRequestSigner {
     credentials: ExchangeCredentials,
     timestamp: String,
     path: String = "/api/v3/brokerage/accounts"
-  ) -> SignedExchangeRequest {
+  ) throws -> SignedExchangeRequest {
     let method = "GET"
     let body = ""
     let prehash = "\(timestamp)\(method)\(path)\(body)"
-    let signature = hmacSHA256Base64(message: prehash, secret: credentials.secret)
+    // The CB-ACCESS HMAC scheme uses a base64-encoded API secret (same as
+    // Kraken), not raw UTF-8 bytes. Decode it before signing.
+    // NOTE: current Coinbase Advanced Trade CDP keys use JWT/ES256 instead;
+    // full JWT support is a separate change that needs live validation.
+    let secret = try Base64URL.decode(credentials.secret)
+    let signature = hmacSHA256Base64(message: prehash, secretData: secret)
     return SignedExchangeRequest(
       method: method,
       path: path,
@@ -95,8 +100,8 @@ public enum ExchangeRequestSigner {
     return Data(HMAC<SHA256>.authenticationCode(for: Data(message.utf8), using: key)).hexString
   }
 
-  private static func hmacSHA256Base64(message: String, secret: String) -> String {
-    let key = SymmetricKey(data: Data(secret.utf8))
+  private static func hmacSHA256Base64(message: String, secretData: Data) -> String {
+    let key = SymmetricKey(data: secretData)
     return Data(HMAC<SHA256>.authenticationCode(for: Data(message.utf8), using: key)).base64EncodedString()
   }
 }
