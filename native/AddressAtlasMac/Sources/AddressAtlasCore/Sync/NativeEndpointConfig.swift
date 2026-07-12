@@ -46,7 +46,7 @@ public struct NativeEndpointConfig: Codable, Equatable, Sendable {
   }
 
   public static let bundled = NativeEndpointConfig(
-    configVersion: 2,
+    configVersion: 3,
     chains: [
       "bitcoin": ChainEndpointOverride(restURL: URL(string: "https://blockstream.info/api")),
       "solana": ChainEndpointOverride(rpcURL: URL(string: "https://api.mainnet-beta.solana.com")),
@@ -87,51 +87,106 @@ public struct NativeEndpointConfig: Codable, Equatable, Sendable {
   }
 
   public func exchangeBaseURL(for provider: ExchangeProvider) -> URL? {
-    exchanges[provider.rawValue]?.baseURL
+    switch provider {
+    case .binance: URL(string: "https://api.binance.com")
+    case .coinbase: URL(string: "https://api.coinbase.com")
+    case .kraken: URL(string: "https://api.kraken.com")
+    }
   }
 
   public func exchangeAccountPath(for provider: ExchangeProvider) -> String? {
-    exchanges[provider.rawValue]?.accountPath
+    switch provider {
+    case .binance: "/api/v3/account"
+    case .coinbase: "/api/v3/brokerage/accounts"
+    case .kraken: "/0/private/Balance"
+    }
   }
 
   public func validated() throws -> NativeEndpointConfig {
-    try Self.validateHTTPURL(priceBaseURL, field: "priceBaseUrl")
+    try Self.validateRemoteURL(
+      priceBaseURL,
+      matching: Self.bundled.priceBaseURL,
+      field: "priceBaseUrl",
+      requiresExactPath: true
+    )
     for (chainId, override) in chains {
-      try Self.validateHTTPURL(override.rpcURL, field: "\(chainId).rpcUrl")
-      try Self.validateHTTPURL(override.restURL, field: "\(chainId).restUrl")
-      try Self.validateHTTPURL(override.explorerURL, field: "\(chainId).explorerUrl")
+      guard let bundled = Self.bundled.chains[chainId] else {
+        throw NativeEndpointConfigError.invalidEndpoint(chainId)
+      }
+      try Self.validateRemoteURL(
+        override.rpcURL,
+        matching: bundled.rpcURL,
+        field: "\(chainId).rpcUrl"
+      )
+      try Self.validateRemoteURL(
+        override.restURL,
+        matching: bundled.restURL,
+        field: "\(chainId).restUrl"
+      )
+      try Self.validateRemoteURL(
+        override.explorerURL,
+        matching: bundled.explorerURL,
+        field: "\(chainId).explorerUrl"
+      )
     }
-    for (provider, override) in exchanges {
-      try Self.validateHTTPSURL(override.baseURL, field: "\(provider).baseUrl")
-      try Self.validatePath(override.accountPath, field: "\(provider).accountPath")
+    // Exchange requests carry live API credentials/signatures. Their host,
+    // method and path are a local trust boundary and can never be delegated to
+    // a remotely supplied config document.
+    guard exchanges.isEmpty else {
+      throw NativeEndpointConfigError.invalidEndpoint("exchanges")
     }
     return self
+  }
+
+  private static func validateRemoteURL(
+    _ url: URL?,
+    matching bundledURL: URL?,
+    field: String,
+    requiresExactPath: Bool = false
+  ) throws {
+    guard let url else { return }
+    guard let bundledURL,
+          let scheme = url.scheme?.lowercased(), scheme == "https",
+          let host = url.host?.lowercased(), !host.isEmpty,
+          scheme == bundledURL.scheme?.lowercased(),
+          host == bundledURL.host?.lowercased(),
+          effectivePort(for: url) == effectivePort(for: bundledURL),
+          url.user == nil, url.password == nil, url.fragment == nil, url.query == nil,
+          !requiresExactPath || normalizedPath(url) == normalizedPath(bundledURL)
+    else {
+      throw NativeEndpointConfigError.invalidEndpoint(field)
+    }
+  }
+
+  private static func effectivePort(for url: URL) -> Int? {
+    if let port = url.port { return port }
+    switch url.scheme?.lowercased() {
+    case "https": return 443
+    case "http": return 80
+    default: return nil
+    }
+  }
+
+  private static func normalizedPath(_ url: URL) -> String {
+    let path = url.path.isEmpty ? "/" : url.path
+    return path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
   }
 
   private static func validateHTTPURL(_ url: URL?, field: String) throws {
     guard let url else { return }
     let scheme = url.scheme?.lowercased()
+    guard let host = url.host?.lowercased(), !host.isEmpty,
+          url.user == nil, url.password == nil, url.fragment == nil
+    else {
+      throw NativeEndpointConfigError.invalidEndpoint(field)
+    }
     if scheme == "https" { return }
     // Permit plaintext http only for a local node; remote endpoints must be https.
-    if scheme == "http", let host = url.host?.lowercased(),
+    if scheme == "http",
        host == "localhost" || host == "127.0.0.1" || host == "::1" {
       return
     }
     throw NativeEndpointConfigError.invalidEndpoint(field)
-  }
-
-  private static func validateHTTPSURL(_ url: URL?, field: String) throws {
-    guard let url else { return }
-    guard url.scheme?.lowercased() == "https" else {
-      throw NativeEndpointConfigError.invalidEndpoint(field)
-    }
-  }
-
-  private static func validatePath(_ path: String?, field: String) throws {
-    guard let path else { return }
-    guard path.hasPrefix("/"), !path.contains("://") else {
-      throw NativeEndpointConfigError.invalidEndpoint(field)
-    }
   }
 }
 
@@ -193,6 +248,7 @@ public struct NativeEndpointConfigClient: Sendable {
   }
 
   public func fetch(from serverURL: URL) async throws -> NativeEndpointConfig {
+    try NativeEndpointConfig.validateServerURL(serverURL)
     var request = URLRequest(url: serverURL.appending(path: "config/native"))
     request.timeoutInterval = 20
     request.setValue("application/json", forHTTPHeaderField: "accept")
@@ -208,5 +264,11 @@ public struct NativeEndpointConfigClient: Sendable {
       throw NativeEndpointConfigError.invalidSchema
     }
     return try config.validated()
+  }
+}
+
+extension NativeEndpointConfig {
+  fileprivate static func validateServerURL(_ url: URL) throws {
+    try validateHTTPURL(url, field: "serverUrl")
   }
 }

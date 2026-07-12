@@ -27,7 +27,7 @@ hdiutil create \
   "$DMG_PATH"
 
 if [[ -n "${ADDRESS_ATLAS_CODESIGN_IDENTITY:-}" ]]; then
-  codesign --force --sign "$ADDRESS_ATLAS_CODESIGN_IDENTITY" "$DMG_PATH"
+  codesign --force --timestamp --sign "$ADDRESS_ATLAS_CODESIGN_IDENTITY" "$DMG_PATH"
   codesign --verify --verbose=2 "$DMG_PATH"
 fi
 

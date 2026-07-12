@@ -1,68 +1,99 @@
 # Development Notes
 
-## Imported Know-How
+## Product Boundary
 
-Address Atlas intentionally borrows ideas, not whole subsystems, from the earlier projects.
+Address Atlas is a local-first, read-only crypto portfolio tracker. It accepts public wallet addresses and balance/read-only exchange credentials. It must never request seed phrases, wallet private keys, signing permission, trading permission, or withdrawal permission.
 
-From HodlTrack:
+There are two runtime components:
 
-- Public RPC balance scans for EVM native assets.
-- ERC-20 `balanceOf` probing with common token registries.
-- Bitcoin and Cosmos balance fetch patterns.
-- CoinGecko simple-price mapping.
-- Local-first portfolio state.
+- `native/AddressAtlasMac`: the SwiftUI macOS product. It owns plaintext portfolio data, network scans, exchange credentials, local encryption, recovery, export, and sync encryption.
+- The repository-root Next.js service plus `server/sync`: a passkey-authenticated sync service. It stores passkey public keys and opaque encrypted vault snapshots in Postgres. It must not receive plaintext addresses, balances, token lists, exchange credentials, preferences, or recovery material.
 
-From FluxTranche:
+The old Prisma/SQLite web portfolio and ccxt runtime no longer exist. Do not reintroduce them.
 
-- Portfolio entities should distinguish chain, coin, address, liquid balance, and future staked/reward fields.
-- Chain support should be registry-driven, not hardcoded inside UI components.
-- The public positioning should stay read-only and no-custody.
+## Native Architecture
 
-## Product Constraint
+- `Sources/AddressAtlasCore/Models.swift`: durable vault schema and migration-compatible decoding.
+- `Crypto/`: AES-256-GCM, purpose-separated HKDF keys, Keychain storage, exchange-credential envelopes, and recovery kits.
+- `Storage/EncryptedSQLiteVaultStore.swift`: one encrypted `VaultDocument` envelope in local SQLite.
+- `Sync/`: authenticated sync envelopes and public endpoint configuration. Snapshot account, version, and schema metadata are cryptographically bound to the ciphertext.
+- `Scanners/`: public-chain scanners, CoinGecko pricing, and native Binance, Coinbase Advanced Trade, and Kraken read-only clients.
+- `Sources/AddressAtlasMac/AppState.swift`: UI state transitions, validation, scan orchestration, conflict-safe sync, and bounded snapshot retention.
+- `Sources/AddressAtlasMac/AddressAtlasApp.swift`: SwiftUI presentation and recovery/unlock flows.
 
-Address Atlas avoids account creation, automated rebalancing, signing, and fund-management claims. Exchange keys are allowed only for read-only balance fetching and are encrypted locally: the legacy web reference uses a vault passphrase, while the native Mac app uses a random Keychain-backed vault key. The app should answer one question well: "What do these public wallets and read-only exchange accounts appear to hold?"
+Exchange origins and sensitive request paths are pinned in the native app. Remote `/config/native` data may change only paths on each chain's bundled HTTPS origin; it cannot change RPC origins. The CoinGecko price origin and path are both fixed. Remote config must never redirect signed exchange requests or credential-bearing headers.
 
-## Local-First Architecture
+## Local Development
 
-- Next.js app routes power Portfolio, Wallets, Assets, Snapshots, Export, and Settings.
-- Prisma 7 + SQLite store local state in `.data/address-atlas.db`.
-- Prisma Client is generated into `src/generated/prisma` during `npm run dev`, `npm run build`, and `npm test`; generated output is ignored by git.
-- Exchange connections use ccxt adapters for Binance, Coinbase, and Kraken. Only `fetchBalance` is used.
-- Vault encryption uses AES-256-GCM with a PBKDF2-derived key. The passphrase is verified, not stored.
-- Scan history is read from persisted `ScanRun` rows and exposed via `/api/scan/history`.
-- Manual exchange entries live in `ManualExchangeHolding` and are merged into the latest scan response at read time; they are not persisted as historical `Holding` rows.
-- Custom token allowlist entries live in `CustomToken` and can target either EVM contracts or Solana mints. They are merged with built-in token registries during scans, and built-in registry entries win on duplicate addresses/mints.
-- Custom tokens can use either a CoinGecko id, a manual USD price, both, or neither. If both are present, live CoinGecko prices win and manual price is the fallback.
-- `/api/tokens/metadata` prefers the built-in registry, can read ERC-20 symbol/name/decimals from the selected chain RPC, returns CoinGecko id suggestions, and reads Solana mint decimals from parsed account info. If `JUPITER_API_KEY` is configured, it also uses Jupiter Tokens API for arbitrary Solana mint symbol/name/USD price hints.
-- Solana scanning includes classic SPL Token Program and Token-2022 balances from the registry. EVM scanning covers Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, Avalanche, Gnosis, Linea, Mantle, Scroll, and ZKsync Era through the shared registry, and batches ERC-20 `balanceOf` probes per chain with a single-request fallback for RPCs that reject JSON-RPC batches. TRON scanning includes native TRX plus tracked TRC20 tokens, currently USDT. XRP Ledger scanning includes native XRP plus positive issued-currency trustline balances as unpriced `issued` assets. Cosmos scanning includes native liquid balances, delegations, and distribution rewards.
+Sync service:
 
-## Native Mac Track
+```bash
+npm ci
+cp .env.example .env
+npm run sync:db:up
+npm run dev
+```
 
-- `native/AddressAtlasMac` is the new native SwiftUI implementation. The Next app remains a reference while the Mac app grows toward full replacement.
-- `native/AddressAtlasMac/build-mac-app.sh` builds a local `dist/Address Atlas.app` bundle on Macs with full Xcode selected, or with the Homebrew Swift.org toolchain fallback when full Xcode is unavailable. The script prefers full Xcode, ad-hoc signs local app bundles by default, and can use `ADDRESS_ATLAS_CODESIGN_IDENTITY` when a Developer ID Application identity is available.
-- The native vault key is a random 256-bit key stored in macOS Keychain with this-device-only accessibility. Users do not type or memorize an encryption password.
-- The native local store uses SQLite as an envelope table: the app serializes `VaultDocument`, encrypts it with an HKDF-derived local database key, and stores only envelope JSON (`nonce`, `ciphertext`, checksums, versions).
-- The vault key derives separate subkeys for local database encryption, encrypted server sync blobs, and field-level exchange credential encryption.
-- Native scanners make public RPC/API requests directly from the Mac app. EVM scanning includes native balances plus built-in/custom ERC-20 `balanceOf` probes across the same common registry set as the web reference; Solana scanning includes native SOL plus built-in/custom SPL Token and Token-2022 account parsing. Token, staking, reward, and trustline subrequest failures are surfaced as scan warnings without discarding successfully read native balances. Binance, Coinbase, and Kraken balances use native Swift REST clients with read-only credentials decrypted only in memory for the scan. `/config/native` can rotate public RPC, price, exchange base URL, and exchange account path settings without a Mac update, but schema/signing changes still require an app release. The server sync layer is not a portfolio API and cannot decrypt user data.
-- Native exchange support uses deterministic Swift request builders and mocked signing/balance tests before live balance calls. Do not reintroduce `ccxt` into the Mac runtime.
+Native app:
 
-## Encrypted Sync Server
+```bash
+cd native/AddressAtlasMac
+./check-toolchain.sh
+swift run AddressAtlasMac
+```
 
-- The zero-knowledge sync surface is `POST /auth/passkey/options`, `POST /auth/passkey/verify`, `GET /vault/latest`, and `PUT /vault/latest`.
-- Sync requires Postgres through `SYNC_DATABASE_URL`; keep this separate from the legacy local Prisma SQLite `DATABASE_URL`.
-- Local sync development can use `npm run sync:db:up`, which starts `compose.sync.yml` with the same default URL shown in `.env.example`.
-- Server tables are `users`, `passkey_credentials`, and `vault_snapshots`. Plain wallet addresses, balances, exchange credentials, token allowlists, preferences, and scan history must not be added to sync tables.
-- Passkeys authenticate accounts. They are not encryption keys; encrypted vault blobs are produced and opened only by the native client.
-- The native Mac app uses `ASWebAuthenticationSession` to open `/auth/native`, complete WebAuthn on the server origin, and receive the short-lived sync session token through `address-atlas://sync-auth`. The app-bundle build script registers that URL scheme.
+The local Postgres port is bound to loopback only. `SYNC_SESSION_SECRET` must be at least 32 random bytes; published example/placeholder values are rejected.
 
-## Gotchas
+## Verification
 
-- Restart the dev server after Prisma schema/model changes. The dev process caches a global Prisma client, so newly generated delegates such as `customToken` and `manualExchangeHolding` may be missing until restart.
-- Full Xcode 26.4.1 is selected and licensed in this workspace. `swift test` now runs; keep using full Xcode for native verification. The Homebrew Swift fallback remains useful only when another machine has Command Line Tools but no full Xcode/XCTest.
+Run the complete local gate before handoff:
 
-## Next Useful Milestones
+```bash
+npm test
+npm run typecheck
+npm run build
+npm audit
+npm run native:test
+./native/AddressAtlasMac/build-mac-app.sh
+./scripts/release-doctor.sh --strict
+```
 
-- Add Solana metadata-program or DAS lookup if we want no-key symbol/name autofill for arbitrary Solana mints.
-- Add more TRC20 registry entries and price mappings for well-known XRPL issued currencies.
-- Make manual exchange entries easier to reconcile against historical snapshots if users want time-specific manual values later.
-- Continue native scanner parity with broader built-in token registries, XRP issued-asset pricing rules, token metadata autofill, and possible Multicall-style aggregation if JSON-RPC batching is not enough for very large EVM token sets.
+The Postgres integration suite additionally requires `TEST_SYNC_DATABASE_URL`. Live exchange smoke tests are opt-in and require externally supplied read-only credentials. Never store those credentials in the repository, handoff notes, command output, fixtures, or environment examples.
+
+## Vault And Recovery Invariants
+
+- A new vault key may be created only when no existing encrypted vault is present.
+- If a vault exists but its Keychain key is missing, unlock must report that recovery is required. It must not create an unrelated replacement key.
+- Recovery is available from the locked screen. The recovery file is decrypted and proven against the existing vault before Keychain is changed.
+- Keychain replacement must be atomic; a failed update must leave the previous working key intact.
+- JSON exports use a redacted DTO and must never contain the sync bearer token, checksums, or other session state.
+
+## Sync Invariants
+
+- The local document tracks whether it differs from the last authenticated remote base.
+- Download must never overwrite local changes implicitly. A destructive replacement requires an explicit user decision.
+- Upload must compare against the last authenticated remote checksum/version and fail closed on conflicts.
+- Changing the sync server or account clears the old bearer token and remote-base metadata.
+- Snapshot version, account ID, schema version, nonce, and ciphertext are authenticated together. Relabeling an old ciphertext with a higher version must fail.
+- Scan history is bounded so the encrypted envelope cannot grow forever.
+
+## Scanner Invariants
+
+- Successful balances survive optional token, price, staking, rewards, trustline, or pagination failures and carry visible warnings.
+- Network workflows have bounded concurrency and deadlines, and cancellation propagates to outstanding requests.
+- Unpriced assets remain visible as unpriced; they are not silently dropped or reported as successfully valued at zero.
+- Non-USD fiat balances use CoinGecko's BTC-relative exchange rates to derive USD value. A missing or failed rate must leave the balance unpriced with a visible warning.
+- Chain-specific address validation is authoritative. Case-sensitive base58 identifiers must not be lowercased for identity or deduplication.
+- Coinbase Advanced Trade uses CDP ES256 JWT authentication. Legacy `CB-ACCESS-SIGN` HMAC must not be used with `/api/v3/brokerage` routes.
+
+## Distribution
+
+`build-mac-app.sh` creates a universal `arm64` + `x86_64` app by default and signs it with hardened runtime. Set `ADDRESS_ATLAS_ARCHS=arm64` only for an explicitly local Apple-Silicon build.
+
+For public notarization, first save credentials in Keychain without placing the password in process arguments:
+
+```bash
+xcrun notarytool store-credentials address-atlas-notary
+```
+
+Then set `ADDRESS_ATLAS_CODESIGN_IDENTITY` and `ADDRESS_ATLAS_NOTARY_PROFILE=address-atlas-notary`. Public distribution is blocked until a Developer ID Application identity and a valid notary profile are available.

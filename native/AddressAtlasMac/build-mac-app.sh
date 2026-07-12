@@ -3,7 +3,6 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="Address Atlas"
-BUILD_DIR="$ROOT/.build/release"
 DIST_DIR="$ROOT/dist"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
 
@@ -15,12 +14,32 @@ if [[ "$SELECTED_DEVELOPER_DIR" == *"CommandLineTools"* && -x "/opt/homebrew/opt
   export PATH="/opt/homebrew/opt/swift/bin:$PATH"
   export DEVELOPER_DIR="/Library/Developer/CommandLineTools"
 fi
-swift build -c release --product AddressAtlasMac
+SDK_PATH="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}"
+ARCH_LIST="${ADDRESS_ATLAS_ARCHS:-arm64,x86_64}"
+IFS=',' read -r -a ARCHITECTURES <<< "$ARCH_LIST"
+BINARIES=()
+for architecture in "${ARCHITECTURES[@]}"; do
+  case "$architecture" in
+    arm64|x86_64) ;;
+    *)
+      echo "Unsupported architecture: $architecture" >&2
+      exit 1
+      ;;
+  esac
+  triple="${architecture}-apple-macosx14.0"
+  swift build -c release --product AddressAtlasMac --triple "$triple" --sdk "$SDK_PATH"
+  bin_dir="$(swift build -c release --show-bin-path --triple "$triple" --sdk "$SDK_PATH")"
+  BINARIES+=("$bin_dir/AddressAtlasMac")
+done
 
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 
-cp "$BUILD_DIR/AddressAtlasMac" "$APP_DIR/Contents/MacOS/$APP_NAME"
+if [[ "${#BINARIES[@]}" -eq 1 ]]; then
+  cp "${BINARIES[0]}" "$APP_DIR/Contents/MacOS/$APP_NAME"
+else
+  xcrun lipo -create "${BINARIES[@]}" -output "$APP_DIR/Contents/MacOS/$APP_NAME"
+fi
 
 cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -40,7 +59,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>0.2.0</string>
   <key>CFBundleURLTypes</key>
   <array>
     <dict>
@@ -53,7 +72,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     </dict>
   </array>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>2</string>
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
   <key>NSHighResolutionCapable</key>
@@ -63,7 +82,15 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 PLIST
 
 SIGN_IDENTITY="${ADDRESS_ATLAS_CODESIGN_IDENTITY:--}"
-codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_DIR" >/dev/null
+if [[ "$SIGN_IDENTITY" == "-" ]]; then
+  codesign --force --options runtime --timestamp=none --sign "$SIGN_IDENTITY" "$APP_DIR" >/dev/null
+else
+  codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_DIR" >/dev/null
+fi
 codesign --verify --deep --strict --verbose=2 "$APP_DIR"
+xcrun lipo -archs "$APP_DIR/Contents/MacOS/$APP_NAME"
+codesign_details="$(codesign --display --verbose=4 "$APP_DIR" 2>&1)"
+grep -q "flags=.*runtime" <<< "$codesign_details" \
+  || { echo "Hardened runtime flag missing after signing" >&2; exit 1; }
 
 echo "Built $APP_DIR"

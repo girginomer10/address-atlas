@@ -15,7 +15,10 @@ services:
       - caddy-data:/data
       - caddy-config:/config
     depends_on:
-      - web
+      web:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
 
   web:
     build:
@@ -27,16 +30,32 @@ services:
       NODE_ENV: "production"
       SYNC_DATABASE_URL: "${SYNC_DATABASE_URL}"
       SYNC_SESSION_SECRET: "${SYNC_SESSION_SECRET}"
+      SYNC_MAX_ACCOUNTS: "${SYNC_MAX_ACCOUNTS:-100000}"
+      SYNC_VAULT_DAILY_WRITE_LIMIT: "${SYNC_VAULT_DAILY_WRITE_LIMIT:-100}"
+      SYNC_VAULT_DAILY_BYTE_LIMIT: "${SYNC_VAULT_DAILY_BYTE_LIMIT:-64000000}"
+      SYNC_GLOBAL_VAULT_STORAGE_LIMIT: "${SYNC_GLOBAL_VAULT_STORAGE_LIMIT:-10000000000}"
+      SYNC_DB_CONNECT_TIMEOUT_MS: "${SYNC_DB_CONNECT_TIMEOUT_MS:-5000}"
+      SYNC_DB_STATEMENT_TIMEOUT_MS: "${SYNC_DB_STATEMENT_TIMEOUT_MS:-10000}"
+      SYNC_DB_QUERY_TIMEOUT_MS: "${SYNC_DB_QUERY_TIMEOUT_MS:-12000}"
       PASSKEY_RP_ID: "${PASSKEY_RP_ID}"
       PASSKEY_RP_NAME: "${PASSKEY_RP_NAME}"
       PASSKEY_ORIGIN: "${PASSKEY_ORIGIN}"
-      NATIVE_ENDPOINT_CONFIG_VERSION: "${NATIVE_ENDPOINT_CONFIG_VERSION:-1}"
-      NATIVE_ENDPOINT_CONFIG_UPDATED_AT: "${NATIVE_ENDPOINT_CONFIG_UPDATED_AT:-2026-05-09T00:00:00.000Z}"
+      NATIVE_ENDPOINT_CONFIG_VERSION: "${NATIVE_ENDPOINT_CONFIG_VERSION:-3}"
+      NATIVE_ENDPOINT_CONFIG_UPDATED_AT: "${NATIVE_ENDPOINT_CONFIG_UPDATED_AT:-2026-07-12T00:00:00.000Z}"
       NATIVE_ENDPOINT_CONFIG_MESSAGE: "${NATIVE_ENDPOINT_CONFIG_MESSAGE:-}"
+      NATIVE_ENDPOINT_MIN_APP_VERSION: "${NATIVE_ENDPOINT_MIN_APP_VERSION:-0.2.0}"
       NATIVE_ENDPOINT_CONFIG_JSON: "${NATIVE_ENDPOINT_CONFIG_JSON:-}"
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3000/healthz | grep -q '\"ok\":true'"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
 
   postgres:
     image: postgres:16-alpine
@@ -52,6 +71,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
   address-atlas-prod-postgres:

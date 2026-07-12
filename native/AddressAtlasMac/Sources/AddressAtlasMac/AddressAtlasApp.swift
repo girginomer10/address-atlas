@@ -36,6 +36,10 @@ private enum AtlasTheme {
 struct RootView: View {
   @EnvironmentObject private var state: AppState
 
+  private var autoRefreshTaskID: String {
+    "\(state.isUnlocked)-\(state.document.preferences.autoRefresh)"
+  }
+
   var body: some View {
     Group {
       if state.isUnlocked {
@@ -48,11 +52,29 @@ struct RootView: View {
     .foregroundStyle(AtlasTheme.ink)
     .preferredColorScheme(.light)
     .tint(AtlasTheme.accent)
+    .task(id: autoRefreshTaskID) {
+      guard state.isUnlocked, state.document.preferences.autoRefresh else { return }
+      while !Task.isCancelled {
+        do {
+          try await Task.sleep(for: .seconds(15 * 60))
+        } catch {
+          return
+        }
+        guard state.isUnlocked,
+              state.document.preferences.autoRefresh,
+              state.hasScanSources,
+              !state.scanning,
+              !state.syncing
+        else { continue }
+        state.startScan()
+      }
+    }
   }
 }
 
 struct UnlockView: View {
   @EnvironmentObject private var state: AppState
+  @State private var restoreCode = ""
 
   var body: some View {
     HStack(spacing: 0) {
@@ -75,6 +97,23 @@ struct UnlockView: View {
           Label("Unlock vault", systemImage: "lock.open")
         }
         .buttonStyle(AtlasPrimaryButtonStyle())
+        VStack(alignment: .leading, spacing: 9) {
+          AtlasLabel("Lost Keychain access?")
+          Text("Restore the vault key with the recovery file and code. The file is verified before Keychain is changed.")
+            .font(.system(size: 12))
+            .foregroundStyle(AtlasTheme.ink2)
+          HStack(spacing: 10) {
+            SecureField("Recovery code", text: $restoreCode)
+              .textFieldStyle(AtlasTextFieldStyle())
+              .accessibilityLabel("Recovery code")
+            Button("Restore recovery kit") {
+              restoreRecoveryKit()
+            }
+            .buttonStyle(AtlasSecondaryButtonStyle())
+            .disabled(restoreCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+          }
+        }
+        .frame(maxWidth: 620, alignment: .leading)
         Spacer()
         StatusLine()
       }
@@ -95,6 +134,18 @@ struct UnlockView: View {
       }
     }
     .frame(minWidth: 980, minHeight: 640)
+  }
+
+  private func restoreRecoveryKit() {
+    let panel = NSOpenPanel()
+    panel.allowedContentTypes = [UTType(filenameExtension: "atlas-recovery") ?? .data]
+    panel.allowsMultipleSelection = false
+    panel.canChooseDirectories = false
+    if panel.runModal() == .OK, let url = panel.url {
+      Task {
+        await state.restoreRecoveryKit(from: url, recoveryCode: restoreCode)
+      }
+    }
   }
 }
 
@@ -234,7 +285,7 @@ struct PortfolioView: View {
           TotalBlock(
             total: state.latestScan?.totalUsd ?? 0,
             generatedAt: state.latestScan?.generatedAt,
-            assetCount: state.latestScan?.holdings.count ?? 0
+            assetCount: state.visibleLatestHoldings.count
           )
           MetricStrip(items: [
             ("Wallets", "\(state.document.wallets.count)"),
@@ -248,8 +299,12 @@ struct PortfolioView: View {
           .frame(width: 290)
       }
 
-      SectionHeader(title: "Top holdings", meta: "\(state.latestScan?.holdings.count ?? 0) rows")
-      AssetList(assets: state.latestScan?.holdings ?? [])
+      if let warnings = state.latestScan?.warnings, !warnings.isEmpty {
+        ScanWarningsView(warnings: warnings)
+      }
+
+      SectionHeader(title: "Top holdings", meta: "\(state.visibleLatestHoldings.count) visible rows")
+      AssetList(assets: state.visibleLatestHoldings)
     }
   }
 
@@ -277,8 +332,9 @@ struct WalletsView: View {
             TextField("Public wallet address", text: $address)
               .textFieldStyle(AtlasTextFieldStyle())
             Button {
-              state.addWallet(address: address)
-              address = ""
+              if state.addWallet(address: address) {
+                address = ""
+              }
             } label: {
               Label("Add", systemImage: "plus")
             }
@@ -308,6 +364,7 @@ struct WalletsView: View {
 
 struct WalletRow: View {
   @EnvironmentObject private var state: AppState
+  @State private var confirmingRemoval = false
   var wallet: WalletRecord
 
   var body: some View {
@@ -332,14 +389,27 @@ struct WalletRow: View {
       Badge(wallet.chainKind.rawValue.uppercased())
 
       Button(role: .destructive) {
-        state.removeWallet(id: wallet.id)
+        confirmingRemoval = true
       } label: {
         Image(systemName: "trash")
       }
       .buttonStyle(IconButtonStyle())
+      .accessibilityLabel("Remove wallet \(wallet.label)")
     }
     .padding(.horizontal, 18)
     .frame(height: 62)
+    .confirmationDialog(
+      "Remove \(wallet.label)?",
+      isPresented: $confirmingRemoval,
+      titleVisibility: .visible
+    ) {
+      Button("Remove wallet", role: .destructive) {
+        state.removeWallet(id: wallet.id)
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("The public address will be removed from this vault. Existing snapshots are unchanged.")
+    }
   }
 }
 
@@ -349,7 +419,7 @@ struct AssetsView: View {
   @State private var hideUnpriced = false
 
   var filteredAssets: [TrackedAsset] {
-    (state.latestScan?.holdings ?? []).filter { asset in
+    state.visibleLatestHoldings.filter { asset in
       let matchesQuery = query.isEmpty
         || asset.symbol.localizedCaseInsensitiveContains(query)
         || asset.chainName.localizedCaseInsensitiveContains(query)
@@ -438,7 +508,7 @@ struct TokenAllowlistView: View {
               .textFieldStyle(AtlasTextFieldStyle())
               .frame(width: 120)
             Button("Add token") {
-              state.addCustomToken(
+              if state.addCustomToken(
                 chainKind: chainKind,
                 chainId: chainKind == .solana ? "solana" : chainId,
                 address: address,
@@ -447,8 +517,14 @@ struct TokenAllowlistView: View {
                 decimals: decimals,
                 coinGeckoId: coinGeckoId,
                 priceUsd: priceUsd
-              )
-              address = ""; symbol = ""; name = ""; decimals = chainKind == .evm ? "18" : "6"; coinGeckoId = ""; priceUsd = ""
+              ) {
+                address = ""
+                symbol = ""
+                name = ""
+                decimals = chainKind == .evm ? "18" : "6"
+                coinGeckoId = ""
+                priceUsd = ""
+              }
             }
             .buttonStyle(AtlasPrimaryButtonStyle())
           }
@@ -480,6 +556,7 @@ struct TokenAllowlistView: View {
 
 struct TokenRow: View {
   @EnvironmentObject private var state: AppState
+  @State private var confirmingRemoval = false
   var token: CustomTokenRecord
 
   var body: some View {
@@ -499,21 +576,33 @@ struct TokenRow: View {
       }
       Spacer()
       Badge(token.enabled ? "ENABLED" : "PAUSED", color: token.enabled ? AtlasTheme.gain : AtlasTheme.ink3)
-      Toggle("", isOn: Binding(get: {
+      Toggle("Enable \(token.symbol)", isOn: Binding(get: {
         token.enabled
       }, set: { _ in
         state.toggleCustomToken(id: token.id)
       }))
       .labelsHidden()
+      .accessibilityLabel("Enable \(token.symbol)")
       Button(role: .destructive) {
-        state.removeCustomToken(id: token.id)
+        confirmingRemoval = true
       } label: {
         Image(systemName: "trash")
       }
       .buttonStyle(IconButtonStyle())
+      .accessibilityLabel("Remove token \(token.symbol)")
     }
     .padding(.horizontal, 18)
     .frame(height: 64)
+    .confirmationDialog(
+      "Remove \(token.symbol)?",
+      isPresented: $confirmingRemoval,
+      titleVisibility: .visible
+    ) {
+      Button("Remove token", role: .destructive) {
+        state.removeCustomToken(id: token.id)
+      }
+      Button("Cancel", role: .cancel) {}
+    }
   }
 }
 
@@ -545,8 +634,11 @@ struct SnapshotsView: View {
               .textFieldStyle(AtlasTextFieldStyle())
               .frame(width: 150)
             Button("Add manual") {
-              state.addManualHolding(symbol: symbol, amount: amount, valueUsd: value)
-              symbol = ""; amount = ""; value = ""
+              if state.addManualHolding(symbol: symbol, amount: amount, valueUsd: value) {
+                symbol = ""
+                amount = ""
+                value = ""
+              }
             }
             .buttonStyle(AtlasPrimaryButtonStyle())
           }
@@ -563,6 +655,7 @@ struct SnapshotsView: View {
 
 struct SnapshotList: View {
   @EnvironmentObject private var state: AppState
+  @State private var pendingRemoval: UUID?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -585,11 +678,12 @@ struct SnapshotList: View {
                 Text(money(run.totalUsd))
                   .font(.system(size: 14, design: .monospaced))
                 Button(role: .destructive) {
-                  state.removeScanRun(id: run.id)
+                  pendingRemoval = run.id
                 } label: {
                   Image(systemName: "trash")
                 }
                 .buttonStyle(IconButtonStyle())
+                .accessibilityLabel("Remove snapshot from \(run.generatedAt.formatted(date: .abbreviated, time: .shortened))")
               }
               .padding(.horizontal, 18)
               .frame(height: 58)
@@ -602,11 +696,28 @@ struct SnapshotList: View {
       }
     }
     .frame(maxWidth: .infinity, alignment: .topLeading)
+    .confirmationDialog(
+      "Remove this snapshot?",
+      isPresented: Binding(
+        get: { pendingRemoval != nil },
+        set: { if !$0 { pendingRemoval = nil } }
+      ),
+      titleVisibility: .visible
+    ) {
+      Button("Remove snapshot", role: .destructive) {
+        if let pendingRemoval {
+          state.removeScanRun(id: pendingRemoval)
+        }
+        pendingRemoval = nil
+      }
+      Button("Cancel", role: .cancel) { pendingRemoval = nil }
+    }
   }
 }
 
 struct ManualHoldingList: View {
   @EnvironmentObject private var state: AppState
+  @State private var pendingRemoval: UUID?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -626,18 +737,20 @@ struct ManualHoldingList: View {
                     .foregroundStyle(AtlasTheme.ink3)
                 }
                 Spacer()
-                Toggle("", isOn: Binding(get: {
+                Toggle("Enable \(holding.symbol)", isOn: Binding(get: {
                   holding.enabled
                 }, set: { _ in
                   state.toggleManualHolding(id: holding.id)
                 }))
                 .labelsHidden()
+                .accessibilityLabel("Enable \(holding.symbol)")
                 Button(role: .destructive) {
-                  state.removeManualHolding(id: holding.id)
+                  pendingRemoval = holding.id
                 } label: {
                   Image(systemName: "trash")
                 }
                 .buttonStyle(IconButtonStyle())
+                .accessibilityLabel("Remove manual holding \(holding.symbol)")
               }
               .padding(.horizontal, 18)
               .frame(height: 58)
@@ -650,6 +763,22 @@ struct ManualHoldingList: View {
       }
     }
     .frame(maxWidth: .infinity, alignment: .topLeading)
+    .confirmationDialog(
+      "Remove this manual holding?",
+      isPresented: Binding(
+        get: { pendingRemoval != nil },
+        set: { if !$0 { pendingRemoval = nil } }
+      ),
+      titleVisibility: .visible
+    ) {
+      Button("Remove holding", role: .destructive) {
+        if let pendingRemoval {
+          state.removeManualHolding(id: pendingRemoval)
+        }
+        pendingRemoval = nil
+      }
+      Button("Cancel", role: .cancel) { pendingRemoval = nil }
+    }
   }
 }
 
@@ -659,7 +788,6 @@ struct ExchangesView: View {
   @State private var label = ""
   @State private var apiKey = ""
   @State private var secret = ""
-  @State private var passphrase = ""
 
   var body: some View {
     Page(
@@ -687,32 +815,41 @@ struct ExchangesView: View {
               .textFieldStyle(AtlasTextFieldStyle())
             SecureField("Secret", text: $secret)
               .textFieldStyle(AtlasTextFieldStyle())
-            SecureField("Passphrase", text: $passphrase)
-              .textFieldStyle(AtlasTextFieldStyle())
-              .frame(width: 170)
             Button("Save encrypted") {
-              state.saveExchangeConnection(
+              if state.saveExchangeConnection(
                 provider: provider,
                 label: label,
                 credentials: ExchangeCredentials(
                   apiKey: apiKey,
                   secret: secret,
-                  passphrase: passphrase.isEmpty ? nil : passphrase
+                  passphrase: nil
                 )
-              )
-              label = ""; apiKey = ""; secret = ""; passphrase = ""
+              ) {
+                label = ""
+                apiKey = ""
+                secret = ""
+              }
             }
             .buttonStyle(AtlasPrimaryButtonStyle())
           }
+          Text(provider == .coinbase
+            ? "Coinbase uses a CDP API key name and ES256 private key. Escaped \\n line breaks are accepted."
+            : "Use a balance/read-only key with trading and withdrawals disabled.")
+            .font(.system(size: 12))
+            .foregroundStyle(AtlasTheme.ink3)
         }
       }
 
       HStack(spacing: 12) {
         Button {
-          Task { await state.scanSavedWallets() }
+          if state.scanning {
+            state.cancelScan()
+          } else {
+            state.startScan()
+          }
         } label: {
           if state.scanning {
-            ProgressView()
+            Label("Cancel scan", systemImage: "xmark.circle")
           } else {
             Label("Scan exchange balances", systemImage: "arrow.clockwise")
           }
@@ -745,6 +882,7 @@ struct ExchangesView: View {
 
 struct ExchangeRow: View {
   @EnvironmentObject private var state: AppState
+  @State private var confirmingRemoval = false
   var connection: ExchangeConnectionRecord
 
   var body: some View {
@@ -765,20 +903,34 @@ struct ExchangeRow: View {
           .foregroundStyle(AtlasTheme.ink3)
       }
       Button(role: .destructive) {
-        state.removeExchangeConnection(id: connection.id)
+        confirmingRemoval = true
       } label: {
         Image(systemName: "trash")
       }
       .buttonStyle(IconButtonStyle())
+      .accessibilityLabel("Remove exchange connection \(connection.label)")
     }
     .padding(.horizontal, 18)
     .frame(height: 64)
+    .confirmationDialog(
+      "Remove \(connection.label)?",
+      isPresented: $confirmingRemoval,
+      titleVisibility: .visible
+    ) {
+      Button("Remove connection", role: .destructive) {
+        state.removeExchangeConnection(id: connection.id)
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("The encrypted API credentials for this connection will be removed from the vault.")
+    }
   }
 }
 
 struct SyncView: View {
   @EnvironmentObject private var state: AppState
   @State private var serverURL = ""
+  @State private var confirmingDiscardDownload = false
 
   var body: some View {
     Page(
@@ -793,6 +945,7 @@ struct SyncView: View {
           SectionHeader(title: "Passkey account", meta: "Authentication only")
           TextField("Sync server URL", text: $serverURL)
             .textFieldStyle(AtlasTextFieldStyle())
+            .disabled(state.syncing || state.scanning)
           HStack(spacing: 10) {
             Button("Create passkey account") {
               Task {
@@ -801,6 +954,7 @@ struct SyncView: View {
               }
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
+            .disabled(state.syncing || state.scanning)
             Button("Sign in with passkey") {
               Task {
                 await state.signInWithPasskey(serverURL: serverURL)
@@ -808,6 +962,7 @@ struct SyncView: View {
               }
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
+            .disabled(state.syncing || state.scanning)
             Button("Save server") {
               state.saveSyncSettings(serverURL: serverURL)
               Task {
@@ -815,12 +970,14 @@ struct SyncView: View {
               }
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
+            .disabled(state.syncing || state.scanning)
             Button("Refresh endpoints") {
               Task {
                 await state.refreshEndpointConfig()
               }
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
+            .disabled(state.syncing || state.scanning)
           }
           HStack(spacing: 10) {
             Button {
@@ -833,10 +990,16 @@ struct SyncView: View {
               }
             }
             .buttonStyle(AtlasPrimaryButtonStyle())
+            .disabled(state.syncing || state.scanning)
             Button("Download encrypted vault") {
-              Task { await state.downloadEncryptedVault() }
+              if state.hasUnsyncedLocalChanges {
+                confirmingDiscardDownload = true
+              } else {
+                Task { await state.downloadEncryptedVault() }
+              }
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
+            .disabled(state.syncing || state.scanning)
           }
         }
       }
@@ -849,6 +1012,7 @@ struct SyncView: View {
             ("Session", state.document.syncState.sessionToken.isEmpty ? "sign in required" : "active"),
             ("Endpoint config", state.endpointConfigStatus),
             ("Config version", "\(state.endpointConfig.configVersion)"),
+            ("Local changes", state.hasUnsyncedLocalChanges ? "not uploaded" : "synced"),
             ("Last synced", state.document.syncState.lastSyncedAt?.formatted(date: .abbreviated, time: .shortened) ?? "never"),
             ("Checksum", state.document.syncState.lastChecksum ?? "none")
           ])
@@ -860,6 +1024,18 @@ struct SyncView: View {
       Task {
         await state.refreshEndpointConfig(silent: true)
       }
+    }
+    .confirmationDialog(
+      "Discard local changes and download?",
+      isPresented: $confirmingDiscardDownload,
+      titleVisibility: .visible
+    ) {
+      Button("Discard local changes", role: .destructive) {
+        Task { await state.downloadEncryptedVault(discardingLocalChanges: true) }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("This replaces the local vault with the latest authenticated remote snapshot. Export or upload anything you need first.")
     }
   }
 }
@@ -942,7 +1118,7 @@ struct SettingsView: View {
       title: "Settings",
       subtitle: "Display and scan preferences stored inside the encrypted vault.",
       statTitle: "Currency",
-      statValue: state.document.preferences.currency
+      statValue: "USD"
     ) {
       Surface {
         VStack(alignment: .leading, spacing: 18) {
@@ -950,30 +1126,39 @@ struct SettingsView: View {
           Toggle("Auto-refresh", isOn: Binding(get: {
             state.document.preferences.autoRefresh
           }, set: {
-            state.document.preferences.autoRefresh = $0
-            state.save()
+            state.setAutoRefresh($0)
           }))
+          Text("When enabled, Address Atlas refreshes saved sources every 15 minutes while the app is open and unlocked.")
+            .font(.system(size: 12))
+            .foregroundStyle(AtlasTheme.ink3)
           Toggle("Hide dust", isOn: Binding(get: {
             state.document.preferences.hideDust
           }, set: {
-            state.document.preferences.hideDust = $0
-            state.save()
+            state.setHideDust($0)
           }))
           HStack(spacing: 12) {
-            TextField("Dust threshold USD", value: Binding(get: {
-              state.document.preferences.dustThreshold
-            }, set: {
-              state.document.preferences.dustThreshold = $0
-              state.save()
-            }), format: .number)
-            .textFieldStyle(AtlasTextFieldStyle())
-            TextField("Display currency", text: Binding(get: {
-              state.document.preferences.currency
-            }, set: {
-              state.document.preferences.currency = $0.uppercased()
-              state.save()
-            }))
-            .textFieldStyle(AtlasTextFieldStyle())
+            VStack(alignment: .leading, spacing: 7) {
+              AtlasLabel("Dust threshold (USD)")
+              TextField("0.00", value: Binding(get: {
+                state.document.preferences.dustThreshold
+              }, set: {
+                state.setDustThreshold($0)
+              }), format: .number)
+              .textFieldStyle(AtlasTextFieldStyle())
+              .accessibilityLabel("Dust threshold in US dollars")
+            }
+            VStack(alignment: .leading, spacing: 7) {
+              AtlasLabel("Display currency")
+              HStack {
+                Text("USD")
+                  .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                Spacer()
+                Badge("PRICE SOURCE")
+              }
+              .padding(.horizontal, 12)
+              .frame(height: 40)
+              .overlay(Rectangle().stroke(AtlasTheme.rule, lineWidth: 1))
+            }
           }
         }
       }
@@ -989,12 +1174,14 @@ struct SettingsView: View {
               exportRecoveryKit()
             }
             .buttonStyle(AtlasPrimaryButtonStyle())
-            TextField("Recovery code for restore", text: $restoreCode)
+            SecureField("Recovery code for restore", text: $restoreCode)
               .textFieldStyle(AtlasTextFieldStyle())
+              .accessibilityLabel("Recovery code for restore")
             Button("Restore from kit") {
               restoreRecoveryKit()
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
+            .disabled(restoreCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
           }
           if !recoveryCode.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
@@ -1071,6 +1258,30 @@ struct AssetList: View {
   }
 }
 
+struct ScanWarningsView: View {
+  var warnings: [String]
+
+  var body: some View {
+    Surface {
+      VStack(alignment: .leading, spacing: 10) {
+        SectionHeader(title: "Partial scan warnings", meta: "\(warnings.count) issue\(warnings.count == 1 ? "" : "s")")
+        ForEach(Array(warnings.enumerated()), id: \.offset) { _, warning in
+          HStack(alignment: .top, spacing: 9) {
+            Image(systemName: "exclamationmark.triangle")
+              .foregroundStyle(Color.orange)
+            Text(warning)
+              .font(.system(size: 12))
+              .foregroundStyle(AtlasTheme.ink2)
+              .textSelection(.enabled)
+          }
+        }
+      }
+    }
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel("Partial scan warnings")
+  }
+}
+
 struct AssetRow: View {
   var asset: TrackedAsset
 
@@ -1119,15 +1330,20 @@ struct QuickActionsPanel: View {
     VStack(alignment: .leading, spacing: 14) {
       SectionHeader(title: "Quick actions", meta: "Local")
       Button {
-        Task { await state.scanSavedWallets() }
+        if state.scanning {
+          state.cancelScan()
+        } else {
+          state.startScan()
+        }
       } label: {
         if state.scanning {
-          ProgressView()
+          Label("Cancel scan", systemImage: "xmark.circle")
         } else {
           Label("Scan saved wallets", systemImage: "arrow.clockwise")
         }
       }
       .buttonStyle(AtlasPrimaryButtonStyle())
+      .disabled(!state.scanning && !state.hasScanSources)
       SidebarTrustLine(title: "Storage", copy: "Encrypted on device")
       SidebarTrustLine(title: "Sync", copy: "Encrypted blobs only")
       SidebarTrustLine(title: "Network", copy: "RPC/API from Mac")

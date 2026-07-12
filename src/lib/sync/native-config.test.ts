@@ -6,29 +6,30 @@ describe("native endpoint config", () => {
     vi.unstubAllEnvs();
   });
 
-  it("returns bundled defaults for the native app", () => {
+  it("returns bundled public endpoints without remotely-configurable exchanges", () => {
     const config = getNativeEndpointConfig();
 
     expect(config.schemaVersion).toBe(1);
-    expect(config.configVersion).toBe(2);
+    expect(config.configVersion).toBe(3);
+    expect(config.minSupportedAppVersion).toBe("0.2.0");
     expect(config.priceBaseUrl).toBe("https://api.coingecko.com/api/v3/simple/price");
     expect(config.chains.ethereum.rpcUrl).toBe("https://eth.llamarpc.com");
     expect(config.chains.scroll.rpcUrl).toBe("https://rpc.scroll.io");
     expect(config.chains["zksync-era"].rpcUrl).toBe("https://mainnet.era.zksync.io");
-    expect(config.exchanges.binance.baseUrl).toBe("https://api.binance.com");
-    expect(config.exchanges.binance.accountPath).toBe("/api/v3/account");
+    expect(config.exchanges).toEqual({});
   });
 
-  it("allows server-side endpoint overrides without changing the Mac app", () => {
+  it("allows only path changes on known bundled chain origins", () => {
     vi.stubEnv("NATIVE_ENDPOINT_CONFIG_VERSION", "7");
     vi.stubEnv("NATIVE_ENDPOINT_CONFIG_UPDATED_AT", "2026-05-09T12:00:00.000Z");
     vi.stubEnv("NATIVE_ENDPOINT_CONFIG_JSON", JSON.stringify({
-      priceBaseUrl: "https://prices.example/simple/price",
+      priceBaseUrl: "https://api.coingecko.com/api/v3/simple/price",
       chains: {
-        ethereum: { rpcUrl: "https://eth.example/rpc" }
+        ethereum: { rpcUrl: "https://eth.llamarpc.com/rpc" },
+        unknown: { rpcUrl: "https://unknown.example/rpc" }
       },
       exchanges: {
-        binance: { baseUrl: "https://binance.example", accountPath: "/api/v4/account" }
+        binance: { baseUrl: "https://evil.example", accountPath: "/0/private/CancelAll" }
       }
     }));
 
@@ -36,23 +37,21 @@ describe("native endpoint config", () => {
 
     expect(config.configVersion).toBe(7);
     expect(config.updatedAt).toBe("2026-05-09T12:00:00.000Z");
-    expect(config.priceBaseUrl).toBe("https://prices.example/simple/price");
-    expect(config.chains.ethereum.rpcUrl).toBe("https://eth.example/rpc");
+    expect(config.priceBaseUrl).toBe(DEFAULT_NATIVE_ENDPOINT_CONFIG.priceBaseUrl);
+    expect(config.chains.ethereum.rpcUrl).toBe("https://eth.llamarpc.com/rpc");
     expect(config.chains.solana.rpcUrl).toBe(DEFAULT_NATIVE_ENDPOINT_CONFIG.chains.solana.rpcUrl);
-    expect(config.exchanges.binance.baseUrl).toBe("https://binance.example");
-    expect(config.exchanges.binance.accountPath).toBe("/api/v4/account");
-    expect(config.exchanges.coinbase.accountPath).toBe("/api/v3/brokerage/accounts");
+    expect(config.chains.unknown).toBeUndefined();
+    expect(config.exchanges).toEqual({});
   });
 
-  it("keeps safe defaults when endpoint overrides are malformed", () => {
+  it("falls back on arbitrary origins, HTTP, credentials, fragments, and price queries", () => {
     vi.stubEnv("NATIVE_ENDPOINT_CONFIG_JSON", JSON.stringify({
-      priceBaseUrl: "file:///tmp/prices",
+      priceBaseUrl: "https://api.coingecko.com/api/v3/simple/price?redirect=evil",
       chains: {
-        ethereum: { rpcUrl: "javascript:alert(1)" }
-      },
-      exchanges: {
-        binance: { baseUrl: "http://binance.example", accountPath: "https://bad.example/path" },
-        coinbase: { baseUrl: "ftp://coinbase.example" }
+        ethereum: { rpcUrl: "https://evil.example/rpc" },
+        solana: { rpcUrl: "http://127.0.0.1:8899" },
+        scroll: { rpcUrl: "https://user:password@rpc.scroll.io/private" },
+        polygon: { rpcUrl: "https://polygon-rpc.com/path#fragment" }
       }
     }));
 
@@ -60,8 +59,8 @@ describe("native endpoint config", () => {
 
     expect(config.priceBaseUrl).toBe(DEFAULT_NATIVE_ENDPOINT_CONFIG.priceBaseUrl);
     expect(config.chains.ethereum.rpcUrl).toBe(DEFAULT_NATIVE_ENDPOINT_CONFIG.chains.ethereum.rpcUrl);
-    expect(config.exchanges.binance.baseUrl).toBe(DEFAULT_NATIVE_ENDPOINT_CONFIG.exchanges.binance.baseUrl);
-    expect(config.exchanges.binance.accountPath).toBe(DEFAULT_NATIVE_ENDPOINT_CONFIG.exchanges.binance.accountPath);
-    expect(config.exchanges.coinbase.baseUrl).toBe(DEFAULT_NATIVE_ENDPOINT_CONFIG.exchanges.coinbase.baseUrl);
+    expect(config.chains.solana.rpcUrl).toBe(DEFAULT_NATIVE_ENDPOINT_CONFIG.chains.solana.rpcUrl);
+    expect(config.chains.scroll.rpcUrl).toBe(DEFAULT_NATIVE_ENDPOINT_CONFIG.chains.scroll.rpcUrl);
+    expect(config.chains.polygon.rpcUrl).toBe(DEFAULT_NATIVE_ENDPOINT_CONFIG.chains.polygon.rpcUrl);
   });
 });

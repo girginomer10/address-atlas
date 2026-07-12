@@ -40,7 +40,11 @@ else
   fail "xcodebuild missing"
 fi
 
-if has_command security && security find-identity -v -p codesigning | grep -q "Developer ID Application"; then
+codesigning_identities=""
+if has_command security; then
+  codesigning_identities="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+fi
+if grep -q "Developer ID Application" <<< "$codesigning_identities"; then
   pass "Developer ID Application signing identity available"
 else
   fail "Developer ID Application signing identity missing; public notarized release is blocked"
@@ -57,13 +61,29 @@ else
   warn "server/sync/.env.production missing; copy server/sync/.env.production.example before VPS deploy"
 fi
 
-for name in APPLE_ID APPLE_TEAM_ID APPLE_APP_SPECIFIC_PASSWORD ADDRESS_ATLAS_CODESIGN_IDENTITY; do
+for name in ADDRESS_ATLAS_CODESIGN_IDENTITY ADDRESS_ATLAS_NOTARY_PROFILE; do
   if [[ -n "${!name:-}" ]]; then
     pass "$name is set"
   else
-    warn "$name is not set"
+    fail "$name is not set; public release is blocked"
   fi
 done
+
+if [[ -n "${ADDRESS_ATLAS_CODESIGN_IDENTITY:-}" ]]; then
+  if grep -Fq "$ADDRESS_ATLAS_CODESIGN_IDENTITY" <<< "$codesigning_identities"; then
+    pass "Selected signing identity exists in Keychain"
+  else
+    fail "Selected signing identity was not found in Keychain"
+  fi
+fi
+
+if [[ -n "${ADDRESS_ATLAS_NOTARY_PROFILE:-}" && "$STRICT" -eq 1 ]]; then
+  if xcrun notarytool history --keychain-profile "$ADDRESS_ATLAS_NOTARY_PROFILE" >/dev/null 2>&1; then
+    pass "Selected notary profile is valid"
+  else
+    fail "Selected notary profile is missing, invalid, or cannot reach Apple's notary service"
+  fi
+fi
 
 live_exchange_missing=0
 for name in \

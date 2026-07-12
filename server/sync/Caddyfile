@@ -20,5 +20,14 @@
     -Server
   }
 
-  reverse_proxy web:3000
+  reverse_proxy web:3000 {
+    health_uri /healthz
+    health_interval 15s
+    health_timeout 5s
+    fail_duration 30s
+    transport http {
+      dial_timeout 5s
+      response_header_timeout 35s
+    }
+  }
 }

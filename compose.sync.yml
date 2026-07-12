@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: address_atlas
       POSTGRES_DB: address_atlas_sync
     ports:
-      - "15432:5432"
+      - "127.0.0.1:15432:5432"
     volumes:
       - address-atlas-sync-postgres:/var/lib/postgresql/data
     healthcheck:

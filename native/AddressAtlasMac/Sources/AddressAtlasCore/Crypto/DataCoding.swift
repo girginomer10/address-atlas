@@ -9,6 +9,20 @@ public enum Base64URL {
   }
 
   public static func decode(_ value: String) throws -> Data {
+    // Wire values are canonical, unpadded base64url. Rejecting padding,
+    // whitespace and non-zero trailing bits prevents multiple textual
+    // representations of the same authenticated bytes.
+    guard !value.contains("="), value.count % 4 != 1,
+          value.unicodeScalars.allSatisfy({ scalar in
+            (65...90).contains(scalar.value)
+              || (97...122).contains(scalar.value)
+              || (48...57).contains(scalar.value)
+              || scalar == "-"
+              || scalar == "_"
+          })
+    else {
+      throw VaultCryptoError.invalidBase64
+    }
     var normalized = value
       .replacingOccurrences(of: "-", with: "+")
       .replacingOccurrences(of: "_", with: "/")
@@ -16,6 +30,9 @@ public enum Base64URL {
       normalized.append("=")
     }
     guard let data = Data(base64Encoded: normalized) else {
+      throw VaultCryptoError.invalidBase64
+    }
+    guard encode(data) == value else {
       throw VaultCryptoError.invalidBase64
     }
     return data

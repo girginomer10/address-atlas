@@ -29,6 +29,23 @@ public struct SignedExchangeRequest: Equatable, Sendable {
   }
 }
 
+public enum ExchangeSigningError: Error, Equatable, LocalizedError, Sendable {
+  case invalidCoinbaseKeyName
+  case invalidCoinbasePrivateKey
+  case invalidCoinbaseRequest
+
+  public var errorDescription: String? {
+    switch self {
+    case .invalidCoinbaseKeyName:
+      return "Coinbase requires a CDP key name such as organizations/.../apiKeys/...."
+    case .invalidCoinbasePrivateKey:
+      return "Coinbase requires an ES256 CDP EC private key in PEM format."
+    case .invalidCoinbaseRequest:
+      return "Coinbase JWT request metadata is invalid."
+    }
+  }
+}
+
 public enum ExchangeRequestSigner {
   public static func binanceAccountRequest(
     credentials: ExchangeCredentials,
@@ -47,28 +64,50 @@ public enum ExchangeRequestSigner {
 
   public static func coinbaseAccountsRequest(
     credentials: ExchangeCredentials,
-    timestamp: String,
-    path: String = "/api/v3/brokerage/accounts"
+    timestamp: Int64,
+    nonce: String,
+    host: String = "api.coinbase.com",
+    path: String = "/api/v3/brokerage/accounts",
+    query: String = ""
   ) throws -> SignedExchangeRequest {
-    let method = "GET"
-    let body = ""
-    let prehash = "\(timestamp)\(method)\(path)\(body)"
-    // The CB-ACCESS HMAC scheme uses a base64-encoded API secret (same as
-    // Kraken), not raw UTF-8 bytes. Decode it before signing.
-    // NOTE: current Coinbase Advanced Trade CDP keys use JWT/ES256 instead;
-    // full JWT support is a separate change that needs live validation.
-    let secret = try Base64URL.decode(credentials.secret)
-    let signature = hmacSHA256Base64(message: prehash, secretData: secret)
+    let keyName = credentials.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    let normalizedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard keyName.hasPrefix("organizations/"), keyName.contains("/apiKeys/") else {
+      throw ExchangeSigningError.invalidCoinbaseKeyName
+    }
+    guard !nonce.isEmpty, !normalizedHost.isEmpty, path.hasPrefix("/") else {
+      throw ExchangeSigningError.invalidCoinbaseRequest
+    }
+    let pem = credentials.secret
+      .replacingOccurrences(of: "\\n", with: "\n")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let privateKey = try? P256.Signing.PrivateKey(pemRepresentation: pem) else {
+      throw ExchangeSigningError.invalidCoinbasePrivateKey
+    }
+
+    let header = CoinbaseJWTHeader(kid: keyName, nonce: nonce)
+    let payload = CoinbaseJWTPayload(
+      sub: keyName,
+      nbf: timestamp,
+      exp: timestamp + 120,
+      uri: "GET \(normalizedHost)\(path)"
+    )
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    let encodedHeader = Base64URL.encode(try encoder.encode(header))
+    let encodedPayload = Base64URL.encode(try encoder.encode(payload))
+    let signingInput = "\(encodedHeader).\(encodedPayload)"
+    guard let signingData = signingInput.data(using: .utf8) else {
+      throw ExchangeSigningError.invalidCoinbaseRequest
+    }
+    let signature = try privateKey.signature(for: signingData)
+    let jwt = "\(signingInput).\(Base64URL.encode(signature.rawRepresentation))"
+
     return SignedExchangeRequest(
-      method: method,
+      method: "GET",
       path: path,
-      body: body,
-      headers: [
-        "CB-ACCESS-KEY": credentials.apiKey,
-        "CB-ACCESS-SIGN": signature,
-        "CB-ACCESS-TIMESTAMP": timestamp,
-        "CB-ACCESS-PASSPHRASE": credentials.passphrase ?? ""
-      ]
+      query: query,
+      headers: ["Authorization": "Bearer \(jwt)"]
     )
   }
 
@@ -100,8 +139,19 @@ public enum ExchangeRequestSigner {
     return Data(HMAC<SHA256>.authenticationCode(for: Data(message.utf8), using: key)).hexString
   }
 
-  private static func hmacSHA256Base64(message: String, secretData: Data) -> String {
-    let key = SymmetricKey(data: secretData)
-    return Data(HMAC<SHA256>.authenticationCode(for: Data(message.utf8), using: key)).base64EncodedString()
-  }
+}
+
+private struct CoinbaseJWTHeader: Encodable {
+  var alg = "ES256"
+  var typ = "JWT"
+  var kid: String
+  var nonce: String
+}
+
+private struct CoinbaseJWTPayload: Encodable {
+  var sub: String
+  var iss = "cdp"
+  var nbf: Int64
+  var exp: Int64
+  var uri: String
 }

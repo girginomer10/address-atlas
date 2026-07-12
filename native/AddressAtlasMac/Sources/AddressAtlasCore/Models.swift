@@ -318,6 +318,19 @@ public struct SyncState: Codable, Equatable, Sendable {
   public var latestRemoteVersion: Int
   public var lastSyncedAt: Date?
   public var lastChecksum: String?
+  /// SHA-256 of the user-controlled vault content at the last successful sync.
+  /// Authentication/session fields are deliberately excluded from this digest.
+  public var lastSyncedContentChecksum: String?
+
+  enum CodingKeys: String, CodingKey {
+    case accountId
+    case serverURL
+    case sessionToken
+    case latestRemoteVersion
+    case lastSyncedAt
+    case lastChecksum
+    case lastSyncedContentChecksum
+  }
 
   public init(
     accountId: String? = nil,
@@ -325,7 +338,8 @@ public struct SyncState: Codable, Equatable, Sendable {
     sessionToken: String = "",
     latestRemoteVersion: Int = 0,
     lastSyncedAt: Date? = nil,
-    lastChecksum: String? = nil
+    lastChecksum: String? = nil,
+    lastSyncedContentChecksum: String? = nil
   ) {
     self.accountId = accountId
     self.serverURL = serverURL
@@ -333,10 +347,68 @@ public struct SyncState: Codable, Equatable, Sendable {
     self.latestRemoteVersion = latestRemoteVersion
     self.lastSyncedAt = lastSyncedAt
     self.lastChecksum = lastChecksum
+    self.lastSyncedContentChecksum = lastSyncedContentChecksum
+  }
+
+  /// Decode old schema-v1 documents whose sync state predates server/session
+  /// fields and content-baseline tracking.
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    accountId = try container.decodeIfPresent(String.self, forKey: .accountId)
+    serverURL = try container.decodeIfPresent(String.self, forKey: .serverURL) ?? ""
+    sessionToken = try container.decodeIfPresent(String.self, forKey: .sessionToken) ?? ""
+    latestRemoteVersion = max(0, try container.decodeIfPresent(Int.self, forKey: .latestRemoteVersion) ?? 0)
+    lastSyncedAt = try container.decodeIfPresent(Date.self, forKey: .lastSyncedAt)
+    lastChecksum = try container.decodeIfPresent(String.self, forKey: .lastChecksum)
+    lastSyncedContentChecksum = try container.decodeIfPresent(String.self, forKey: .lastSyncedContentChecksum)
+  }
+
+  /// Switch the sync authority without ever forwarding the previous server's
+  /// bearer token or treating its version/checksum as a baseline on the new one.
+  public mutating func changeServer(to serverURL: String) {
+    let nextServer = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard nextServer != self.serverURL else { return }
+    self.serverURL = nextServer
+    accountId = nil
+    sessionToken = ""
+    clearRemoteTracking()
+  }
+
+  /// Install credentials returned by passkey authentication. A different
+  /// account or server starts with a clean remote baseline.
+  public mutating func connect(accountId: String, serverURL: String, sessionToken: String) {
+    let nextServer = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    if self.accountId != accountId || self.serverURL != nextServer {
+      clearRemoteTracking()
+    }
+    self.accountId = accountId
+    self.serverURL = nextServer
+    self.sessionToken = sessionToken
+  }
+
+  public mutating func clearRemoteTracking() {
+    latestRemoteVersion = 0
+    lastSyncedAt = nil
+    lastChecksum = nil
+    lastSyncedContentChecksum = nil
+  }
+
+  public mutating func markSynced(
+    version: Int,
+    snapshotChecksum: String,
+    contentChecksum: String,
+    at date: Date = Date()
+  ) {
+    latestRemoteVersion = version
+    lastSyncedAt = date
+    lastChecksum = snapshotChecksum
+    lastSyncedContentChecksum = contentChecksum
   }
 }
 
 public struct VaultDocument: Codable, Equatable, Sendable {
+  public static let currentSchemaVersion = 2
+
   public var schemaVersion: Int
   public var preferences: Preferences
   public var wallets: [WalletRecord]
@@ -348,7 +420,7 @@ public struct VaultDocument: Codable, Equatable, Sendable {
   public var updatedAt: Date
 
   public init(
-    schemaVersion: Int = 1,
+    schemaVersion: Int = VaultDocument.currentSchemaVersion,
     preferences: Preferences = Preferences(),
     wallets: [WalletRecord] = [],
     customTokens: [CustomTokenRecord] = [],
@@ -367,5 +439,42 @@ public struct VaultDocument: Codable, Equatable, Sendable {
     self.scanRuns = scanRuns
     self.syncState = syncState
     self.updatedAt = updatedAt
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case schemaVersion
+    case preferences
+    case wallets
+    case customTokens
+    case manualHoldings
+    case exchangeConnections
+    case scanRuns
+    case syncState
+    case updatedAt
+  }
+
+  /// Migrate persisted schema-v1 documents in memory. Missing collections and
+  /// sync fields receive conservative defaults; unknown future schemas fail
+  /// closed instead of being partially interpreted.
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let storedSchemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+    guard (1...Self.currentSchemaVersion).contains(storedSchemaVersion) else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .schemaVersion,
+        in: container,
+        debugDescription: "Unsupported vault schema version \(storedSchemaVersion)."
+      )
+    }
+
+    schemaVersion = Self.currentSchemaVersion
+    preferences = try container.decodeIfPresent(Preferences.self, forKey: .preferences) ?? Preferences()
+    wallets = try container.decodeIfPresent([WalletRecord].self, forKey: .wallets) ?? []
+    customTokens = try container.decodeIfPresent([CustomTokenRecord].self, forKey: .customTokens) ?? []
+    manualHoldings = try container.decodeIfPresent([ManualHoldingRecord].self, forKey: .manualHoldings) ?? []
+    exchangeConnections = try container.decodeIfPresent([ExchangeConnectionRecord].self, forKey: .exchangeConnections) ?? []
+    scanRuns = try container.decodeIfPresent([ScanRunRecord].self, forKey: .scanRuns) ?? []
+    syncState = try container.decodeIfPresent(SyncState.self, forKey: .syncState) ?? SyncState()
+    updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
   }
 }

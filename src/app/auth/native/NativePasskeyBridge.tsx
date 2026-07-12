@@ -23,13 +23,34 @@ type VerifyResponse = {
   error?: string;
 };
 
-export function NativePasskeyBridge({ callback, state }: { callback: string; state: string }) {
+export function NativePasskeyBridge({
+  callback,
+  state,
+  mode
+}: {
+  callback: string;
+  state: string;
+  mode: Mode | null;
+}) {
   const [accountName, setAccountName] = useState("");
   const [busy, setBusy] = useState<Mode | null>(null);
   const [message, setMessage] = useState("");
-  const canReturn = useMemo(() => callback.startsWith("address-atlas://"), [callback]);
+  const canReturn = useMemo(() => {
+    try {
+      const url = new URL(callback);
+      return url.protocol === "address-atlas:"
+        && url.hostname === "sync-auth"
+        && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(state);
+    } catch {
+      return false;
+    }
+  }, [callback, state]);
 
-  async function run(mode: Mode) {
+  async function run() {
+    if (!mode) {
+      setMessage("A valid passkey action is required.");
+      return;
+    }
     setBusy(mode);
     setMessage("");
     try {
@@ -78,9 +99,7 @@ export function NativePasskeyBridge({ callback, state }: { callback: string; sta
       returnURL.searchParams.set("serverURL", window.location.origin);
       // Echo the native-supplied state so the app can bind this callback to the
       // request it started (CSRF / replay protection).
-      if (state) {
-        returnURL.searchParams.set("state", state);
-      }
+      returnURL.searchParams.set("state", state);
       window.location.assign(returnURL.toString());
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Passkey flow failed.");
@@ -101,26 +120,31 @@ export function NativePasskeyBridge({ callback, state }: { callback: string; sta
           </p>
         </div>
 
-        <label>
-          Account label
-          <input
-            value={accountName}
-            onChange={(event) => setAccountName(event.target.value)}
-            placeholder="Omer's Mac"
-            autoComplete="username webauthn"
-          />
-        </label>
+        {mode === "register" ? (
+          <label>
+            Account label
+            <input
+              value={accountName}
+              onChange={(event) => setAccountName(event.target.value)}
+              placeholder="Omer's Mac"
+              maxLength={80}
+              autoComplete="username webauthn"
+            />
+          </label>
+        ) : null}
 
         <div className="aa-auth-actions">
-          <button type="button" onClick={() => run("register")} disabled={Boolean(busy)}>
-            {busy === "register" ? "Creating..." : "Create passkey"}
-          </button>
-          <button type="button" onClick={() => run("authenticate")} disabled={Boolean(busy)}>
-            {busy === "authenticate" ? "Signing in..." : "Sign in"}
-          </button>
+          {mode ? (
+            <button type="button" onClick={run} disabled={Boolean(busy) || !canReturn}>
+              {busy
+                ? mode === "register" ? "Creating..." : "Signing in..."
+                : mode === "register" ? "Create passkey" : "Sign in"}
+            </button>
+          ) : null}
         </div>
 
         {message ? <p className="aa-auth-error">{message}</p> : null}
+        {!mode ? <p className="aa-auth-error">Open this page from a valid sync action in Address Atlas Mac.</p> : null}
         {!canReturn ? <p className="aa-auth-error">Open this page from Address Atlas Mac.</p> : null}
       </section>
     </main>

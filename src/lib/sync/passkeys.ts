@@ -7,11 +7,40 @@ import {
 } from "@simplewebauthn/server";
 import { base64urlDecode, base64urlEncode } from "./base64url";
 import { ensureSyncSchema, getSyncPool } from "./postgres";
-import { ChallengeToken, issueSessionToken, signToken, verifyToken } from "./tokens";
+import { ChallengeToken, issueChallengeToken, issueSessionToken, readChallengeToken } from "./tokens";
 
 type RegistrationResponseJSON = Parameters<typeof verifyRegistrationResponse>[0]["response"];
 type AuthenticationResponseJSON = Parameters<typeof verifyAuthenticationResponse>[0]["response"];
 type WebAuthnCredential = Parameters<typeof verifyAuthenticationResponse>[0]["credential"];
+export type PasskeyMode = "register" | "authenticate";
+
+export class PasskeyInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PasskeyInputError";
+  }
+}
+
+export class PasskeyVerificationError extends Error {
+  constructor() {
+    super("Passkey verification failed.");
+    this.name = "PasskeyVerificationError";
+  }
+}
+
+export interface PasskeyOptionsInput {
+  mode: PasskeyMode;
+  accountName?: string;
+}
+
+export interface PasskeyVerifyInput {
+  mode: PasskeyMode;
+  challengeToken: string;
+  response: RegistrationResponseJSON | AuthenticationResponseJSON;
+}
+
+const MAX_ACCOUNT_NAME_LENGTH = 80;
+const MAX_CHALLENGE_TOKEN_LENGTH = 4_096;
 
 function rpID() {
   return process.env.PASSKEY_RP_ID || "localhost";
@@ -25,15 +54,61 @@ function expectedOrigin() {
   return process.env.PASSKEY_ORIGIN || "http://localhost:3000";
 }
 
+export function parsePasskeyOptionsInput(body: unknown): PasskeyOptionsInput {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new PasskeyInputError("A JSON request body is required.");
+  }
+  const input = body as { mode?: unknown; accountName?: unknown };
+  if (input.mode !== "register" && input.mode !== "authenticate") {
+    throw new PasskeyInputError("mode must be register or authenticate.");
+  }
+  if (input.accountName !== undefined && typeof input.accountName !== "string") {
+    throw new PasskeyInputError("accountName must be a string.");
+  }
+  const accountName = typeof input.accountName === "string" ? input.accountName.trim() : undefined;
+  if (accountName && (accountName.length > MAX_ACCOUNT_NAME_LENGTH || /[\u0000-\u001f\u007f]/.test(accountName))) {
+    throw new PasskeyInputError(`accountName must be at most ${MAX_ACCOUNT_NAME_LENGTH} characters and contain no control characters.`);
+  }
+  if (input.mode === "authenticate" && accountName) {
+    throw new PasskeyInputError("accountName is only accepted when registering.");
+  }
+  return { mode: input.mode, accountName: accountName || undefined };
+}
+
+export function parsePasskeyVerifyInput(body: unknown): PasskeyVerifyInput {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new PasskeyInputError("A JSON request body is required.");
+  }
+  const input = body as { mode?: unknown; challengeToken?: unknown; response?: unknown };
+  if (input.mode !== "register" && input.mode !== "authenticate") {
+    throw new PasskeyInputError("mode must be register or authenticate.");
+  }
+  if (
+    typeof input.challengeToken !== "string"
+    || input.challengeToken.length < 1
+    || input.challengeToken.length > MAX_CHALLENGE_TOKEN_LENGTH
+  ) {
+    throw new PasskeyInputError("A valid challengeToken is required.");
+  }
+  if (!input.response || typeof input.response !== "object" || Array.isArray(input.response)) {
+    throw new PasskeyInputError("A passkey response is required.");
+  }
+  return {
+    mode: input.mode,
+    challengeToken: input.challengeToken,
+    response: input.response as RegistrationResponseJSON | AuthenticationResponseJSON
+  };
+}
+
 export async function createPasskeyOptions(body: unknown) {
-  const input = body as { mode?: string; accountName?: string };
+  const input = parsePasskeyOptionsInput(body);
   if (input.mode === "register") {
     const pendingUserId = randomUUID();
     const challenge = base64urlEncode(randomBytes(32));
     const publicKey = await generateRegistrationOptions({
       rpName: rpName(),
       rpID: rpID(),
-      userName: input.accountName?.trim() || `address-atlas-${pendingUserId}`,
+      userName: input.accountName || `address-atlas-${pendingUserId}`,
       userID: base64urlDecode(base64urlEncode(pendingUserId)),
       challenge,
       attestationType: "none",
@@ -44,7 +119,7 @@ export async function createPasskeyOptions(body: unknown) {
     });
     return {
       mode: "register",
-      challengeToken: signToken<ChallengeToken>({
+      challengeToken: issueChallengeToken({
         mode: "register",
         challenge,
         pendingUserId,
@@ -63,7 +138,7 @@ export async function createPasskeyOptions(body: unknown) {
     });
     return {
       mode: "authenticate",
-      challengeToken: signToken<ChallengeToken>({
+      challengeToken: issueChallengeToken({
         mode: "authenticate",
         challenge,
         expiresAt: Date.now() + 1000 * 60 * 5
@@ -71,22 +146,13 @@ export async function createPasskeyOptions(body: unknown) {
       publicKey
     };
   }
-
-  throw new Error("mode must be register or authenticate.");
 }
 
 export async function verifyPasskey(body: unknown) {
-  const input = body as {
-    mode?: string;
-    challengeToken?: string;
-    response?: RegistrationResponseJSON | AuthenticationResponseJSON;
-  };
-  if (!input.challengeToken || !input.response) {
-    throw new Error("challengeToken and response are required.");
-  }
-  const challenge = verifyToken<ChallengeToken>(input.challengeToken);
+  const input = parsePasskeyVerifyInput(body);
+  const challenge = readChallengeToken(input.challengeToken);
   if (input.mode !== challenge.mode) {
-    throw new Error("Challenge mode mismatch.");
+    throw new PasskeyVerificationError();
   }
   await ensureSyncSchema();
   void pruneConsumedChallenges();
@@ -98,19 +164,6 @@ export async function verifyPasskey(body: unknown) {
     return verifyRegistration(challenge, input.response as RegistrationResponseJSON);
   }
   return verifyAuthentication(challenge, input.response as AuthenticationResponseJSON);
-}
-
-// Single-use enforcement: the PRIMARY KEY conflict makes this atomic, so two
-// concurrent requests with the same challenge race on the unique index and
-// exactly one wins.
-async function consumeChallenge(challenge: string) {
-  const result = await getSyncPool().query(
-    "INSERT INTO consumed_challenges (challenge) VALUES ($1) ON CONFLICT (challenge) DO NOTHING",
-    [challenge]
-  );
-  if (result.rowCount === 0) {
-    throw new Error("Challenge has already been used.");
-  }
 }
 
 // Challenge tokens live 5 minutes; rows older than that are dead weight. Best
@@ -126,19 +179,23 @@ async function pruneConsumedChallenges() {
 }
 
 async function verifyRegistration(challenge: ChallengeToken, response: RegistrationResponseJSON) {
-  if (!challenge.pendingUserId) throw new Error("Registration challenge missing pending user id.");
-  const verification = await verifyRegistrationResponse({
-    response,
-    expectedChallenge: challenge.challenge,
-    expectedOrigin: expectedOrigin(),
-    expectedRPID: rpID(),
-    requireUserVerification: true
-  });
-  if (!verification.verified) throw new Error("Passkey registration failed.");
+  if (!challenge.pendingUserId) throw new PasskeyVerificationError();
+  let verification: Awaited<ReturnType<typeof verifyRegistrationResponse>>;
+  try {
+    verification = await verifyRegistrationResponse({
+      response,
+      expectedChallenge: challenge.challenge,
+      expectedOrigin: expectedOrigin(),
+      expectedRPID: rpID(),
+      requireUserVerification: true
+    });
+  } catch {
+    throw new PasskeyVerificationError();
+  }
+  if (!verification.verified) throw new PasskeyVerificationError();
 
   const credential = verification.registrationInfo.credential;
   const client = await getSyncPool().connect();
-  let effectiveUserId = challenge.pendingUserId;
   try {
     await client.query("BEGIN");
     // Consume inside the transaction so a later failure rolls the challenge back.
@@ -146,16 +203,26 @@ async function verifyRegistration(challenge: ChallengeToken, response: Registrat
       "INSERT INTO consumed_challenges (challenge) VALUES ($1) ON CONFLICT (challenge) DO NOTHING",
       [challenge.challenge]
     );
-    if (consumed.rowCount === 0) throw new Error("Challenge has already been used.");
+    if (consumed.rowCount === 0) throw new PasskeyVerificationError();
+
+    // Serialize registrations while enforcing a configurable service-wide
+    // account ceiling. This keeps an internet-facing registration endpoint from
+    // creating unbounded durable rows even if edge limits are bypassed/restarted.
+    await client.query("SELECT pg_advisory_xact_lock(1094992972)");
+    const accountCount = await client.query<{ count: string }>("SELECT count(*)::text AS count FROM users");
+    if (Number(accountCount.rows[0]?.count ?? 0) >= maxAccounts()) {
+      throw new PasskeyVerificationError();
+    }
+
     await client.query("INSERT INTO users (id) VALUES ($1) ON CONFLICT (id) DO NOTHING", [challenge.pendingUserId]);
-    // ON CONFLICT keeps the credential's existing user_id, so re-registering an
-    // already-registered passkey returns the ORIGINAL account rather than forking
-    // a new empty user. RETURNING tells us which user_id actually owns it.
-    const credentialResult = await client.query<{ user_id: string }>(
+    // A credential ID is globally unique at the RP. Never mutate or reuse an
+    // existing row: an authenticator-controlled duplicate ID must not become a
+    // bridge into the credential's original account.
+    const credentialResult = await client.query(
       `INSERT INTO passkey_credentials (id, user_id, public_key_base64url, counter, transports)
        VALUES ($1, $2, $3, $4, $5::jsonb)
-       ON CONFLICT (id) DO UPDATE SET updated_at = now()
-       RETURNING user_id`,
+       ON CONFLICT (id) DO NOTHING
+       RETURNING id`,
       [
         credential.id,
         challenge.pendingUserId,
@@ -164,15 +231,12 @@ async function verifyRegistration(challenge: ChallengeToken, response: Registrat
         JSON.stringify(response.response.transports ?? [])
       ]
     );
-    effectiveUserId = credentialResult.rows[0].user_id;
-    // Drop the freshly-inserted pending user if the credential already belonged
-    // to someone else (otherwise it would be an orphan row with no credential).
-    if (effectiveUserId !== challenge.pendingUserId) {
-      await client.query("DELETE FROM users WHERE id = $1", [challenge.pendingUserId]);
+    if (credentialResult.rowCount === 0) {
+      throw new PasskeyVerificationError();
     }
     await client.query("COMMIT");
   } catch (error) {
-    await client.query("ROLLBACK");
+    await rollbackQuietly(client);
     throw error;
   } finally {
     client.release();
@@ -180,52 +244,88 @@ async function verifyRegistration(challenge: ChallengeToken, response: Registrat
 
   return {
     verified: true,
-    userId: effectiveUserId,
-    sessionToken: issueSessionToken(effectiveUserId)
+    userId: challenge.pendingUserId,
+    sessionToken: issueSessionToken(challenge.pendingUserId)
   };
 }
 
 async function verifyAuthentication(challenge: ChallengeToken, response: AuthenticationResponseJSON) {
-  const credentialRow = await getSyncPool().query<{
-    id: string;
-    user_id: string;
-    public_key_base64url: string;
-    counter: string;
-    transports: string[];
-  }>(
-    "SELECT id, user_id, public_key_base64url, counter, transports FROM passkey_credentials WHERE id = $1",
-    [response.id]
-  );
-  const row = credentialRow.rows[0];
-  // Same message as a failed assertion below, so the response can't be used to
-  // enumerate which credential IDs are registered.
-  if (!row) throw new Error("Passkey authentication failed.");
+  const client = await getSyncPool().connect();
+  try {
+    await client.query("BEGIN");
+    // Lock before verification so concurrent assertions cannot both validate
+    // against the same counter. The monotonic UPDATE is a second line of defense
+    // for authenticators that always report counter zero.
+    const credentialRow = await client.query<{
+      id: string;
+      user_id: string;
+      public_key_base64url: string;
+      counter: string;
+      transports: string[];
+    }>(
+      `SELECT id, user_id, public_key_base64url, counter, transports
+       FROM passkey_credentials WHERE id = $1 FOR UPDATE`,
+      [response.id]
+    );
+    const row = credentialRow.rows[0];
+    if (!row) throw new PasskeyVerificationError();
 
-  const credential: WebAuthnCredential = {
-    id: row.id,
-    publicKey: base64urlDecode(row.public_key_base64url),
-    counter: Number(row.counter),
-    transports: row.transports as WebAuthnCredential["transports"]
-  };
-  const verification = await verifyAuthenticationResponse({
-    response,
-    expectedChallenge: challenge.challenge,
-    expectedOrigin: expectedOrigin(),
-    expectedRPID: rpID(),
-    credential,
-    requireUserVerification: true
-  });
-  if (!verification.verified) throw new Error("Passkey authentication failed.");
-  // Consume only after a valid assertion, so probing with junk can't burn it.
-  await consumeChallenge(challenge.challenge);
-  await getSyncPool().query(
-    "UPDATE passkey_credentials SET counter = $2, updated_at = now() WHERE id = $1",
-    [row.id, verification.authenticationInfo.newCounter]
-  );
+    const credential: WebAuthnCredential = {
+      id: row.id,
+      publicKey: base64urlDecode(row.public_key_base64url),
+      counter: Number(row.counter),
+      transports: row.transports as WebAuthnCredential["transports"]
+    };
+    let verification: Awaited<ReturnType<typeof verifyAuthenticationResponse>>;
+    try {
+      verification = await verifyAuthenticationResponse({
+        response,
+        expectedChallenge: challenge.challenge,
+        expectedOrigin: expectedOrigin(),
+        expectedRPID: rpID(),
+        credential,
+        requireUserVerification: true
+      });
+    } catch {
+      throw new PasskeyVerificationError();
+    }
+    if (!verification.verified) throw new PasskeyVerificationError();
 
-  return {
-    verified: true,
-    userId: row.user_id,
-    sessionToken: issueSessionToken(row.user_id)
-  };
+    const consumed = await client.query(
+      "INSERT INTO consumed_challenges (challenge) VALUES ($1) ON CONFLICT (challenge) DO NOTHING",
+      [challenge.challenge]
+    );
+    if (consumed.rowCount === 0) throw new PasskeyVerificationError();
+    await client.query(
+      `UPDATE passkey_credentials
+       SET counter = GREATEST(counter, $2), updated_at = now()
+       WHERE id = $1`,
+      [row.id, verification.authenticationInfo.newCounter]
+    );
+    await client.query("COMMIT");
+
+    return {
+      verified: true,
+      userId: row.user_id,
+      sessionToken: issueSessionToken(row.user_id)
+    };
+  } catch (error) {
+    await rollbackQuietly(client);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function maxAccounts() {
+  const parsed = Number(process.env.SYNC_MAX_ACCOUNTS ?? 100_000);
+  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= 10_000_000 ? parsed : 100_000;
+}
+
+async function rollbackQuietly(client: { query: (sql: string) => Promise<unknown> }) {
+  try {
+    await client.query("ROLLBACK");
+  } catch {
+    // Preserve the authentication/database error that caused the rollback.
+  }
 }

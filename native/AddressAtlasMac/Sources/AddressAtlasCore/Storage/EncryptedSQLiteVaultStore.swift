@@ -70,7 +70,12 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
     try initialize()
     var next = document
     next.updatedAt = Date()
-    let envelope = try crypto.sealJSON(next, with: key, keyId: "local-db")
+    let envelope = try crypto.sealJSON(
+      next,
+      with: key,
+      keyId: "local-db",
+      schemaVersion: next.schemaVersion
+    )
     let encoded = try JSONEncoder.addressAtlas.encode(envelope)
 
     let db = try openDatabase()

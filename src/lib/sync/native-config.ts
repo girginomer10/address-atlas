@@ -23,10 +23,10 @@ export interface NativeEndpointConfig {
 
 export const DEFAULT_NATIVE_ENDPOINT_CONFIG: NativeEndpointConfig = {
   schemaVersion: 1,
-  configVersion: 2,
-  updatedAt: "2026-05-09T00:00:00.000Z",
+  configVersion: 3,
+  updatedAt: "2026-07-12T00:00:00.000Z",
   refreshAfterSeconds: 21_600,
-  minSupportedAppVersion: "0.1.0",
+  minSupportedAppVersion: "0.2.0",
   priceBaseUrl: "https://api.coingecko.com/api/v3/simple/price",
   chains: {
     bitcoin: { restUrl: "https://blockstream.info/api" },
@@ -51,11 +51,10 @@ export const DEFAULT_NATIVE_ENDPOINT_CONFIG: NativeEndpointConfig = {
     stargaze: { restUrl: "https://rest.stargaze-apis.com" },
     stride: { restUrl: "https://stride-api.polkachu.com" }
   },
-  exchanges: {
-    binance: { baseUrl: "https://api.binance.com", accountPath: "/api/v3/account" },
-    coinbase: { baseUrl: "https://api.coinbase.com", accountPath: "/api/v3/brokerage/accounts" },
-    kraken: { baseUrl: "https://api.kraken.com", accountPath: "/0/private/Balance" }
-  }
+  // Exchange endpoints are credential-bearing security boundaries and are
+  // intentionally NOT remotely configurable. The native binary owns its fixed
+  // provider host/method/path allowlist; this field stays for schema compatibility.
+  exchanges: {}
 };
 
 export function getNativeEndpointConfig(): NativeEndpointConfig {
@@ -92,62 +91,60 @@ function mergeNativeConfig(base: NativeEndpointConfig, override: Partial<NativeE
     configVersion: override.configVersion ?? base.configVersion,
     updatedAt: override.updatedAt ?? base.updatedAt,
     refreshAfterSeconds: override.refreshAfterSeconds ?? base.refreshAfterSeconds,
-    priceBaseUrl: override.priceBaseUrl ?? base.priceBaseUrl,
-    chains: {
-      ...base.chains,
-      ...mergeRecord(base.chains, override.chains)
-    },
-    exchanges: {
-      ...base.exchanges,
-      ...mergeRecord(base.exchanges, override.exchanges)
-    }
+    priceBaseUrl: typeof override.priceBaseUrl === "string" ? override.priceBaseUrl : base.priceBaseUrl,
+    chains: mergeKnownRecord(base.chains, override.chains),
+    exchanges: {}
   };
 }
 
-function mergeRecord<T>(base: Record<string, T>, override?: Record<string, Partial<T>>): Record<string, T> {
-  if (!override) return {};
+function mergeKnownRecord<T>(base: Record<string, T>, override?: Record<string, Partial<T>>): Record<string, T> {
+  const safeOverride = override && typeof override === "object" && !Array.isArray(override) ? override : undefined;
   return Object.fromEntries(
-    Object.entries(override).map(([key, value]) => [key, { ...(base[key] ?? {}), ...value }])
+    Object.entries(base).map(([key, value]) => {
+      const candidate = safeOverride?.[key];
+      const fields = candidate && typeof candidate === "object" && !Array.isArray(candidate) ? candidate : {};
+      return [key, { ...value, ...fields }];
+    })
   ) as Record<string, T>;
 }
 
 function sanitizeNativeConfig(config: NativeEndpointConfig): NativeEndpointConfig {
   return {
     ...config,
+    schemaVersion: 1,
+    configVersion: boundedInteger(config.configVersion, DEFAULT_NATIVE_ENDPOINT_CONFIG.configVersion, 1, 2_000_000_000),
+    updatedAt: isoDateOrFallback(config.updatedAt, DEFAULT_NATIVE_ENDPOINT_CONFIG.updatedAt),
+    refreshAfterSeconds: boundedInteger(config.refreshAfterSeconds, 21_600, 300, 86_400),
+    message: typeof config.message === "string" ? config.message.trim().slice(0, 500) || undefined : undefined,
     minSupportedAppVersion: semverOrUndefined(config.minSupportedAppVersion),
-    priceBaseUrl: httpURL(config.priceBaseUrl, DEFAULT_NATIVE_ENDPOINT_CONFIG.priceBaseUrl),
+    priceBaseUrl: fixedPriceURL(config.priceBaseUrl, DEFAULT_NATIVE_ENDPOINT_CONFIG.priceBaseUrl),
     chains: Object.fromEntries(
       Object.entries(config.chains).map(([chainId, value]) => {
         const fallback = DEFAULT_NATIVE_ENDPOINT_CONFIG.chains[chainId] ?? {};
         return [chainId, {
-          rpcUrl: optionalHTTPURL(value.rpcUrl, fallback.rpcUrl),
-          restUrl: optionalHTTPURL(value.restUrl, fallback.restUrl),
-          explorerUrl: optionalHTTPURL(value.explorerUrl, fallback.explorerUrl)
+          rpcUrl: sameOriginURL(value.rpcUrl, fallback.rpcUrl),
+          restUrl: sameOriginURL(value.restUrl, fallback.restUrl),
+          explorerUrl: sameOriginURL(value.explorerUrl, fallback.explorerUrl)
         }];
       })
     ),
-    exchanges: Object.fromEntries(
-      Object.entries(config.exchanges).map(([provider, value]) => {
-        const fallback = DEFAULT_NATIVE_ENDPOINT_CONFIG.exchanges[provider] ?? value;
-        return [provider, {
-          baseUrl: httpsURL(value.baseUrl, fallback.baseUrl),
-          accountPath: pathValue(value.accountPath, fallback.accountPath)
-        }];
-      })
-    )
+    exchanges: {}
   };
 }
 
-function optionalHTTPURL(value: string | undefined, fallback: string | undefined) {
+function sameOriginURL(value: string | undefined, fallback: string | undefined) {
+  if (!fallback) return undefined;
   if (!value) return fallback;
-  return httpURL(value, fallback);
-}
-
-function httpURL(value: string | undefined, fallback: string | undefined) {
-  if (!value) return fallback ?? "";
   try {
     const url = new URL(value);
-    if (url.protocol === "https:" || url.protocol === "http:") {
+    const bundled = new URL(fallback);
+    if (
+      url.protocol === "https:"
+      && url.origin === bundled.origin
+      && !url.username
+      && !url.password
+      && !url.hash
+    ) {
       return value;
     }
   } catch {
@@ -156,22 +153,26 @@ function httpURL(value: string | undefined, fallback: string | undefined) {
   return fallback ?? "";
 }
 
-function httpsURL(value: string | undefined, fallback: string | undefined) {
-  if (!value) return fallback ?? "";
+function fixedPriceURL(value: string | undefined, fallback: string) {
+  if (!value) return fallback;
   try {
     const url = new URL(value);
-    if (url.protocol === "https:") {
+    const bundled = new URL(fallback);
+    if (
+      url.protocol === "https:"
+      && url.origin === bundled.origin
+      && url.pathname === bundled.pathname
+      && !url.username
+      && !url.password
+      && !url.hash
+      && !url.search
+    ) {
       return value;
     }
   } catch {
-    // Fall through to fallback.
+    // Fall through to the bundled endpoint.
   }
-  return fallback ?? "";
-}
-
-function pathValue(value: string | undefined, fallback: string | undefined) {
-  if (!value) return fallback;
-  return value.startsWith("/") && !value.includes("://") ? value : fallback;
+  return fallback;
 }
 
 function numberFromEnv(name: string, fallback: number) {
@@ -179,9 +180,21 @@ function numberFromEnv(name: string, fallback: number) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function boundedInteger(value: number, fallback: number, min: number, max: number) {
+  return Number.isSafeInteger(value) && value >= min && value <= max ? value : fallback;
+}
+
+function isoDateOrFallback(value: unknown, fallback: string) {
+  return typeof value === "string"
+    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(value)
+    && Number.isFinite(Date.parse(value))
+    ? value
+    : fallback;
+}
+
 // Only emit a well-formed dotted version (e.g. "1.2.3"); anything else is
 // dropped so the native client never tries to enforce a garbage kill-switch.
-function semverOrUndefined(value: string | undefined): string | undefined {
-  if (!value) return undefined;
+function semverOrUndefined(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value) return undefined;
   return /^\d+(\.\d+){1,3}$/.test(value.trim()) ? value.trim() : undefined;
 }

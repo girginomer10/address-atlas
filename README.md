@@ -24,12 +24,13 @@ This repo is a cleaner follow-up to earlier hackathon experiments:
 - TRON native TRX plus tracked TRC20 tokens.
 - XRP Ledger native XRP plus positive issued-currency trustline balances.
 - Cosmos liquid, delegated, and reward balances for Cosmos Hub, Osmosis, Celestia, Stargaze, and Stride.
-- Read-only exchange balances through Binance, Coinbase, and Kraken via native Swift REST clients.
+- Read-only exchange balances through Binance, Coinbase Advanced Trade (CDP ES256 JWT), and Kraken via native Swift REST clients.
 - A local encrypted SQLite vault for watched wallets, holdings, exchange connections, and preferences.
 - AES-256-GCM encryption for the vault, using a Keychain-backed vault subkey.
-- USD prices through CoinGecko.
-- CSV and JSON export from the latest local snapshot.
-- Partial scan warnings when optional token, staking, reward, or trustline requests fail.
+- Crypto USD prices and BTC-relative fiat conversion rates through CoinGecko; unsupported or unavailable rates remain visibly unpriced.
+- CSV and redacted JSON export from the latest local snapshot; sync sessions and authentication metadata are never exported.
+- Visible partial-scan warnings when optional token, price, staking, reward, trustline, or pagination requests fail.
+- Working 15-minute in-app auto-refresh and an optional USD dust filter.
 - Native macOS UI: Portfolio, Wallets, Assets, Snapshots, Export, and Settings.
 
 ## Sync server (local) development
@@ -55,7 +56,7 @@ cd native/AddressAtlasMac
 PATH="/opt/homebrew/opt/swift/bin:$PATH" swift run AddressAtlasMac
 ```
 
-`swift test` requires full Xcode for XCTest. The local `.app` bundle is ad-hoc signed by default and can be built with either full Xcode or the Homebrew Swift.org toolchain:
+`swift test` requires full Xcode for XCTest. The local `.app` bundle is universal (`arm64` + `x86_64`), hardened-runtime, and ad-hoc signed by default; it can be built with either full Xcode or the Homebrew Swift.org toolchain:
 
 ```bash
 cd native/AddressAtlasMac
@@ -69,17 +70,15 @@ Public macOS distribution uses a signed, notarized DMG. A public release is bloc
 
 ```bash
 cd native/AddressAtlasMac
-./build-dmg.sh
+xcrun notarytool store-credentials address-atlas-notary
 ADDRESS_ATLAS_CODESIGN_IDENTITY="Developer ID Application: ..." \
-APPLE_ID="apple-id@example.com" \
-APPLE_TEAM_ID="TEAMID" \
-APPLE_APP_SPECIFIC_PASSWORD="app-specific-password" \
+ADDRESS_ATLAS_NOTARY_PROFILE="address-atlas-notary" \
 ./notarize-mac-app.sh
 ```
 
 The app stores its local vault in `~/Library/Application Support/AddressAtlas/vault.sqlite`. The SQLite table stores encrypted envelope JSON only; wallet addresses, exchange credentials, scan history, token lists, and preferences are encrypted before persistence.
 
-Settings includes a recovery kit flow. Export creates a `.atlas-recovery` file plus a high-entropy recovery code shown once. The file and code are both required to unwrap the Mac vault key; neither is uploaded to the sync server.
+Settings includes a recovery kit flow. Export creates a `.atlas-recovery` file plus a high-entropy recovery code shown once. The file and code are both required to unwrap the Mac vault key; neither is uploaded to the sync server. If the Keychain key is missing, recovery is available directly from the locked screen and the app does not create an unrelated replacement key.
 
 The encrypted sync server uses these environment variables:
 
@@ -111,7 +110,7 @@ Sync endpoints are intentionally narrow: `POST /auth/passkey/options`, `POST /au
 
 The Mac app opens `/auth/native` in a system web authentication session for passkey account creation/sign-in, then receives only a short-lived sync session token through the `address-atlas://sync-auth` callback URL.
 
-`GET /config/native` returns public endpoint config for blockchain RPC, price, and exchange base URLs. This lets the server operator rotate public providers without shipping a new Mac app. The Mac app still sends scan requests client-side; the config endpoint does not receive wallet addresses or vault data. If a provider URL changes, users get it after refreshing endpoint config or before the next scan.
+`GET /config/native` returns public endpoint config for approved blockchain RPC and price providers. Exchange origins, credential-bearing routes, and request methods are pinned in the native binary and cannot be redirected by the sync server. The Mac app still sends scan requests client-side; the config endpoint does not receive wallet addresses or vault data.
 
 Opt-in live exchange smoke tests are available for release QA. They run only when explicitly enabled and credentials are supplied out of band:
 

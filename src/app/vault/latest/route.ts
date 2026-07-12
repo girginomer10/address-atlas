@@ -1,7 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
-import { assertEnvelopeChecksum, assertNoPlaintextLeak, assertRemoteVaultSnapshot, MAX_ENVELOPE_BYTES } from "@/lib/sync/envelope";
+import {
+  assertEnvelopeChecksum,
+  assertNoPlaintextLeak,
+  assertRemoteVaultSnapshot,
+  MAX_SNAPSHOT_REQUEST_BYTES,
+  type RemoteVaultSnapshot
+} from "@/lib/sync/envelope";
 import { ensureSyncSchema, getSyncPool } from "@/lib/sync/postgres";
-import { readBearerToken } from "@/lib/sync/tokens";
+import { rateLimitMany } from "@/lib/sync/rate-limit";
+import { readLimitedJSON, RequestBodyError } from "@/lib/sync/request";
+import { readBearerToken, TokenValidationError } from "@/lib/sync/tokens";
+import {
+  saveVaultSnapshot,
+  VaultAccountMissingError,
+  VaultConflictError,
+  VaultQuotaError,
+  VaultStorageCapacityError
+} from "@/lib/sync/vault-storage";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -9,6 +24,12 @@ export const runtime = "nodejs";
 export async function GET(request: NextRequest) {
   try {
     const session = readBearerToken(request.headers.get("authorization"));
+    if (!rateLimitMany([
+      { key: "vault-get:global", limit: 3_000, windowMs: 60_000 },
+      { key: `vault-get:account:${session.userId}`, limit: 120, windowMs: 60_000 }
+    ])) {
+      return rateLimitedResponse();
+    }
     await ensureSyncSchema();
     const result = await getSyncPool().query<{
       version: number;
@@ -21,18 +42,27 @@ export async function GET(request: NextRequest) {
       [session.userId]
     );
     const row = result.rows[0];
-    if (!row) return NextResponse.json({ error: "No vault snapshot." }, { status: 404 });
-    return NextResponse.json({
-      version: row.version,
-      envelope: row.envelope,
-      byteSize: row.byte_size,
-      checksum: row.checksum,
-      updatedAt: row.updated_at.toISOString()
-    });
-  } catch (error) {
+    if (!row) {
+      return NextResponse.json(
+        { error: "No vault snapshot." },
+        { status: 404, headers: { "cache-control": "no-store" } }
+      );
+    }
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Vault snapshot could not be loaded." },
-      { status: isAuthError(error) ? 401 : 500 }
+      {
+        version: row.version,
+        envelope: row.envelope,
+        byteSize: row.byte_size,
+        checksum: row.checksum,
+        updatedAt: row.updated_at.toISOString()
+      },
+      { headers: { "cache-control": "no-store" } }
+    );
+  } catch (error) {
+    const authenticationFailure = error instanceof TokenValidationError || error instanceof VaultAccountMissingError;
+    return NextResponse.json(
+      { error: authenticationFailure ? "Authentication required." : "Vault snapshot could not be loaded." },
+      { status: authenticationFailure ? 401 : 500, headers: { "cache-control": "no-store" } }
     );
   }
 }
@@ -40,62 +70,77 @@ export async function GET(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     const session = readBearerToken(request.headers.get("authorization"));
-    // Reject oversized uploads before buffering the body. The proxy enforces a
-    // hard request_body cap too; this is the app-level backstop.
-    const declaredSize = Number(request.headers.get("content-length") ?? 0);
-    if (Number.isFinite(declaredSize) && declaredSize > MAX_ENVELOPE_BYTES + 100_000) {
-      return NextResponse.json({ error: "Snapshot too large." }, { status: 413 });
+    if (!rateLimitMany([
+      { key: "vault-put:global", limit: 300, windowMs: 60_000 },
+      { key: `vault-put:account:${session.userId}`, limit: 10, windowMs: 60_000 }
+    ])) {
+      return rateLimitedResponse();
     }
-    const body = await request.json().catch(() => ({}));
-    assertRemoteVaultSnapshot(body);
-    assertNoPlaintextLeak(body);
-    assertEnvelopeChecksum(body.envelope);
+    const { value, byteLength } = await readLimitedJSON(request, MAX_SNAPSHOT_REQUEST_BYTES);
+    const body = validateUploadedSnapshot(value);
     await ensureSyncSchema();
-    const result = await getSyncPool().query(
-      `INSERT INTO vault_snapshots (user_id, version, envelope, byte_size, checksum)
-       VALUES ($1, $2, $3::jsonb, $4, $5)
-       ON CONFLICT (user_id) DO UPDATE SET
-         version = excluded.version,
-         envelope = excluded.envelope,
-         byte_size = excluded.byte_size,
-         checksum = excluded.checksum,
-         updated_at = now()
-       -- Accept only a strictly newer version, or a truly idempotent re-PUT of
-       -- the same version. For the same-version case we require BOTH checksums to
-       -- match the stored row: the top-level snapshot checksum AND the inner
-       -- envelope checksum. The top-level checksum is client-supplied and not
-       -- recomputed server-side, so on its own it can be replayed with swapped
-       -- ciphertext. The inner envelope checksum is verified against the
-       -- ciphertext by assertEnvelopeChecksum() above, so binding the idempotent
-       -- path to it makes a same-version content swap require a SHA-256 preimage.
-       WHERE vault_snapshots.version < excluded.version
-          OR (
-            vault_snapshots.version = excluded.version
-            AND vault_snapshots.checksum = excluded.checksum
-            AND vault_snapshots.envelope->>'checksum' = excluded.envelope->>'checksum'
-          )
-       RETURNING version`,
-      [session.userId, body.version, JSON.stringify(body.envelope), body.byteSize, body.checksum]
-    );
-    if (result.rowCount === 0) {
-      return NextResponse.json(
-        { error: "Remote vault snapshot is newer. Download before uploading again." },
-        { status: 409 }
-      );
-    }
-    return NextResponse.json({ ok: true });
+    const result = await saveVaultSnapshot(session.userId, body, byteLength);
+    return NextResponse.json({ ok: true, idempotent: result.idempotent }, {
+      headers: { "cache-control": "no-store" }
+    });
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Vault snapshot could not be saved." },
-      { status: isAuthError(error) ? 401 : 400 }
+      { error: vaultErrorMessage(error) },
+      {
+        status: vaultErrorStatus(error),
+        headers: error instanceof VaultQuotaError ? { "retry-after": "3600" } : undefined
+      }
     );
   }
 }
 
-function isAuthError(error: unknown) {
-  const message = error instanceof Error ? error.message.toLowerCase() : "";
-  return message.includes("authorization")
-    || message.includes("token")
-    || message.includes("signature")
-    || message.includes("expired");
+class VaultValidationError extends Error {}
+
+function validateUploadedSnapshot(input: unknown): RemoteVaultSnapshot {
+  try {
+    assertRemoteVaultSnapshot(input);
+    assertNoPlaintextLeak(input);
+    assertEnvelopeChecksum(input.envelope);
+    // New writes must bind account/version metadata through sync-v2 AES-GCM AAD.
+    // Existing v1 rows remain readable so the current client can migrate them.
+    if (input.envelope.schemaVersion !== 2 || input.envelope.cryptoVersion !== 2) {
+      throw new Error("Encrypted vault uploads must use sync envelope version 2.");
+    }
+    return input;
+  } catch (error) {
+    throw new VaultValidationError(error instanceof Error ? error.message : "Invalid vault snapshot.");
+  }
+}
+
+function vaultErrorStatus(error: unknown) {
+  if (error instanceof TokenValidationError || error instanceof VaultAccountMissingError) return 401;
+  if (error instanceof RequestBodyError) return error.status;
+  if (error instanceof VaultValidationError) return 400;
+  if (error instanceof VaultConflictError) return 409;
+  if (error instanceof VaultQuotaError) return 429;
+  if (error instanceof VaultStorageCapacityError) return 507;
+  return 500;
+}
+
+function vaultErrorMessage(error: unknown) {
+  if (error instanceof TokenValidationError || error instanceof VaultAccountMissingError) {
+    return "Authentication required.";
+  }
+  if (
+    error instanceof RequestBodyError
+    || error instanceof VaultValidationError
+    || error instanceof VaultConflictError
+    || error instanceof VaultQuotaError
+    || error instanceof VaultStorageCapacityError
+  ) {
+    return error.message;
+  }
+  return "Vault snapshot could not be saved.";
+}
+
+function rateLimitedResponse() {
+  return NextResponse.json(
+    { error: "Too many requests." },
+    { status: 429, headers: { "retry-after": "60", "cache-control": "no-store" } }
+  );
 }

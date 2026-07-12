@@ -20,13 +20,13 @@ cp server/sync/.env.production.example server/sync/.env.production
 npm run sync:prod:up
 ```
 
-`NATIVE_ENDPOINT_CONFIG_JSON` can be used to update public client endpoint config without shipping a new Mac app. The Mac app still sends blockchain, price, and exchange requests directly from the client; this endpoint only tells it which public providers to use.
+`NATIVE_ENDPOINT_CONFIG_JSON` can adjust paths on the bundled public blockchain provider origins without shipping a new Mac app. It cannot change provider origins. The CoinGecko price endpoint is fixed to its bundled origin and path. Exchange hosts, methods, and paths are security-sensitive and remain a fixed allowlist inside the signed Mac app; the server cannot override them.
 
 Example:
 
 ```env
-NATIVE_ENDPOINT_CONFIG_VERSION=2
-NATIVE_ENDPOINT_CONFIG_JSON={"chains":{"ethereum":{"rpcUrl":"https://eth.example/rpc"}},"exchanges":{"coinbase":{"baseUrl":"https://api.coinbase.com","accountPath":"/api/v3/brokerage/accounts"}}}
+NATIVE_ENDPOINT_CONFIG_VERSION=4
+NATIVE_ENDPOINT_CONFIG_JSON={"chains":{"ethereum":{"rpcUrl":"https://eth.llamarpc.com/rpc"}}}
 ```
 
-Only `http` and `https` URLs are accepted by the Mac app, and exchange account paths must be relative paths beginning with `/`.
+Generate `SYNC_SESSION_SECRET` with at least 32 random bytes. The server enforces configurable total-account capacity, persistent per-account daily encrypted-upload quotas, and an atomic aggregate encrypted-snapshot storage ceiling (`SYNC_GLOBAL_VAULT_STORAGE_LIMIT`, 10 GB by default) in addition to short-window request throttles.

@@ -76,7 +76,7 @@ final class RecoveryKitTests: XCTestCase {
 
 final class NativeEndpointConfigTests: XCTestCase {
   func testBundledEndpointConfigCoversExpandedEvmChains() {
-    XCTAssertEqual(NativeEndpointConfig.bundled.configVersion, 2)
+    XCTAssertEqual(NativeEndpointConfig.bundled.configVersion, 3)
     XCTAssertEqual(
       NativeEndpointConfig.bundled.chains["scroll"]?.rpcURL?.absoluteString,
       "https://rpc.scroll.io"
@@ -87,12 +87,12 @@ final class NativeEndpointConfigTests: XCTestCase {
     )
   }
 
-  func testEndpointConfigOverridesChainAndExchangeEndpoints() throws {
+  func testEndpointConfigOverridesChainsButKeepsExchangeEndpointsFixed() throws {
     let config = NativeEndpointConfig(
       configVersion: 3,
       priceBaseURL: URL(string: "https://prices.example/simple/price")!,
       chains: [
-        "ethereum": ChainEndpointOverride(rpcURL: URL(string: "https://eth.example/rpc"))
+        "ethereum": ChainEndpointOverride(rpcURL: URL(string: "https://eth.llamarpc.com/rotated-rpc"))
       ],
       exchanges: [
         ExchangeProvider.binance.rawValue: ExchangeEndpointOverride(
@@ -105,24 +105,19 @@ final class NativeEndpointConfigTests: XCTestCase {
     let chain = config.applying(to: ChainRegistry.evmChains.first { $0.id == "ethereum" }!)
 
     XCTAssertEqual(config.configVersion, 3)
-    XCTAssertEqual(chain.rpcUrl?.absoluteString, "https://eth.example/rpc")
-    XCTAssertEqual(config.exchangeBaseURL(for: .binance)?.absoluteString, "https://binance.example")
-    XCTAssertEqual(config.exchangeAccountPath(for: .binance), "/api/v4/account")
-    XCTAssertEqual(config.exchangeBaseURL(for: .coinbase), nil)
+    XCTAssertEqual(chain.rpcUrl?.absoluteString, "https://eth.llamarpc.com/rotated-rpc")
+    XCTAssertEqual(config.exchangeBaseURL(for: .binance)?.absoluteString, "https://api.binance.com")
+    XCTAssertEqual(config.exchangeAccountPath(for: .binance), "/api/v3/account")
+    XCTAssertEqual(config.exchangeBaseURL(for: .coinbase)?.absoluteString, "https://api.coinbase.com")
   }
 
   func testEndpointConfigClientFetchesNativeConfig() async throws {
     let expected = NativeEndpointConfig(
       configVersion: 4,
       updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
-      priceBaseURL: URL(string: "https://prices.example/simple/price")!,
-      chains: ["solana": ChainEndpointOverride(rpcURL: URL(string: "https://solana.example"))],
-      exchanges: [
-        ExchangeProvider.kraken.rawValue: ExchangeEndpointOverride(
-          baseURL: URL(string: "https://kraken.example")!,
-          accountPath: "/private/balance"
-        )
-      ]
+      priceBaseURL: URL(string: "https://api.coingecko.com/api/v3/simple/price")!,
+      chains: ["solana": ChainEndpointOverride(rpcURL: URL(string: "https://api.mainnet-beta.solana.com/rotated"))],
+      exchanges: [:]
     )
     let http = StubHTTPClient { request in
       XCTAssertEqual(request.url?.path, "/config/native")
@@ -158,11 +153,11 @@ final class NativeEndpointConfigTests: XCTestCase {
     }
   }
 
-  func testEndpointConfigClientRejectsPlainHttpExchangeEndpoints() async throws {
+  func testEndpointConfigClientRejectsRemoteExchangeOverrides() async throws {
     let invalid = NativeEndpointConfig(
       exchanges: [
         ExchangeProvider.binance.rawValue: ExchangeEndpointOverride(
-          baseURL: URL(string: "http://binance.example")!,
+          baseURL: URL(string: "https://api.binance.com")!,
           accountPath: "/api/v3/account"
         )
       ]
@@ -176,7 +171,7 @@ final class NativeEndpointConfigTests: XCTestCase {
       _ = try await client.fetch(from: URL(string: "https://sync.example")!)
       XCTFail("Expected plain HTTP exchange endpoint config to fail.")
     } catch NativeEndpointConfigError.invalidEndpoint(let field) {
-      XCTAssertEqual(field, "binance.baseUrl")
+      XCTAssertEqual(field, "exchanges")
     }
   }
 }
@@ -621,7 +616,7 @@ final class NativeExchangeClientTests: XCTestCase {
     XCTAssertNil(balance.total["EMPTY"])
   }
 
-  func testExchangeClientUsesEndpointConfigPathOverrides() async throws {
+  func testExchangeClientIgnoresRemoteEndpointConfigForSignedRequests() async throws {
     let config = NativeEndpointConfig(
       exchanges: [
         ExchangeProvider.binance.rawValue: ExchangeEndpointOverride(
@@ -631,8 +626,8 @@ final class NativeExchangeClientTests: XCTestCase {
       ]
     )
     let http = StubHTTPClient { request in
-      XCTAssertEqual(request.url?.host, "binance.example")
-      XCTAssertEqual(request.url?.path, "/api/v4/account")
+      XCTAssertEqual(request.url?.host, "api.binance.com")
+      XCTAssertEqual(request.url?.path, "/api/v3/account")
       return (Data("{\"balances\":[]}".utf8), httpResponse(for: request))
     }
     let client = NativeExchangeBalanceClient(

@@ -83,7 +83,16 @@ public struct RecoveryKitCodec: Sendable {
     let salt = try Base64URL.decode(document.salt)
     let nonce = try Base64URL.decode(document.nonce)
     let wrapped = try Base64URL.decode(document.wrappedVaultKey)
-    guard nonce.count == 12, wrapped.count > 16 else { throw RecoveryKitError.invalidDocument }
+    guard salt.count == 32,
+          nonce.count == 12,
+          wrapped.count == VaultCrypto.vaultKeyByteCount + 16,
+          document.checksum.count == 64,
+          document.checksum.unicodeScalars.allSatisfy({ scalar in
+            (48...57).contains(scalar.value) || (97...102).contains(scalar.value)
+          })
+    else {
+      throw RecoveryKitError.invalidDocument
+    }
     guard Self.checksum(version: document.version, salt: salt, nonce: nonce, wrappedVaultKey: wrapped) == document.checksum else {
       throw RecoveryKitError.checksumMismatch
     }
@@ -155,5 +164,62 @@ public struct RecoveryKitCodec: Sendable {
     data.append(nonce)
     data.append(wrappedVaultKey)
     return Data(SHA256.hash(data: data)).hexString
+  }
+}
+
+/// Fully initialized state returned after a locked-vault recovery succeeds.
+/// The caller can install these values without needing an already-unlocked UI.
+public struct RecoveredVault: Sendable {
+  public let vaultKey: Data
+  public let document: VaultDocument
+  public let store: EncryptedSQLiteVaultStore
+
+  public init(vaultKey: Data, document: VaultDocument, store: EncryptedSQLiteVaultStore) {
+    self.vaultKey = vaultKey
+    self.document = document
+    self.store = store
+  }
+}
+
+public struct VaultRecoveryService: Sendable {
+  private let codec: RecoveryKitCodec
+  private let crypto: VaultCrypto
+
+  public init(codec: RecoveryKitCodec = RecoveryKitCodec(), crypto: VaultCrypto = VaultCrypto()) {
+    self.codec = codec
+    self.crypto = crypto
+  }
+
+  public func restore(
+    from recoveryFileURL: URL,
+    recoveryCode: String,
+    vaultURL: URL,
+    keyStore: any VaultKeyStore
+  ) throws -> RecoveredVault {
+    let data = try Data(contentsOf: recoveryFileURL)
+    let document = try JSONDecoder.addressAtlas.decode(RecoveryKitDocument.self, from: data)
+    return try restore(
+      document: document,
+      recoveryCode: recoveryCode,
+      vaultURL: vaultURL,
+      keyStore: keyStore
+    )
+  }
+
+  public func restore(
+    document recoveryDocument: RecoveryKitDocument,
+    recoveryCode: String,
+    vaultURL: URL,
+    keyStore: any VaultKeyStore
+  ) throws -> RecoveredVault {
+    let restoredKey = try codec.open(recoveryDocument, recoveryCode: recoveryCode)
+    let store = try EncryptedSQLiteVaultStore(path: vaultURL, vaultKey: restoredKey, crypto: crypto)
+
+    // Prove that the recovered key decrypts the existing document before
+    // replacing a working/different Keychain item. saveVaultKey itself updates
+    // atomically, so failures leave the prior item intact.
+    let document = try store.load()
+    try keyStore.saveVaultKey(restoredKey)
+    return RecoveredVault(vaultKey: restoredKey, document: document, store: store)
   }
 }

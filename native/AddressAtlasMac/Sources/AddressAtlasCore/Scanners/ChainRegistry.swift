@@ -108,7 +108,7 @@ public enum ChainRegistry {
     ChainConfig(id: "base", name: "Base", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, rpcUrl: URL(string: "https://mainnet.base.org"), explorerUrl: URL(string: "https://basescan.org/address/")!),
     ChainConfig(id: "arbitrum", name: "Arbitrum One", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, rpcUrl: URL(string: "https://arb1.arbitrum.io/rpc"), explorerUrl: URL(string: "https://arbiscan.io/address/")!),
     ChainConfig(id: "optimism", name: "Optimism", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, rpcUrl: URL(string: "https://mainnet.optimism.io"), explorerUrl: URL(string: "https://optimistic.etherscan.io/address/")!),
-    ChainConfig(id: "polygon", name: "Polygon PoS", family: .evm, symbol: "MATIC", coinGeckoId: "matic-network", decimals: 18, rpcUrl: URL(string: "https://polygon-rpc.com"), explorerUrl: URL(string: "https://polygonscan.com/address/")!),
+    ChainConfig(id: "polygon", name: "Polygon PoS", family: .evm, symbol: "POL", coinGeckoId: "polygon-ecosystem-token", decimals: 18, rpcUrl: URL(string: "https://polygon-rpc.com"), explorerUrl: URL(string: "https://polygonscan.com/address/")!),
     ChainConfig(id: "bsc", name: "BNB Chain", family: .evm, symbol: "BNB", coinGeckoId: "binancecoin", decimals: 18, rpcUrl: URL(string: "https://bsc-dataseed.binance.org"), explorerUrl: URL(string: "https://bscscan.com/address/")!),
     ChainConfig(id: "avalanche", name: "Avalanche C-Chain", family: .evm, symbol: "AVAX", coinGeckoId: "avalanche-2", decimals: 18, rpcUrl: URL(string: "https://api.avax.network/ext/bc/C/rpc"), explorerUrl: URL(string: "https://snowtrace.io/address/")!),
     ChainConfig(id: "gnosis", name: "Gnosis Chain", family: .evm, symbol: "XDAI", coinGeckoId: "xdai", decimals: 18, rpcUrl: URL(string: "https://rpc.gnosischain.com"), explorerUrl: URL(string: "https://gnosisscan.io/address/")!),
@@ -247,13 +247,6 @@ public enum ChainRegistry {
         address: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
         decimals: 6,
         coinGeckoId: "tether"
-      ),
-      TokenConfig(
-        symbol: "WBTC",
-        name: "Wrapped Bitcoin",
-        address: "9n4nbM75f5Ui33ZbPYXn59EwSgE8CGsHtAeTH5YFeJ9E",
-        decimals: 6,
-        coinGeckoId: "wrapped-bitcoin"
       ),
       TokenConfig(
         symbol: "JitoSOL",

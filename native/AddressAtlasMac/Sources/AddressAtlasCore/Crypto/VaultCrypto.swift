@@ -46,6 +46,7 @@ public enum VaultSubkey: String, CaseIterable, Sendable {
 
 public struct VaultCrypto: Sendable {
   public static let vaultKeyByteCount = 32
+  public static let maximumEnvelopeBodyByteCount = 64_000_000
   private let salt = Data("address-atlas-v1".utf8)
 
   public init() {}
@@ -71,14 +72,34 @@ public struct VaultCrypto: Sendable {
     )
   }
 
-  public func seal(_ plaintext: Data, with key: SymmetricKey, keyId: String, schemaVersion: Int = 1) throws -> EncryptedVaultEnvelope {
-    let sealed = try AES.GCM.seal(plaintext, using: key)
+  public func seal(
+    _ plaintext: Data,
+    with key: SymmetricKey,
+    keyId: String,
+    schemaVersion: Int = 1,
+    authenticatedData: Data? = nil
+  ) throws -> EncryptedVaultEnvelope {
+    try validateMetadata(schemaVersion: schemaVersion, keyId: keyId)
+    let cryptoVersion = authenticatedData == nil ? 1 : 2
+    let sealed = try AES.GCM.seal(
+      plaintext,
+      using: key,
+      authenticating: authenticatedData ?? Data()
+    )
     let nonce = sealed.nonce.dataRepresentation
     let body = sealed.ciphertext + sealed.tag
-    let checksum = SHA256.hash(data: checksumInput(schemaVersion: schemaVersion, cryptoVersion: 1, keyId: keyId, nonce: nonce, ciphertext: body))
+    let checksum = SHA256.hash(
+      data: checksumInput(
+        schemaVersion: schemaVersion,
+        cryptoVersion: cryptoVersion,
+        keyId: keyId,
+        nonce: nonce,
+        ciphertext: body
+      )
+    )
     return EncryptedVaultEnvelope(
       schemaVersion: schemaVersion,
-      cryptoVersion: 1,
+      cryptoVersion: cryptoVersion,
       keyId: keyId,
       nonce: Base64URL.encode(nonce),
       ciphertext: Base64URL.encode(body),
@@ -86,13 +107,34 @@ public struct VaultCrypto: Sendable {
     )
   }
 
-  public func open(_ envelope: EncryptedVaultEnvelope, with key: SymmetricKey) throws -> Data {
-    guard envelope.cryptoVersion == 1 else {
+  public func open(
+    _ envelope: EncryptedVaultEnvelope,
+    with key: SymmetricKey,
+    authenticatedData: Data? = nil
+  ) throws -> Data {
+    guard envelope.cryptoVersion == 1 || envelope.cryptoVersion == 2 else {
+      throw VaultCryptoError.invalidEnvelope
+    }
+    if envelope.cryptoVersion == 1, authenticatedData != nil {
+      throw VaultCryptoError.invalidEnvelope
+    }
+    if envelope.cryptoVersion == 2, authenticatedData == nil {
+      throw VaultCryptoError.invalidEnvelope
+    }
+    try validateMetadata(schemaVersion: envelope.schemaVersion, keyId: envelope.keyId)
+    guard envelope.checksum.count == 64,
+          envelope.checksum.unicodeScalars.allSatisfy({ scalar in
+            (48...57).contains(scalar.value) || (97...102).contains(scalar.value)
+          })
+    else {
       throw VaultCryptoError.invalidEnvelope
     }
     let nonceData = try Base64URL.decode(envelope.nonce)
     let body = try Base64URL.decode(envelope.ciphertext)
-    guard nonceData.count == 12, body.count > 16 else {
+    guard nonceData.count == 12,
+          body.count >= 16,
+          body.count <= Self.maximumEnvelopeBodyByteCount
+    else {
       throw VaultCryptoError.invalidEnvelope
     }
     let expected = SHA256.hash(
@@ -112,7 +154,7 @@ public struct VaultCrypto: Sendable {
     do {
       let nonce = try AES.GCM.Nonce(data: nonceData)
       let box = try AES.GCM.SealedBox(nonce: nonce, ciphertext: Data(ciphertext), tag: Data(tag))
-      return try AES.GCM.open(box, using: key)
+      return try AES.GCM.open(box, using: key, authenticating: authenticatedData ?? Data())
     } catch {
       // Surface the same error as a checksum mismatch so the failure mode can't
       // be used to tell "wrong key" apart from "corrupt ciphertext" (uniform
@@ -121,12 +163,48 @@ public struct VaultCrypto: Sendable {
     }
   }
 
-  public func sealJSON<T: Encodable>(_ value: T, with key: SymmetricKey, keyId: String, encoder: JSONEncoder = .addressAtlas) throws -> EncryptedVaultEnvelope {
-    try seal(encoder.encode(value), with: key, keyId: keyId)
+  public func sealJSON<T: Encodable>(
+    _ value: T,
+    with key: SymmetricKey,
+    keyId: String,
+    schemaVersion: Int = 1,
+    authenticatedData: Data? = nil,
+    encoder: JSONEncoder = .addressAtlas
+  ) throws -> EncryptedVaultEnvelope {
+    try seal(
+      encoder.encode(value),
+      with: key,
+      keyId: keyId,
+      schemaVersion: schemaVersion,
+      authenticatedData: authenticatedData
+    )
   }
 
-  public func openJSON<T: Decodable>(_ type: T.Type, envelope: EncryptedVaultEnvelope, with key: SymmetricKey, decoder: JSONDecoder = .addressAtlas) throws -> T {
-    try decoder.decode(type, from: open(envelope, with: key))
+  public func openJSON<T: Decodable>(
+    _ type: T.Type,
+    envelope: EncryptedVaultEnvelope,
+    with key: SymmetricKey,
+    authenticatedData: Data? = nil,
+    decoder: JSONDecoder = .addressAtlas
+  ) throws -> T {
+    try decoder.decode(type, from: open(envelope, with: key, authenticatedData: authenticatedData))
+  }
+
+  private func validateMetadata(schemaVersion: Int, keyId: String) throws {
+    guard (1...VaultDocument.currentSchemaVersion).contains(schemaVersion),
+          (3...80).contains(keyId.count),
+          keyId.unicodeScalars.allSatisfy({ scalar in
+            (65...90).contains(scalar.value)
+              || (97...122).contains(scalar.value)
+              || (48...57).contains(scalar.value)
+              || scalar == "-"
+              || scalar == "_"
+              || scalar == "."
+              || scalar == ":"
+          })
+    else {
+      throw VaultCryptoError.invalidEnvelope
+    }
   }
 
   private func checksumInput(schemaVersion: Int, cryptoVersion: Int, keyId: String, nonce: Data, ciphertext: Data) -> Data {

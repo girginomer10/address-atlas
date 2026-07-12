@@ -1,21 +1,44 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyPasskey } from "@/lib/sync/passkeys";
-import { clientKey, rateLimit } from "@/lib/sync/rate-limit";
+import {
+  parsePasskeyVerifyInput,
+  PasskeyInputError,
+  PasskeyVerificationError,
+  verifyPasskey
+} from "@/lib/sync/passkeys";
+import { clientKey, rateLimitMany } from "@/lib/sync/rate-limit";
+import { readLimitedJSON, RequestBodyError } from "@/lib/sync/request";
+import { TokenValidationError } from "@/lib/sync/tokens";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
   try {
-    if (!rateLimit(`auth:${clientKey(request)}`, 20, 60_000)) {
+    const { value } = await readLimitedJSON(request, 128_000);
+    const input = parsePasskeyVerifyInput(value);
+    const client = clientKey(request);
+    const rules = [
+      { key: "auth-verify:global", limit: 600, windowMs: 60_000 },
+      { key: `auth-verify:client:${client}`, limit: 30, windowMs: 60_000 }
+    ];
+    if (input.mode === "register") {
+      rules.push(
+        { key: "auth-register-verify:global", limit: 100, windowMs: 3_600_000 },
+        { key: `auth-register-verify:client:${client}`, limit: 5, windowMs: 3_600_000 }
+      );
+    }
+    if (!rateLimitMany(rules)) {
       return NextResponse.json({ error: "Too many requests." }, { status: 429 });
     }
-    const body = await request.json().catch(() => ({}));
-    return NextResponse.json(await verifyPasskey(body));
+    return NextResponse.json(await verifyPasskey(input));
   } catch (error) {
+    const expected = error instanceof RequestBodyError
+      || error instanceof PasskeyInputError
+      || error instanceof PasskeyVerificationError
+      || error instanceof TokenValidationError;
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Passkey verification failed." },
-      { status: 400 }
+      { error: error instanceof RequestBodyError ? error.message : "Passkey verification failed." },
+      { status: error instanceof RequestBodyError ? error.status : expected ? 400 : 500 }
     );
   }
 }
