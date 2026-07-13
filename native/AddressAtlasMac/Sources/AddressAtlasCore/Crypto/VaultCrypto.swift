@@ -10,6 +10,22 @@ public enum VaultCryptoError: Error, Equatable {
   case authenticationFailed
 }
 
+/// Separate from `VaultCryptoError` so adding the write-side limit does not
+/// break external exhaustive switches over the existing public enum.
+public struct VaultCryptoPlaintextTooLargeError: Error, Equatable, LocalizedError, Sendable {
+  public let actualByteCount: Int
+  public let maximumByteCount: Int
+
+  public init(actualByteCount: Int, maximumByteCount: Int) {
+    self.actualByteCount = actualByteCount
+    self.maximumByteCount = maximumByteCount
+  }
+
+  public var errorDescription: String? {
+    "The encrypted vault is too large to store safely (\(actualByteCount) bytes; maximum \(maximumByteCount)). Remove older scan history or reduce vault data and try again."
+  }
+}
+
 public struct EncryptedVaultEnvelope: Codable, Equatable, Hashable, Sendable {
   public var schemaVersion: Int
   public var cryptoVersion: Int
@@ -47,9 +63,24 @@ public enum VaultSubkey: String, CaseIterable, Sendable {
 public struct VaultCrypto: Sendable {
   public static let vaultKeyByteCount = 32
   public static let maximumEnvelopeBodyByteCount = 64_000_000
+  public static let maximumEnvelopePlaintextByteCount = maximumEnvelopeBodyByteCount - 16
+  private static let authenticationTagByteCount = 16
   private let salt = Data("address-atlas-v1".utf8)
+  private let envelopeBodyByteLimit: Int
 
-  public init() {}
+  public init() {
+    envelopeBodyByteLimit = Self.maximumEnvelopeBodyByteCount
+  }
+
+  /// A lower limit used by focused persistence tests without allocating a
+  /// production-sized document. It can never relax the public hard limit.
+  init(maximumEnvelopeBodyByteCount: Int) {
+    precondition(
+      (Self.authenticationTagByteCount...Self.maximumEnvelopeBodyByteCount)
+        .contains(maximumEnvelopeBodyByteCount)
+    )
+    envelopeBodyByteLimit = maximumEnvelopeBodyByteCount
+  }
 
   public func generateVaultKey() throws -> Data {
     var bytes = [UInt8](repeating: 0, count: Self.vaultKeyByteCount)
@@ -80,6 +111,15 @@ public struct VaultCrypto: Sendable {
     authenticatedData: Data? = nil
   ) throws -> EncryptedVaultEnvelope {
     try validateMetadata(schemaVersion: schemaVersion, keyId: keyId)
+    // AES-GCM appends a 16-byte authentication tag. Reject before encryption
+    // so every envelope produced here also satisfies open's body-size limit.
+    let maximumPlaintextByteCount = envelopeBodyByteLimit - Self.authenticationTagByteCount
+    guard plaintext.count <= maximumPlaintextByteCount else {
+      throw VaultCryptoPlaintextTooLargeError(
+        actualByteCount: plaintext.count,
+        maximumByteCount: maximumPlaintextByteCount
+      )
+    }
     let cryptoVersion = authenticatedData == nil ? 1 : 2
     let sealed = try AES.GCM.seal(
       plaintext,
@@ -133,7 +173,7 @@ public struct VaultCrypto: Sendable {
     let body = try Base64URL.decode(envelope.ciphertext)
     guard nonceData.count == 12,
           body.count >= 16,
-          body.count <= Self.maximumEnvelopeBodyByteCount
+          body.count <= envelopeBodyByteLimit
     else {
       throw VaultCryptoError.invalidEnvelope
     }

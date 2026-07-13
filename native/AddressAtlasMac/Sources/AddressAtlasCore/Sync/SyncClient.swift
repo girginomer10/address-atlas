@@ -52,6 +52,22 @@ public enum VaultSyncCodecError: Error, Equatable, LocalizedError {
   }
 }
 
+/// Separate from `VaultSyncCodecError` so size enforcement remains
+/// source-compatible with exhaustive switches over the existing public enum.
+public struct VaultSyncSnapshotTooLargeError: Error, Equatable, LocalizedError, Sendable {
+  public let actualByteCount: Int
+  public let maximumByteCount: Int
+
+  public init(actualByteCount: Int, maximumByteCount: Int) {
+    self.actualByteCount = actualByteCount
+    self.maximumByteCount = maximumByteCount
+  }
+
+  public var errorDescription: String? {
+    "Encrypted sync snapshot is too large (\(actualByteCount) bytes; maximum \(maximumByteCount)). Remove older scan history or reduce vault data before syncing."
+  }
+}
+
 public struct VaultSyncCodec: Sendable {
   public static let maximumSnapshotByteCount = 8_000_000
   private static let maximumVersion = 2_000_000_000
@@ -69,14 +85,15 @@ public struct VaultSyncCodec: Sendable {
   ) throws -> RemoteVaultSnapshot {
     let accountId = try validatedAccountId(accountId)
     try validateVersion(version)
+    let remoteDocument = documentForRemoteSnapshot(document, accountId: accountId)
+    let projectedByteCount = try encodedEnvelopeByteCount(for: remoteDocument)
+    guard projectedByteCount <= Self.maximumSnapshotByteCount else {
+      throw VaultSyncSnapshotTooLargeError(
+        actualByteCount: projectedByteCount,
+        maximumByteCount: Self.maximumSnapshotByteCount
+      )
+    }
     let key = try crypto.deriveKey(from: vaultKey, purpose: .syncBlob)
-    var remoteDocument = document
-    remoteDocument.schemaVersion = VaultDocument.currentSchemaVersion
-    remoteDocument.syncState.accountId = accountId
-    // A bearer token grants server access but provides no value inside the
-    // encrypted backup. Never preserve a live token in historical snapshots.
-    remoteDocument.syncState.sessionToken = ""
-    remoteDocument.syncState.serverURL = ""
     let authenticatedData = syncAuthenticatedData(
       accountId: accountId,
       version: version,
@@ -90,7 +107,10 @@ public struct VaultSyncCodec: Sendable {
       authenticatedData: authenticatedData
     )
     let encoded = try JSONEncoder.addressAtlas.encode(envelope)
-    guard !encoded.isEmpty, encoded.count <= Self.maximumSnapshotByteCount else {
+    // The projection and the concrete envelope must stay byte-for-byte size
+    // equivalent. Fail closed if a future envelope format invalidates the
+    // projection instead of silently accepting an incorrect limit decision.
+    guard !encoded.isEmpty, encoded.count == projectedByteCount else {
       throw VaultSyncCodecError.invalidSnapshot
     }
     let checksum = snapshotChecksum(envelopeData: encoded, version: version, cryptoVersion: 2)
@@ -100,6 +120,47 @@ public struct VaultSyncCodec: Sendable {
       byteSize: encoded.count,
       checksum: checksum
     )
+  }
+
+  /// Exact encoded JSON size of the encrypted v2 envelope without performing
+  /// encryption. AES-GCM adds a fixed 16-byte tag and every envelope field has
+  /// a fixed encoded width except the Base64URL ciphertext, so this projection
+  /// matches `RemoteVaultSnapshot.byteSize` exactly.
+  public func encodedSnapshotByteCount(
+    document: VaultDocument,
+    accountId: String
+  ) throws -> Int {
+    let accountId = try validatedAccountId(accountId)
+    return try encodedEnvelopeByteCount(
+      for: documentForRemoteSnapshot(document, accountId: accountId)
+    )
+  }
+
+  /// Project the exact envelope size after a successful upload has installed
+  /// its version, timestamp, and two 64-character checksums. Persistence uses
+  /// this larger size so a just-uploaded document cannot immediately become
+  /// too large when `markSynced` adds its metadata.
+  public func projectedPostSyncSnapshotByteCount(
+    document: VaultDocument,
+    version: Int,
+    accountId: String
+  ) throws -> Int {
+    try validateVersion(version)
+    var projected = document
+    projected.syncState.markSynced(
+      version: version,
+      snapshotChecksum: String(repeating: "0", count: 64),
+      contentChecksum: try contentChecksum(for: document),
+      // JSONEncoder.addressAtlas emits all ordinary dates with the same
+      // second-precision width. Epoch makes the projection deterministic.
+      at: Date(timeIntervalSince1970: 0)
+    )
+    return try encodedSnapshotByteCount(document: projected, accountId: accountId)
+  }
+
+  public func isValidAccountId(_ accountId: String?) -> Bool {
+    guard let accountId else { return false }
+    return (try? validatedAccountId(accountId)) != nil
   }
 
   public func open(
@@ -224,6 +285,17 @@ public struct VaultSyncCodec: Sendable {
     return next
   }
 
+  /// Local persistence still needs a bounded size projection after the remote
+  /// version space is exhausted. Reuse the final valid version for byte-width
+  /// accounting; an actual upload continues to call `nextVersion` and fail.
+  public func versionForNextSyncSizeProjection(after latestVersion: Int) throws -> Int {
+    guard latestVersion >= 0 else { throw VaultSyncCodecError.invalidVersion }
+    if latestVersion >= Self.maximumVersion {
+      return Self.maximumVersion
+    }
+    return try nextVersion(after: latestVersion)
+  }
+
   private func validatedAccountId(_ accountId: String) throws -> String {
     let trimmed = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty, trimmed.count <= 200 else {
@@ -236,6 +308,60 @@ public struct VaultSyncCodec: Sendable {
     guard (1...Self.maximumVersion).contains(version) else {
       throw VaultSyncCodecError.invalidVersion
     }
+  }
+
+  private func documentForRemoteSnapshot(
+    _ document: VaultDocument,
+    accountId: String
+  ) -> VaultDocument {
+    var remoteDocument = document
+    remoteDocument.schemaVersion = VaultDocument.currentSchemaVersion
+    remoteDocument.syncState.accountId = accountId
+    // A bearer token grants server access but provides no value inside the
+    // encrypted backup. Never preserve a live token in historical snapshots.
+    remoteDocument.syncState.sessionToken = ""
+    remoteDocument.syncState.serverURL = ""
+    return remoteDocument
+  }
+
+  private func encodedEnvelopeByteCount(for remoteDocument: VaultDocument) throws -> Int {
+    let plaintextByteCount = try JSONEncoder.addressAtlas.encode(remoteDocument).count
+    let (bodyByteCount, bodyOverflow) = plaintextByteCount.addingReportingOverflow(16)
+    guard !bodyOverflow else { throw VaultSyncCodecError.invalidSnapshot }
+    let ciphertextCharacterCount = try base64URLCharacterCount(forByteCount: bodyByteCount)
+
+    // All Base64URL characters are JSON-safe, so encoding the fixed envelope
+    // with an empty ciphertext and adding its projected character count is
+    // equivalent to allocating and encoding the full ciphertext string.
+    let template = EncryptedVaultEnvelope(
+      schemaVersion: VaultDocument.currentSchemaVersion,
+      cryptoVersion: 2,
+      keyId: "sync-v2",
+      nonce: String(repeating: "A", count: 16),
+      ciphertext: "",
+      checksum: String(repeating: "0", count: 64),
+      createdAt: Date(timeIntervalSince1970: 0)
+    )
+    let fixedByteCount = try JSONEncoder.addressAtlas.encode(template).count
+    let (total, totalOverflow) = fixedByteCount.addingReportingOverflow(ciphertextCharacterCount)
+    guard !totalOverflow, total > 0 else { throw VaultSyncCodecError.invalidSnapshot }
+    return total
+  }
+
+  private func base64URLCharacterCount(forByteCount byteCount: Int) throws -> Int {
+    guard byteCount >= 0 else { throw VaultSyncCodecError.invalidSnapshot }
+    let (fullTripletCharacters, multiplicationOverflow) = (byteCount / 3)
+      .multipliedReportingOverflow(by: 4)
+    guard !multiplicationOverflow else { throw VaultSyncCodecError.invalidSnapshot }
+    let trailingCharacters: Int
+    switch byteCount % 3 {
+    case 0: trailingCharacters = 0
+    case 1: trailingCharacters = 2
+    default: trailingCharacters = 3
+    }
+    let (total, additionOverflow) = fullTripletCharacters.addingReportingOverflow(trailingCharacters)
+    guard !additionOverflow else { throw VaultSyncCodecError.invalidSnapshot }
+    return total
   }
 
   private func snapshotChecksum(envelopeData: Data, version: Int, cryptoVersion: Int) -> String {

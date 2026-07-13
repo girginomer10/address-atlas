@@ -33,6 +33,24 @@ final class VaultCryptoTests: XCTestCase {
     XCTAssertNotEqual(first.nonce, second.nonce)
     XCTAssertNotEqual(first.ciphertext, second.ciphertext)
   }
+
+  func testSealRejectsPlaintextThatWouldProduceAnEnvelopeOpenCannotRead() throws {
+    let crypto = VaultCrypto(maximumEnvelopeBodyByteCount: 64)
+    let key = try crypto.deriveKey(from: crypto.generateVaultKey(), purpose: .syncBlob)
+    let maximumReadablePlaintext = Data(repeating: 0x41, count: 48)
+
+    let readable = try crypto.seal(maximumReadablePlaintext, with: key, keyId: "sync-v1")
+    XCTAssertEqual(try crypto.open(readable, with: key), maximumReadablePlaintext)
+
+    XCTAssertThrowsError(
+      try crypto.seal(Data(repeating: 0x42, count: 49), with: key, keyId: "sync-v1")
+    ) { error in
+      XCTAssertEqual(
+        error as? VaultCryptoPlaintextTooLargeError,
+        VaultCryptoPlaintextTooLargeError(actualByteCount: 49, maximumByteCount: 48)
+      )
+    }
+  }
 }
 
 final class RecoveryKitTests: XCTestCase {
@@ -229,6 +247,72 @@ final class EncryptedSQLiteVaultStoreTests: XCTestCase {
     XCTAssertEqual(loaded.wallets.first?.address, wallet.address)
     XCTAssertFalse(rawText.contains(wallet.address))
     XCTAssertTrue(rawText.contains("ciphertext"))
+  }
+
+  func testOversizedSavePreservesReadableRowAndStoreBaseline() throws {
+    let tempDir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+    let databaseURL = tempDir.appending(path: "vault.sqlite")
+    let crypto = VaultCrypto(maximumEnvelopeBodyByteCount: 2_048)
+    let vaultKey = try crypto.generateVaultKey()
+    let store = try EncryptedSQLiteVaultStore(path: databaseURL, vaultKey: vaultKey, crypto: crypto)
+    _ = try store.load()
+    var baseline = VaultDocument(wallets: [
+      WalletRecord(label: "Readable", address: "0x1", chainKind: .evm)
+    ])
+    baseline = try store.saveReturningPersistedDocument(baseline)
+    let envelopeBeforeRejectedSave = try XCTUnwrap(store.rawStoredEnvelopeBytes())
+
+    let oversized = VaultDocument(wallets: [
+      WalletRecord(
+        label: String(repeating: "x", count: 4_096),
+        address: "0x2",
+        chainKind: .evm
+      )
+    ])
+    XCTAssertThrowsError(try store.save(oversized)) { error in
+      XCTAssertNotNil(error as? VaultCryptoPlaintextTooLargeError)
+    }
+    XCTAssertEqual(try store.rawStoredEnvelopeBytes(), envelopeBeforeRejectedSave)
+
+    let verifierAfterFailure = try EncryptedSQLiteVaultStore(
+      path: databaseURL,
+      vaultKey: vaultKey,
+      crypto: crypto
+    )
+    XCTAssertEqual(try verifierAfterFailure.load().wallets.map(\.label), ["Readable"])
+
+    // A normal follow-up save through the original store proves the failed
+    // preflight did not advance or invalidate its compare-and-swap baseline.
+    baseline.wallets[0].label = "Saved after rejection"
+    try store.save(baseline)
+    let finalVerifier = try EncryptedSQLiteVaultStore(path: databaseURL, vaultKey: vaultKey, crypto: crypto)
+    XCTAssertEqual(try finalVerifier.load().wallets.map(\.label), ["Saved after rejection"])
+  }
+
+  func testSaveReturningPersistedDocumentReturnsTheExactPersistedTimestamp() throws {
+    let tempDir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+    let databaseURL = tempDir.appending(path: "vault.sqlite")
+    let vaultKey = try VaultCrypto().generateVaultKey()
+    let store = try EncryptedSQLiteVaultStore(path: databaseURL, vaultKey: vaultKey)
+    let originalTimestamp = Date(timeIntervalSince1970: 0)
+
+    let saved = try store.saveReturningPersistedDocument(
+      VaultDocument(updatedAt: originalTimestamp)
+    )
+    let verifier = try EncryptedSQLiteVaultStore(path: databaseURL, vaultKey: vaultKey)
+    let loaded = try verifier.load()
+
+    XCTAssertGreaterThan(saved.updatedAt, originalTimestamp)
+    XCTAssertEqual(saved.updatedAt, loaded.updatedAt)
+
+    // Keep the original public API source-compatible for callers that expect
+    // a Void-returning persistence operation.
+    let voidSave: (VaultDocument) throws -> Void = store.save
+    try voidSave(saved)
   }
 
   func testStoreCreatesAndRepairsDatabaseAsOwnerOnly() throws {
@@ -983,20 +1067,66 @@ final class NativeExchangeClientTests: XCTestCase {
     }
   }
 
-  func testExchangeBalanceNormalizerPricesStablecoinsAndKnownAssets() {
+  func testExchangeBalanceNormalizerUsesLiveStablecoinPricesAndExactUSD() async throws {
+    XCTAssertTrue(
+      ExchangeBalanceNormalizer.usdStableSymbols.subtracting(["USD"]).allSatisfy {
+        ExchangeBalanceNormalizer.coinGeckoIds[$0] != nil
+      }
+    )
     let id = UUID()
-    let holdings = ExchangeBalanceNormalizer.normalize(
-      balance: ExchangeBalance(total: ["USDC": 42, "XBT": 0.5]),
+    let result = try await ExchangeBalanceNormalizer.normalizeWithWarnings(
+      balance: ExchangeBalance(total: [
+        "BUSD": 100, "DAI": 100, "FDUSD": 100, "TUSD": 100,
+        "USD": 100, "USDC": 100, "USDP": 100, "USDT": 100, "XBT": 0.5
+      ]),
       id: id,
       provider: .kraken,
       label: "Kraken main",
-      prices: ["bitcoin": PricePoint(usd: 100_000, usd24hChange: 1.5)]
+      priceProvider: StaticPriceProvider(values: [
+        "bitcoin": PricePoint(usd: 100_000, usd24hChange: 1.5),
+        "binance-usd": PricePoint(usd: 0.96),
+        "first-digital-usd": PricePoint(usd: 0.98),
+        "pax-dollar": PricePoint(usd: 1.01),
+        "usd-coin": PricePoint(usd: 0.97, usd24hChange: -3),
+        "tether": PricePoint(usd: 1.02, usd24hChange: 2),
+        "dai": PricePoint(usd: 0.99, usd24hChange: -1),
+        "true-usd": PricePoint(usd: 0.95)
+      ])
+    )
+    let holdings = result.holdings
+
+    XCTAssertEqual(
+      holdings.map(\.symbol),
+      ["BTC", "BUSD", "DAI", "FDUSD", "TUSD", "USD", "USDC", "USDP", "USDT"]
+    )
+    XCTAssertEqual(holdings.first(where: { $0.symbol == "BTC" })?.valueUsd, 50_000)
+    XCTAssertEqual(try XCTUnwrap(holdings.first(where: { $0.symbol == "BUSD" })?.valueUsd), 96, accuracy: 0.000_001)
+    XCTAssertEqual(try XCTUnwrap(holdings.first(where: { $0.symbol == "DAI" })?.valueUsd), 99, accuracy: 0.000_001)
+    XCTAssertEqual(try XCTUnwrap(holdings.first(where: { $0.symbol == "FDUSD" })?.valueUsd), 98, accuracy: 0.000_001)
+    XCTAssertEqual(try XCTUnwrap(holdings.first(where: { $0.symbol == "TUSD" })?.valueUsd), 95, accuracy: 0.000_001)
+    XCTAssertEqual(try XCTUnwrap(holdings.first(where: { $0.symbol == "USD" })?.priceUsd), 1, accuracy: 0.000_001)
+    XCTAssertEqual(try XCTUnwrap(holdings.first(where: { $0.symbol == "USDC" })?.valueUsd), 97, accuracy: 0.000_001)
+    XCTAssertEqual(try XCTUnwrap(holdings.first(where: { $0.symbol == "USDP" })?.valueUsd), 101, accuracy: 0.000_001)
+    XCTAssertEqual(try XCTUnwrap(holdings.first(where: { $0.symbol == "USDT" })?.valueUsd), 102, accuracy: 0.000_001)
+    XCTAssertEqual(holdings.first?.source, .exchange)
+    XCTAssertTrue(result.warnings.isEmpty)
+  }
+
+  func testExchangeBalanceNormalizerLeavesMissingStablecoinPricesVisiblyUnpriced() async throws {
+    let result = try await ExchangeBalanceNormalizer.normalizeWithWarnings(
+      balance: ExchangeBalance(total: ["USDC": 42, "USD": 5]),
+      id: UUID(),
+      provider: .binance,
+      label: "Binance main",
+      priceProvider: StaticPriceProvider(values: [:])
     )
 
-    XCTAssertEqual(holdings.map(\.symbol), ["BTC", "USDC"])
-    XCTAssertEqual(holdings.first(where: { $0.symbol == "BTC" })?.valueUsd, 50_000)
-    XCTAssertEqual(holdings.first(where: { $0.symbol == "USDC" })?.valueUsd, 42)
-    XCTAssertEqual(holdings.first?.source, .exchange)
+    XCTAssertEqual(result.holdings.first(where: { $0.symbol == "USDC" })?.priceUsd, 0)
+    XCTAssertEqual(result.holdings.first(where: { $0.symbol == "USDC" })?.valueUsd, 0)
+    XCTAssertEqual(result.holdings.first(where: { $0.symbol == "USD" })?.valueUsd, 5)
+    XCTAssertTrue(result.warnings.contains(where: {
+      $0.contains("USDC") && $0.contains("shown unpriced")
+    }))
   }
 
   func testNativeExchangeScannerDecryptsCredentialsAndUpdatesConnection() async throws {
@@ -1027,7 +1157,7 @@ final class NativeExchangeClientTests: XCTestCase {
     let scanner = NativeExchangeScanner(
       client: NativeExchangeBalanceClient(http: http, now: { Date(timeIntervalSince1970: 1_700_000_000) }),
       credentialVault: ExchangeCredentialVault(crypto: crypto),
-      priceProvider: StaticPriceProvider(values: [:])
+      priceProvider: StaticPriceProvider(values: ["usd-coin": PricePoint(usd: 1)])
     )
 
     let result = await scanner.scan(connections: [connection], vaultKey: vaultKey)

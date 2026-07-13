@@ -81,15 +81,26 @@ public enum AddressAtlasExporter {
 
   private static func csvEscape(_ value: String) -> String {
     // Neutralize spreadsheet formula injection: a free-text cell (symbol, name,
-    // wallet label) beginning with =, +, -, @, tab, or CR is executed as a
-    // formula by Excel/Sheets. Prefix it with a single quote so it stays text.
+    // wallet label) beginning with =, +, -, @, or tab can be executed as a
+    // formula by Excel/Sheets. Apply the same protection after CR/LF so even a
+    // consumer that mishandles multiline fields cannot expose a formula at a
+    // record boundary. Prefix it with a single quote so it stays text.
     // (Numeric columns are written without csvEscape, so negative numbers are
     // unaffected.)
-    var sanitized = value
-    if let first = value.first, "=+-@\t\r".contains(first) {
-      sanitized = "'" + value
+    var sanitized = ""
+    sanitized.reserveCapacity(value.count)
+    var atRecordStart = true
+    for scalar in value.unicodeScalars {
+      if atRecordStart, [61, 43, 45, 64, 9].contains(scalar.value) {
+        sanitized.append("'")
+      }
+      sanitized.append(String(scalar))
+      atRecordStart = scalar.value == 13 || scalar.value == 10
     }
-    if sanitized.contains(",") || sanitized.contains("\"") || sanitized.contains("\n") {
+    let requiresQuotes = sanitized.unicodeScalars.contains { scalar in
+      scalar.value == 44 || scalar.value == 34 || scalar.value == 13 || scalar.value == 10
+    }
+    if requiresQuotes {
       return "\"\(sanitized.replacingOccurrences(of: "\"", with: "\"\""))\""
     }
     return sanitized

@@ -91,6 +91,15 @@ final class ScannerAddressValidationTests: XCTestCase {
       decimals: 18,
       priceUsd: .infinity
     )
+    let invalidCoinGeckoId = CustomTokenRecord(
+      chainKind: .evm,
+      chainId: "ethereum",
+      address: "0x0000000000000000000000000000000000000004",
+      symbol: "BADID",
+      name: "Bad CoinGecko ID",
+      decimals: 18,
+      coinGeckoId: "tökén"
+    )
     let mismatchedChain = CustomTokenRecord(
       chainKind: .solana,
       chainId: "ethereum",
@@ -101,14 +110,22 @@ final class ScannerAddressValidationTests: XCTestCase {
     )
 
     let registries = NativeScanner.tokenRegistries(
-      customTokens: [valid, invalidAddress, invalidDecimals, invalidPrice, mismatchedChain]
+      customTokens: [valid, invalidAddress, invalidDecimals, invalidPrice, invalidCoinGeckoId, mismatchedChain]
     )
     let added = registries.evm["ethereum"]?.first(where: { $0.symbol == "TEST" })
+    let legacyInvalidID = registries.evm["ethereum"]?.first(where: { $0.symbol == "BADID" })
 
     XCTAssertEqual(added?.address, "0x0000000000000000000000000000000000000001")
     XCTAssertEqual(added?.coinGeckoId, "test-token")
-    XCTAssertFalse(registries.evm["ethereum"]?.contains(where: { $0.symbol.hasPrefix("BAD") }) ?? true)
-    XCTAssertEqual(registries.warnings.count, 4)
+    XCTAssertEqual(legacyInvalidID?.address, "0x0000000000000000000000000000000000000004")
+    XCTAssertNil(legacyInvalidID?.coinGeckoId)
+    XCTAssertFalse(registries.evm["ethereum"]?.contains(where: {
+      ["BADADDR", "BADDEC", "BADPRICE", "BADCHAIN"].contains($0.symbol)
+    }) ?? true)
+    XCTAssertEqual(registries.warnings.count, 5)
+    XCTAssertTrue(registries.warnings.contains(where: {
+      $0.contains("BADID") && $0.contains("CoinGecko pricing was disabled")
+    }))
     XCTAssertTrue(AddressDetection.isValidCustomTokenAddress(valid.address, family: .evm))
     XCTAssertEqual(AddressDetection.canonicalAddress(valid.address, family: .evm), added?.address)
   }
@@ -121,6 +138,20 @@ final class ScannerAddressValidationTests: XCTestCase {
     XCTAssertFalse(ChainRegistry.commonSplTokens["solana"]?.contains(where: {
       $0.address == "9n4nbM75f5Ui33ZbPYXn59EwSgE8CGsHtAeTH5YFeJ9E" || $0.symbol == "WBTC"
     }) ?? true)
+  }
+
+  func testExplorerURLBuilderSupportsFragmentAndPathBasedExplorers() {
+    let tronAddress = "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7"
+    let bitcoinAddress = "1BoatSLRHtKNngkdXEeobR76b53LETtpyT"
+
+    XCTAssertEqual(
+      ChainRegistry.tron.explorerURL(for: tronAddress).absoluteString,
+      "https://tronscan.org/#/address/\(tronAddress)"
+    )
+    XCTAssertEqual(
+      ChainRegistry.bitcoin.explorerURL(for: bitcoinAddress).absoluteString,
+      "https://blockstream.info/address/\(bitcoinAddress)"
+    )
   }
 
   func testAddressParsingReportsTruncation() {
@@ -738,6 +769,24 @@ final class ScannerWorkflowTests: XCTestCase {
     XCTAssertFalse(result.holdings.contains(where: { $0.symbol == "USDT" }))
     XCTAssertTrue(result.warnings.contains(where: { $0.contains("Native TRX") && $0.contains("invalid") }))
     XCTAssertTrue(result.warnings.contains(where: { $0.contains("USDT") && $0.contains("invalid") }))
+  }
+
+  func testTronScanPublishesFragmentBasedExplorerURL() async throws {
+    let address = "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7"
+    let http = ScannerHTTPStub { request in
+      scannerResponse(request, #"{"data":[{"balance":1000000,"trc20":[]}]}"#)
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: ScannerStaticPriceProvider(values: ["tron": PricePoint(usd: 1)])
+    )
+
+    let result = try await scanner.scan(addresses: address)
+
+    XCTAssertEqual(
+      result.holdings.first(where: { $0.symbol == "TRX" })?.explorerUrl,
+      "https://tronscan.org/#/address/\(address)"
+    )
   }
 
   func testPriceOutagePreservesSuccessfulNativeBalance() async throws {

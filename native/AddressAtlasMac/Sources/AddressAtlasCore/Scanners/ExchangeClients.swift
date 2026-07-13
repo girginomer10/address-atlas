@@ -546,14 +546,14 @@ public enum ExchangeBalanceNormalizer {
   public static let coinGeckoIds: [String: String] = [
     "AAVE": "aave", "ADA": "cardano", "AERO": "aerodrome-finance", "ARB": "arbitrum",
     "ATOM": "cosmos", "AVAX": "avalanche-2", "BCH": "bitcoin-cash", "BNB": "binancecoin",
-    "BONK": "bonk", "BTC": "bitcoin", "CRV": "curve-dao-token", "DAI": "dai",
+    "BONK": "bonk", "BTC": "bitcoin", "BUSD": "binance-usd", "CRV": "curve-dao-token", "DAI": "dai",
     "DOGE": "dogecoin", "DOT": "polkadot", "ETH": "ethereum", "EURC": "euro-coin",
     "GNO": "gnosis", "JUP": "jupiter-exchange-solana", "LINK": "chainlink", "LDO": "lido-dao",
-    "LTC": "litecoin", "MATIC": "polygon-ecosystem-token", "MNT": "mantle", "MORPHO": "morpho",
+    "FDUSD": "first-digital-usd", "LTC": "litecoin", "MATIC": "polygon-ecosystem-token", "MNT": "mantle", "MORPHO": "morpho",
     "MSOL": "msol", "OP": "optimism", "ORCA": "orca", "OSMO": "osmosis", "PEPE": "pepe",
     "POL": "polygon-ecosystem-token", "PYTH": "pyth-network", "RAY": "raydium", "SCR": "scroll",
     "SHIB": "shiba-inu", "SOL": "solana", "STETH": "staked-ether", "STRD": "stride",
-    "TIA": "celestia", "UNI": "uniswap", "USDC": "usd-coin", "USDT": "tether",
+    "TIA": "celestia", "TUSD": "true-usd", "UNI": "uniswap", "USDC": "usd-coin", "USDP": "pax-dollar", "USDT": "tether",
     "WBTC": "wrapped-bitcoin", "WETH": "weth", "WIF": "dogwifcoin", "XLM": "stellar",
     "XRP": "ripple", "XDAI": "xdai", "ZK": "zksync"
   ]
@@ -567,7 +567,7 @@ public enum ExchangeBalanceNormalizer {
   ) async throws -> ExchangeNormalizationResult {
     let entries = balanceEntries(balance)
     let ids = Array(Set(entries.compactMap { symbol, _ in
-      usdStableSymbols.contains(symbol) || fiatSymbols.contains(symbol) ? nil : coinGeckoIds[symbol]
+      fiatSymbols.contains(symbol) ? nil : coinGeckoIds[symbol]
     }))
     let requestedFiatSymbols = Array(Set(entries.compactMap { symbol, _ in
       fiatSymbols.contains(symbol) && symbol != "USD" ? symbol : nil
@@ -629,7 +629,6 @@ public enum ExchangeBalanceNormalizer {
 
     if !priceRequestFailed {
       let missing = entries.compactMap { symbol, _ -> String? in
-        if usdStableSymbols.contains(symbol) { return nil }
         if fiatSymbols.contains(symbol) { return nil }
         guard let id = coinGeckoIds[symbol] else { return symbol }
         guard let point = prices[id], point.usd.isFinite, point.usd >= 0 else { return symbol }
@@ -754,7 +753,7 @@ public enum ExchangeBalanceNormalizer {
     prices: [String: PricePoint],
     fiatUsdRates: [String: Double]
   ) -> PricePoint {
-    if usdStableSymbols.contains(symbol) { return PricePoint(usd: 1, usd24hChange: 0) }
+    if symbol == "USD" { return PricePoint(usd: 1, usd24hChange: 0) }
     if fiatSymbols.contains(symbol), let rate = fiatUsdRates[symbol], rate.isFinite, rate > 0 {
       return PricePoint(usd: rate)
     }

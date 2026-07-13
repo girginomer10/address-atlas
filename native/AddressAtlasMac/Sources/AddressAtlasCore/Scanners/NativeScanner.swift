@@ -764,7 +764,7 @@ public struct NativeScanner: Sendable {
         priceUsd: unitPrice,
         valueUsd: amount * unitPrice,
         change24h: price.usd24hChange,
-        explorerUrl: chain.explorerUrl.appending(path: address).absoluteString,
+        explorerUrl: chain.explorerURL(for: address).absoluteString,
         source: source
       )
     ]
@@ -794,7 +794,7 @@ public struct NativeScanner: Sendable {
       priceUsd: priceUsd,
       valueUsd: amount * priceUsd,
       change24h: price?.usd24hChange,
-      explorerUrl: chain.explorerUrl.appending(path: address).absoluteString,
+      explorerUrl: chain.explorerURL(for: address).absoluteString,
       source: source
     )
   }
@@ -1010,7 +1010,7 @@ public struct NativeScanner: Sendable {
         priceUsd: 0,
         valueUsd: 0,
         change24h: nil,
-        explorerUrl: chain.explorerUrl.appending(path: address).absoluteString,
+        explorerUrl: chain.explorerURL(for: address).absoluteString,
         source: .issued
       )
     }
@@ -1092,16 +1092,15 @@ public struct NativeScanner: Sendable {
       }
       let coinGeckoId: String?
       if let rawId = token.coinGeckoId?.trimmingCharacters(in: .whitespacesAndNewlines), !rawId.isEmpty {
-        let normalizedId = rawId.lowercased()
-        guard normalizedId.count <= 128,
-              normalizedId.utf8.allSatisfy({ byte in
-                (97...122).contains(byte) || (48...57).contains(byte) || byte == 45
-              })
-        else {
-          warnings.append("Custom token \(label) has an invalid CoinGecko ID and was skipped.")
-          continue
+        if let normalizedId = UserInputValidation.normalizedCoinGeckoId(rawId) {
+          coinGeckoId = normalizedId
+        } else {
+          // Older app versions accepted Unicode lowercase characters here.
+          // Preserve the valid on-chain token and only discard unsafe pricing
+          // metadata so its balance remains visible as unpriced.
+          warnings.append("Custom token \(label) has an invalid CoinGecko ID; CoinGecko pricing was disabled.")
+          coinGeckoId = nil
         }
-        coinGeckoId = normalizedId
       } else {
         coinGeckoId = nil
       }

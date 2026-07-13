@@ -5,6 +5,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="Address Atlas"
 DIST_DIR="$ROOT/dist"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
+APP_VERSION_SOURCE="$ROOT/Sources/AddressAtlasMac/AppState.swift"
+APP_VERSION="$(sed -nE 's/^[[:space:]]*static let currentAppVersion = "([0-9]+(\.[0-9]+){1,3})"$/\1/p' "$APP_VERSION_SOURCE")"
+
+if [[ -z "$APP_VERSION" || "$APP_VERSION" == *$'\n'* ]]; then
+  echo "Could not read one valid currentAppVersion from $APP_VERSION_SOURCE" >&2
+  exit 1
+fi
 
 cd "$ROOT"
 
@@ -68,7 +75,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.2.0</string>
+  <string>$APP_VERSION</string>
   <key>CFBundleURLTypes</key>
   <array>
     <dict>

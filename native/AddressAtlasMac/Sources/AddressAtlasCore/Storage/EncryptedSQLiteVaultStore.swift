@@ -137,12 +137,23 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
     return document
   }
 
+  /// Preserve the original public source contract for callers that only need
+  /// durability. Internal callers that mirror the canonical persisted
+  /// timestamp back into memory use `saveReturningPersistedDocument`.
   public func save(_ document: VaultDocument) throws {
+    _ = try saveReturningPersistedDocument(document)
+  }
+
+  @discardableResult
+  public func saveReturningPersistedDocument(_ document: VaultDocument) throws -> VaultDocument {
     operationLock.lock()
     defer { operationLock.unlock() }
     try initializeLocked()
     var next = document
-    next.updatedAt = Date()
+    // JSONEncoder.addressAtlas persists ISO-8601 dates at whole-second
+    // precision. Canonicalize before writing so the returned updatedAt value
+    // exactly matches a subsequent load.
+    next.updatedAt = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
     let envelope = try crypto.sealJSON(
       next,
       with: key,
@@ -230,6 +241,7 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
     }
     expectedRevision = Int(storedRevision)
     expectedEnvelopeBytes = encoded
+    return next
   }
 
   public func rawStoredEnvelopeBytes() throws -> Data? {

@@ -14,6 +14,7 @@ final class AppState: ObservableObject {
   @Published var isUnlocked = false
   @Published private(set) var isUnlocking = false
   @Published private(set) var syncPersistencePending = false
+  private(set) var lastSaveRemovedScanRunCount = 0
   @Published var notice = "" {
     didSet {
       if !notice.isEmpty, !error.isEmpty { error = "" }
@@ -32,6 +33,7 @@ final class AppState: ObservableObject {
   private let crypto = VaultCrypto()
   private let keyStore = KeychainVaultKeyStore()
   private let syncCodec = VaultSyncCodec()
+  private let syncSnapshotByteLimit: Int
   private let recoveryKit = RecoveryKitCodec()
   private let endpointConfigClient: any EndpointConfigFetching
   private let passkeyAuthenticator = PasskeyWebAuthenticator()
@@ -53,9 +55,30 @@ final class AppState: ObservableObject {
   private static let maximumCustomTokens = 100
   private static let maximumManualHoldings = 100
   private static let maximumExchangeConnections = 20
+  /// The app-bundle script reads this value when generating Info.plist.
+  /// SwiftPM's `swift run` executable has no Info.plist, so it also needs the
+  /// compiled release version for the server compatibility check.
+  static let currentAppVersion = "0.2.0"
 
   init(endpointConfigClient: any EndpointConfigFetching = NativeEndpointConfigClient()) {
     self.endpointConfigClient = endpointConfigClient
+    syncSnapshotByteLimit = VaultSyncCodec.maximumSnapshotByteCount
+  }
+
+  /// Installs an already-loaded store for persistence behavior tests without
+  /// involving Keychain or the user's Application Support directory.
+  init(
+    testStore: EncryptedSQLiteVaultStore,
+    document: VaultDocument,
+    syncSnapshotByteLimit: Int = VaultSyncCodec.maximumSnapshotByteCount,
+    endpointConfigClient: any EndpointConfigFetching = NativeEndpointConfigClient()
+  ) {
+    precondition((1...VaultSyncCodec.maximumSnapshotByteCount).contains(syncSnapshotByteLimit))
+    self.endpointConfigClient = endpointConfigClient
+    self.syncSnapshotByteLimit = syncSnapshotByteLimit
+    self.store = testStore
+    self.document = document
+    self.isUnlocked = true
   }
 
   var latestScan: ScanRunRecord? {
@@ -96,7 +119,9 @@ final class AppState: ObservableObject {
   }
 
   var appVersion: String {
-    Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+    AppState.resolvedAppVersion(
+      Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+    )
   }
 
   /// False when the server's `minSupportedAppVersion` is newer than this build.
@@ -110,6 +135,12 @@ final class AppState: ObservableObject {
   /// traversing plaintext.
   static func validatedSyncURL(_ raw: String) -> URL? {
     SyncServerURL.validatedOrigin(raw)
+  }
+
+  static func resolvedAppVersion(_ bundleVersion: String?) -> String {
+    guard let bundleVersion else { return currentAppVersion }
+    let trimmed = bundleVersion.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? currentAppVersion : trimmed
   }
 
   static func supportsAppVersion(_ current: String, minimum: String?) -> Bool {
@@ -192,9 +223,11 @@ final class AppState: ObservableObject {
       let key = try await vaultKeyManager.loadOrCreateVaultKey(existingVaultAt: vaultURL)
       let sqlite = try EncryptedSQLiteVaultStore(path: vaultURL, vaultKey: key, crypto: crypto)
       let loaded = try sqlite.load()
-      document = normalizedLoadedDocument(loaded)
-      if document != loaded {
-        try sqlite.save(document)
+      let normalized = normalizedLoadedDocument(loaded)
+      if normalized != loaded {
+        document = try sqlite.saveReturningPersistedDocument(normalized)
+      } else {
+        document = loaded
       }
       vaultKey = key
       store = sqlite
@@ -209,15 +242,26 @@ final class AppState: ObservableObject {
 
   @discardableResult
   func save() -> Bool {
+    save(projectedSyncVersion: nil)
+  }
+
+  @discardableResult
+  private func save(projectedSyncVersion: Int?) -> Bool {
+    lastSaveRemovedScanRunCount = 0
     guard let store else {
       notice = ""
       error = "Unlock the vault before saving."
       return false
     }
     do {
-      try store.save(document)
+      let prepared = try prepareForSyncPersistence(
+        document,
+        projectedVersion: projectedSyncVersion
+      )
+      document = try store.saveReturningPersistedDocument(prepared.document)
+      lastSaveRemovedScanRunCount = prepared.removedScanRunCount
       syncPersistencePending = false
-      notice = "Saved locally."
+      notice = "Saved locally." + pruningNoticeSuffix(prepared.removedScanRunCount)
       error = ""
       return true
     } catch {
@@ -230,7 +274,7 @@ final class AppState: ObservableObject {
   func retryPendingSyncPersistence() {
     guard syncPersistencePending else { return }
     if save() {
-      notice = "Sync state saved locally."
+      notice = "Sync state saved locally." + pruningNoticeSuffix(lastSaveRemovedScanRunCount)
     }
   }
 
@@ -263,16 +307,22 @@ final class AppState: ObservableObject {
     }
   }
 
-  func updateWalletLabel(id: UUID, label: String) {
-    guard canMutateVault() else { return }
-    guard let index = document.wallets.firstIndex(where: { $0.id == id }) else { return }
+  static func normalizedWalletLabel(_ label: String) -> String? {
     let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty, trimmed.count <= 80 else {
+    return trimmed.isEmpty || trimmed.count > 80 ? nil : trimmed
+  }
+
+  @discardableResult
+  func updateWalletLabel(id: UUID, label: String) -> Bool {
+    guard canMutateVault() else { return false }
+    guard let index = document.wallets.firstIndex(where: { $0.id == id }) else { return false }
+    guard let normalized = AppState.normalizedWalletLabel(label) else {
       error = "Wallet labels must be between 1 and 80 characters."
-      return
+      return false
     }
-    _ = mutateDocument { document in
-      document.wallets[index].label = trimmed
+    guard document.wallets[index].label != normalized else { return true }
+    return mutateDocument { document in
+      document.wallets[index].label = normalized
       document.wallets[index].updatedAt = Date()
     }
   }
@@ -305,7 +355,10 @@ final class AppState: ObservableObject {
     let parsedDecimals = Int(decimals.trimmingCharacters(in: .whitespacesAndNewlines)) ?? -1
     let priceInput = priceUsd.trimmingCharacters(in: .whitespacesAndNewlines)
     let parsedPrice = priceInput.isEmpty ? nil : UserInputValidation.nonnegativeFiniteNumber(priceInput)
-    let normalizedCoinGeckoId = coinGeckoId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let trimmedCoinGeckoId = coinGeckoId.trimmingCharacters(in: .whitespacesAndNewlines)
+    let normalizedCoinGeckoId = trimmedCoinGeckoId.isEmpty
+      ? nil
+      : UserInputValidation.normalizedCoinGeckoId(trimmedCoinGeckoId)
     guard chainKind == .evm || chainKind == .solana,
           !normalizedAddress.isEmpty,
           !normalizedSymbol.isEmpty, normalizedSymbol.count <= 32,
@@ -316,10 +369,7 @@ final class AppState: ObservableObject {
       error = "Token needs address, symbol, name, and decimals between 0 and 36."
       return false
     }
-    guard normalizedCoinGeckoId.isEmpty || (
-      normalizedCoinGeckoId.count <= 128
-        && normalizedCoinGeckoId.allSatisfy { $0.isLowercase || $0.isNumber || $0 == "-" }
-    ) else {
+    guard trimmedCoinGeckoId.isEmpty || normalizedCoinGeckoId != nil else {
       error = "CoinGecko ID may contain lowercase letters, numbers, and hyphens only."
       return false
     }
@@ -354,7 +404,7 @@ final class AppState: ObservableObject {
           symbol: normalizedSymbol,
           name: normalizedName,
           decimals: parsedDecimals,
-          coinGeckoId: normalizedCoinGeckoId.isEmpty ? nil : normalizedCoinGeckoId,
+          coinGeckoId: normalizedCoinGeckoId,
           priceUsd: parsedPrice
         )
       )
@@ -676,8 +726,10 @@ final class AppState: ObservableObject {
         document = previousDocument
         return
       }
+      let removedScanRunCount = lastSaveRemovedScanRunCount
       await refreshEndpointConfig(silent: true)
-      notice = mode == .register ? "Passkey account connected." : "Passkey sign-in complete."
+      notice = (mode == .register ? "Passkey account connected." : "Passkey sign-in complete.")
+        + pruningNoticeSuffix(removedScanRunCount)
       error = ""
     } catch {
       self.error = error.localizedDescription
@@ -689,7 +741,7 @@ final class AppState: ObservableObject {
       error = "Cancel or finish the active scan before syncing."
       return
     }
-    guard let vaultKey else {
+    guard let vaultKey, let store else {
       error = "Vault must be unlocked before syncing."
       return
     }
@@ -711,6 +763,7 @@ final class AppState: ObservableObject {
     }
     syncing = true
     defer { syncing = false }
+    var durablyRemovedScanRunCount = 0
     do {
       guard await refreshEndpointConfig(silent: true) else {
         throw SyncClientError.requestFailed(503, "The sync server's compatibility policy could not be verified. Try again when endpoint config is available.")
@@ -738,6 +791,18 @@ final class AppState: ObservableObject {
         uploadDocument.syncState.latestRemoteVersion = max(uploadDocument.syncState.latestRemoteVersion, remote.version)
       }
       let nextVersion = try syncCodec.nextVersion(after: uploadDocument.syncState.latestRemoteVersion)
+      let prepared = try prepareForSyncPersistence(
+        uploadDocument,
+        projectedVersion: nextVersion
+      )
+      uploadDocument = prepared.document
+      if prepared.removedScanRunCount > 0 {
+        // Make the pruned candidate durable before the remote side effect, and
+        // upload that exact persisted value (including its canonical timestamp).
+        uploadDocument = try store.saveReturningPersistedDocument(uploadDocument)
+        document = uploadDocument
+        durablyRemovedScanRunCount = prepared.removedScanRunCount
+      }
       let sealedContentChecksum = try syncCodec.contentChecksum(for: uploadDocument)
       let snapshot = try syncCodec.seal(
         document: uploadDocument,
@@ -752,15 +817,17 @@ final class AppState: ObservableObject {
         contentChecksum: sealedContentChecksum
       )
       document = uploadDocument
-      guard save() else {
+      guard save(projectedSyncVersion: snapshot.version) else {
         let persistenceError = self.error
         syncPersistencePending = true
         self.error = "The remote vault was uploaded, but its sync state is pending local persistence. Keep the app open and use Retry local save after fixing storage: \(persistenceError)"
+          + pruningNoticeSuffix(durablyRemovedScanRunCount)
         return
       }
-      notice = "Encrypted vault uploaded."
+      let removedScanRunCount = durablyRemovedScanRunCount + lastSaveRemovedScanRunCount
+      notice = "Encrypted vault uploaded." + pruningNoticeSuffix(removedScanRunCount)
     } catch {
-      handleSyncError(error)
+      handleSyncError(error, removedScanRunCount: durablyRemovedScanRunCount)
     }
   }
 
@@ -791,6 +858,7 @@ final class AppState: ObservableObject {
     }
     syncing = true
     defer { syncing = false }
+    var removedScanRunCount = 0
     do {
       guard await refreshEndpointConfig(silent: true) else {
         throw SyncClientError.requestFailed(503, "The sync server's compatibility policy could not be verified. Try again when endpoint config is available.")
@@ -838,10 +906,17 @@ final class AppState: ObservableObject {
         sessionToken: document.syncState.sessionToken
       )
       try syncCodec.markSynced(document: &opened, snapshot: snapshot)
+      var persistenceProjectionVersion = snapshot.version
 
       if result.requiresV2Upgrade {
         do {
           let upgradeVersion = try syncCodec.nextVersion(after: snapshot.version)
+          let prepared = try prepareForSyncPersistence(
+            opened,
+            projectedVersion: upgradeVersion
+          )
+          opened = prepared.document
+          removedScanRunCount += prepared.removedScanRunCount
           let upgraded = try syncCodec.seal(
             document: opened,
             vaultKey: vaultKey,
@@ -850,30 +925,35 @@ final class AppState: ObservableObject {
           )
           try await client.upload(snapshot: upgraded)
           try syncCodec.markSynced(document: &opened, snapshot: upgraded)
+          persistenceProjectionVersion = upgraded.version
         } catch {
           document = opened
-          guard save() else {
+          guard save(projectedSyncVersion: persistenceProjectionVersion) else {
             syncPersistencePending = true
             throw SyncClientError.requestFailed(
               500,
               "The legacy vault downloaded, but its local persistence is pending before the v2 upgrade can be retried."
             )
           }
+          removedScanRunCount += lastSaveRemovedScanRunCount
           throw error
         }
       }
       document = opened
-      guard save() else {
+      guard save(projectedSyncVersion: persistenceProjectionVersion) else {
         let persistenceError = self.error
         syncPersistencePending = true
         self.error = "The remote vault was opened, but its local persistence is pending. Keep the app open and use Retry local save after fixing storage: \(persistenceError)"
+          + pruningNoticeSuffix(removedScanRunCount)
         return
       }
-      notice = result.requiresV2Upgrade
+      removedScanRunCount += lastSaveRemovedScanRunCount
+      let successNotice = result.requiresV2Upgrade
         ? "Encrypted vault downloaded and upgraded to protected sync format v2."
         : "Encrypted vault downloaded."
+      notice = successNotice + pruningNoticeSuffix(removedScanRunCount)
     } catch {
-      handleSyncError(error)
+      handleSyncError(error, removedScanRunCount: removedScanRunCount)
     }
   }
 
@@ -904,10 +984,10 @@ final class AppState: ObservableObject {
         vaultURL: appSupportDirectory.appending(path: "vault.sqlite"),
         keyStore: keyStore
       )
-      document = normalizedLoadedDocument(recovered.document)
-      if document != recovered.document {
-        try recovered.store.save(document)
-      }
+      let normalized = normalizedLoadedDocument(recovered.document)
+      document = normalized == recovered.document
+        ? recovered.document
+        : try recovered.store.saveReturningPersistedDocument(normalized)
       vaultKey = recovered.vaultKey
       store = recovered.store
       isUnlocked = true
@@ -919,25 +999,31 @@ final class AppState: ObservableObject {
     }
   }
 
-  private func handleSyncError(_ error: Error) {
+  func handleSyncError(_ error: Error, removedScanRunCount: Int = 0) {
     if case SyncClientError.authenticationRequired = error {
       document.syncState.sessionToken = ""
       do {
         guard let store else {
           syncPersistencePending = true
           self.error = "Sync session expired, but the cleared session is pending local persistence. Unlock the vault and retry the local save."
+            + pruningNoticeSuffix(removedScanRunCount)
           return
         }
-        try store.save(document)
+        // The session token is excluded from remote snapshots, so clearing it
+        // must remain locally persistable even if the existing synced payload
+        // is currently above the wire limit.
+        document = try store.saveReturningPersistedDocument(document)
       } catch {
         syncPersistencePending = true
         self.error = "Sync session expired, but the cleared session is pending local persistence. Use Retry local save after fixing storage: \(error.localizedDescription)"
+          + pruningNoticeSuffix(removedScanRunCount)
         return
       }
       self.error = "Sync session expired. Sign in with passkey again."
+        + pruningNoticeSuffix(removedScanRunCount)
       return
     }
-    self.error = error.localizedDescription
+    self.error = error.localizedDescription + pruningNoticeSuffix(removedScanRunCount)
   }
 
   func startScan() {
@@ -1036,9 +1122,10 @@ final class AppState: ObservableObject {
           document.scanRuns.sorted { $0.generatedAt > $1.generatedAt }.prefix(Self.maximumStoredScanRuns)
         )
       }) {
-        notice = scan.warnings.isEmpty
+        let successNotice = scan.warnings.isEmpty
           ? "Snapshot saved."
           : "Snapshot saved with \(scan.warnings.count) warning\(scan.warnings.count == 1 ? "" : "s")."
+        notice = successNotice + pruningNoticeSuffix(lastSaveRemovedScanRunCount)
       }
     } catch is CancellationError {
       notice = "Scan cancelled."
@@ -1047,10 +1134,108 @@ final class AppState: ObservableObject {
     }
   }
 
+  private struct SyncPersistencePreparation {
+    var document: VaultDocument
+    var removedScanRunCount: Int
+  }
+
+  private func pruningNoticeSuffix(_ removedScanRunCount: Int) -> String {
+    guard removedScanRunCount > 0 else { return "" }
+    return " Removed \(removedScanRunCount) oldest scan snapshot\(removedScanRunCount == 1 ? "" : "s") to stay within the sync size limit."
+  }
+
+  /// Synced vaults must remain uploadable after sync metadata is installed.
+  /// If necessary, retain the newest run and binary-search the largest
+  /// newest-first prefix whose exact projected envelope fits the wire limit.
+  /// The returned candidate deliberately keeps the previous sync baseline, so
+  /// removing history remains a visible local change until it is uploaded.
+  private func prepareForSyncPersistence(
+    _ input: VaultDocument,
+    projectedVersion: Int? = nil
+  ) throws -> SyncPersistencePreparation {
+    guard let accountId = input.syncState.accountId,
+          syncCodec.isValidAccountId(accountId)
+    else {
+      return SyncPersistencePreparation(document: input, removedScanRunCount: 0)
+    }
+
+    let version: Int
+    if let projectedVersion {
+      version = projectedVersion
+    } else {
+      version = try syncCodec.versionForNextSyncSizeProjection(
+        after: input.syncState.latestRemoteVersion
+      )
+    }
+    func projectedByteCount(_ document: VaultDocument) throws -> Int {
+      let current = try syncCodec.encodedSnapshotByteCount(
+        document: document,
+        accountId: accountId
+      )
+      let afterMarkSynced = try syncCodec.projectedPostSyncSnapshotByteCount(
+        document: document,
+        version: version,
+        accountId: accountId
+      )
+      return max(current, afterMarkSynced)
+    }
+
+    let fullByteCount = try projectedByteCount(input)
+    guard fullByteCount > syncSnapshotByteLimit else {
+      return SyncPersistencePreparation(document: input, removedScanRunCount: 0)
+    }
+
+    let newestFirst = input.scanRuns.sorted { lhs, rhs in
+      if lhs.generatedAt != rhs.generatedAt {
+        return lhs.generatedAt > rhs.generatedAt
+      }
+      return lhs.id.uuidString < rhs.id.uuidString
+    }
+    guard let newest = newestFirst.first else {
+      throw VaultSyncSnapshotTooLargeError(
+        actualByteCount: fullByteCount,
+        maximumByteCount: syncSnapshotByteLimit
+      )
+    }
+
+    var newestOnly = input
+    newestOnly.scanRuns = [newest]
+    let minimumByteCount = try projectedByteCount(newestOnly)
+    guard minimumByteCount <= syncSnapshotByteLimit else {
+      throw VaultSyncSnapshotTooLargeError(
+        actualByteCount: minimumByteCount,
+        maximumByteCount: syncSnapshotByteLimit
+      )
+    }
+
+    var bestKeptCount = 1
+    var lowerBound = 2
+    var upperBound = newestFirst.count - 1 // The full set is already too large.
+    while lowerBound <= upperBound {
+      let midpoint = lowerBound + (upperBound - lowerBound) / 2
+      var candidate = input
+      candidate.scanRuns = Array(newestFirst.prefix(midpoint))
+      if try projectedByteCount(candidate) <= syncSnapshotByteLimit {
+        bestKeptCount = midpoint
+        lowerBound = midpoint + 1
+      } else {
+        upperBound = midpoint - 1
+      }
+    }
+
+    var pruned = input
+    pruned.scanRuns = Array(newestFirst.prefix(bestKeptCount))
+    return SyncPersistencePreparation(
+      document: pruned,
+      removedScanRunCount: newestFirst.count - bestKeptCount
+    )
+  }
+
   private func normalizedLoadedDocument(_ input: VaultDocument) -> VaultDocument {
     var output = input
     output.schemaVersion = VaultDocument.currentSchemaVersion
     output.preferences.currency = "USD"
+    output.customTokens = AppState.repairLegacyCoinGeckoIDs(in: output.customTokens)
     output.scanRuns = Array(output.scanRuns.sorted { $0.generatedAt > $1.generatedAt }.prefix(Self.maximumStoredScanRuns))
     if let canonicalServer = AppState.validatedSyncURL(output.syncState.serverURL) {
       // Equivalent origin spellings must not clear a valid session/baseline.
@@ -1062,8 +1247,17 @@ final class AppState: ObservableObject {
     return output
   }
 
+  static func repairLegacyCoinGeckoIDs(in tokens: [CustomTokenRecord]) -> [CustomTokenRecord] {
+    tokens.map { token in
+      var repaired = token
+      guard let rawId = token.coinGeckoId else { return repaired }
+      repaired.coinGeckoId = UserInputValidation.normalizedCoinGeckoId(rawId)
+      return repaired
+    }
+  }
+
   @discardableResult
-  private func mutateDocument(_ mutation: (inout VaultDocument) -> Void) -> Bool {
+  func mutateDocument(_ mutation: (inout VaultDocument) -> Void) -> Bool {
     let previous = document
     mutation(&document)
     guard save() else {

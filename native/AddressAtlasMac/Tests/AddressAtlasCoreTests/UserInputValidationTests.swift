@@ -21,4 +21,17 @@ final class UserInputValidationTests: XCTestCase {
       XCTAssertNil(UserInputValidation.nonnegativeFiniteNumber(input, locale: locale), input)
     }
   }
+
+  func testNormalizesOnlyASCIICoinGeckoIdentifiers() {
+    XCTAssertEqual(UserInputValidation.normalizedCoinGeckoId(" Test-Token-2 "), "test-token-2")
+
+    for input in ["", "tökén", "Koin", "token_name", "token.name", "token name", "токен"] {
+      XCTAssertNil(UserInputValidation.normalizedCoinGeckoId(input), input)
+    }
+    XCTAssertNil(
+      UserInputValidation.normalizedCoinGeckoId(
+        String(repeating: "a", count: UserInputValidation.maximumCoinGeckoIdLength + 1)
+      )
+    )
+  }
 }

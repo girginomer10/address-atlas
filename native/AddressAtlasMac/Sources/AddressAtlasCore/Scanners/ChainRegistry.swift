@@ -38,6 +38,19 @@ public struct ChainConfig: Codable, Hashable, Sendable {
     self.nativeDenom = nativeDenom
     self.addressPrefix = addressPrefix
   }
+
+  /// Builds an address URL for both conventional path-based explorers and
+  /// single-page explorers such as Tronscan, whose route lives in a fragment.
+  public func explorerURL(for address: String) -> URL {
+    if var components = URLComponents(url: explorerUrl, resolvingAgainstBaseURL: false),
+       let fragment = components.fragment {
+      components.fragment = fragment + address
+      if let url = components.url {
+        return url
+      }
+    }
+    return explorerUrl.appending(path: address)
+  }
 }
 
 public struct TokenConfig: Codable, Hashable, Sendable {

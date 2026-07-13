@@ -4,6 +4,123 @@ import XCTest
 @testable import AddressAtlasCore
 
 final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
+  func testEncodedSnapshotByteCountExactlyMatchesSealedEnvelope() throws {
+    let codec = VaultSyncCodec()
+    let vaultKey = try VaultCrypto().generateVaultKey()
+    let accountId = "size-account"
+
+    for warningLength in [0, 1, 2, 3, 31, 512] {
+      let document = VaultDocument(
+        scanRuns: [
+          ScanRunRecord(
+            generatedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            totalUsd: 0,
+            inputCount: 0,
+            holdings: [],
+            warnings: [String(repeating: "x", count: warningLength)]
+          )
+        ],
+        syncState: SyncState(
+          accountId: "  \(accountId)  ",
+          serverURL: "https://sync.example",
+          sessionToken: "must-not-be-projected"
+        ),
+        updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+      )
+
+      let projected = try codec.encodedSnapshotByteCount(
+        document: document,
+        accountId: "  \(accountId)  "
+      )
+      let snapshot = try codec.seal(
+        document: document,
+        vaultKey: vaultKey,
+        version: 1,
+        accountId: "  \(accountId)  "
+      )
+
+      XCTAssertEqual(projected, snapshot.byteSize, "warning length \(warningLength)")
+      XCTAssertEqual(
+        projected,
+        try JSONEncoder.addressAtlas.encode(snapshot.envelope).count,
+        "warning length \(warningLength)"
+      )
+    }
+  }
+
+  func testPostSyncProjectionReservesExactMarkSyncedMetadataHeadroom() throws {
+    let codec = VaultSyncCodec()
+    let vaultKey = try VaultCrypto().generateVaultKey()
+    let accountId = "post-sync-account"
+    var document = VaultDocument(syncState: SyncState(accountId: accountId))
+    let beforeMark = try codec.encodedSnapshotByteCount(
+      document: document,
+      accountId: accountId
+    )
+    let projectedAfterMark = try codec.projectedPostSyncSnapshotByteCount(
+      document: document,
+      version: 7,
+      accountId: accountId
+    )
+    let snapshot = try codec.seal(
+      document: document,
+      vaultKey: vaultKey,
+      version: 7,
+      accountId: accountId
+    )
+
+    try codec.markSynced(
+      document: &document,
+      snapshot: snapshot,
+      at: Date(timeIntervalSince1970: 1_700_000_000)
+    )
+    let actualAfterMark = try codec.encodedSnapshotByteCount(
+      document: document,
+      accountId: accountId
+    )
+
+    XCTAssertGreaterThan(projectedAfterMark, beforeMark)
+    XCTAssertEqual(projectedAfterMark, actualAfterMark)
+  }
+
+  func testSealReportsActualAndMaximumBytesForOversizedSnapshot() throws {
+    let codec = VaultSyncCodec()
+    let vaultKey = try VaultCrypto().generateVaultKey()
+    let document = VaultDocument(
+      scanRuns: [
+        ScanRunRecord(
+          totalUsd: 0,
+          inputCount: 0,
+          holdings: [],
+          warnings: [String(repeating: "x", count: 6_100_000)]
+        )
+      ]
+    )
+    let actual = try codec.encodedSnapshotByteCount(
+      document: document,
+      accountId: "oversized-account"
+    )
+    XCTAssertGreaterThan(actual, VaultSyncCodec.maximumSnapshotByteCount)
+
+    XCTAssertThrowsError(
+      try codec.seal(
+        document: document,
+        vaultKey: vaultKey,
+        version: 1,
+        accountId: "oversized-account"
+      )
+    ) { error in
+      XCTAssertEqual(
+        error as? VaultSyncSnapshotTooLargeError,
+        VaultSyncSnapshotTooLargeError(
+          actualByteCount: actual,
+          maximumByteCount: VaultSyncCodec.maximumSnapshotByteCount
+        )
+      )
+      XCTAssertTrue(error.localizedDescription.contains("\(actual) bytes"))
+    }
+  }
+
   func testRemoteSnapshotRejectsMalformedMetadataBeforeVersionUse() throws {
     let vaultKey = try VaultCrypto().generateVaultKey()
     let codec = VaultSyncCodec()
@@ -32,6 +149,17 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
 
     XCTAssertEqual(try codec.nextVersion(after: 0), 1)
     XCTAssertEqual(try codec.nextVersion(after: 7), 8)
+    XCTAssertEqual(
+      try codec.versionForNextSyncSizeProjection(after: 2_000_000_000),
+      2_000_000_000
+    )
+    XCTAssertEqual(
+      try codec.versionForNextSyncSizeProjection(after: Int.max),
+      2_000_000_000
+    )
+    XCTAssertThrowsError(try codec.versionForNextSyncSizeProjection(after: -1)) { error in
+      XCTAssertEqual(error as? VaultSyncCodecError, .invalidVersion)
+    }
     for latestVersion in [-1, 2_000_000_000, Int.max] {
       XCTAssertThrowsError(try codec.nextVersion(after: latestVersion)) { error in
         XCTAssertEqual(error as? VaultSyncCodecError, .invalidVersion)

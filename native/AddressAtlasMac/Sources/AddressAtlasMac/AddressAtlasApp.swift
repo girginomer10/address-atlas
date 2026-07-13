@@ -382,18 +382,29 @@ struct WalletsView: View {
 struct WalletRow: View {
   @EnvironmentObject private var state: AppState
   @State private var confirmingRemoval = false
+  @State private var labelDraft: String
+  @FocusState private var labelIsFocused: Bool
   var wallet: WalletRecord
+
+  init(wallet: WalletRecord) {
+    self.wallet = wallet
+    _labelDraft = State(initialValue: wallet.label)
+  }
 
   var body: some View {
     HStack(spacing: 16) {
-      TextField("Label", text: Binding(get: {
-        state.document.wallets.first(where: { $0.id == wallet.id })?.label ?? wallet.label
-      }, set: { newValue in
-        state.updateWalletLabel(id: wallet.id, label: newValue)
-      }))
+      TextField("Label", text: $labelDraft)
       .textFieldStyle(.plain)
       .font(.system(size: 16, weight: .semibold))
       .frame(width: 180)
+      .focused($labelIsFocused)
+      .onSubmit(commitLabel)
+      .onChange(of: labelIsFocused) { _, isFocused in
+        if !isFocused { commitLabel() }
+      }
+      .onChange(of: wallet.label) { _, label in
+        if !labelIsFocused { labelDraft = label }
+      }
 
       Text(wallet.address)
         .font(.system(size: 12, design: .monospaced))
@@ -427,7 +438,18 @@ struct WalletRow: View {
     } message: {
       Text("The public address will be removed from this vault. Existing snapshots are unchanged.")
     }
+    .onDisappear(perform: commitLabel)
     .disabled(state.vaultEditsDisabled)
+  }
+
+  private func commitLabel() {
+    let persistedLabel = state.document.wallets.first(where: { $0.id == wallet.id })?.label ?? wallet.label
+    guard labelDraft != persistedLabel else { return }
+    guard state.updateWalletLabel(id: wallet.id, label: labelDraft) else {
+      labelDraft = persistedLabel
+      return
+    }
+    labelDraft = state.document.wallets.first(where: { $0.id == wallet.id })?.label ?? persistedLabel
   }
 }
 
