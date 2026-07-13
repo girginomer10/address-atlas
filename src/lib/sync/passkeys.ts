@@ -92,15 +92,16 @@ export function parsePasskeyVerifyInput(body: unknown): PasskeyVerifyInput {
 export async function createPasskeyOptions(body: unknown) {
   const input = parsePasskeyOptionsInput(body);
   const config = getSyncPasskeyConfig();
+  // SimpleWebAuthn treats string challenges as UTF-8 input and encodes them
+  // again. Pass raw entropy and bind the token to its exact browser output.
   if (input.mode === "register") {
     const pendingUserId = randomUUID();
-    const challenge = base64urlEncode(randomBytes(32));
     const publicKey = await generateRegistrationOptions({
       rpName: config.rpName,
       rpID: config.rpID,
       userName: input.accountName || `address-atlas-${pendingUserId}`,
       userID: base64urlDecode(base64urlEncode(pendingUserId)),
-      challenge,
+      challenge: randomBytes(32),
       attestationType: "none",
       authenticatorSelection: {
         residentKey: "required",
@@ -111,7 +112,7 @@ export async function createPasskeyOptions(body: unknown) {
       mode: "register",
       challengeToken: issueChallengeToken({
         mode: "register",
-        challenge,
+        challenge: publicKey.challenge,
         pendingUserId,
         expiresAt: Date.now() + 1000 * 60 * 5
       }),
@@ -120,17 +121,16 @@ export async function createPasskeyOptions(body: unknown) {
   }
 
   if (input.mode === "authenticate") {
-    const challenge = base64urlEncode(randomBytes(32));
     const publicKey = await generateAuthenticationOptions({
       rpID: config.rpID,
-      challenge,
+      challenge: randomBytes(32),
       userVerification: "required"
     });
     return {
       mode: "authenticate",
       challengeToken: issueChallengeToken({
         mode: "authenticate",
-        challenge,
+        challenge: publicKey.challenge,
         expiresAt: Date.now() + 1000 * 60 * 5
       }),
       publicKey

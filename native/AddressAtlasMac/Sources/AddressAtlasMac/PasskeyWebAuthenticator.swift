@@ -54,7 +54,9 @@ final class PasskeyWebAuthenticator: NSObject, ASWebAuthenticationPresentationCo
         }
       }
       webSession.presentationContextProvider = self
-      webSession.prefersEphemeralWebBrowserSession = false
+      // The passkey ceremony does not require Safari cookies. Avoid retaining
+      // or reusing web-session state on shared Macs.
+      webSession.prefersEphemeralWebBrowserSession = true
       session = webSession
       if !webSession.start() {
         session = nil

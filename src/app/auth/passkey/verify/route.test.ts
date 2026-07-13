@@ -31,12 +31,24 @@ describe("passkey verification error boundary", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.rateLimitMany.mockReturnValue(true);
+    mocks.verifyPasskey.mockResolvedValue({
+      verified: true,
+      userId: "user-1",
+      sessionToken: "session-token"
+    });
+  });
+
+  it("marks session-token responses as non-cacheable", async () => {
+    const response = await POST(request());
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
   });
 
   it("normalizes expected authentication failures", async () => {
     mocks.verifyPasskey.mockRejectedValue(new PasskeyVerificationError());
     const response = await POST(request());
     expect(response.status).toBe(400);
+    expect(response.headers.get("cache-control")).toBe("no-store");
     expect(await response.json()).toEqual({ error: "Passkey verification failed." });
   });
 
@@ -44,8 +56,18 @@ describe("passkey verification error boundary", () => {
     mocks.verifyPasskey.mockRejectedValue(new Error("postgres://admin:secret@db failed"));
     const response = await POST(request());
     expect(response.status).toBe(500);
+    expect(response.headers.get("cache-control")).toBe("no-store");
     const body = JSON.stringify(await response.json());
     expect(body).toContain("Passkey verification failed");
     expect(body).not.toContain("secret");
+  });
+
+  it("marks rate-limit responses as non-cacheable", async () => {
+    mocks.rateLimitMany.mockReturnValue(false);
+    const response = await POST(request());
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(mocks.verifyPasskey).not.toHaveBeenCalled();
   });
 });

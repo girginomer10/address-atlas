@@ -83,7 +83,8 @@ public struct CoinGeckoPriceClient: PriceProviding {
           ]
           return try await http.get(components.url!, as: [String: PricePoint].self)
         }
-        for (id, point) in response where point.usd.isFinite && point.usd >= 0 {
+        for (id, point) in response {
+          guard let point = Self.sanitized(point) else { continue }
           merged[id] = point
         }
       } catch {
@@ -96,6 +97,12 @@ public struct CoinGeckoPriceClient: PriceProviding {
       throw PriceClientError.requestFailed(firstFailure)
     }
     return merged
+  }
+
+  static func sanitized(_ point: PricePoint) -> PricePoint? {
+    guard point.usd.isFinite, point.usd >= 0 else { return nil }
+    let finiteChange = point.usd24hChange.flatMap { $0.isFinite ? $0 : nil }
+    return PricePoint(usd: point.usd, usd24hChange: finiteChange)
   }
 
   public func usdRates(forFiatSymbols symbols: [String]) async throws -> [String: Double] {

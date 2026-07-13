@@ -43,6 +43,10 @@ struct RootView: View {
     "\(state.isUnlocked)-\(state.document.preferences.autoRefresh)"
   }
 
+  private var endpointConfigRefreshTaskID: String {
+    "\(state.isUnlocked)-\(state.document.syncState.serverURL)"
+  }
+
   var body: some View {
     Group {
       if state.isUnlocked {
@@ -72,6 +76,9 @@ struct RootView: View {
         else { continue }
         state.startScan()
       }
+    }
+    .task(id: endpointConfigRefreshTaskID) {
+      await state.runEndpointConfigRefreshLoop()
     }
   }
 }

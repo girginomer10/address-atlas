@@ -234,7 +234,25 @@ extension JSONEncoder {
 extension JSONDecoder {
   public static var addressAtlas: JSONDecoder {
     let decoder = JSONDecoder()
-    decoder.dateDecodingStrategy = .iso8601
+    // Foundation's built-in `.iso8601` strategy on macOS 14 rejects the
+    // fractional seconds emitted by JavaScript's `Date.toISOString()`. Keep
+    // accepting the second-precision dates produced by our encoder while also
+    // accepting the server's RFC 3339 timestamps.
+    let fractionalFormatter = ISO8601DateFormatter()
+    fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    let wholeSecondsFormatter = ISO8601DateFormatter()
+    wholeSecondsFormatter.formatOptions = [.withInternetDateTime]
+    decoder.dateDecodingStrategy = .custom { decoder in
+      let container = try decoder.singleValueContainer()
+      let value = try container.decode(String.self)
+      if let date = fractionalFormatter.date(from: value) ?? wholeSecondsFormatter.date(from: value) {
+        return date
+      }
+      throw DecodingError.dataCorruptedError(
+        in: container,
+        debugDescription: "Expected an ISO 8601 date with optional fractional seconds."
+      )
+    }
     return decoder
   }
 }

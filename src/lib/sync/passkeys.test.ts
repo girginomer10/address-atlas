@@ -8,18 +8,15 @@ const mocks = vi.hoisted(() => ({
   release: vi.fn(),
   verifyRegistrationResponse: vi.fn(),
   verifyAuthenticationResponse: vi.fn(),
-  generateRegistrationOptions: vi.fn(),
-  generateAuthenticationOptions: vi.fn(),
   readChallengeToken: vi.fn(),
   issueSessionToken: vi.fn(),
   issueChallengeToken: vi.fn()
 }));
 
-vi.mock("@simplewebauthn/server", () => ({
+vi.mock("@simplewebauthn/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@simplewebauthn/server")>()),
   verifyRegistrationResponse: mocks.verifyRegistrationResponse,
-  verifyAuthenticationResponse: mocks.verifyAuthenticationResponse,
-  generateRegistrationOptions: mocks.generateRegistrationOptions,
-  generateAuthenticationOptions: mocks.generateAuthenticationOptions
+  verifyAuthenticationResponse: mocks.verifyAuthenticationResponse
 }));
 
 vi.mock("./postgres", () => ({
@@ -47,7 +44,7 @@ vi.mock("./tokens", () => ({
   issueChallengeToken: mocks.issueChallengeToken
 }));
 
-import { parsePasskeyOptionsInput, verifyPasskey } from "./passkeys";
+import { createPasskeyOptions, parsePasskeyOptionsInput, verifyPasskey } from "./passkeys";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const CHALLENGE = "c".repeat(43);
@@ -59,6 +56,7 @@ describe("passkey account safety", () => {
     mocks.poolQuery.mockResolvedValue({ rowCount: 0, rows: [] });
     mocks.connect.mockResolvedValue({ query: mocks.clientQuery, release: mocks.release });
     mocks.issueSessionToken.mockReturnValue("session-token");
+    mocks.issueChallengeToken.mockReturnValue("challenge-token");
   });
 
   it("bounds account labels before generating registration options", () => {
@@ -69,6 +67,18 @@ describe("passkey account safety", () => {
     expect(() => parsePasskeyOptionsInput({ mode: "register", accountName: "x".repeat(81) })).toThrow(/80/);
     expect(() => parsePasskeyOptionsInput({ mode: "authenticate", accountName: "unexpected" })).toThrow(/only accepted/i);
   });
+
+  it.each(["register", "authenticate"] as const)(
+    "binds the %s token to the exact challenge returned to the browser",
+    async (mode) => {
+      const result = await createPasskeyOptions({ mode });
+      const tokenPayload = mocks.issueChallengeToken.mock.calls[0]?.[0];
+
+      expect(result?.challengeToken).toBe("challenge-token");
+      expect(result?.publicKey.challenge).toHaveLength(43);
+      expect(tokenPayload.challenge).toBe(result?.publicKey.challenge);
+    }
+  );
 
   it("rejects duplicate credential IDs and rolls back without mutating their owner", async () => {
     mocks.readChallengeToken.mockReturnValue({
@@ -137,6 +147,36 @@ describe("passkey account safety", () => {
     expect(mocks.release).toHaveBeenCalledWith(true);
   });
 
+  it("rejects a replayed registration challenge before creating an account", async () => {
+    mocks.readChallengeToken.mockReturnValue({
+      mode: "register",
+      challenge: CHALLENGE,
+      pendingUserId: USER_ID,
+      expiresAt: Date.now() + 60_000
+    });
+    mocks.verifyRegistrationResponse.mockResolvedValue({
+      verified: true,
+      registrationInfo: {
+        credential: { id: "credential-1", publicKey: new Uint8Array([1, 2, 3]), counter: 0 }
+      }
+    });
+    mocks.clientQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes("consumed_challenges")) return { rowCount: 0, rows: [] };
+      return { rowCount: 1, rows: [] };
+    });
+
+    await expect(verifyPasskey({
+      mode: "register",
+      challengeToken: "token",
+      response: { id: "credential-1" }
+    })).rejects.toThrow(/verification failed/i);
+
+    expect(mocks.verifyRegistrationResponse).toHaveBeenCalledOnce();
+    expect(mocks.clientQuery).toHaveBeenCalledWith("ROLLBACK");
+    expect(mocks.clientQuery.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO users"))).toBe(false);
+    expect(mocks.issueSessionToken).not.toHaveBeenCalled();
+  });
+
   it("locks a credential through verification and updates its counter monotonically", async () => {
     mocks.readChallengeToken.mockReturnValue({
       mode: "authenticate",
@@ -181,5 +221,43 @@ describe("passkey account safety", () => {
     const verificationInput = mocks.verifyAuthenticationResponse.mock.calls[0]?.[0];
     expect(verificationInput.credential).not.toHaveProperty("transports");
     expect(mocks.release).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a replayed authentication challenge before updating the credential", async () => {
+    mocks.readChallengeToken.mockReturnValue({
+      mode: "authenticate",
+      challenge: CHALLENGE,
+      expiresAt: Date.now() + 60_000
+    });
+    mocks.verifyAuthenticationResponse.mockResolvedValue({
+      verified: true,
+      authenticationInfo: { newCounter: 9 }
+    });
+    mocks.clientQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM passkey_credentials")) {
+        return {
+          rowCount: 1,
+          rows: [{
+            id: "credential-1",
+            user_id: USER_ID,
+            public_key_base64url: "AQIDBA",
+            counter: "8"
+          }]
+        };
+      }
+      if (sql.includes("consumed_challenges")) return { rowCount: 0, rows: [] };
+      return { rowCount: 1, rows: [] };
+    });
+
+    await expect(verifyPasskey({
+      mode: "authenticate",
+      challengeToken: "token",
+      response: { id: "credential-1" }
+    })).rejects.toThrow(/verification failed/i);
+
+    expect(mocks.verifyAuthenticationResponse).toHaveBeenCalledOnce();
+    expect(mocks.clientQuery).toHaveBeenCalledWith("ROLLBACK");
+    expect(mocks.clientQuery.mock.calls.some(([sql]) => String(sql).includes("UPDATE passkey_credentials"))).toBe(false);
+    expect(mocks.issueSessionToken).not.toHaveBeenCalled();
   });
 });

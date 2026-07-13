@@ -5,6 +5,7 @@ import { readLimitedJSON, RequestBodyError } from "@/lib/sync/request";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+const NO_STORE_HEADERS = { "cache-control": "no-store" };
 
 export async function POST(request: NextRequest) {
   try {
@@ -24,14 +25,20 @@ export async function POST(request: NextRequest) {
       );
     }
     if (!rateLimitMany(rules)) {
-      return NextResponse.json({ error: "Too many requests." }, { status: 429 });
+      return NextResponse.json(
+        { error: "Too many requests." },
+        { status: 429, headers: NO_STORE_HEADERS }
+      );
     }
-    return NextResponse.json(await createPasskeyOptions(input));
+    return NextResponse.json(await createPasskeyOptions(input), { headers: NO_STORE_HEADERS });
   } catch (error) {
     const expected = error instanceof RequestBodyError || error instanceof PasskeyInputError;
     return NextResponse.json(
       { error: expected ? error.message : "Passkey options failed." },
-      { status: error instanceof RequestBodyError ? error.status : expected ? 400 : 500 }
+      {
+        status: error instanceof RequestBodyError ? error.status : expected ? 400 : 500,
+        headers: NO_STORE_HEADERS
+      }
     );
   }
 }

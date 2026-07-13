@@ -13,7 +13,8 @@ import { resetRateLimitsForTests } from "@/lib/sync/rate-limit";
 const mocks = vi.hoisted(() => ({
   saveVaultSnapshot: vi.fn(),
   dbQuery: vi.fn(),
-  readBearerToken: vi.fn()
+  readBearerToken: vi.fn(),
+  rateLimitMany: vi.fn()
 }));
 
 vi.mock("@/lib/sync/postgres", () => ({
@@ -26,12 +27,18 @@ vi.mock("@/lib/sync/tokens", async (importOriginal) => ({
   readBearerToken: mocks.readBearerToken
 }));
 
+vi.mock("@/lib/sync/rate-limit", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/sync/rate-limit")>()),
+  rateLimitMany: mocks.rateLimitMany
+}));
+
 vi.mock("@/lib/sync/vault-storage", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/sync/vault-storage")>()),
   saveVaultSnapshot: mocks.saveVaultSnapshot
 }));
 
 import { GET, PUT } from "./route";
+import { TokenValidationError } from "@/lib/sync/tokens";
 import { VaultConflictError } from "@/lib/sync/vault-storage";
 
 function snapshot(schemaVersion: 1 | 2 = 2): RemoteVaultSnapshot {
@@ -77,6 +84,7 @@ describe("vault latest route", () => {
     vi.clearAllMocks();
     resetRateLimitsForTests();
     mocks.saveVaultSnapshot.mockResolvedValue({ idempotent: false });
+    mocks.rateLimitMany.mockReturnValue(true);
     mocks.readBearerToken.mockReturnValue({
       userId: "11111111-1111-4111-8111-111111111111",
       expiresAt: Date.now() + 60_000
@@ -88,6 +96,7 @@ describe("vault latest route", () => {
     mocks.saveVaultSnapshot.mockRejectedValue(new VaultConflictError());
     const response = await PUT(request(snapshot()));
     expect(response.status).toBe(409);
+    expect(response.headers.get("cache-control")).toBe("no-store");
     expect((await response.json()).error).toMatch(/newer/i);
   });
 
@@ -108,6 +117,65 @@ describe("vault latest route", () => {
       expect.objectContaining({ version: 2 }),
       expect.any(Number)
     );
+  });
+
+  it("returns 429 before reading or saving an upload when its request quota is exhausted", async () => {
+    mocks.rateLimitMany.mockReturnValue(false);
+
+    const response = await PUT(request(snapshot()));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("60");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({ error: "Too many requests." });
+    expect(mocks.saveVaultSnapshot).not.toHaveBeenCalled();
+    expect(mocks.rateLimitMany).toHaveBeenCalledWith([
+      { key: "vault-put:global", limit: 300, windowMs: 60_000 },
+      { key: "vault-put:account:11111111-1111-4111-8111-111111111111", limit: 10, windowMs: 60_000 }
+    ]);
+  });
+
+  it("returns 429 before querying storage when its read quota is exhausted", async () => {
+    mocks.rateLimitMany.mockReturnValue(false);
+
+    const response = await GET(new NextRequest("http://localhost/vault/latest", {
+      headers: { authorization: "Bearer token" }
+    }));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("60");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({ error: "Too many requests." });
+    expect(mocks.dbQuery).not.toHaveBeenCalled();
+    expect(mocks.rateLimitMany).toHaveBeenCalledWith([
+      { key: "vault-get:global", limit: 3_000, windowMs: 60_000 },
+      { key: "vault-get:account:11111111-1111-4111-8111-111111111111", limit: 120, windowMs: 60_000 }
+    ]);
+  });
+
+  it("does not let unauthenticated traffic consume shared vault quota", async () => {
+    mocks.readBearerToken.mockImplementationOnce(() => {
+      throw new TokenValidationError();
+    });
+
+    const response = await GET(new NextRequest("http://localhost/vault/latest"));
+
+    expect(response.status).toBe(401);
+    expect(mocks.rateLimitMany).not.toHaveBeenCalled();
+    expect(mocks.dbQuery).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unauthenticated upload before quota or storage work", async () => {
+    mocks.readBearerToken.mockImplementationOnce(() => {
+      throw new TokenValidationError();
+    });
+
+    const response = await PUT(request(snapshot()));
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(mocks.rateLimitMany).not.toHaveBeenCalled();
+    expect(mocks.saveVaultSnapshot).not.toHaveBeenCalled();
   });
 
   it("does not expose unexpected database details", async () => {

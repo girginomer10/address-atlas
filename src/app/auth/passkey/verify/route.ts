@@ -11,6 +11,7 @@ import { TokenValidationError } from "@/lib/sync/tokens";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+const NO_STORE_HEADERS = { "cache-control": "no-store" };
 
 export async function POST(request: NextRequest) {
   try {
@@ -28,9 +29,12 @@ export async function POST(request: NextRequest) {
       );
     }
     if (!rateLimitMany(rules)) {
-      return NextResponse.json({ error: "Too many requests." }, { status: 429 });
+      return NextResponse.json(
+        { error: "Too many requests." },
+        { status: 429, headers: NO_STORE_HEADERS }
+      );
     }
-    return NextResponse.json(await verifyPasskey(input));
+    return NextResponse.json(await verifyPasskey(input), { headers: NO_STORE_HEADERS });
   } catch (error) {
     const expected = error instanceof RequestBodyError
       || error instanceof PasskeyInputError
@@ -38,7 +42,10 @@ export async function POST(request: NextRequest) {
       || error instanceof TokenValidationError;
     return NextResponse.json(
       { error: error instanceof RequestBodyError ? error.message : "Passkey verification failed." },
-      { status: error instanceof RequestBodyError ? error.status : expected ? 400 : 500 }
+      {
+        status: error instanceof RequestBodyError ? error.status : expected ? 400 : 500,
+        headers: NO_STORE_HEADERS
+      }
     );
   }
 }

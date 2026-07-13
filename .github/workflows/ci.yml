@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: Web and sync server
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: address_atlas
+          POSTGRES_PASSWORD: address_atlas_ci
+          POSTGRES_DB: address_atlas_sync
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U address_atlas -d address_atlas_sync"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_SYNC_DATABASE_URL: postgresql://address_atlas:address_atlas_ci@127.0.0.1:5432/address_atlas_sync
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run build
+
+  native:
+    name: Native macOS package
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: swift test
+        working-directory: native/AddressAtlasMac
+
+  deployment-config:
+    name: Deployment configuration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ADDRESS_ATLAS_DOMAIN: sync.addressatlas.test
+      ACME_EMAIL: ci@addressatlas.test
+      POSTGRES_PASSWORD: address_atlas_ci
+      SYNC_DATABASE_URL: postgresql://address_atlas:address_atlas_ci@postgres:5432/address_atlas_sync
+      SYNC_SESSION_SECRET: ci-only-public-value-for-config-validation-2026 # Not a credential.
+      PASSKEY_RP_ID: sync.addressatlas.test
+      PASSKEY_RP_NAME: Address Atlas CI
+      PASSKEY_ORIGIN: https://sync.addressatlas.test
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Validate Compose configuration
+        run: docker compose -f server/sync/compose.prod.yml config --quiet
+      - name: Validate Caddy configuration
+        run: >-
+          docker run --rm
+          --env ADDRESS_ATLAS_DOMAIN
+          --env ACME_EMAIL
+          --volume "$PWD/server/sync/Caddyfile:/etc/caddy/Caddyfile:ro"
+          caddy:2-alpine
+          caddy validate --config /etc/caddy/Caddyfile
+      - name: Build production image
+        run: docker build --file server/sync/Dockerfile .

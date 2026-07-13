@@ -40,7 +40,12 @@ describe("vault storage abuse controls", () => {
     mocks.connect.mockResolvedValue({ query: mocks.query, release: mocks.release });
   });
 
-  it("charges exact-replay bytes without incrementing writes or rewriting the snapshot", async () => {
+  it("rejects an invalid byte charge before opening a transaction", async () => {
+    await expect(saveVaultSnapshot(USER_ID, SNAPSHOT, 0)).rejects.toBeInstanceOf(VaultQuotaError);
+    expect(mocks.connect).not.toHaveBeenCalled();
+  });
+
+  it("does not charge quota or rewrite storage for an exact replay", async () => {
     mocks.query.mockImplementation(async (sql: string) => {
       if (sql.includes("SELECT id FROM users")) return { rowCount: 1, rows: [{ id: USER_ID }] };
       if (sql.includes("FROM vault_snapshots")) {
@@ -51,9 +56,7 @@ describe("vault storage abuse controls", () => {
 
     await expect(saveVaultSnapshot(USER_ID, SNAPSHOT, 500)).resolves.toEqual({ idempotent: true });
     const sql = mocks.query.mock.calls.map(([statement]) => String(statement)).join("\n");
-    expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO vault_write_usage"), [
-      USER_ID, 500, 0, 100, 64_000_000
-    ]);
+    expect(sql).not.toContain("INSERT INTO vault_write_usage");
     expect(sql).not.toContain("INSERT INTO vault_snapshots");
     expect(sql).not.toContain("UPDATE sync_storage_usage");
     expect(mocks.query).toHaveBeenCalledWith("COMMIT");

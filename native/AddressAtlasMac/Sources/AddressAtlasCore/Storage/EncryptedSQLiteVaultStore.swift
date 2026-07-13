@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 import SQLite3
 
@@ -7,6 +8,7 @@ public enum EncryptedSQLiteVaultStoreError: Error, Equatable {
   case prepareFailed(String)
   case stepFailed(String)
   case bindFailed(String)
+  case filePermissionsFailed(String)
   case missingDocument
   case invalidRow
 }
@@ -127,12 +129,28 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
   }
 
   private func openDatabase() throws -> OpaquePointer {
+    try secureDatabaseFile()
     var db: OpaquePointer?
     let status = sqlite3_open_v2(path.path, &db, SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil)
     guard status == SQLITE_OK, let db else {
       throw EncryptedSQLiteVaultStoreError.openFailed(db.map(errorMessage) ?? "unknown")
     }
     return db
+  }
+
+  /// Pre-create new databases as owner-only and repair permissions on an
+  /// existing database before SQLite opens it. Using a file descriptor avoids
+  /// a group/world-readable creation window caused by the process umask.
+  private func secureDatabaseFile() throws {
+    let permissions = mode_t(S_IRUSR | S_IWUSR)
+    let descriptor = Darwin.open(path.path, O_RDWR | O_CREAT | O_CLOEXEC, permissions)
+    guard descriptor >= 0 else {
+      throw EncryptedSQLiteVaultStoreError.openFailed(String(cString: strerror(errno)))
+    }
+    defer { Darwin.close(descriptor) }
+    guard fchmod(descriptor, permissions) == 0 else {
+      throw EncryptedSQLiteVaultStoreError.filePermissionsFailed(String(cString: strerror(errno)))
+    }
   }
 
   private func exec(_ sql: String, db: OpaquePointer) throws {

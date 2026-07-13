@@ -146,10 +146,10 @@ function validateNativeConfigOverride(value: Partial<NativeEndpointConfig>) {
     throw new NativeConfigError("Native endpoint chains must be an object.");
   }
   for (const [chainId, candidate] of Object.entries(value.chains ?? {})) {
-    const bundled = DEFAULT_NATIVE_ENDPOINT_CONFIG.chains[chainId];
-    if (!bundled) {
+    if (!Object.hasOwn(DEFAULT_NATIVE_ENDPOINT_CONFIG.chains, chainId)) {
       throw new NativeConfigError(`Native endpoint config contains unknown chain ${chainId}.`);
     }
+    const bundled = DEFAULT_NATIVE_ENDPOINT_CONFIG.chains[chainId]!;
     if (!isPlainRecord(candidate)) {
       throw new NativeConfigError(`Native endpoint chain ${chainId} must be an object.`);
     }

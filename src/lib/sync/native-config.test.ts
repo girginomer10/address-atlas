@@ -85,4 +85,12 @@ describe("native endpoint config", () => {
 
     expect(() => getNativeEndpointConfig()).toThrow(/configVersion|refreshAfter/i);
   });
+
+  it.each(["__proto__", "constructor", "prototype"])(
+    "rejects prototype-like chain key %s instead of reading inherited properties",
+    (chainId) => {
+      vi.stubEnv("NATIVE_ENDPOINT_CONFIG_JSON", `{"chains":{"${chainId}":{}}}`);
+      expect(() => getNativeEndpointConfig()).toThrow(new RegExp(`unknown chain ${chainId}`, "i"));
+    }
+  );
 });

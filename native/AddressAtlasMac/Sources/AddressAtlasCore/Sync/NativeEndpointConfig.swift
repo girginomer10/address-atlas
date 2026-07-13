@@ -1,6 +1,9 @@
 import Foundation
 
 public struct NativeEndpointConfig: Codable, Equatable, Sendable {
+  public static let minimumRefreshAfterSeconds = 300
+  public static let maximumRefreshAfterSeconds = 86_400
+
   public var schemaVersion: Int
   public var configVersion: Int
   public var updatedAt: Date?
@@ -103,6 +106,9 @@ public struct NativeEndpointConfig: Codable, Equatable, Sendable {
   }
 
   public func validated() throws -> NativeEndpointConfig {
+    guard (Self.minimumRefreshAfterSeconds...Self.maximumRefreshAfterSeconds).contains(refreshAfterSeconds) else {
+      throw NativeEndpointConfigError.invalidRefreshInterval
+    }
     try Self.validateRemoteURL(
       priceBaseURL,
       matching: Self.bundled.priceBaseURL,
@@ -225,6 +231,7 @@ public struct ExchangeEndpointOverride: Codable, Equatable, Sendable {
 
 public enum NativeEndpointConfigError: Error, Equatable, LocalizedError {
   case invalidSchema
+  case invalidRefreshInterval
   case invalidEndpoint(String)
   case requestFailed(Int, String)
 
@@ -232,6 +239,8 @@ public enum NativeEndpointConfigError: Error, Equatable, LocalizedError {
     switch self {
     case .invalidSchema:
       return "Endpoint config is not supported by this app version."
+    case .invalidRefreshInterval:
+      return "Endpoint config contains an invalid refresh interval."
     case .invalidEndpoint(let field):
       return "Endpoint config contains an invalid URL or path: \(field)."
     case .requestFailed(_, let message):

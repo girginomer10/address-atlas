@@ -4,6 +4,9 @@ import Security
 public protocol VaultKeyStore: Sendable {
   func loadVaultKey() throws -> Data?
   func saveVaultKey(_ key: Data) throws
+  /// Atomically install a first-run key or return the key another process won
+  /// the race to install. Unlike `saveVaultKey`, this must not replace a key.
+  func saveVaultKeyIfAbsent(_ key: Data) throws -> Data
   func deleteVaultKey() throws
 }
 
@@ -78,6 +81,28 @@ public struct KeychainVaultKeyStore: VaultKeyStore {
     }
   }
 
+  public func saveVaultKeyIfAbsent(_ key: Data) throws -> Data {
+    guard key.count == VaultCrypto.vaultKeyByteCount else {
+      throw KeychainVaultKeyStoreError.invalidItem
+    }
+    var item = baseQuery()
+    item[kSecValueData as String] = key
+    item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+
+    let status = SecItemAdd(item as CFDictionary, nil)
+    if status == errSecSuccess {
+      return key
+    }
+    guard status == errSecDuplicateItem else {
+      throw KeychainVaultKeyStoreError.unexpectedStatus(status)
+    }
+    guard let winner = try loadVaultKey() else {
+      // The item was removed between duplicate detection and retrieval.
+      throw KeychainVaultKeyStoreError.unexpectedStatus(errSecItemNotFound)
+    }
+    return winner
+  }
+
   public func deleteVaultKey() throws {
     let status = SecItemDelete(baseQuery() as CFDictionary)
     guard status == errSecSuccess || status == errSecItemNotFound else {
@@ -128,7 +153,10 @@ public actor VaultKeyManager {
       throw VaultKeyManagerError.recoveryRequired
     }
     let generated = try crypto.generateVaultKey()
-    try store.saveVaultKey(generated)
-    return generated
+    let installed = try store.saveVaultKeyIfAbsent(generated)
+    guard installed.count == VaultCrypto.vaultKeyByteCount else {
+      throw VaultCryptoError.invalidKeyLength
+    }
+    return installed
   }
 }

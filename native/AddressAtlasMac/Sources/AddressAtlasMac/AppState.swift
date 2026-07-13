@@ -40,6 +40,13 @@ final class AppState: ObservableObject {
   private var store: EncryptedSQLiteVaultStore?
   private var scanTask: Task<Void, Never>?
   private var endpointConfigRefreshGeneration = 0
+  private var endpointConfigRefreshRequest: EndpointConfigRefreshRequest?
+
+  private struct EndpointConfigRefreshRequest {
+    var generation: Int
+    var serverURL: URL
+    var task: Task<NativeEndpointConfig, Error>
+  }
 
   private static let maximumStoredScanRuns = 30
   private static let maximumWallets = 24
@@ -533,9 +540,10 @@ final class AppState: ObservableObject {
 
   @discardableResult
   func refreshEndpointConfig(silent: Bool = false) async -> Bool {
-    endpointConfigRefreshGeneration &+= 1
-    let generation = endpointConfigRefreshGeneration
     guard let serverURL = AppState.validatedSyncURL(document.syncState.serverURL) else {
+      endpointConfigRefreshGeneration &+= 1
+      endpointConfigRefreshRequest?.task.cancel()
+      endpointConfigRefreshRequest = nil
       endpointConfig = .bundled
       endpointConfigStatus = "Bundled endpoints"
       if !silent {
@@ -544,9 +552,30 @@ final class AppState: ObservableObject {
       return false
     }
 
+    let request: EndpointConfigRefreshRequest
+    if let inFlight = endpointConfigRefreshRequest, inFlight.serverURL == serverURL {
+      request = inFlight
+    } else {
+      endpointConfigRefreshGeneration &+= 1
+      endpointConfigRefreshRequest?.task.cancel()
+      let generation = endpointConfigRefreshGeneration
+      let client = endpointConfigClient
+      request = EndpointConfigRefreshRequest(
+        generation: generation,
+        serverURL: serverURL,
+        task: Task { try await client.fetch(from: serverURL) }
+      )
+      endpointConfigRefreshRequest = request
+    }
+    defer {
+      if endpointConfigRefreshRequest?.generation == request.generation {
+        endpointConfigRefreshRequest = nil
+      }
+    }
+
     do {
-      let config = try await endpointConfigClient.fetch(from: serverURL)
-      guard generation == endpointConfigRefreshGeneration,
+      let config = try await request.task.value
+      guard request.generation == endpointConfigRefreshGeneration,
             AppState.validatedSyncURL(document.syncState.serverURL) == serverURL
       else { return false }
       endpointConfig = config
@@ -563,7 +592,7 @@ final class AppState: ObservableObject {
       }
       return true
     } catch {
-      guard generation == endpointConfigRefreshGeneration,
+      guard request.generation == endpointConfigRefreshGeneration,
             AppState.validatedSyncURL(document.syncState.serverURL) == serverURL
       else { return false }
       endpointConfig = .bundled
@@ -572,6 +601,32 @@ final class AppState: ObservableObject {
         self.error = error.localizedDescription
       }
       return false
+    }
+  }
+
+  /// Keep compatibility policy and credential-free scanner endpoints fresh
+  /// even when the user is not actively scanning or syncing. The SwiftUI task
+  /// that owns this loop is restarted whenever the configured server changes.
+  func runEndpointConfigRefreshLoop() async {
+    guard isUnlocked else { return }
+    while !Task.isCancelled,
+          isUnlocked,
+          AppState.validatedSyncURL(document.syncState.serverURL) != nil {
+      // Scan and sync flows already perform a fail-closed refresh before using
+      // remote policy, so avoid starting another request while they are active.
+      if !scanning, !syncing {
+        _ = await refreshEndpointConfig(silent: true)
+      }
+
+      let refreshSeconds = min(
+        max(endpointConfig.refreshAfterSeconds, NativeEndpointConfig.minimumRefreshAfterSeconds),
+        NativeEndpointConfig.maximumRefreshAfterSeconds
+      )
+      do {
+        try await Task.sleep(for: .seconds(refreshSeconds))
+      } catch {
+        return
+      }
     }
   }
 

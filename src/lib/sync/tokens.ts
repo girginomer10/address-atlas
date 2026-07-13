@@ -99,6 +99,10 @@ export function readChallengeToken(token: string) {
 
 export function issueSessionToken(userId: string) {
   if (!UUID_RE.test(userId)) throw new Error("Invalid session user id.");
+  // Deliberately short-lived and stateless: the single-instance sync service
+  // has no long-lived refresh tokens or server-side login sessions. Account
+  // deletion removes all vault data, and rotating SYNC_SESSION_SECRET remains
+  // the emergency mechanism for invalidating every outstanding bearer.
   return signToken<SessionToken>("session", {
     userId,
     expiresAt: Date.now() + 1000 * 60 * 60 * 12

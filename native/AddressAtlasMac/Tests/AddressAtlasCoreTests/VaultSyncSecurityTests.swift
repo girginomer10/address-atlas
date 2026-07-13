@@ -244,6 +244,24 @@ final class VaultSyncKeyRecoveryTests: XCTestCase {
     XCTAssertEqual(keyStore.saveCount, 0)
   }
 
+  func testConcurrentFirstRunManagersConvergeOnOneInstalledKey() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let keyStore = SimulatedFirstRunRaceVaultKeyStore()
+    let firstManager = VaultKeyManager(store: keyStore)
+    let secondManager = VaultKeyManager(store: keyStore)
+    let vaultURL = directory.appending(path: "vault.sqlite")
+
+    async let first = firstManager.loadOrCreateVaultKey(existingVaultAt: vaultURL)
+    async let second = secondManager.loadOrCreateVaultKey(existingVaultAt: vaultURL)
+    let (firstKey, secondKey) = try await (first, second)
+
+    XCTAssertEqual(firstKey, secondKey)
+    XCTAssertEqual(firstKey, try keyStore.loadVaultKey())
+    XCTAssertEqual(keyStore.conditionalSaveAttempts, 2)
+  }
+
   func testRecoveryValidatesDatabaseBeforeAtomicallyInstallingKey() throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -292,6 +310,30 @@ final class VaultSyncKeyRecoveryTests: XCTestCase {
     )
     XCTAssertEqual(try keyStore.loadVaultKey(), existingKeychainKey)
     XCTAssertEqual(keyStore.saveCount, 0)
+  }
+}
+
+final class KeychainVaultKeyStoreTests: XCTestCase {
+  func testRealKeychainStoreRoundTripsAndPreservesFirstInsertWinner() throws {
+    let identifier = UUID().uuidString
+    let store = KeychainVaultKeyStore(
+      service: "com.addressatlas.tests.\(identifier)",
+      account: "vault-key-\(identifier)"
+    )
+    defer { try? store.deleteVaultKey() }
+    let first = Data(repeating: 0x11, count: VaultCrypto.vaultKeyByteCount)
+    let competing = Data(repeating: 0x22, count: VaultCrypto.vaultKeyByteCount)
+    let replacement = Data(repeating: 0x33, count: VaultCrypto.vaultKeyByteCount)
+
+    XCTAssertNil(try store.loadVaultKey())
+    XCTAssertEqual(try store.saveVaultKeyIfAbsent(first), first)
+    XCTAssertEqual(try store.saveVaultKeyIfAbsent(competing), first)
+    XCTAssertEqual(try store.loadVaultKey(), first)
+
+    try store.saveVaultKey(replacement)
+    XCTAssertEqual(try store.loadVaultKey(), replacement)
+    try store.deleteVaultKey()
+    XCTAssertNil(try store.loadVaultKey())
   }
 }
 
@@ -397,6 +439,55 @@ private final class InMemoryVaultKeyStore: VaultKeyStore, @unchecked Sendable {
     lock.withLock {
       self.key = key
       saveCount += 1
+    }
+  }
+
+  func saveVaultKeyIfAbsent(_ key: Data) throws -> Data {
+    lock.withLock {
+      if let existing = self.key { return existing }
+      self.key = key
+      saveCount += 1
+      return key
+    }
+  }
+
+  func deleteVaultKey() throws {
+    lock.withLock { key = nil }
+  }
+}
+
+/// Simulates two processes that both observed a missing Keychain item before
+/// either attempted the atomic insert.
+private final class SimulatedFirstRunRaceVaultKeyStore: VaultKeyStore, @unchecked Sendable {
+  private let lock = NSLock()
+  private var key: Data?
+  private var staleMissingReads = 2
+  private var saveAttempts = 0
+
+  var conditionalSaveAttempts: Int {
+    lock.withLock { saveAttempts }
+  }
+
+  func loadVaultKey() throws -> Data? {
+    lock.withLock {
+      if staleMissingReads > 0 {
+        staleMissingReads -= 1
+        return nil
+      }
+      return key
+    }
+  }
+
+  func saveVaultKey(_ key: Data) throws {
+    lock.withLock { self.key = key }
+  }
+
+  func saveVaultKeyIfAbsent(_ key: Data) throws -> Data {
+    lock.withLock {
+      saveAttempts += 1
+      if let existing = self.key { return existing }
+      self.key = key
+      return key
     }
   }
 

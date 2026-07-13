@@ -32,6 +32,7 @@ describe("passkey options request ordering", () => {
       body: JSON.stringify({ mode: "authenticate" })
     }));
     expect(response.status).toBe(415);
+    expect(response.headers.get("cache-control")).toBe("no-store");
     expect(mocks.rateLimitMany).not.toHaveBeenCalled();
   });
 
@@ -42,7 +43,21 @@ describe("passkey options request ordering", () => {
       body: JSON.stringify({ mode: "authenticate" })
     }));
     expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
     expect(mocks.rateLimitMany).toHaveBeenCalledOnce();
     expect(mocks.createPasskeyOptions).toHaveBeenCalledWith({ mode: "authenticate" });
+  });
+
+  it("marks rate-limit responses as non-cacheable", async () => {
+    mocks.rateLimitMany.mockReturnValue(false);
+    const response = await POST(new NextRequest("https://sync.example/auth/passkey/options", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode: "authenticate" })
+    }));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(mocks.createPasskeyOptions).not.toHaveBeenCalled();
   });
 });

@@ -23,6 +23,9 @@ export const runtime = "nodejs";
 
 export async function GET(request: NextRequest) {
   try {
+    // Authenticate before touching shared quota. Token parsing is bounded and
+    // HMAC-only; charging invalid public traffic here would let anyone exhaust
+    // the global bucket and deny vault access to authenticated clients.
     const session = readBearerToken(request.headers.get("authorization"));
     if (!rateLimitMany([
       { key: "vault-get:global", limit: 3_000, windowMs: 60_000 },
@@ -69,6 +72,8 @@ export async function GET(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   try {
+    // Keep invalid public traffic out of the shared authenticated quota. The
+    // request body is deliberately not read until after auth and throttling.
     const session = readBearerToken(request.headers.get("authorization"));
     if (!rateLimitMany([
       { key: "vault-put:global", limit: 300, windowMs: 60_000 },
@@ -88,7 +93,10 @@ export async function PUT(request: NextRequest) {
       { error: vaultErrorMessage(error) },
       {
         status: vaultErrorStatus(error),
-        headers: error instanceof VaultQuotaError ? { "retry-after": "3600" } : undefined
+        headers: {
+          "cache-control": "no-store",
+          ...(error instanceof VaultQuotaError ? { "retry-after": "3600" } : {})
+        }
       }
     );
   }

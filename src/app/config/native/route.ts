@@ -5,9 +5,16 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function GET() {
-  return NextResponse.json(getNativeEndpointConfig(), {
-    headers: {
-      "cache-control": "public, max-age=300"
-    }
-  });
+  try {
+    return NextResponse.json(getNativeEndpointConfig(), {
+      headers: {
+        "cache-control": "public, max-age=300"
+      }
+    });
+  } catch {
+    return NextResponse.json(
+      { error: "Native configuration unavailable." },
+      { status: 503, headers: { "cache-control": "no-store" } }
+    );
+  }
 }

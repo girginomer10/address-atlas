@@ -66,7 +66,10 @@ function sweepExpired(now: number) {
   }
 }
 
-/** Best-effort client identity from proxy headers (Caddy sets X-Forwarded-For). */
+/**
+ * Best-effort client identity from the production proxy boundary. Caddy is the
+ * only published peer and sanitizes X-Forwarded-For before forwarding it.
+ */
 export function clientKey(request: Request): string {
   const forwarded = request.headers.get("x-forwarded-for");
   if (forwarded) return boundedKey(forwarded.split(",")[0]!.trim());

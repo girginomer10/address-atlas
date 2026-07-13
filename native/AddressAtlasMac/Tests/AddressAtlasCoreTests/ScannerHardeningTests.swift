@@ -156,6 +156,16 @@ final class ScannerAddressValidationTests: XCTestCase {
 }
 
 final class ScannerFiatRateTests: XCTestCase {
+  func testPriceSanitizationDropsNonFiniteChangeWithoutDiscardingPrice() throws {
+    let sanitized = try XCTUnwrap(
+      CoinGeckoPriceClient.sanitized(PricePoint(usd: 42, usd24hChange: .infinity))
+    )
+
+    XCTAssertEqual(sanitized.usd, 42)
+    XCTAssertNil(sanitized.usd24hChange)
+    XCTAssertNil(CoinGeckoPriceClient.sanitized(PricePoint(usd: .infinity, usd24hChange: 1)))
+  }
+
   func testCoinGeckoBTCRelativeRatesConvertToUSDPerFiatUnit() async throws {
     let requests = ScannerRequestLog()
     let http = ScannerHTTPStub { request in

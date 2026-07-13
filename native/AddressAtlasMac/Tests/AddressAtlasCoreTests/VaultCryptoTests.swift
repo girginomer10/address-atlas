@@ -130,6 +130,16 @@ final class NativeEndpointConfigTests: XCTestCase {
     XCTAssertEqual(config, expected)
   }
 
+  func testEndpointConfigRejectsUnsafeRefreshIntervals() {
+    for seconds in [299, 86_401] {
+      XCTAssertThrowsError(try NativeEndpointConfig(refreshAfterSeconds: seconds).validated()) { error in
+        XCTAssertEqual(error as? NativeEndpointConfigError, .invalidRefreshInterval)
+      }
+    }
+    XCTAssertNoThrow(try NativeEndpointConfig(refreshAfterSeconds: 300).validated())
+    XCTAssertNoThrow(try NativeEndpointConfig(refreshAfterSeconds: 86_400).validated())
+  }
+
   func testEndpointConfigClientRejectsUnsafeURLsAndPaths() async throws {
     let invalid = NativeEndpointConfig(
       priceBaseURL: URL(string: "file:///tmp/prices")!,
@@ -195,6 +205,26 @@ final class EncryptedSQLiteVaultStoreTests: XCTestCase {
     XCTAssertEqual(loaded.wallets.first?.address, wallet.address)
     XCTAssertFalse(rawText.contains(wallet.address))
     XCTAssertTrue(rawText.contains("ciphertext"))
+  }
+
+  func testStoreCreatesAndRepairsDatabaseAsOwnerOnly() throws {
+    let tempDir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+    let databaseURL = tempDir.appending(path: "vault.sqlite")
+    let store = try EncryptedSQLiteVaultStore(
+      path: databaseURL,
+      vaultKey: try VaultCrypto().generateVaultKey()
+    )
+
+    try store.initialize()
+    var attributes = try FileManager.default.attributesOfItem(atPath: databaseURL.path)
+    XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+
+    try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: databaseURL.path)
+    try store.initialize()
+    attributes = try FileManager.default.attributesOfItem(atPath: databaseURL.path)
+    XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
   }
 }
 
@@ -849,6 +879,48 @@ final class NativeExchangeClientTests: XCTestCase {
 }
 
 final class SyncClientTests: XCTestCase {
+  func testSyncClientDecodesFractionalServerTimestamps() async throws {
+    let snapshot = RemoteVaultSnapshot(
+      version: 1,
+      envelope: EncryptedVaultEnvelope(
+        keyId: "sync-v1",
+        nonce: "AA",
+        ciphertext: "AA",
+        checksum: String(repeating: "a", count: 64),
+        createdAt: Date(timeIntervalSince1970: 0)
+      ),
+      byteSize: 2,
+      checksum: String(repeating: "b", count: 64),
+      updatedAt: Date(timeIntervalSince1970: 0)
+    )
+    var wireObject = try XCTUnwrap(
+      try JSONSerialization.jsonObject(with: JSONEncoder.addressAtlas.encode(snapshot)) as? [String: Any]
+    )
+    wireObject["updatedAt"] = "2026-07-12T12:34:56.789Z"
+    var envelopeObject = try XCTUnwrap(wireObject["envelope"] as? [String: Any])
+    envelopeObject["createdAt"] = "2026-07-12T12:34:56Z"
+    wireObject["envelope"] = envelopeObject
+    let wireData = try JSONSerialization.data(withJSONObject: wireObject)
+    let http = StubHTTPClient { request in
+      (wireData, httpResponse(for: request))
+    }
+    let client = ZeroKnowledgeSyncClient(baseURL: URL(string: "https://sync.example")!, http: http)
+
+    let response = try await client.latestVault()
+    let decoded = try XCTUnwrap(response)
+
+    let fractionalFormatter = ISO8601DateFormatter()
+    fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    let expected = try XCTUnwrap(fractionalFormatter.date(from: "2026-07-12T12:34:56.789Z"))
+    XCTAssertEqual(decoded.updatedAt.timeIntervalSince1970, expected.timeIntervalSince1970, accuracy: 0.000_001)
+    let wholeSecondsFormatter = ISO8601DateFormatter()
+    wholeSecondsFormatter.formatOptions = [.withInternetDateTime]
+    XCTAssertEqual(
+      decoded.envelope.createdAt,
+      try XCTUnwrap(wholeSecondsFormatter.date(from: "2026-07-12T12:34:56Z"))
+    )
+  }
+
   func testSyncClientSurfacesExpiredSession() async throws {
     let http = StubHTTPClient { request in
       XCTAssertEqual(request.value(forHTTPHeaderField: "authorization"), "Bearer expired")

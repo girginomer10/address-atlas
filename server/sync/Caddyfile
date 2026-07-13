@@ -20,6 +20,10 @@
     -Server
   }
 
+  # Caddy is the public trust boundary. Its reverse proxy ignores client-sent
+  # X-Forwarded-* values by default and supplies the direct peer IP instead.
+  # Do not enable trusted_proxies unless a real upstream proxy is introduced
+  # and its CIDRs are explicitly constrained.
   reverse_proxy web:3000 {
     health_uri /healthz
     health_interval 15s

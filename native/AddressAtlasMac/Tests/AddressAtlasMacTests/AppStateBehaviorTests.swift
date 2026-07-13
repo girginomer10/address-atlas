@@ -135,6 +135,43 @@ final class AppStateBehaviorTests: XCTestCase {
 
 @MainActor
 final class EndpointConfigRefreshTests: XCTestCase {
+  func testConcurrentRefreshesForSameServerShareOneRequest() async {
+    let client = CountingEndpointConfigClient(
+      config: NativeEndpointConfig(configVersion: 24, refreshAfterSeconds: 300)
+    )
+    let state = AppState(endpointConfigClient: client)
+    state.document.syncState.serverURL = "https://sync.example"
+
+    async let first = state.refreshEndpointConfig(silent: true)
+    async let second = state.refreshEndpointConfig(silent: true)
+    let results = await (first, second)
+    let requestCount = await client.requestCount
+
+    XCTAssertTrue(results.0)
+    XCTAssertTrue(results.1)
+    XCTAssertEqual(requestCount, 1)
+    XCTAssertEqual(state.endpointConfig.configVersion, 24)
+  }
+
+  func testRefreshLoopFetchesConfigProactivelyAfterUnlock() async {
+    let client = ControllableEndpointConfigClient()
+    let state = AppState(endpointConfigClient: client)
+    state.isUnlocked = true
+    state.document.syncState.serverURL = "https://sync.example"
+
+    let refreshLoop = Task { await state.runEndpointConfigRefreshLoop() }
+    await client.waitUntilRequested("https://sync.example")
+    await client.resolve(
+      "https://sync.example",
+      with: NativeEndpointConfig(configVersion: 23, refreshAfterSeconds: 300)
+    )
+    refreshLoop.cancel()
+    await refreshLoop.value
+
+    XCTAssertEqual(state.endpointConfig.configVersion, 23)
+    XCTAssertEqual(state.endpointConfig.refreshAfterSeconds, 300)
+  }
+
   func testStaleResponseCannotReplaceConfigForNewServer() async {
     let client = ControllableEndpointConfigClient()
     let state = AppState(endpointConfigClient: client)
@@ -156,6 +193,21 @@ final class EndpointConfigRefreshTests: XCTestCase {
     let firstResult = await firstRefresh.value
     XCTAssertFalse(firstResult)
     XCTAssertEqual(state.endpointConfig.configVersion, 22)
+  }
+}
+
+private actor CountingEndpointConfigClient: EndpointConfigFetching {
+  let config: NativeEndpointConfig
+  private(set) var requestCount = 0
+
+  init(config: NativeEndpointConfig) {
+    self.config = config
+  }
+
+  func fetch(from serverURL: URL) async throws -> NativeEndpointConfig {
+    requestCount += 1
+    try await Task.sleep(for: .milliseconds(20))
+    return config
   }
 }
 

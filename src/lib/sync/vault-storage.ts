@@ -37,14 +37,16 @@ export interface VaultSaveResult {
 
 /**
  * Serialize writes per user, skip exact replays without touching snapshot WAL,
- * and charge every accepted upload's bytes to a durable UTC-day quota. Exact
- * retries do not increment the logical write counter.
+ * and charge snapshot mutations to a durable UTC-day quota. Exact retries are
+ * idempotent: request rate limits still bound them, but they consume neither
+ * the logical write counter nor the byte quota a second time.
  */
 export async function saveVaultSnapshot(
   userId: string,
   snapshot: RemoteVaultSnapshot,
   chargedBytes: number
 ): Promise<VaultSaveResult> {
+  assertValidChargedBytes(chargedBytes);
   const client = await getSyncPool().connect();
   let discardClient = false;
   try {
@@ -70,7 +72,6 @@ export async function saveVaultSnapshot(
       && row.byte_size === snapshot.byteSize
       && row.same_envelope;
     if (isExactReplay) {
-      await chargeDailyQuota(client, userId, chargedBytes, 0);
       await client.query("COMMIT");
       return { idempotent: true };
     }
@@ -131,9 +132,7 @@ async function chargeDailyQuota(
   const limits = getSyncLimitConfig();
   const maxWrites = limits.dailyVaultWriteLimit;
   const maxBytes = limits.dailyVaultByteLimit;
-  if (!Number.isSafeInteger(chargedBytes) || chargedBytes < 1 || chargedBytes > maxBytes) {
-    throw new VaultQuotaError();
-  }
+  assertValidChargedBytes(chargedBytes, maxBytes);
   const usage = await client.query(
     `INSERT INTO vault_write_usage (user_id, usage_date, write_count, byte_count)
      VALUES ($1, (now() AT TIME ZONE 'UTC')::date, $3, $2)
@@ -147,6 +146,15 @@ async function chargeDailyQuota(
     [userId, chargedBytes, writeIncrement, maxWrites, maxBytes]
   );
   if (usage.rowCount === 0) throw new VaultQuotaError();
+}
+
+function assertValidChargedBytes(
+  chargedBytes: number,
+  maxBytes = getSyncLimitConfig().dailyVaultByteLimit
+) {
+  if (!Number.isSafeInteger(chargedBytes) || chargedBytes < 1 || chargedBytes > maxBytes) {
+    throw new VaultQuotaError();
+  }
 }
 
 async function rollbackQuietly(client: PoolClient) {
