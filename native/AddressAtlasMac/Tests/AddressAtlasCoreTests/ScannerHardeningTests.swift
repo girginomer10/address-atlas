@@ -4,6 +4,40 @@ import XCTest
 @testable import AddressAtlasCore
 
 final class ScannerAddressValidationTests: XCTestCase {
+  func testEvmMixedCaseAddressesRequireAValidEIP55Checksum() {
+    let officialValid = [
+      "0x52908400098527886E0F7030069857D2E4169EE7",
+      "0x8617E340B3D01FA5F11F306F4090FD50E238070D",
+      "0xde709f2102306220921060314715629080e2fb77",
+      "0x27b1fdb04752bbc536007a920d24acb045561c26",
+      "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+      "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359",
+      "0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB",
+      "0xD1220A0cf47c7B9Be7A2E6BA89F429762e7b9aDb"
+    ]
+    for address in officialValid {
+      XCTAssertFalse(AddressDetection.detectChains(for: address).isEmpty, address)
+    }
+
+    for valid in officialValid where valid.dropFirst(2).contains(where: { $0.isLowercase })
+      && valid.dropFirst(2).contains(where: { $0.isUppercase }) {
+      var characters = Array(valid)
+      let index = characters[2...].firstIndex(where: { $0.isLetter })!
+      characters[index] = characters[index].isUppercase
+        ? Character(characters[index].lowercased())
+        : Character(characters[index].uppercased())
+      let invalid = String(characters)
+      XCTAssertTrue(AddressDetection.detectChains(for: invalid).isEmpty, invalid)
+    }
+  }
+
+  func testCosmosValidationAcceptsLegacyAnd32ByteAccountAddresses() {
+    let modern = "cosmos1qqqtduhx4t2xvgcxrqfmrz0heq00vlvjqhuz93nwt6d2y0quqlqqxxec22"
+
+    XCTAssertEqual(AddressDetection.detectChains(for: modern).map(\.id), ["cosmoshub"])
+    XCTAssertEqual(AddressDetection.canonicalAddress(modern, family: .cosmos), modern)
+  }
+
   func testChainSpecificValidationDoesNotMisclassifySolanaAsBitcoin() {
     XCTAssertEqual(
       AddressDetection.detectChains(for: "1BoatSLRHtKNngkdXEeobR76b53LETtpyT").map(\.family),
@@ -185,7 +219,147 @@ final class ScannerFiatRateTests: XCTestCase {
   }
 }
 
+final class JSONHTTPClientHardeningTests: XCTestCase {
+  func testRetriesOneRateLimitedRequestUsingBoundedRetryAfter() async throws {
+    let requests = ScannerRequestLog()
+    let http = ScannerHTTPStub { request in
+      let call = requests.append(request)
+      if call == 1 {
+        return scannerResponse(
+          request,
+          #"{"error":"slow down"}"#,
+          statusCode: 429,
+          headerFields: ["Retry-After": "0"]
+        )
+      }
+      return scannerResponse(request, #"{"ok":1}"#)
+    }
+    let client = JSONHTTPClient(http: http, maxRateLimitRetries: 1)
+
+    let result = try await client.get(URL(string: "https://rpc.example/data")!, as: [String: Int].self)
+
+    XCTAssertEqual(result["ok"], 1)
+    XCTAssertEqual(requests.snapshot().count, 2)
+  }
+
+  func testRejectsSuccessfulResponseAboveConfiguredSizeLimit() async throws {
+    let http = ScannerHTTPStub { request in
+      scannerResponse(request, #"{"payload":"too-large"}"#)
+    }
+    let client = JSONHTTPClient(http: http, maxResponseBytes: 8)
+
+    do {
+      _ = try await client.get(URL(string: "https://rpc.example/data")!, as: [String: String].self)
+      XCTFail("Expected a response-size failure.")
+    } catch let error as JSONHTTPClientError {
+      XCTAssertEqual(error, .responseTooLarge)
+    }
+  }
+
+  func testBoundedURLSessionClientAbortsAnUnknownLengthStreamAtTheLimit() async throws {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [ScannerOversizedURLProtocol.self]
+    let session = URLSession(configuration: configuration)
+    defer { session.invalidateAndCancel() }
+    let client = BoundedURLSessionHTTPClient(session: session, maxResponseBytes: 8)
+    let request = URLRequest(url: URL(string: "https://stream.example/oversized")!)
+
+    do {
+      _ = try await client.data(for: request)
+      XCTFail("Expected the stream to be aborted at its byte limit.")
+    } catch let error as JSONHTTPClientError {
+      XCTAssertEqual(error, .responseTooLarge)
+    }
+  }
+
+  func testBoundedURLSessionClientDoesNotFollowRedirects() async throws {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [ScannerRedirectURLProtocol.self]
+    let session = URLSession(
+      configuration: configuration,
+      delegate: NonRedirectingSessionDelegate(),
+      delegateQueue: nil
+    )
+    defer { session.invalidateAndCancel() }
+    let client = BoundedURLSessionHTTPClient(session: session)
+    let request = URLRequest(url: URL(string: "https://redirect-origin.example/start")!)
+
+    do {
+      _ = try await client.data(for: request)
+      XCTFail("Expected the refused redirect to fail the request.")
+    } catch {
+      XCTAssertTrue(error is URLError)
+    }
+    XCTAssertEqual(ScannerRedirectURLProtocol.destinationRequestCount, 0)
+  }
+
+  func testProviderErrorSanitizerRedactsSecretsFlattensControlsAndCapsLength() {
+    let rawSecret = String(repeating: "s", count: 80)
+    let sanitized = ProviderErrorSanitizer.sanitize(
+      "authorization: Bearer \(rawSecret)\napi_key=\(rawSecret) \(String(repeating: "x", count: 500))"
+    )
+
+    XCTAssertFalse(sanitized.contains(rawSecret))
+    XCTAssertFalse(sanitized.contains("\n"))
+    XCTAssertTrue(sanitized.contains("[redacted]"))
+    XCTAssertLessThanOrEqual(sanitized.unicodeScalars.count, ProviderErrorSanitizer.maximumScalarCount + 1)
+  }
+}
+
 final class ScannerCoinbaseAndKrakenTests: XCTestCase {
+  func testKrakenNonceGeneratorIsMonotonicPerAPIKeyAcrossConcurrencyAndClockRegression() async {
+    let generator = KrakenNonceGenerator()
+    let baseDate = Date(timeIntervalSince1970: 1_700_000_000)
+    let concurrent = await withTaskGroup(of: String.self, returning: [String].self) { group in
+      for _ in 0..<16 {
+        group.addTask { await generator.next(apiKey: "same-key", at: baseDate) }
+      }
+      var values: [String] = []
+      for await value in group { values.append(value) }
+      return values
+    }
+    let sorted = concurrent.compactMap(Int64.init).sorted()
+    let first = Int64(1_700_000_000_000)
+    let regressed = await generator.next(apiKey: "same-key", at: baseDate.addingTimeInterval(-60))
+    let otherKey = await generator.next(apiKey: "different-key", at: baseDate)
+
+    XCTAssertEqual(sorted, Array(first..<(first + 16)))
+    XCTAssertEqual(regressed, String(first + 16))
+    XCTAssertEqual(otherKey, String(first))
+  }
+
+  func testDefaultKrakenNonceGeneratorIsSharedAcrossClientInstances() async throws {
+    let requests = ScannerRequestLog()
+    let http = ScannerHTTPStub { request in
+      _ = requests.append(request)
+      if request.url?.path == "/0/private/Balance" {
+        return scannerResponse(request, #"{"error":[],"result":{}}"#)
+      }
+      return scannerResponse(request, #"{"error":[],"result":{}}"#)
+    }
+    let now: @Sendable () -> Date = { Date(timeIntervalSince1970: 1_700_000_000) }
+    let firstClient = NativeExchangeBalanceClient(http: http, now: now)
+    let secondClient = NativeExchangeBalanceClient(http: http, now: now)
+    let credentials = ExchangeCredentials(
+      apiKey: "nonce-test-\(UUID().uuidString)",
+      secret: Data("secret".utf8).base64EncodedString()
+    )
+
+    async let firstBalance = firstClient.fetchBalance(provider: .kraken, credentials: credentials)
+    async let secondBalance = secondClient.fetchBalance(provider: .kraken, credentials: credentials)
+    _ = try await (firstBalance, secondBalance)
+
+    let nonces = requests.snapshot().compactMap { request -> Int64? in
+      guard request.url?.path == "/0/private/Balance",
+            let body = request.httpBody.flatMap({ String(data: $0, encoding: .utf8) }),
+            body.hasPrefix("nonce=")
+      else { return nil }
+      return Int64(body.dropFirst("nonce=".count))
+    }.sorted()
+    XCTAssertEqual(nonces.count, 2)
+    XCTAssertEqual(nonces[1], nonces[0] + 1)
+  }
+
   func testCoinbaseSignerBuildsVerifiableCDPJWT() throws {
     let key = try scannerPrivateKey()
     let keyName = "organizations/test/apiKeys/key-id"
@@ -343,6 +517,126 @@ final class ScannerCoinbaseAndKrakenTests: XCTestCase {
 }
 
 final class ScannerWorkflowTests: XCTestCase {
+  func testRateLimitedErc20BatchDoesNotFanOutIntoIndividualCalls() async throws {
+    let requests = ScannerRequestLog()
+    let http = ScannerHTTPStub { request in
+      _ = requests.append(request)
+      let body = request.httpBody.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+      if body.contains("\"eth_getBalance\"") {
+        return scannerResponse(request, #"{"result":"0x0"}"#)
+      }
+      if body.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("[") {
+        return scannerResponse(
+          request,
+          #"{"error":"rate limited"}"#,
+          statusCode: 429,
+          headerFields: ["Retry-After": "0"]
+        )
+      }
+      XCTFail("Unexpected individual ERC-20 request after a rate-limited batch: \(body)")
+      return scannerResponse(request, #"{"result":"0x0"}"#)
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http, maxRateLimitRetries: 0),
+      priceProvider: ScannerStaticPriceProvider(values: [:])
+    )
+
+    let result = try await scanner.scan(addresses: "0x0000000000000000000000000000000000000001")
+    let bodies = requests.snapshot().compactMap { request in
+      request.httpBody.flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    XCTAssertTrue(bodies.contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("[") }))
+    XCTAssertFalse(bodies.contains(where: {
+      $0.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{") && $0.contains("\"eth_call\"")
+    }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("rate-limited") && $0.contains("individual retries") }))
+  }
+
+  func testMalformedSolanaTokenAmountProducesVisibleWarning() async throws {
+    let http = ScannerHTTPStub { request in
+      let body = request.httpBody.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+      if body.contains("getBalance") {
+        return scannerResponse(request, #"{"result":{"value":-1}}"#)
+      }
+      return scannerResponse(
+        request,
+        #"{"result":{"value":[{"account":{"data":{"parsed":{"info":{"mint":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v","tokenAmount":{"amount":"not-a-number","decimals":6}}}}}}]}}"#
+      )
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: ScannerStaticPriceProvider(values: [:])
+    )
+
+    let result = try await scanner.scan(addresses: "11111111111111111111111111111111")
+
+    XCTAssertFalse(result.holdings.contains(where: { $0.symbol == "USDC" }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("Native SOL") && $0.contains("invalid") }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("USDC") && $0.contains("invalid") }))
+  }
+
+  func testNegativeBitcoinProviderStatisticsProduceVisibleWarning() async throws {
+    let http = ScannerHTTPStub { request in
+      scannerResponse(
+        request,
+        #"{"chain_stats":{"funded_txo_sum":-1,"spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0}}"#
+      )
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: ScannerStaticPriceProvider(values: [:])
+    )
+
+    let result = try await scanner.scan(addresses: "1BoatSLRHtKNngkdXEeobR76b53LETtpyT")
+
+    XCTAssertFalse(result.holdings.contains(where: { $0.symbol == "BTC" }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("invalid statistics") }))
+  }
+
+  func testMalformedCosmosAmountProducesVisibleWarning() async throws {
+    let http = ScannerHTTPStub { request in
+      switch request.url?.path {
+      case let path? where path.contains("/cosmos/bank/"):
+        return scannerResponse(request, #"{"balances":[{"denom":"uatom","amount":"not-a-number"}]}"#)
+      case let path? where path.contains("/cosmos/staking/"):
+        return scannerResponse(request, #"{"delegation_responses":[]}"#)
+      default:
+        return scannerResponse(request, #"{"total":[]}"#)
+      }
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: ScannerStaticPriceProvider(values: [:])
+    )
+
+    let result = try await scanner.scan(
+      addresses: "cosmos1qqqtduhx4t2xvgcxrqfmrz0heq00vlvjqhuz93nwt6d2y0quqlqqxxec22"
+    )
+
+    XCTAssertFalse(result.holdings.contains(where: { $0.symbol == "ATOM" }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("Liquid balance could not be read") }))
+  }
+
+  func testMalformedTronTokenAmountProducesVisibleWarning() async throws {
+    let http = ScannerHTTPStub { request in
+      scannerResponse(
+        request,
+        #"{"data":[{"balance":-1,"trc20":[{"TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t":"not-a-number"}]}]}"#
+      )
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: ScannerStaticPriceProvider(values: [:])
+    )
+
+    let result = try await scanner.scan(addresses: "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7")
+
+    XCTAssertFalse(result.holdings.contains(where: { $0.symbol == "USDT" }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("Native TRX") && $0.contains("invalid") }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("USDT") && $0.contains("invalid") }))
+  }
+
   func testPriceOutagePreservesSuccessfulNativeBalance() async throws {
     let http = ScannerHTTPStub { request in
       scannerResponse(
@@ -631,6 +925,63 @@ private actor ScannerConcurrencyProbe {
   func maximum() -> Int { highWaterMark }
 }
 
+private final class ScannerOversizedURLProtocol: URLProtocol, @unchecked Sendable {
+  override class func canInit(with request: URLRequest) -> Bool { true }
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+  override func startLoading() {
+    let response = HTTPURLResponse(
+      url: request.url!,
+      statusCode: 200,
+      httpVersion: "HTTP/1.1",
+      headerFields: ["content-type": "application/json"]
+    )!
+    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+    client?.urlProtocol(self, didLoad: Data(repeating: 0x61, count: 4))
+    client?.urlProtocol(self, didLoad: Data(repeating: 0x62, count: 4))
+    client?.urlProtocol(self, didLoad: Data(repeating: 0x63, count: 4))
+    client?.urlProtocolDidFinishLoading(self)
+  }
+
+  override func stopLoading() {}
+}
+
+private final class ScannerRedirectURLProtocol: URLProtocol, @unchecked Sendable {
+  private static let destinationRequests = ScannerRequestLog()
+  static var destinationRequestCount: Int { destinationRequests.snapshot().count }
+
+  override class func canInit(with request: URLRequest) -> Bool { true }
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+  override func startLoading() {
+    if request.url?.host == "redirect-origin.example" {
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 302,
+        httpVersion: "HTTP/1.1",
+        headerFields: ["location": "https://redirect-destination.example/secret"]
+      )!
+      let redirected = URLRequest(url: URL(string: "https://redirect-destination.example/secret")!)
+      client?.urlProtocol(self, wasRedirectedTo: redirected, redirectResponse: response)
+      client?.urlProtocolDidFinishLoading(self)
+      return
+    }
+
+    _ = Self.destinationRequests.append(request)
+    let response = HTTPURLResponse(
+      url: request.url!,
+      statusCode: 200,
+      httpVersion: "HTTP/1.1",
+      headerFields: ["content-type": "text/plain"]
+    )!
+    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+    client?.urlProtocol(self, didLoad: Data("redirect followed".utf8))
+    client?.urlProtocolDidFinishLoading(self)
+  }
+
+  override func stopLoading() {}
+}
+
 private func scannerPrivateKey() throws -> P256.Signing.PrivateKey {
   try P256.Signing.PrivateKey(rawRepresentation: Data(repeating: 1, count: 32))
 }
@@ -642,16 +993,23 @@ private func scannerJSONObject(_ data: Data) throws -> [String: Any] {
 private func scannerResponse(
   _ request: URLRequest,
   _ json: String,
-  statusCode: Int = 200
+  statusCode: Int = 200,
+  headerFields: [String: String] = [:]
 ) -> (Data, HTTPURLResponse) {
-  (Data(json.utf8), scannerHTTPResponse(request, statusCode: statusCode))
+  (Data(json.utf8), scannerHTTPResponse(request, statusCode: statusCode, headerFields: headerFields))
 }
 
-private func scannerHTTPResponse(_ request: URLRequest, statusCode: Int = 200) -> HTTPURLResponse {
-  HTTPURLResponse(
+private func scannerHTTPResponse(
+  _ request: URLRequest,
+  statusCode: Int = 200,
+  headerFields: [String: String] = [:]
+) -> HTTPURLResponse {
+  var headers = ["content-type": "application/json"]
+  headers.merge(headerFields) { _, new in new }
+  return HTTPURLResponse(
     url: request.url ?? URL(string: "https://example.com")!,
     statusCode: statusCode,
     httpVersion: "HTTP/1.1",
-    headerFields: ["content-type": "application/json"]
+    headerFields: headers
   )!
 }

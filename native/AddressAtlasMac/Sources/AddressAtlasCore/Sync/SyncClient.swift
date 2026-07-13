@@ -359,9 +359,9 @@ public actor ZeroKnowledgeSyncClient {
   private let http: HTTPClient
   private var bearerToken: String?
 
-  public init(baseURL: URL, http: HTTPClient = URLSession.shared) {
+  public init(baseURL: URL, http: HTTPClient? = nil) {
     self.baseURL = baseURL
-    self.http = http
+    self.http = http ?? BoundedURLSessionHTTPClient(maxResponseBytes: Self.maximumWireSnapshotByteCount)
   }
 
   public func setBearerToken(_ token: String?) {

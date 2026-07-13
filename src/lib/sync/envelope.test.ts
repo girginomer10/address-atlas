@@ -81,4 +81,21 @@ describe("encrypted sync envelope validation", () => {
     })).toThrow(/mismatched/i);
     expect(() => assertNoPlaintextLeak({ ...value, walletAddress: "0x123" } as RemoteVaultSnapshot)).toThrow(/unexpected field/i);
   });
+
+  it("rejects noncanonical values that the Swift client cannot open", () => {
+    const value = snapshot(2);
+    expect(() => assertRemoteVaultSnapshot({
+      ...value,
+      checksum: value.checksum.toUpperCase()
+    })).toThrow(/checksum/i);
+    expect(() => assertRemoteVaultSnapshot({
+      ...value,
+      envelope: { ...value.envelope, keyId: "sync-v1" }
+    })).toThrow(/keyId/i);
+    const missingCreatedAt = {
+      ...value,
+      envelope: { ...value.envelope, createdAt: undefined }
+    };
+    expect(() => assertRemoteVaultSnapshot(missingCreatedAt)).toThrow(/createdAt/i);
+  });
 });

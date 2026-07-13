@@ -95,14 +95,15 @@ public struct NativeExchangeScanner: Sendable {
             }
           } catch {
             try throwIfCancellation(error)
+            let safeError = ProviderErrorSanitizer.sanitize(error.localizedDescription)
             var failed = job.connection
             failed.status = .failed
             failed.lastTestedAt = Date()
-            failed.lastError = error.localizedDescription
+            failed.lastError = safeError
             failed.updatedAt = Date()
             outcome = ExchangeConnectionOutcome(
               connection: failed,
-              warnings: ["\(job.connection.label): \(error.localizedDescription)"]
+              warnings: [ProviderErrorSanitizer.sanitize("\(job.connection.label): \(safeError)")]
             )
           }
           let indexed = IndexedExchangeConnectionOutcome(index: job.index, outcome: outcome)
@@ -159,7 +160,9 @@ public struct NativeExchangeScanner: Sendable {
     return ExchangeConnectionOutcome(
       connection: connection,
       holdings: normalized.holdings,
-      warnings: normalized.warnings.map { "\(connection.label): \($0)" }
+      warnings: normalized.warnings.map {
+        ProviderErrorSanitizer.sanitize("\(connection.label): \($0)")
+      }
     )
   }
 }
@@ -180,6 +183,34 @@ private struct IndexedExchangeConnectionOutcome: Sendable {
   var outcome: ExchangeConnectionOutcome
 }
 
+public actor KrakenNonceGenerator {
+  public static let shared = KrakenNonceGenerator()
+  private var lastNonceByAPIKey: [String: Int64] = [:]
+
+  public init() {}
+
+  func next(apiKey: String, at date: Date) -> String {
+    let rawMilliseconds = date.timeIntervalSince1970 * 1_000
+    let currentMilliseconds: Int64
+    if !rawMilliseconds.isFinite || rawMilliseconds <= 0 {
+      currentMilliseconds = 0
+    } else if rawMilliseconds >= Double(Int64.max) {
+      currentMilliseconds = Int64.max
+    } else {
+      currentMilliseconds = Int64(rawMilliseconds.rounded(.down))
+    }
+
+    let next: Int64
+    if let previous = lastNonceByAPIKey[apiKey], previous >= currentMilliseconds {
+      next = previous == Int64.max ? Int64.max : previous + 1
+    } else {
+      next = currentMilliseconds
+    }
+    lastNonceByAPIKey[apiKey] = next
+    return String(next)
+  }
+}
+
 public struct NativeExchangeBalanceClient: Sendable {
   private let http: HTTPClient
   private let binanceBaseURL: URL
@@ -191,9 +222,10 @@ public struct NativeExchangeBalanceClient: Sendable {
   private let now: @Sendable () -> Date
   private let jwtNonce: @Sendable () -> String
   private let maxCoinbasePages: Int
+  private let krakenNonceGenerator: KrakenNonceGenerator
 
   public init(
-    http: HTTPClient = URLSession.nonRedirecting,
+    http: HTTPClient? = nil,
     endpointConfig: NativeEndpointConfig = .bundled,
     binanceBaseURL: URL? = nil,
     coinbaseBaseURL: URL? = nil,
@@ -203,9 +235,10 @@ public struct NativeExchangeBalanceClient: Sendable {
     krakenBalancePath: String? = nil,
     now: @escaping @Sendable () -> Date = { Date() },
     jwtNonce: @escaping @Sendable () -> String = { UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() },
-    maxCoinbasePages: Int = 20
+    maxCoinbasePages: Int = 20,
+    krakenNonceGenerator: KrakenNonceGenerator = .shared
   ) {
-    self.http = http
+    self.http = http ?? BoundedURLSessionHTTPClient(maxResponseBytes: 8_000_000)
     self.binanceBaseURL = binanceBaseURL
       ?? endpointConfig.exchangeBaseURL(for: .binance)
       ?? URL(string: "https://api.binance.com")!
@@ -227,6 +260,7 @@ public struct NativeExchangeBalanceClient: Sendable {
     self.now = now
     self.jwtNonce = jwtNonce
     self.maxCoinbasePages = max(1, maxCoinbasePages)
+    self.krakenNonceGenerator = krakenNonceGenerator
   }
 
   public func fetchBalance(provider: ExchangeProvider, credentials: ExchangeCredentials) async throws -> ExchangeBalance {
@@ -340,7 +374,7 @@ public struct NativeExchangeBalanceClient: Sendable {
   }
 
   private func fetchKrakenBalance(credentials: ExchangeCredentials) async throws -> ExchangeBalance {
-    let nonce = String(Int64(now().timeIntervalSince1970 * 1000))
+    let nonce = await krakenNonceGenerator.next(apiKey: credentials.apiKey, at: now())
     let signed = try ExchangeRequestSigner.krakenBalanceRequest(
       credentials: credentials,
       nonce: nonce,
@@ -349,7 +383,9 @@ public struct NativeExchangeBalanceClient: Sendable {
     let data = try await sendSignedRequest(signed, baseURL: krakenBaseURL, contentType: "application/x-www-form-urlencoded")
     let response = try JSONDecoder.addressAtlas.decode(KrakenBalanceResponse.self, from: data)
     guard response.error.isEmpty else {
-      throw ExchangeClientError.invalidResponse(response.error.joined(separator: ", "))
+      throw ExchangeClientError.invalidResponse(
+        ProviderErrorSanitizer.sanitize(response.error.joined(separator: ", "))
+      )
     }
     guard let rawBalances = response.result else {
       throw ExchangeClientError.invalidResponse("Kraken balance response was missing its result object.")
@@ -398,7 +434,9 @@ public struct NativeExchangeBalanceClient: Sendable {
     }
     let decoded = try JSONDecoder.addressAtlas.decode(KrakenAssetsResponse.self, from: data)
     guard decoded.error.isEmpty else {
-      throw ExchangeClientError.invalidResponse(decoded.error.joined(separator: ", "))
+      throw ExchangeClientError.invalidResponse(
+        ProviderErrorSanitizer.sanitize(decoded.error.joined(separator: ", "))
+      )
     }
     return Dictionary(uniqueKeysWithValues: decoded.result.map { key, asset in
       (key.uppercased(), asset.altname)
@@ -460,9 +498,12 @@ public struct NativeExchangeBalanceClient: Sendable {
   private static func responseMessage(from data: Data, statusCode: Int) -> String {
     let fallback = HTTPURLResponse.localizedString(forStatusCode: statusCode)
     guard !data.isEmpty else { return fallback }
-    if let json = try? JSONSerialization.jsonObject(with: data), let message = jsonMessage(json) { return message }
-    if let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
-      return text
+    let cappedData = Data(data.prefix(16_384))
+    if let json = try? JSONSerialization.jsonObject(with: cappedData), let message = jsonMessage(json) {
+      return ProviderErrorSanitizer.sanitize(message, fallback: fallback)
+    }
+    if let text = String(data: cappedData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+      return ProviderErrorSanitizer.sanitize(text, fallback: fallback)
     }
     return fallback
   }

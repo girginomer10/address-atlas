@@ -16,6 +16,59 @@ public struct WorkflowTimeoutError: Error, Equatable, LocalizedError, Sendable {
   }
 }
 
+public enum JSONHTTPClientError: Error, Equatable, LocalizedError, Sendable {
+  case httpStatus(Int)
+  case responseTooLarge
+
+  public var statusCode: Int? {
+    if case .httpStatus(let statusCode) = self { return statusCode }
+    return nil
+  }
+
+  public var errorDescription: String? {
+    switch self {
+    case .httpStatus(let statusCode):
+      return "HTTP request failed with status \(statusCode)."
+    case .responseTooLarge:
+      return "HTTP response exceeded the supported size limit."
+    }
+  }
+}
+
+enum ProviderErrorSanitizer {
+  static let maximumScalarCount = 320
+
+  static func sanitize(_ raw: String, fallback: String = "Provider request failed.") -> String {
+    let withoutControls = String(raw.unicodeScalars.map { scalar -> Character in
+      CharacterSet.controlCharacters.contains(scalar) ? " " : Character(String(scalar))
+    })
+    var cleaned = withoutControls
+      .split(whereSeparator: { $0.isWhitespace })
+      .joined(separator: " ")
+
+    cleaned = cleaned.replacingOccurrences(
+      of: #"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"#,
+      with: "Bearer [redacted]",
+      options: .regularExpression
+    )
+    cleaned = cleaned.replacingOccurrences(
+      of: #"(?i)(api[_ -]?key|secret|token|passphrase|authorization)[\"']?\s*[:=]\s*[\"']?[^,\s\"'}]+"#,
+      with: "$1=[redacted]",
+      options: .regularExpression
+    )
+    cleaned = cleaned.replacingOccurrences(
+      of: #"(?<![A-Za-z0-9])[A-Za-z0-9+/_=-]{48,}(?![A-Za-z0-9])"#,
+      with: "[redacted]",
+      options: .regularExpression
+    )
+
+    guard !cleaned.isEmpty else { return fallback }
+    let scalars = cleaned.unicodeScalars
+    guard scalars.count > maximumScalarCount else { return cleaned }
+    return String(String.UnicodeScalarView(scalars.prefix(maximumScalarCount))) + "…"
+  }
+}
+
 private struct IndexedAsyncValue<Value: Sendable>: Sendable {
   var index: Int
   var value: Value
@@ -127,21 +180,70 @@ public extension URLSession {
   )
 }
 
+/// Streams response bytes and aborts the underlying task as soon as the limit
+/// is exceeded. A post-download `Data.count` check is not sufficient because an
+/// untrusted provider could otherwise exhaust memory before validation runs.
+public struct BoundedURLSessionHTTPClient: HTTPClient {
+  private let session: URLSession
+  public let maxResponseBytes: Int
+
+  public init(session: URLSession = .nonRedirecting, maxResponseBytes: Int = 8_000_000) {
+    self.session = session
+    self.maxResponseBytes = max(1, maxResponseBytes)
+  }
+
+  public func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    let (bytes, response) = try await session.bytes(for: request, delegate: nil)
+    guard let http = response as? HTTPURLResponse else {
+      bytes.task.cancel()
+      throw URLError(.badServerResponse)
+    }
+    if response.expectedContentLength > Int64(maxResponseBytes) {
+      bytes.task.cancel()
+      throw JSONHTTPClientError.responseTooLarge
+    }
+
+    var data = Data()
+    if response.expectedContentLength > 0 {
+      data.reserveCapacity(min(maxResponseBytes, Int(response.expectedContentLength)))
+    }
+    do {
+      for try await byte in bytes {
+        guard data.count < maxResponseBytes else {
+          bytes.task.cancel()
+          throw JSONHTTPClientError.responseTooLarge
+        }
+        data.append(byte)
+      }
+    } catch {
+      bytes.task.cancel()
+      throw error
+    }
+    return (data, http)
+  }
+}
+
 public struct JSONHTTPClient: Sendable {
   private let http: HTTPClient
+  private let maxResponseBytes: Int
+  private let maxRateLimitRetries: Int
 
-  public init(http: HTTPClient = URLSession.shared) {
-    self.http = http
+  public init(
+    http: HTTPClient? = nil,
+    maxResponseBytes: Int = 8_000_000,
+    maxRateLimitRetries: Int = 1
+  ) {
+    let responseLimit = max(1, maxResponseBytes)
+    self.http = http ?? BoundedURLSessionHTTPClient(maxResponseBytes: responseLimit)
+    self.maxResponseBytes = responseLimit
+    self.maxRateLimitRetries = max(0, min(maxRateLimitRetries, 3))
   }
 
   public func get<T: Decodable>(_ url: URL, as type: T.Type = T.self) async throws -> T {
     var request = URLRequest(url: url)
     request.timeoutInterval = 30
     request.setValue("application/json", forHTTPHeaderField: "accept")
-    let (data, response) = try await http.data(for: request)
-    guard (200..<300).contains(response.statusCode) else {
-      throw URLError(.badServerResponse)
-    }
+    let data = try await send(request)
     return try JSONDecoder.addressAtlas.decode(T.self, from: data)
   }
 
@@ -152,10 +254,41 @@ public struct JSONHTTPClient: Sendable {
     request.setValue("application/json", forHTTPHeaderField: "accept")
     request.setValue("application/json", forHTTPHeaderField: "content-type")
     request.httpBody = try JSONEncoder.addressAtlas.encode(body)
-    let (data, response) = try await http.data(for: request)
-    guard (200..<300).contains(response.statusCode) else {
-      throw URLError(.badServerResponse)
-    }
+    let data = try await send(request)
     return try JSONDecoder.addressAtlas.decode(T.self, from: data)
+  }
+
+  private func send(_ request: URLRequest) async throws -> Data {
+    var rateLimitRetries = 0
+    while true {
+      try Task.checkCancellation()
+      let (data, response) = try await http.data(for: request)
+      if response.statusCode == 429,
+         rateLimitRetries < maxRateLimitRetries,
+         let delay = Self.boundedRetryDelay(response.value(forHTTPHeaderField: "Retry-After")) {
+        rateLimitRetries += 1
+        if delay > 0 {
+          try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+        }
+        continue
+      }
+      guard (200..<300).contains(response.statusCode) else {
+        throw JSONHTTPClientError.httpStatus(response.statusCode)
+      }
+      guard data.count <= maxResponseBytes else {
+        throw JSONHTTPClientError.responseTooLarge
+      }
+      return data
+    }
+  }
+
+  private static func boundedRetryDelay(_ value: String?) -> TimeInterval? {
+    guard let value else { return 0.25 }
+    guard let seconds = TimeInterval(value.trimmingCharacters(in: .whitespacesAndNewlines)),
+          seconds.isFinite,
+          seconds >= 0,
+          seconds <= 2
+    else { return nil }
+    return seconds
   }
 }

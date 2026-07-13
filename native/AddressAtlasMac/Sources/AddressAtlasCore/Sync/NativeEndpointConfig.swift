@@ -243,8 +243,8 @@ public enum NativeEndpointConfigError: Error, Equatable, LocalizedError {
 public struct NativeEndpointConfigClient: Sendable {
   private let http: HTTPClient
 
-  public init(http: HTTPClient = URLSession.shared) {
-    self.http = http
+  public init(http: HTTPClient? = nil) {
+    self.http = http ?? BoundedURLSessionHTTPClient(maxResponseBytes: 1_000_000)
   }
 
   public func fetch(from serverURL: URL) async throws -> NativeEndpointConfig {

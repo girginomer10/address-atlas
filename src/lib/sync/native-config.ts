@@ -21,6 +21,13 @@ export interface NativeEndpointConfig {
   exchanges: Record<string, NativeExchangeEndpointConfig>;
 }
 
+export class NativeConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NativeConfigError";
+  }
+}
+
 export const DEFAULT_NATIVE_ENDPOINT_CONFIG: NativeEndpointConfig = {
   schemaVersion: 1,
   configVersion: 3,
@@ -57,40 +64,115 @@ export const DEFAULT_NATIVE_ENDPOINT_CONFIG: NativeEndpointConfig = {
   exchanges: {}
 };
 
+const NATIVE_CONFIG_KEYS = new Set([
+  "schemaVersion",
+  "configVersion",
+  "updatedAt",
+  "refreshAfterSeconds",
+  "minSupportedAppVersion",
+  "message",
+  "priceBaseUrl",
+  "chains",
+  "exchanges"
+]);
+const CHAIN_ENDPOINT_KEYS = new Set(["rpcUrl", "restUrl", "explorerUrl"]);
+
 export function getNativeEndpointConfig(): NativeEndpointConfig {
   const envOverride = parseNativeConfigOverride(process.env.NATIVE_ENDPOINT_CONFIG_JSON);
   const config = mergeNativeConfig(DEFAULT_NATIVE_ENDPOINT_CONFIG, envOverride);
   return sanitizeNativeConfig({
     ...config,
-    configVersion: numberFromEnv("NATIVE_ENDPOINT_CONFIG_VERSION", config.configVersion),
-    updatedAt: process.env.NATIVE_ENDPOINT_CONFIG_UPDATED_AT || config.updatedAt,
+    configVersion: integerFromEnv("NATIVE_ENDPOINT_CONFIG_VERSION", config.configVersion, 1, 2_000_000_000),
+    updatedAt: isoDateFromEnv("NATIVE_ENDPOINT_CONFIG_UPDATED_AT", config.updatedAt),
     message: process.env.NATIVE_ENDPOINT_CONFIG_MESSAGE || config.message,
-    minSupportedAppVersion:
-      process.env.NATIVE_ENDPOINT_MIN_APP_VERSION || config.minSupportedAppVersion
+    minSupportedAppVersion: semverFromEnv("NATIVE_ENDPOINT_MIN_APP_VERSION", config.minSupportedAppVersion)
   });
 }
 
 function parseNativeConfigOverride(raw: string | undefined) {
-  if (!raw) return {};
+  if (raw === undefined || !raw.trim()) return {};
   try {
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return {};
+      throw new NativeConfigError("NATIVE_ENDPOINT_CONFIG_JSON must contain a JSON object.");
     }
+    validateNativeConfigOverride(parsed as Partial<NativeEndpointConfig>);
     return parsed as Partial<NativeEndpointConfig>;
-  } catch {
-    return {};
+  } catch (error) {
+    if (error instanceof NativeConfigError) throw error;
+    throw new NativeConfigError("NATIVE_ENDPOINT_CONFIG_JSON must contain valid JSON.");
+  }
+}
+
+function validateNativeConfigOverride(value: Partial<NativeEndpointConfig>) {
+  const unknownKey = Object.keys(value).find((key) => !NATIVE_CONFIG_KEYS.has(key));
+  if (unknownKey) {
+    throw new NativeConfigError(`Native endpoint config contains unknown field ${unknownKey}.`);
+  }
+  if (value.schemaVersion !== undefined && value.schemaVersion !== 1) {
+    throw new NativeConfigError("Native endpoint schemaVersion must be 1.");
+  }
+  if (value.configVersion !== undefined && !isBoundedInteger(value.configVersion, 1, 2_000_000_000)) {
+    throw new NativeConfigError("Native endpoint configVersion is invalid.");
+  }
+  if (value.updatedAt !== undefined && !isISODate(value.updatedAt)) {
+    throw new NativeConfigError("Native endpoint updatedAt is invalid.");
+  }
+  if (value.refreshAfterSeconds !== undefined && !isBoundedInteger(value.refreshAfterSeconds, 300, 86_400)) {
+    throw new NativeConfigError("Native endpoint refreshAfterSeconds is invalid.");
+  }
+  if (
+    value.minSupportedAppVersion !== undefined
+    && (
+      typeof value.minSupportedAppVersion !== "string"
+      || semverOrUndefined(value.minSupportedAppVersion) !== value.minSupportedAppVersion.trim()
+    )
+  ) {
+    throw new NativeConfigError("Native endpoint minSupportedAppVersion is invalid.");
+  }
+  if (value.message !== undefined && (typeof value.message !== "string" || value.message.length > 500)) {
+    throw new NativeConfigError("Native endpoint message must be a string of at most 500 characters.");
+  }
+  if (
+    value.priceBaseUrl !== undefined
+    && (typeof value.priceBaseUrl !== "string" || !isFixedPriceURL(value.priceBaseUrl, DEFAULT_NATIVE_ENDPOINT_CONFIG.priceBaseUrl))
+  ) {
+    throw new NativeConfigError("Native endpoint priceBaseUrl must match the bundled HTTPS price endpoint.");
+  }
+  if (value.exchanges !== undefined && !isPlainRecord(value.exchanges)) {
+    throw new NativeConfigError("Native endpoint exchanges must be an object.");
+  }
+  if (value.chains !== undefined && !isPlainRecord(value.chains)) {
+    throw new NativeConfigError("Native endpoint chains must be an object.");
+  }
+  for (const [chainId, candidate] of Object.entries(value.chains ?? {})) {
+    const bundled = DEFAULT_NATIVE_ENDPOINT_CONFIG.chains[chainId];
+    if (!bundled) {
+      throw new NativeConfigError(`Native endpoint config contains unknown chain ${chainId}.`);
+    }
+    if (!isPlainRecord(candidate)) {
+      throw new NativeConfigError(`Native endpoint chain ${chainId} must be an object.`);
+    }
+    for (const [field, endpoint] of Object.entries(candidate)) {
+      if (!CHAIN_ENDPOINT_KEYS.has(field) || !(field in bundled)) {
+        throw new NativeConfigError(`Native endpoint chain ${chainId} contains unsupported field ${field}.`);
+      }
+      const fallback = bundled[field as keyof NativeChainEndpointConfig];
+      if (typeof endpoint !== "string" || !isSameOriginURL(endpoint, fallback)) {
+        throw new NativeConfigError(`Native endpoint ${chainId}.${field} is not an allowed HTTPS URL.`);
+      }
+    }
   }
 }
 
 function mergeNativeConfig(base: NativeEndpointConfig, override: Partial<NativeEndpointConfig>): NativeEndpointConfig {
   return {
-    ...base,
-    ...override,
     schemaVersion: override.schemaVersion ?? base.schemaVersion,
     configVersion: override.configVersion ?? base.configVersion,
     updatedAt: override.updatedAt ?? base.updatedAt,
     refreshAfterSeconds: override.refreshAfterSeconds ?? base.refreshAfterSeconds,
+    minSupportedAppVersion: override.minSupportedAppVersion ?? base.minSupportedAppVersion,
+    message: override.message ?? base.message,
     priceBaseUrl: typeof override.priceBaseUrl === "string" ? override.priceBaseUrl : base.priceBaseUrl,
     chains: mergeKnownRecord(base.chains, override.chains),
     exchanges: {}
@@ -110,7 +192,6 @@ function mergeKnownRecord<T>(base: Record<string, T>, override?: Record<string, 
 
 function sanitizeNativeConfig(config: NativeEndpointConfig): NativeEndpointConfig {
   return {
-    ...config,
     schemaVersion: 1,
     configVersion: boundedInteger(config.configVersion, DEFAULT_NATIVE_ENDPOINT_CONFIG.configVersion, 1, 2_000_000_000),
     updatedAt: isoDateOrFallback(config.updatedAt, DEFAULT_NATIVE_ENDPOINT_CONFIG.updatedAt),
@@ -135,6 +216,11 @@ function sanitizeNativeConfig(config: NativeEndpointConfig): NativeEndpointConfi
 function sameOriginURL(value: string | undefined, fallback: string | undefined) {
   if (!fallback) return undefined;
   if (!value) return fallback;
+  return isSameOriginURL(value, fallback) ? value : fallback;
+}
+
+function isSameOriginURL(value: string, fallback: string | undefined) {
+  if (!fallback) return false;
   try {
     const url = new URL(value);
     const bundled = new URL(fallback);
@@ -143,18 +229,23 @@ function sameOriginURL(value: string | undefined, fallback: string | undefined) 
       && url.origin === bundled.origin
       && !url.username
       && !url.password
+      && !url.search
       && !url.hash
     ) {
-      return value;
+      return true;
     }
   } catch {
-    // Fall through to fallback.
+    // Invalid URL.
   }
-  return fallback ?? "";
+  return false;
 }
 
 function fixedPriceURL(value: string | undefined, fallback: string) {
   if (!value) return fallback;
+  return isFixedPriceURL(value, fallback) ? value : fallback;
+}
+
+function isFixedPriceURL(value: string, fallback: string) {
   try {
     const url = new URL(value);
     const bundled = new URL(fallback);
@@ -167,29 +258,59 @@ function fixedPriceURL(value: string | undefined, fallback: string) {
       && !url.hash
       && !url.search
     ) {
-      return value;
+      return true;
     }
   } catch {
-    // Fall through to the bundled endpoint.
+    // Invalid URL.
   }
-  return fallback;
+  return false;
 }
 
-function numberFromEnv(name: string, fallback: number) {
-  const parsed = Number(process.env[name]);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function integerFromEnv(name: string, fallback: number, min: number, max: number) {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const parsed = Number(raw);
+  if (!raw.trim() || !isBoundedInteger(parsed, min, max)) {
+    throw new NativeConfigError(`${name} must be an integer between ${min} and ${max}.`);
+  }
+  return parsed;
+}
+
+function isoDateFromEnv(name: string, fallback: string) {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  if (!isISODate(raw)) throw new NativeConfigError(`${name} must be an ISO-8601 UTC timestamp.`);
+  return raw;
+}
+
+function semverFromEnv(name: string, fallback: string | undefined) {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const parsed = semverOrUndefined(raw);
+  if (!parsed) throw new NativeConfigError(`${name} must be a dotted numeric version.`);
+  return parsed;
 }
 
 function boundedInteger(value: number, fallback: number, min: number, max: number) {
   return Number.isSafeInteger(value) && value >= min && value <= max ? value : fallback;
 }
 
+function isBoundedInteger(value: unknown, min: number, max: number): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max;
+}
+
 function isoDateOrFallback(value: unknown, fallback: string) {
+  return isISODate(value) ? value : fallback;
+}
+
+function isISODate(value: unknown): value is string {
   return typeof value === "string"
     && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(value)
-    && Number.isFinite(Date.parse(value))
-    ? value
-    : fallback;
+    && Number.isFinite(Date.parse(value));
 }
 
 // Only emit a well-formed dotted version (e.g. "1.2.3"); anything else is

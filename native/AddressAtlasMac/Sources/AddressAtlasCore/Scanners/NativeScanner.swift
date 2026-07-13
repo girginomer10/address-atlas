@@ -201,8 +201,20 @@ public struct NativeScanner: Sendable {
     guard let rest = chain.restUrl else { return [] }
     let url = rest.appending(path: "address/\(address)")
     let response = try await http.get(url, as: Response.self)
+    let reportedValues = [
+      response.chainStats.fundedTxoSum,
+      response.chainStats.spentTxoSum,
+      response.mempoolStats?.fundedTxoSum ?? 0,
+      response.mempoolStats?.spentTxoSum ?? 0
+    ]
+    guard reportedValues.allSatisfy({ $0.isFinite && $0 >= 0 }) else {
+      throw Self.messageError(domain: "Bitcoin", message: "Bitcoin balance lookup returned invalid statistics.")
+    }
     let sats = (response.chainStats.fundedTxoSum - response.chainStats.spentTxoSum)
       + ((response.mempoolStats?.fundedTxoSum ?? 0) - (response.mempoolStats?.spentTxoSum ?? 0))
+    guard sats.isFinite, sats >= 0 else {
+      throw Self.messageError(domain: "Bitcoin", message: "Bitcoin balance lookup returned an invalid total.")
+    }
     return assetIfPositive(amount: sats / pow(10, Double(chain.decimals)), address: address, chain: chain, prices: prices)
   }
 
@@ -226,11 +238,15 @@ public struct NativeScanner: Sendable {
         body: JSONRPCRequest(method: "eth_getBalance", params: [.string(address), .string("latest")]),
         as: Response.self
       )
-      if let message = response.error?.message { throw NSError(domain: "EVM", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
+      if let message = response.error?.message {
+        throw Self.messageError(domain: "EVM", message: message)
+      }
       guard let rawResult = response.result else {
         throw Self.messageError(domain: "EVM", message: "Native balance lookup returned an empty result.")
       }
-      let amount = Self.hexQuantityToDouble(rawResult, decimals: chain.decimals)
+      guard let amount = Self.hexQuantityToDouble(rawResult, decimals: chain.decimals) else {
+        throw Self.messageError(domain: "EVM", message: "Native balance lookup returned an invalid hex quantity.")
+      }
       assets.append(contentsOf: assetIfPositive(amount: amount, address: address, chain: chain, prices: prices))
     } catch {
       try throwIfCancellation(error)
@@ -271,6 +287,10 @@ public struct NativeScanner: Sendable {
         tokens: tokens,
         responses: responses,
         prices: prices
+      )
+    } catch let error as JSONHTTPClientError where error.statusCode == 429 {
+      return NativeScanResult(
+        warnings: ["\(chain.name) token balance batch was rate-limited; individual retries were skipped to avoid amplifying the limit."]
       )
     } catch {
       try throwIfCancellation(error)
@@ -328,7 +348,10 @@ public struct NativeScanner: Sendable {
         failedTokens.append(token.symbol)
         continue
       }
-      let amount = Self.hexQuantityToDouble(rawResult, decimals: token.decimals)
+      guard let amount = Self.hexQuantityToDouble(rawResult, decimals: token.decimals) else {
+        failedTokens.append(token.symbol)
+        continue
+      }
       guard let tokenAsset = tokenAsset(amount: amount, address: address, chain: chain, token: token, prices: prices, source: .erc20) else {
         continue
       }
@@ -368,7 +391,9 @@ public struct NativeScanner: Sendable {
     guard let rawResult = response.result else {
       throw Self.messageError(domain: "EVMToken", message: "Token balance lookup returned an empty result.")
     }
-    let amount = Self.hexQuantityToDouble(rawResult, decimals: token.decimals)
+    guard let amount = Self.hexQuantityToDouble(rawResult, decimals: token.decimals) else {
+      throw Self.messageError(domain: "EVMToken", message: "Token balance lookup returned an invalid hex quantity.")
+    }
     guard amount > 0 else { return nil }
     return tokenAsset(amount: amount, address: address, chain: chain, token: token, prices: prices, source: .erc20)
   }
@@ -399,6 +424,9 @@ public struct NativeScanner: Sendable {
       }
       guard let lamports = response.result?.value else {
         throw Self.messageError(domain: "Solana", message: "Native SOL balance lookup returned an empty result.")
+      }
+      guard lamports.isFinite, lamports >= 0 else {
+        throw Self.messageError(domain: "Solana", message: "Native SOL balance lookup returned an invalid amount.")
       }
       assets.append(contentsOf: assetIfPositive(amount: lamports / pow(10, Double(chain.decimals)), address: address, chain: chain, prices: prices))
     } catch {
@@ -431,8 +459,11 @@ public struct NativeScanner: Sendable {
             rest.appending(path: "cosmos/bank/v1beta1/balances/\(address)"),
             as: CosmosBankResponse.self
           )
+          guard let amount = Self.parseCosmosLiquid(response, denom: denom, decimals: chain.decimals) else {
+            throw Self.messageError(domain: "Cosmos", message: "Liquid balance contained an invalid amount.")
+          }
           return NativeScanResult(assets: assetIfPositive(
-            amount: Self.parseCosmosLiquid(response, denom: denom, decimals: chain.decimals),
+            amount: amount,
             address: address,
             chain: chain,
             prices: prices
@@ -444,8 +475,11 @@ public struct NativeScanner: Sendable {
             queryItems: [URLQueryItem(name: "pagination.limit", value: "500")]
           )
           let response = try await http.get(url, as: CosmosDelegationResponse.self)
+          guard let amount = Self.parseCosmosDelegations(response, denom: denom, decimals: chain.decimals) else {
+            throw Self.messageError(domain: "Cosmos", message: "Delegations contained an invalid amount.")
+          }
           return NativeScanResult(assets: assetIfPositive(
-            amount: Self.parseCosmosDelegations(response, denom: denom, decimals: chain.decimals),
+            amount: amount,
             address: address,
             chain: chain,
             prices: prices,
@@ -457,8 +491,11 @@ public struct NativeScanner: Sendable {
             rest.appending(path: "cosmos/distribution/v1beta1/delegators/\(address)/rewards"),
             as: CosmosRewardsResponse.self
           )
+          guard let amount = Self.parseCosmosRewards(response, denom: denom, decimals: chain.decimals) else {
+            throw Self.messageError(domain: "Cosmos", message: "Rewards contained an invalid amount.")
+          }
           return NativeScanResult(assets: assetIfPositive(
-            amount: Self.parseCosmosRewards(response, denom: denom, decimals: chain.decimals),
+            amount: amount,
             address: address,
             chain: chain,
             prices: prices,
@@ -488,18 +525,30 @@ public struct NativeScanner: Sendable {
     let url = rest.appending(path: "v1/accounts/\(address)")
     let response = try await http.get(url, as: TronAccountResponse.self)
     let account = response.data?.first
-    var assets = assetIfPositive(
-      amount: (account?.balance ?? 0) / pow(10, Double(chain.decimals)),
-      address: address,
-      chain: chain,
-      prices: prices
-    )
+    let rawNativeBalance = account?.balance ?? 0
+    var warnings: [String] = []
+    var assets: [TrackedAsset] = []
+    if rawNativeBalance.isFinite, rawNativeBalance >= 0 {
+      assets = assetIfPositive(
+        amount: rawNativeBalance / pow(10, Double(chain.decimals)),
+        address: address,
+        chain: chain,
+        prices: prices
+      )
+    } else {
+      warnings.append("Native TRX balance returned an invalid amount; TRC-20 balances may still be available.")
+    }
 
-    let tokenAmounts = Self.parseTronTrc20Balances(account?.trc20 ?? [], tokens: tokens)
-    assets.append(contentsOf: tokenAmounts.compactMap { entry in
+    let tokenScan = Self.parseTronTrc20BalanceResult(account?.trc20 ?? [], tokens: tokens)
+    assets.append(contentsOf: tokenScan.balances.compactMap { entry in
       tokenAsset(amount: entry.amount, address: address, chain: chain, token: entry.token, prices: prices, source: .trc20)
     })
-    return NativeScanResult(assets: assets)
+    if !tokenScan.invalidSymbols.isEmpty {
+      warnings.append(
+        "TRC-20 token balance data was invalid for \(Self.formattedSymbols(tokenScan.invalidSymbols)); balances may be incomplete."
+      )
+    }
+    return NativeScanResult(assets: assets, warnings: warnings)
   }
 
   private func scanXRP(address: String, chain: ChainConfig, prices: [String: PricePoint]) async throws -> NativeScanResult {
@@ -710,7 +759,12 @@ public struct NativeScanner: Sendable {
         guard let accounts = response.result?.value else {
           throw Self.messageError(domain: "SolanaTokenAccounts", message: "Token account lookup returned an empty result.")
         }
-        return SolanaProgramOutcome(accounts: Self.parseSolanaTokenAccounts(accounts))
+        let parsed = Self.parseSolanaTokenAccountResult(accounts)
+        return SolanaProgramOutcome(
+          accounts: parsed.accounts,
+          invalidMints: parsed.invalidMints,
+          unidentifiedInvalidAccountCount: parsed.unidentifiedInvalidAccountCount
+        )
       } catch {
         try throwIfCancellation(error)
         return SolanaProgramOutcome(
@@ -723,6 +777,17 @@ public struct NativeScanner: Sendable {
 
     let registryByMint = registry.reduce(into: [String: TokenConfig]()) { result, token in
       if result[token.address] == nil { result[token.address] = token }
+    }
+    let malformedSymbols = outcomes
+      .flatMap(\.invalidMints)
+      .compactMap { registryByMint[$0]?.symbol }
+    if !malformedSymbols.isEmpty {
+      warnings.append(
+        "SPL token balance data was invalid for \(Self.formattedSymbols(malformedSymbols)); balances may be incomplete."
+      )
+    }
+    if outcomes.reduce(0, { $0 + $1.unidentifiedInvalidAccountCount }) > 0 {
+      warnings.append("Some SPL token accounts returned invalid parsed amount data; balances may be incomplete.")
     }
     var totals: [String: Double] = [:]
     var warnedMints = Set<String>()
@@ -751,48 +816,101 @@ public struct NativeScanner: Sendable {
   }
 
   public static func parseSolanaTokenAccounts(_ accounts: [SolanaTokenAccount]) -> [ParsedSplAccount] {
-    accounts.compactMap { account in
-      guard
-        let info = account.account.data.parsed?.info,
-        let amount = Double(info.tokenAmount.amount)
-      else {
-        return nil
+    parseSolanaTokenAccountResult(accounts).accounts
+  }
+
+  private static func parseSolanaTokenAccountResult(_ accounts: [SolanaTokenAccount]) -> SolanaAccountParseResult {
+    var result = SolanaAccountParseResult()
+    for account in accounts {
+      guard let info = account.account.data.parsed?.info else {
+        result.unidentifiedInvalidAccountCount += 1
+        continue
       }
-      return ParsedSplAccount(mint: info.mint, rawAmount: amount, decimals: info.tokenAmount.decimals)
+      guard let amount = Double(info.tokenAmount.amount), amount.isFinite, amount >= 0 else {
+        result.invalidMints.append(info.mint)
+        continue
+      }
+      result.accounts.append(
+        ParsedSplAccount(mint: info.mint, rawAmount: amount, decimals: info.tokenAmount.decimals)
+      )
     }
+    return result
   }
 
-  public static func parseCosmosLiquid(_ response: CosmosBankResponse, denom: String, decimals: Int) -> Double {
-    let raw = Double(response.balances?.first(where: { $0.denom == denom })?.amount ?? "0") ?? 0
-    return raw / pow(10, Double(decimals))
+  public static func parseCosmosLiquid(_ response: CosmosBankResponse, denom: String, decimals: Int) -> Double? {
+    guard (0...36).contains(decimals) else { return nil }
+    guard let balance = response.balances?.first(where: { $0.denom == denom }) else { return 0 }
+    return scaledNonnegativeAmount(balance.amount, decimals: decimals)
   }
 
-  public static func parseCosmosDelegations(_ response: CosmosDelegationResponse, denom: String, decimals: Int) -> Double {
-    let raw = response.delegationResponses?.reduce(0.0) { sum, item in
-      guard item.balance?.denom == denom else { return sum }
-      return sum + (Double(item.balance?.amount ?? "0") ?? 0)
-    } ?? 0
-    return raw / pow(10, Double(decimals))
+  public static func parseCosmosDelegations(_ response: CosmosDelegationResponse, denom: String, decimals: Int) -> Double? {
+    guard (0...36).contains(decimals) else { return nil }
+    var total = 0.0
+    for item in response.delegationResponses ?? [] where item.balance?.denom == denom {
+      guard let amount = item.balance?.amount,
+            let raw = Double(amount), raw.isFinite, raw >= 0
+      else { return nil }
+      total += raw
+      guard total.isFinite else { return nil }
+    }
+    return total / pow(10, Double(decimals))
   }
 
-  public static func parseCosmosRewards(_ response: CosmosRewardsResponse, denom: String, decimals: Int) -> Double {
-    let raw = response.total?.reduce(0.0) { sum, balance in
-      guard balance.denom == denom else { return sum }
-      return sum + (Double(balance.amount) ?? 0)
-    } ?? 0
-    return raw / pow(10, Double(decimals))
+  public static func parseCosmosRewards(_ response: CosmosRewardsResponse, denom: String, decimals: Int) -> Double? {
+    guard (0...36).contains(decimals) else { return nil }
+    var total = 0.0
+    for balance in response.total ?? [] where balance.denom == denom {
+      guard let raw = Double(balance.amount), raw.isFinite, raw >= 0 else { return nil }
+      total += raw
+      guard total.isFinite else { return nil }
+    }
+    return total / pow(10, Double(decimals))
   }
 
   public static func parseTronTrc20Balances(_ balances: [[String: String]], tokens: [TokenConfig]) -> [(token: TokenConfig, amount: Double)] {
-    tokens.compactMap { token in
-      guard (0...36).contains(token.decimals) else { return nil }
-      let raw = balances.reduce(0.0) { sum, entry in
-        sum + (Double(entry[token.address] ?? "0") ?? 0)
+    parseTronTrc20BalanceResult(balances, tokens: tokens).balances
+  }
+
+  private static func parseTronTrc20BalanceResult(
+    _ balances: [[String: String]],
+    tokens: [TokenConfig]
+  ) -> TronTokenBalanceParseResult {
+    var result = TronTokenBalanceParseResult()
+    for token in tokens {
+      guard (0...36).contains(token.decimals) else {
+        result.invalidSymbols.append(token.symbol)
+        continue
       }
-      let amount = raw / pow(10, Double(token.decimals))
-      guard amount.isFinite, amount > 0 else { return nil }
-      return (token, amount)
+      var rawTotal = 0.0
+      var isInvalid = false
+      for entry in balances {
+        guard let rawValue = entry[token.address] else { continue }
+        guard let raw = Double(rawValue), raw.isFinite, raw >= 0 else {
+          isInvalid = true
+          break
+        }
+        rawTotal += raw
+        guard rawTotal.isFinite else {
+          isInvalid = true
+          break
+        }
+      }
+      guard !isInvalid else {
+        result.invalidSymbols.append(token.symbol)
+        continue
+      }
+      let amount = rawTotal / pow(10, Double(token.decimals))
+      if amount.isFinite, amount > 0 {
+        result.balances.append((token, amount))
+      }
     }
+    return result
+  }
+
+  private static func scaledNonnegativeAmount(_ rawValue: String, decimals: Int) -> Double? {
+    guard let raw = Double(rawValue), raw.isFinite, raw >= 0 else { return nil }
+    let amount = raw / pow(10, Double(decimals))
+    return amount.isFinite ? amount : nil
   }
 
   public static func parseXrpTrustLines(_ lines: [XrpTrustLine], address: String, chain: ChainConfig) -> [TrackedAsset] {
@@ -972,19 +1090,22 @@ public struct NativeScanner: Sendable {
     }
   }
 
-  public static func hexQuantityToDouble(_ value: String, decimals: Int) -> Double {
+  public static func hexQuantityToDouble(_ value: String, decimals: Int) -> Double? {
     // Design decision (2026-06-22, won't-fix): on-chain balances (uint256) are
     // intentionally carried as Double for a read-only USD estimate. No overflow
     // or crash (verified) — only sub-cent precision loss well below display
     // resolution. Do not re-flag as a "uint256 overflow/precision bug".
-    guard (0...36).contains(decimals) else { return 0 }
-    let clean = value.replacingOccurrences(of: "0x", with: "")
+    guard (0...36).contains(decimals),
+          value.range(of: #"^0x[0-9a-fA-F]+$"#, options: .regularExpression) != nil
+    else { return nil }
+    let clean = String(value.dropFirst(2))
     let padded = clean.isEmpty
       ? "00"
       : (clean.count.isMultiple(of: 2) ? clean : "0\(clean)")
-    guard let data = try? Data(hex: padded) else { return 0 }
+    guard let data = try? Data(hex: padded) else { return nil }
     let raw = data.reduce(0.0) { $0 * 256 + Double($1) }
-    return raw / pow(10, Double(decimals))
+    let amount = raw / pow(10, Double(decimals))
+    return amount.isFinite ? amount : nil
   }
 
   private static func rpcError(domain: String, error: JSONRPCError, fallback: String) -> NSError {
@@ -992,7 +1113,11 @@ public struct NativeScanner: Sendable {
   }
 
   private static func messageError(domain: String, message: String, code: Int = 1) -> NSError {
-    NSError(domain: "AddressAtlas.\(domain)", code: code, userInfo: [NSLocalizedDescriptionKey: message])
+    NSError(
+      domain: "AddressAtlas.\(domain)",
+      code: code,
+      userInfo: [NSLocalizedDescriptionKey: ProviderErrorSanitizer.sanitize(message)]
+    )
   }
 
   private static func cosmosURL(rest: URL, path: String, queryItems: [URLQueryItem]) -> URL {
@@ -1049,6 +1174,19 @@ private struct TokenScanOutcome: Sendable {
 private struct SolanaProgramOutcome: Sendable {
   var accounts: [ParsedSplAccount] = []
   var warnings: [String] = []
+  var invalidMints: [String] = []
+  var unidentifiedInvalidAccountCount = 0
+}
+
+private struct SolanaAccountParseResult {
+  var accounts: [ParsedSplAccount] = []
+  var invalidMints: [String] = []
+  var unidentifiedInvalidAccountCount = 0
+}
+
+private struct TronTokenBalanceParseResult {
+  var balances: [(token: TokenConfig, amount: Double)] = []
+  var invalidSymbols: [String] = []
 }
 
 private enum CosmosScanPart: Sendable {

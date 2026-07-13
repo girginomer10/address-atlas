@@ -8,7 +8,7 @@ export interface EncryptedVaultEnvelope {
   nonce: string;
   ciphertext: string;
   checksum: string;
-  createdAt?: string;
+  createdAt: string;
 }
 
 export interface RemoteVaultSnapshot {
@@ -20,8 +20,7 @@ export interface RemoteVaultSnapshot {
 }
 
 const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
-const HEX_RE = /^[a-f0-9]{64}$/i;
-const KEY_ID_RE = /^[A-Za-z0-9._:-]+$/;
+const HEX_RE = /^[a-f0-9]{64}$/;
 
 // Hard ceiling on a single encrypted snapshot. A vault holds wallet metadata,
 // not blobs, so even a large portfolio is well under this. Bounds memory/storage
@@ -50,7 +49,7 @@ export function assertRemoteVaultSnapshot(input: unknown): asserts input is Remo
     throw new Error("Snapshot byteSize does not match the encrypted envelope.");
   }
   const expectedSnapshotChecksum = computeSnapshotChecksum(snapshot.version as number, snapshot.envelope, canonical);
-  if (expectedSnapshotChecksum !== snapshot.checksum.toLowerCase()) {
+  if (expectedSnapshotChecksum !== snapshot.checksum) {
     throw new Error("Snapshot checksum does not match the encrypted envelope.");
   }
   if (snapshot.updatedAt !== undefined && !isISODate(snapshot.updatedAt)) {
@@ -64,13 +63,9 @@ function assertEnvelope(envelope: unknown): asserts envelope is EncryptedVaultEn
   const isSupportedVersion = (value.schemaVersion === 1 && value.cryptoVersion === 1)
     || (value.schemaVersion === 2 && value.cryptoVersion === 2);
   if (!isSupportedVersion) throw new Error("Unsupported or mismatched envelope version.");
-  if (
-    typeof value.keyId !== "string"
-    || value.keyId.length < 3
-    || value.keyId.length > 80
-    || !KEY_ID_RE.test(value.keyId)
-  ) {
-    throw new Error("Invalid keyId.");
+  const expectedKeyId = value.schemaVersion === 1 ? "sync-v1" : "sync-v2";
+  if (value.keyId !== expectedKeyId) {
+    throw new Error(`Envelope version ${value.schemaVersion} requires keyId ${expectedKeyId}.`);
   }
   if (typeof value.nonce !== "string" || !BASE64URL_RE.test(value.nonce)) {
     throw new Error("Invalid nonce.");
@@ -81,8 +76,8 @@ function assertEnvelope(envelope: unknown): asserts envelope is EncryptedVaultEn
   if (typeof value.checksum !== "string" || !HEX_RE.test(value.checksum)) {
     throw new Error("Invalid envelope checksum.");
   }
-  if (value.createdAt !== undefined && !isISODate(value.createdAt)) {
-    throw new Error("Invalid envelope createdAt.");
+  if (typeof value.createdAt !== "string" || !isISODate(value.createdAt)) {
+    throw new Error("Envelope createdAt is required and must be an ISO-8601 UTC timestamp.");
   }
   let nonce: Buffer;
   let ciphertext: Buffer;
@@ -112,9 +107,9 @@ export function assertEnvelopeChecksum(envelope: EncryptedVaultEnvelope) {
 export function canonicalEnvelopeBytes(envelope: EncryptedVaultEnvelope) {
   const sortedEnvelope: Record<string, string | number> = {
     checksum: envelope.checksum.toLowerCase(),
-    ciphertext: envelope.ciphertext
+    ciphertext: envelope.ciphertext,
+    createdAt: envelope.createdAt
   };
-  if (envelope.createdAt !== undefined) sortedEnvelope.createdAt = envelope.createdAt;
   sortedEnvelope.cryptoVersion = envelope.cryptoVersion;
   sortedEnvelope.keyId = envelope.keyId;
   sortedEnvelope.nonce = envelope.nonce;

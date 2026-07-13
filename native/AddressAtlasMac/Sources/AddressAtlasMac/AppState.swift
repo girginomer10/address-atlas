@@ -2,12 +2,28 @@ import AddressAtlasCore
 import Foundation
 import SwiftUI
 
+protocol EndpointConfigFetching: Sendable {
+  func fetch(from serverURL: URL) async throws -> NativeEndpointConfig
+}
+
+extension NativeEndpointConfigClient: EndpointConfigFetching {}
+
 @MainActor
 final class AppState: ObservableObject {
   @Published var document = VaultDocument()
   @Published var isUnlocked = false
-  @Published var notice = ""
-  @Published var error = ""
+  @Published private(set) var isUnlocking = false
+  @Published private(set) var syncPersistencePending = false
+  @Published var notice = "" {
+    didSet {
+      if !notice.isEmpty, !error.isEmpty { error = "" }
+    }
+  }
+  @Published var error = "" {
+    didSet {
+      if !error.isEmpty, !notice.isEmpty { notice = "" }
+    }
+  }
   @Published var scanning = false
   @Published var syncing = false
   @Published var endpointConfig = NativeEndpointConfig.bundled
@@ -17,17 +33,23 @@ final class AppState: ObservableObject {
   private let keyStore = KeychainVaultKeyStore()
   private let syncCodec = VaultSyncCodec()
   private let recoveryKit = RecoveryKitCodec()
-  private let endpointConfigClient = NativeEndpointConfigClient()
+  private let endpointConfigClient: any EndpointConfigFetching
   private let passkeyAuthenticator = PasskeyWebAuthenticator()
+  private lazy var vaultKeyManager = VaultKeyManager(store: keyStore, crypto: crypto)
   private var vaultKey: Data?
   private var store: EncryptedSQLiteVaultStore?
   private var scanTask: Task<Void, Never>?
+  private var endpointConfigRefreshGeneration = 0
 
   private static let maximumStoredScanRuns = 30
   private static let maximumWallets = 24
   private static let maximumCustomTokens = 100
   private static let maximumManualHoldings = 100
   private static let maximumExchangeConnections = 20
+
+  init(endpointConfigClient: any EndpointConfigFetching = NativeEndpointConfigClient()) {
+    self.endpointConfigClient = endpointConfigClient
+  }
 
   var latestScan: ScanRunRecord? {
     document.scanRuns.sorted { $0.generatedAt > $1.generatedAt }.first
@@ -42,8 +64,19 @@ final class AppState: ObservableObject {
     return holdings.filter { $0.valueUsd >= threshold }
   }
 
+  var visibleLatestTotalUsd: Double {
+    visibleLatestHoldings.reduce(0) { $0 + $1.valueUsd }
+  }
+
   var hasScanSources: Bool {
     !document.wallets.isEmpty || !document.exchangeConnections.isEmpty || document.manualHoldings.contains(where: \.enabled)
+  }
+
+  /// UI controls that change the encrypted document should remain unavailable
+  /// while another operation owns the document or a completed sync still needs
+  /// to be made durable locally.
+  var vaultEditsDisabled: Bool {
+    syncing || scanning || syncPersistencePending || isUnlocking
   }
 
   var hasUnsyncedLocalChanges: Bool {
@@ -72,16 +105,7 @@ final class AppState: ObservableObject {
   /// dev hosts). Prevents the bearer token / config / vault traffic from ever
   /// traversing plaintext.
   static func validatedSyncURL(_ raw: String) -> URL? {
-    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty, let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() else {
-      return nil
-    }
-    if scheme == "https" { return url }
-    if scheme == "http", let host = url.host?.lowercased(),
-       host == "localhost" || host == "127.0.0.1" || host == "::1" {
-      return url
-    }
-    return nil
+    SyncServerURL.validatedOrigin(raw)
   }
 
   /// Numeric dotted-version comparison: -1 if lhs < rhs, 0 if equal, 1 if greater.
@@ -96,11 +120,62 @@ final class AppState: ObservableObject {
     return 0
   }
 
+  static func isPricedForDisplay(_ asset: TrackedAsset) -> Bool {
+    asset.priceUsd > 0 || asset.valueUsd > 0
+  }
+
+  static func derivedManualPrice(amount: Double, valueUsd: Double) -> Double? {
+    guard amount.isFinite, amount > 0, valueUsd.isFinite, valueUsd >= 0 else { return nil }
+    let price = valueUsd / amount
+    return price.isFinite ? price : nil
+  }
+
+  static func applyingWalletLabels(
+    to holdings: [TrackedAsset],
+    wallets: [WalletRecord]
+  ) -> [TrackedAsset] {
+    var labelsByAddress: [String: String] = [:]
+    for wallet in wallets {
+      guard let canonical = AddressDetection.canonicalAddress(wallet.address, family: wallet.chainKind) else { continue }
+      labelsByAddress["\(wallet.chainKind.rawValue):\(canonical)"] = wallet.label
+    }
+
+    var attributed = holdings
+    for index in attributed.indices {
+      let asset = attributed[index]
+      guard let canonical = AddressDetection.canonicalAddress(asset.address, family: asset.family) else { continue }
+      if let label = labelsByAddress["\(asset.family.rawValue):\(canonical)"] {
+        attributed[index].walletLabel = label
+      }
+    }
+    return attributed
+  }
+
+  static func hasDuplicateExchangeAPIKey(
+    provider: ExchangeProvider,
+    apiKey: String,
+    connections: [ExchangeConnectionRecord],
+    vaultKey: Data,
+    crypto: VaultCrypto = VaultCrypto()
+  ) throws -> Bool {
+    let candidate = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    let credentialVault = ExchangeCredentialVault(crypto: crypto)
+    for connection in connections where connection.provider == provider {
+      let existing = try credentialVault.open(connection.encryptedCredentials, vaultKey: vaultKey)
+      if existing.apiKey.trimmingCharacters(in: .whitespacesAndNewlines) == candidate {
+        return true
+      }
+    }
+    return false
+  }
+
   func unlock() async {
+    guard !isUnlocked, !isUnlocking else { return }
+    isUnlocking = true
+    defer { isUnlocking = false }
     do {
-      let manager = VaultKeyManager(store: keyStore, crypto: crypto)
       let vaultURL = appSupportDirectory.appending(path: "vault.sqlite")
-      let key = try await manager.loadOrCreateVaultKey(existingVaultAt: vaultURL)
+      let key = try await vaultKeyManager.loadOrCreateVaultKey(existingVaultAt: vaultURL)
       let sqlite = try EncryptedSQLiteVaultStore(path: vaultURL, vaultKey: key, crypto: crypto)
       let loaded = try sqlite.load()
       document = normalizedLoadedDocument(loaded)
@@ -127,6 +202,7 @@ final class AppState: ObservableObject {
     }
     do {
       try store.save(document)
+      syncPersistencePending = false
       notice = "Saved locally."
       error = ""
       return true
@@ -134,6 +210,13 @@ final class AppState: ObservableObject {
       notice = ""
       self.error = error.localizedDescription
       return false
+    }
+  }
+
+  func retryPendingSyncPersistence() {
+    guard syncPersistencePending else { return }
+    if save() {
+      notice = "Sync state saved locally."
     }
   }
 
@@ -201,7 +284,8 @@ final class AppState: ObservableObject {
       error = "A vault can contain at most \(Self.maximumCustomTokens) custom tokens."
       return false
     }
-    let normalizedAddress = chainKind == .evm ? address.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() : address.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
+    let normalizedAddress = chainKind == .evm ? trimmedAddress.lowercased() : trimmedAddress
     let normalizedSymbol = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
     let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
     let parsedDecimals = Int(decimals.trimmingCharacters(in: .whitespacesAndNewlines)) ?? -1
@@ -225,7 +309,9 @@ final class AppState: ObservableObject {
       error = "CoinGecko ID may contain lowercase letters, numbers, and hyphens only."
       return false
     }
-    guard AddressDetection.isValidCustomTokenAddress(normalizedAddress, family: chainKind) else {
+    // Preserve mixed-case EVM input until after EIP-55 validation; lowercasing
+    // first would erase an invalid checksum and turn it into an accepted address.
+    guard AddressDetection.isValidCustomTokenAddress(trimmedAddress, family: chainKind) else {
       error = chainKind == .evm ? "Enter a valid 0x token contract address." : "Enter a valid Solana mint address."
       return false
     }
@@ -289,6 +375,12 @@ final class AppState: ObservableObject {
       error = "Manual holding needs a symbol plus finite, non-negative amount and value."
       return false
     }
+    guard let derivedPrice = AppState.derivedManualPrice(amount: parsedAmount, valueUsd: parsedValue) else {
+      error = parsedAmount > 0
+        ? "Manual holding amount and value produce an unsupported price."
+        : "Manual holding amount must be greater than zero."
+      return false
+    }
     let normalized = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
     guard normalized.count <= 32,
           normalized.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" || $0 == "_" })
@@ -305,7 +397,7 @@ final class AppState: ObservableObject {
           symbol: normalized,
           name: normalized,
           amount: parsedAmount,
-          priceUsd: parsedAmount > 0 ? parsedValue / parsedAmount : nil,
+          priceUsd: derivedPrice,
           valueUsd: parsedValue
         )
       )
@@ -361,10 +453,15 @@ final class AppState: ObservableObject {
       error = "Vault must be unlocked before saving exchange credentials."
       return false
     }
-    guard !credentials.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-          !credentials.secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-          credentials.apiKey.utf8.count <= 4_096,
-          credentials.secret.utf8.count <= 32_768
+    let normalizedCredentials = ExchangeCredentials(
+      apiKey: credentials.apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
+      secret: credentials.secret.trimmingCharacters(in: .whitespacesAndNewlines),
+      passphrase: credentials.passphrase?.trimmingCharacters(in: .whitespacesAndNewlines)
+    )
+    guard !normalizedCredentials.apiKey.isEmpty,
+          !normalizedCredentials.secret.isEmpty,
+          normalizedCredentials.apiKey.utf8.count <= 4_096,
+          normalizedCredentials.secret.utf8.count <= 32_768
     else {
       error = "API key and secret are required and must be within supported size limits."
       return false
@@ -376,8 +473,19 @@ final class AppState: ObservableObject {
     }
     let connectionId = UUID()
     do {
-      let encrypted = try ExchangeCredentialVault(crypto: crypto).seal(
-        credentials,
+      let credentialVault = ExchangeCredentialVault(crypto: crypto)
+      if try AppState.hasDuplicateExchangeAPIKey(
+        provider: provider,
+        apiKey: normalizedCredentials.apiKey,
+        connections: document.exchangeConnections,
+        vaultKey: vaultKey,
+        crypto: crypto
+      ) {
+        error = "That \(provider.label) API key is already saved."
+        return false
+      }
+      let encrypted = try credentialVault.seal(
+        normalizedCredentials,
         vaultKey: vaultKey,
         connectionId: connectionId
       )
@@ -402,33 +510,45 @@ final class AppState: ObservableObject {
     _ = mutateDocument { $0.exchangeConnections.removeAll { $0.id == id } }
   }
 
-  func saveSyncSettings(serverURL: String) {
-    guard canMutateVault() else { return }
-    let trimmed = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard AppState.validatedSyncURL(trimmed) != nil else {
-      error = "Sync server URL must use https (http is allowed only for localhost)."
-      return
+  @discardableResult
+  func saveSyncSettings(serverURL: String) -> Bool {
+    guard canMutateVault() else { return false }
+    guard !syncPersistencePending else {
+      error = "Save the pending sync state locally before changing sync servers."
+      return false
     }
-    let serverChanged = document.syncState.serverURL != trimmed
-    guard mutateDocument({ $0.syncState.changeServer(to: trimmed) }) else { return }
+    guard let canonicalURL = AppState.validatedSyncURL(serverURL) else {
+      error = "Sync server URL must use https (http is allowed only for localhost)."
+      return false
+    }
+    let canonical = canonicalURL.absoluteString
+    let serverChanged = document.syncState.serverURL != canonical
+    guard mutateDocument({ $0.syncState.changeServer(to: canonical) }) else { return false }
     if serverChanged {
       endpointConfig = .bundled
       endpointConfigStatus = "Bundled endpoints"
     }
+    return true
   }
 
-  func refreshEndpointConfig(silent: Bool = false) async {
+  @discardableResult
+  func refreshEndpointConfig(silent: Bool = false) async -> Bool {
+    endpointConfigRefreshGeneration &+= 1
+    let generation = endpointConfigRefreshGeneration
     guard let serverURL = AppState.validatedSyncURL(document.syncState.serverURL) else {
       endpointConfig = .bundled
       endpointConfigStatus = "Bundled endpoints"
       if !silent {
         notice = "Using bundled endpoints."
       }
-      return
+      return false
     }
 
     do {
       let config = try await endpointConfigClient.fetch(from: serverURL)
+      guard generation == endpointConfigRefreshGeneration,
+            AppState.validatedSyncURL(document.syncState.serverURL) == serverURL
+      else { return false }
       endpointConfig = config
       if !isAppVersionSupported {
         endpointConfigStatus = "Update required"
@@ -441,12 +561,17 @@ final class AppState: ObservableObject {
           notice = "Endpoint config refreshed."
         }
       }
+      return true
     } catch {
+      guard generation == endpointConfigRefreshGeneration,
+            AppState.validatedSyncURL(document.syncState.serverURL) == serverURL
+      else { return false }
       endpointConfig = .bundled
       endpointConfigStatus = "Bundled endpoints (remote unavailable)"
       if !silent {
         self.error = error.localizedDescription
       }
+      return false
     }
   }
 
@@ -465,6 +590,10 @@ final class AppState: ObservableObject {
     }
     guard let url = AppState.validatedSyncURL(serverURL) else {
       error = "Sync server URL must use https (http is allowed only for localhost)."
+      return
+    }
+    guard !syncPersistencePending else {
+      error = "Save the pending sync state locally before changing sync accounts."
       return
     }
     guard !syncing else {
@@ -510,8 +639,8 @@ final class AppState: ObservableObject {
       error = "Sync account identity is missing. Sign in with passkey again."
       return
     }
-    guard isAppVersionSupported else {
-      error = "This app version is no longer supported. Update Address Atlas to keep syncing."
+    guard !syncPersistencePending else {
+      error = "Save the pending sync state locally before starting another sync operation."
       return
     }
     guard !syncing else {
@@ -521,11 +650,18 @@ final class AppState: ObservableObject {
     syncing = true
     defer { syncing = false }
     do {
+      guard await refreshEndpointConfig(silent: true) else {
+        throw SyncClientError.requestFailed(503, "The sync server's compatibility policy could not be verified. Try again when endpoint config is available.")
+      }
+      guard isAppVersionSupported else {
+        throw SyncClientError.requestFailed(426, "This app version is no longer supported. Update Address Atlas to keep syncing.")
+      }
       let client = ZeroKnowledgeSyncClient(baseURL: serverURL)
       await client.setBearerToken(document.syncState.sessionToken)
+      var uploadDocument = document
       if let remote = try await client.latestVault() {
         guard
-          let lastChecksum = document.syncState.lastChecksum,
+          let lastChecksum = uploadDocument.syncState.lastChecksum,
           !lastChecksum.isEmpty,
           remote.checksum == lastChecksum
         else {
@@ -534,25 +670,27 @@ final class AppState: ObservableObject {
             "Remote vault snapshot is newer. Download before uploading again."
           )
         }
-        document.syncState.latestRemoteVersion = max(document.syncState.latestRemoteVersion, remote.version)
+        uploadDocument.syncState.latestRemoteVersion = max(uploadDocument.syncState.latestRemoteVersion, remote.version)
       }
-      let nextVersion = max(1, document.syncState.latestRemoteVersion + 1)
-      let sealedContentChecksum = try syncCodec.contentChecksum(for: document)
+      let nextVersion = max(1, uploadDocument.syncState.latestRemoteVersion + 1)
+      let sealedContentChecksum = try syncCodec.contentChecksum(for: uploadDocument)
       let snapshot = try syncCodec.seal(
-        document: document,
+        document: uploadDocument,
         vaultKey: vaultKey,
         version: nextVersion,
         accountId: accountId
       )
       try await client.upload(snapshot: snapshot)
-      document.syncState.markSynced(
+      uploadDocument.syncState.markSynced(
         version: snapshot.version,
         snapshotChecksum: snapshot.checksum,
         contentChecksum: sealedContentChecksum
       )
+      document = uploadDocument
       guard save() else {
         let persistenceError = self.error
-        self.error = "The remote vault was uploaded, but its local sync state could not be saved. Keep the app open and retry after fixing local storage: \(persistenceError)"
+        syncPersistencePending = true
+        self.error = "The remote vault was uploaded, but its sync state is pending local persistence. Keep the app open and use Retry local save after fixing storage: \(persistenceError)"
         return
       }
       notice = "Encrypted vault uploaded."
@@ -578,8 +716,8 @@ final class AppState: ObservableObject {
       error = "Sync account identity is missing. Sign in with passkey again."
       return
     }
-    guard isAppVersionSupported else {
-      error = "This app version is no longer supported. Update Address Atlas to keep syncing."
+    guard !syncPersistencePending else {
+      error = "Save the pending sync state locally before starting another sync operation."
       return
     }
     guard !syncing else {
@@ -589,6 +727,12 @@ final class AppState: ObservableObject {
     syncing = true
     defer { syncing = false }
     do {
+      guard await refreshEndpointConfig(silent: true) else {
+        throw SyncClientError.requestFailed(503, "The sync server's compatibility policy could not be verified. Try again when endpoint config is available.")
+      }
+      guard isAppVersionSupported else {
+        throw SyncClientError.requestFailed(426, "This app version is no longer supported. Update Address Atlas to keep syncing.")
+      }
       let startingContentChecksum = try syncCodec.contentChecksum(for: document)
       if try syncCodec.hasLocalChanges(in: document), !discardingLocalChanges {
         error = "Local changes have not been uploaded. Upload them first, or explicitly discard them before downloading."
@@ -622,7 +766,7 @@ final class AppState: ObservableObject {
         vaultKey: vaultKey,
         expectedAccountId: accountId
       )
-      var opened = result.document
+      var opened = normalizedLoadedDocument(result.document)
       opened.syncState.connect(
         accountId: accountId,
         serverURL: document.syncState.serverURL,
@@ -643,9 +787,10 @@ final class AppState: ObservableObject {
         } catch {
           document = opened
           guard save() else {
+            syncPersistencePending = true
             throw SyncClientError.requestFailed(
               500,
-              "The legacy vault downloaded, but local persistence failed before its v2 upgrade could be retried."
+              "The legacy vault downloaded, but its local persistence is pending before the v2 upgrade can be retried."
             )
           }
           throw error
@@ -654,7 +799,8 @@ final class AppState: ObservableObject {
       document = opened
       guard save() else {
         let persistenceError = self.error
-        self.error = "The remote vault was opened but could not be saved locally. The previous on-disk vault remains unchanged: \(persistenceError)"
+        syncPersistencePending = true
+        self.error = "The remote vault was opened, but its local persistence is pending. Keep the app open and use Retry local save after fixing storage: \(persistenceError)"
         return
       }
       notice = result.requiresV2Upgrade
@@ -679,6 +825,12 @@ final class AppState: ObservableObject {
 
   func restoreRecoveryKit(from url: URL, recoveryCode: String) async {
     if isUnlocked, !canMutateVault() { return }
+    guard !isUnlocking else {
+      notice = "A vault unlock or recovery is already running."
+      return
+    }
+    isUnlocking = true
+    defer { isUnlocking = false }
     do {
       let recovered = try VaultRecoveryService(codec: recoveryKit, crypto: crypto).restore(
         from: url,
@@ -693,6 +845,7 @@ final class AppState: ObservableObject {
       vaultKey = recovered.vaultKey
       store = recovered.store
       isUnlocked = true
+      syncPersistencePending = false
       notice = "Recovery kit restored."
       error = ""
     } catch {
@@ -704,9 +857,15 @@ final class AppState: ObservableObject {
     if case SyncClientError.authenticationRequired = error {
       document.syncState.sessionToken = ""
       do {
-        try store?.save(document)
+        guard let store else {
+          syncPersistencePending = true
+          self.error = "Sync session expired, but the cleared session is pending local persistence. Unlock the vault and retry the local save."
+          return
+        }
+        try store.save(document)
       } catch {
-        self.error = error.localizedDescription
+        syncPersistencePending = true
+        self.error = "Sync session expired, but the cleared session is pending local persistence. Use Retry local save after fixing storage: \(error.localizedDescription)"
         return
       }
       self.error = "Sync session expired. Sign in with passkey again."
@@ -718,6 +877,10 @@ final class AppState: ObservableObject {
   func startScan() {
     guard !syncing else {
       error = "Wait for the active sync operation before scanning."
+      return
+    }
+    guard !syncPersistencePending else {
+      error = "Save the pending sync state locally before scanning."
       return
     }
     guard scanTask == nil, !scanning else {
@@ -748,14 +911,21 @@ final class AppState: ObservableObject {
       error = "Wait for the active sync operation before scanning."
       return
     }
+    guard !syncPersistencePending else {
+      error = "Save the pending sync state locally before scanning."
+      return
+    }
     scanning = true
     error = ""
     defer { scanning = false }
     do {
       await refreshEndpointConfig(silent: true)
+      try Task.checkCancellation()
       let input = document.wallets.map(\.address).joined(separator: "\n")
       let scanner = NativeScanner(endpointConfig: endpointConfig)
       var scan = try await scanner.scan(addresses: input, customTokens: document.customTokens)
+      try Task.checkCancellation()
+      scan.holdings = AppState.applyingWalletLabels(to: scan.holdings, wallets: document.wallets)
       let exchangeClient = NativeExchangeBalanceClient(endpointConfig: endpointConfig)
       let exchangeScan = try await NativeExchangeScanner(
         client: exchangeClient,
@@ -764,6 +934,7 @@ final class AppState: ObservableObject {
         connections: document.exchangeConnections,
         vaultKey: vaultKey
       )
+      try Task.checkCancellation()
       let manualAssets = document.manualHoldings.filter(\.enabled).map { holding in
         TrackedAsset(
           id: "manual-\(holding.id.uuidString)",
@@ -791,6 +962,7 @@ final class AppState: ObservableObject {
         scan.warnings.append("Ignored \(invalidHoldingCount) invalid holding value\(invalidHoldingCount == 1 ? "" : "s").")
       }
       scan.totalUsd = scan.holdings.reduce(0) { $0 + $1.valueUsd }
+      try Task.checkCancellation()
       if mutateDocument({ document in
         document.exchangeConnections = exchangeScan.connections
         document.scanRuns.append(scan)
@@ -814,6 +986,13 @@ final class AppState: ObservableObject {
     output.schemaVersion = VaultDocument.currentSchemaVersion
     output.preferences.currency = "USD"
     output.scanRuns = Array(output.scanRuns.sorted { $0.generatedAt > $1.generatedAt }.prefix(Self.maximumStoredScanRuns))
+    if let canonicalServer = AppState.validatedSyncURL(output.syncState.serverURL) {
+      // Equivalent origin spellings must not clear a valid session/baseline.
+      output.syncState.serverURL = canonicalServer.absoluteString
+    } else if !output.syncState.serverURL.isEmpty {
+      // Invalid persisted endpoints must not retain bearer credentials.
+      output.syncState.changeServer(to: "")
+    }
     return output
   }
 
@@ -829,10 +1008,20 @@ final class AppState: ObservableObject {
   }
 
   private func canMutateVault() -> Bool {
-    guard !syncing, !scanning else {
-      error = syncing
-        ? "Wait for the active sync operation before editing the vault."
-        : "Cancel or finish the active scan before editing the vault."
+    guard !syncing else {
+      error = "Wait for the active sync operation before editing the vault."
+      return false
+    }
+    guard !scanning else {
+      error = "Cancel or finish the active scan before editing the vault."
+      return false
+    }
+    guard !syncPersistencePending else {
+      error = "Save the pending sync state locally before editing the vault."
+      return false
+    }
+    guard !isUnlocking else {
+      error = "Wait for vault recovery to finish before editing the vault."
       return false
     }
     return true

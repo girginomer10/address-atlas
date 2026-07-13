@@ -212,6 +212,24 @@ final class ExchangeRequestSigningTests: XCTestCase {
     XCTAssertEqual(signed.headers["X-MBX-APIKEY"], "key")
   }
 
+  func testKrakenSignerAcceptsStandardBase64SecretAndMatchesExpectedSignature() throws {
+    // Kraken's published example secret contains '/', '+' and '=' characters,
+    // so this also guards against accidentally using Base64URL decoding again.
+    let signed = try ExchangeRequestSigner.krakenBalanceRequest(
+      credentials: ExchangeCredentials(
+        apiKey: "key",
+        secret: "kQH5HW/8p1uGOVjbgWA7FunAmGO8lsSUXNsu3eow76sz84Q18fWxnyRzBHCd3pd5nE9qa99HAZtuZuj6F1huXg=="
+      ),
+      nonce: "1616492376594"
+    )
+
+    XCTAssertEqual(signed.body, "nonce=1616492376594")
+    XCTAssertEqual(
+      signed.headers["API-Sign"],
+      "1nH4vwR+8FHiYh1QT649xXkGd3JR3x0DWkgv3u9Ed/Qqv6KPtgQpEU4m+Emb/VgpEji3j1XNwI+HCbfXxmrTOg=="
+    )
+  }
+
   func testAddressDetectionRejectsSeedLikeInput() {
     let phrase = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima"
     XCTAssertFalse(AddressDetection.isSafePublicAddress(phrase))
@@ -241,6 +259,13 @@ final class NativeScannerTokenTests: XCTestCase {
   func testHexQuantityParserAcceptsOddLengthRpcQuantities() {
     XCTAssertEqual(NativeScanner.hexQuantityToDouble("0xf", decimals: 0), 15)
     XCTAssertEqual(NativeScanner.hexQuantityToDouble("0x280de80", decimals: 6), 42)
+  }
+
+  func testHexQuantityParserRejectsMalformedOrUnprefixedValues() {
+    XCTAssertNil(NativeScanner.hexQuantityToDouble("0x10x20", decimals: 0))
+    XCTAssertNil(NativeScanner.hexQuantityToDouble("120", decimals: 0))
+    XCTAssertNil(NativeScanner.hexQuantityToDouble("0x", decimals: 0))
+    XCTAssertNil(NativeScanner.hexQuantityToDouble("0x12", decimals: 37))
   }
 
   func testCustomTokenRegistryKeepsBuiltinOnDuplicate() {
@@ -283,7 +308,7 @@ final class NativeScannerTokenTests: XCTestCase {
 
       if bodyText.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("[") {
         let payload = try JSONSerialization.jsonObject(with: bodyData) as? [[String: Any]] ?? []
-        recorder.sizes.append(payload.count)
+        recorder.append(payload.count)
         let responses: [[String: Any]] = payload.map { item in
           let id = item["id"] as? Int ?? 0
           let params = item["params"] as? [Any] ?? []
@@ -312,7 +337,7 @@ final class NativeScannerTokenTests: XCTestCase {
     let result = try await scanner.scan(addresses: address)
     let usdc = result.holdings.first { $0.chainId == "ethereum" && $0.symbol == "USDC" }
 
-    XCTAssertTrue(recorder.sizes.contains { $0 > 1 })
+    XCTAssertTrue(recorder.snapshot().contains { $0 > 1 })
     XCTAssertEqual(usdc?.amount, 42)
     XCTAssertEqual(usdc?.valueUsd, 42)
     XCTAssertTrue(result.warnings.contains { warning in
@@ -666,6 +691,33 @@ final class NativeExchangeClientTests: XCTestCase {
     }
   }
 
+  func testExchangeClientRedactsAndCapsUntrustedErrorBody() async throws {
+    let rawSecret = String(repeating: "s", count: 80)
+    let http = StubHTTPClient { request in
+      let data = try JSONSerialization.data(withJSONObject: [
+        "message": "authorization: Bearer \(rawSecret)\n\(String(repeating: "x", count: 1_000))"
+      ])
+      return (data, httpResponse(for: request, statusCode: 401))
+    }
+    let client = NativeExchangeBalanceClient(
+      http: http,
+      now: { Date(timeIntervalSince1970: 1_700_000_000) }
+    )
+
+    do {
+      _ = try await client.fetchBalance(
+        provider: .binance,
+        credentials: ExchangeCredentials(apiKey: "key", secret: "secret")
+      )
+      XCTFail("Expected exchange HTTP error.")
+    } catch ExchangeClientError.httpError(_, let message) {
+      XCTAssertFalse(message.contains(rawSecret))
+      XCTAssertFalse(message.contains("\n"))
+      XCTAssertTrue(message.contains("[redacted]"))
+      XCTAssertLessThanOrEqual(message.unicodeScalars.count, ProviderErrorSanitizer.maximumScalarCount + 1)
+    }
+  }
+
   func testExchangeBalanceNormalizerPricesStablecoinsAndKnownAssets() {
     let id = UUID()
     let holdings = ExchangeBalanceNormalizer.normalize(
@@ -857,7 +909,20 @@ private struct StubHTTPClient: HTTPClient, @unchecked Sendable {
 }
 
 private final class BatchRequestRecorder: @unchecked Sendable {
-  var sizes: [Int] = []
+  private let lock = NSLock()
+  private var sizes: [Int] = []
+
+  func append(_ size: Int) {
+    lock.lock()
+    defer { lock.unlock() }
+    sizes.append(size)
+  }
+
+  func snapshot() -> [Int] {
+    lock.lock()
+    defer { lock.unlock() }
+    return sizes
+  }
 }
 
 private func httpResponse(for request: URLRequest, statusCode: Int = 200) -> HTTPURLResponse {

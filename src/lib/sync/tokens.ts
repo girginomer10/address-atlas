@@ -1,5 +1,8 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { base64urlDecode, base64urlEncode } from "./base64url";
+import { getSyncSessionSecret } from "./config";
+
+export { SyncConfigurationError as TokenConfigurationError, validateSessionSecret } from "./config";
 
 export interface ChallengeToken {
   mode: "register" | "authenticate";
@@ -22,35 +25,12 @@ export class TokenValidationError extends Error {
   }
 }
 
-export class TokenConfigurationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "TokenConfigurationError";
-  }
-}
-
 const TOKEN_VERSION = "v1";
 const TOKEN_CONTEXT = "address-atlas-sync";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const PLACEHOLDER_RE = /(replace[-_ ]?with|change[-_ ]?me|example|your[-_ ]?secret|password)/i;
-
-export function validateSessionSecret(value: string | undefined) {
-  const configured = value?.trim();
-  if (!configured) {
-    throw new TokenConfigurationError("SYNC_SESSION_SECRET is required.");
-  }
-  if (Buffer.byteLength(configured, "utf8") < 32) {
-    throw new TokenConfigurationError("SYNC_SESSION_SECRET must contain at least 32 bytes.");
-  }
-  if (PLACEHOLDER_RE.test(configured) || /^(.)(\1)+$/.test(configured)) {
-    throw new TokenConfigurationError("SYNC_SESSION_SECRET must be a random, non-placeholder value.");
-  }
-  return configured;
-}
 
 function secret() {
-  const configured = process.env.SYNC_SESSION_SECRET?.trim();
-  return validateSessionSecret(configured);
+  return getSyncSessionSecret();
 }
 
 function signToken<T extends object>(purpose: TokenPurpose, payload: T) {

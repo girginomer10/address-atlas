@@ -8,7 +8,7 @@ struct AddressAtlasMacApp: App {
   @StateObject private var state = AppState()
 
   var body: some Scene {
-    WindowGroup {
+    Window("Address Atlas", id: "main") {
       RootView()
         .environmentObject(state)
         .task {
@@ -16,6 +16,9 @@ struct AddressAtlasMacApp: App {
         }
     }
     .windowStyle(.hiddenTitleBar)
+    .commands {
+      CommandGroup(replacing: .newItem) {}
+    }
   }
 }
 
@@ -64,7 +67,8 @@ struct RootView: View {
               state.document.preferences.autoRefresh,
               state.hasScanSources,
               !state.scanning,
-              !state.syncing
+              !state.syncing,
+              !state.syncPersistencePending
         else { continue }
         state.startScan()
       }
@@ -94,9 +98,14 @@ struct UnlockView: View {
         Button {
           Task { await state.unlock() }
         } label: {
-          Label("Unlock vault", systemImage: "lock.open")
+          if state.isUnlocking {
+            Label("Unlocking...", systemImage: "hourglass")
+          } else {
+            Label("Unlock vault", systemImage: "lock.open")
+          }
         }
         .buttonStyle(AtlasPrimaryButtonStyle())
+        .disabled(state.isUnlocking)
         VStack(alignment: .leading, spacing: 9) {
           AtlasLabel("Lost Keychain access?")
           Text("Restore the vault key with the recovery file and code. The file is verified before Keychain is changed.")
@@ -110,7 +119,7 @@ struct UnlockView: View {
               restoreRecoveryKit()
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
-            .disabled(restoreCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(state.isUnlocking || restoreCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
           }
         }
         .frame(maxWidth: 620, alignment: .leading)
@@ -283,13 +292,13 @@ struct PortfolioView: View {
       HStack(alignment: .top, spacing: 28) {
         VStack(alignment: .leading, spacing: 18) {
           TotalBlock(
-            total: state.latestScan?.totalUsd ?? 0,
+            total: state.visibleLatestTotalUsd,
             generatedAt: state.latestScan?.generatedAt,
             assetCount: state.visibleLatestHoldings.count
           )
           MetricStrip(items: [
             ("Wallets", "\(state.document.wallets.count)"),
-            ("Assets", "\(state.latestScan?.holdings.count ?? 0)"),
+            ("Visible assets", "\(state.visibleLatestHoldings.count)"),
             ("Tokens", "\(state.document.customTokens.filter(\.enabled).count)")
           ])
         }
@@ -342,6 +351,7 @@ struct WalletsView: View {
           }
         }
       }
+      .disabled(state.vaultEditsDisabled)
 
       SectionHeader(title: "Saved wallets", meta: "\(state.document.wallets.count) encrypted records")
       if state.document.wallets.isEmpty {
@@ -410,6 +420,7 @@ struct WalletRow: View {
     } message: {
       Text("The public address will be removed from this vault. Existing snapshots are unchanged.")
     }
+    .disabled(state.vaultEditsDisabled)
   }
 }
 
@@ -424,7 +435,7 @@ struct AssetsView: View {
         || asset.symbol.localizedCaseInsensitiveContains(query)
         || asset.chainName.localizedCaseInsensitiveContains(query)
         || asset.name.localizedCaseInsensitiveContains(query)
-      let matchesPricing = !hideUnpriced || asset.priceUsd > 0
+      let matchesPricing = !hideUnpriced || AppState.isPricedForDisplay(asset)
       return matchesQuery && matchesPricing
     }
   }
@@ -530,6 +541,7 @@ struct TokenAllowlistView: View {
           }
         }
       }
+      .disabled(state.vaultEditsDisabled)
 
       SectionHeader(title: "Saved tokens", meta: "\(state.document.customTokens.count) records")
       if state.document.customTokens.isEmpty {
@@ -603,6 +615,7 @@ struct TokenRow: View {
       }
       Button("Cancel", role: .cancel) {}
     }
+    .disabled(state.vaultEditsDisabled)
   }
 }
 
@@ -644,6 +657,7 @@ struct SnapshotsView: View {
           }
         }
       }
+      .disabled(state.vaultEditsDisabled)
 
       HStack(alignment: .top, spacing: 24) {
         SnapshotList()
@@ -712,6 +726,7 @@ struct SnapshotList: View {
       }
       Button("Cancel", role: .cancel) { pendingRemoval = nil }
     }
+    .disabled(state.vaultEditsDisabled)
   }
 }
 
@@ -779,6 +794,7 @@ struct ManualHoldingList: View {
       }
       Button("Cancel", role: .cancel) { pendingRemoval = nil }
     }
+    .disabled(state.vaultEditsDisabled)
   }
 }
 
@@ -839,6 +855,7 @@ struct ExchangesView: View {
             .foregroundStyle(AtlasTheme.ink3)
         }
       }
+      .disabled(state.vaultEditsDisabled)
 
       HStack(spacing: 12) {
         Button {
@@ -851,10 +868,11 @@ struct ExchangesView: View {
           if state.scanning {
             Label("Cancel scan", systemImage: "xmark.circle")
           } else {
-            Label("Scan exchange balances", systemImage: "arrow.clockwise")
+            Label("Scan all sources", systemImage: "arrow.clockwise")
           }
         }
         .buttonStyle(AtlasPrimaryButtonStyle())
+        .disabled(!state.scanning && (state.syncing || state.syncPersistencePending || !state.hasScanSources))
         Text("\(state.document.exchangeConnections.count) encrypted connections")
           .font(.system(size: 12, design: .monospaced))
           .foregroundStyle(AtlasTheme.ink3)
@@ -924,6 +942,7 @@ struct ExchangeRow: View {
     } message: {
       Text("The encrypted API credentials for this connection will be removed from the vault.")
     }
+    .disabled(state.vaultEditsDisabled)
   }
 }
 
@@ -945,7 +964,7 @@ struct SyncView: View {
           SectionHeader(title: "Passkey account", meta: "Authentication only")
           TextField("Sync server URL", text: $serverURL)
             .textFieldStyle(AtlasTextFieldStyle())
-            .disabled(state.syncing || state.scanning)
+            .disabled(state.syncing || state.scanning || state.syncPersistencePending)
           HStack(spacing: 10) {
             Button("Create passkey account") {
               Task {
@@ -954,7 +973,7 @@ struct SyncView: View {
               }
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
-            .disabled(state.syncing || state.scanning)
+            .disabled(state.syncing || state.scanning || state.syncPersistencePending)
             Button("Sign in with passkey") {
               Task {
                 await state.signInWithPasskey(serverURL: serverURL)
@@ -962,15 +981,17 @@ struct SyncView: View {
               }
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
-            .disabled(state.syncing || state.scanning)
+            .disabled(state.syncing || state.scanning || state.syncPersistencePending)
             Button("Save server") {
-              state.saveSyncSettings(serverURL: serverURL)
-              Task {
-                await state.refreshEndpointConfig()
+              if state.saveSyncSettings(serverURL: serverURL) {
+                serverURL = state.document.syncState.serverURL
+                Task {
+                  await state.refreshEndpointConfig()
+                }
               }
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
-            .disabled(state.syncing || state.scanning)
+            .disabled(state.syncing || state.scanning || state.syncPersistencePending)
             Button("Refresh endpoints") {
               Task {
                 await state.refreshEndpointConfig()
@@ -990,7 +1011,7 @@ struct SyncView: View {
               }
             }
             .buttonStyle(AtlasPrimaryButtonStyle())
-            .disabled(state.syncing || state.scanning)
+            .disabled(state.syncing || state.scanning || state.syncPersistencePending)
             Button("Download encrypted vault") {
               if state.hasUnsyncedLocalChanges {
                 confirmingDiscardDownload = true
@@ -999,7 +1020,14 @@ struct SyncView: View {
               }
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
-            .disabled(state.syncing || state.scanning)
+            .disabled(state.syncing || state.scanning || state.syncPersistencePending)
+            if state.syncPersistencePending {
+              Button("Retry local save") {
+                state.retryPendingSyncPersistence()
+              }
+              .buttonStyle(AtlasSecondaryButtonStyle())
+              .disabled(state.syncing || state.scanning || state.isUnlocking)
+            }
           }
         }
       }
@@ -1012,7 +1040,10 @@ struct SyncView: View {
             ("Session", state.document.syncState.sessionToken.isEmpty ? "sign in required" : "active"),
             ("Endpoint config", state.endpointConfigStatus),
             ("Config version", "\(state.endpointConfig.configVersion)"),
-            ("Local changes", state.hasUnsyncedLocalChanges ? "not uploaded" : "synced"),
+            ("Local changes", state.syncPersistencePending
+              ? "remote synced; local save pending"
+              : state.hasUnsyncedLocalChanges ? "not uploaded" : "synced"),
+            ("Local persistence", state.syncPersistencePending ? "retry required" : "saved"),
             ("Last synced", state.document.syncState.lastSyncedAt?.formatted(date: .abbreviated, time: .shortened) ?? "never"),
             ("Checksum", state.document.syncState.lastChecksum ?? "none")
           ])
@@ -1162,6 +1193,7 @@ struct SettingsView: View {
           }
         }
       }
+      .disabled(state.vaultEditsDisabled)
 
       Surface {
         VStack(alignment: .leading, spacing: 16) {
@@ -1181,7 +1213,10 @@ struct SettingsView: View {
               restoreRecoveryKit()
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
-            .disabled(restoreCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(
+              state.vaultEditsDisabled
+                || restoreCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            )
           }
           if !recoveryCode.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
@@ -1291,7 +1326,7 @@ struct AssetRow: View {
         HStack(spacing: 8) {
           Text(asset.symbol)
             .font(.system(size: 16, weight: .semibold))
-          if asset.priceUsd <= 0 {
+          if asset.priceUsd <= 0 && asset.valueUsd <= 0 {
             Badge("UNPRICED", color: Color.orange)
           }
         }
@@ -1305,9 +1340,11 @@ struct AssetRow: View {
       VStack(alignment: .leading, spacing: 4) {
         Text(asset.chainName)
           .font(.system(size: 14))
-        Text(asset.source.rawValue.uppercased())
+        Text(asset.walletLabel ?? asset.address)
           .font(.system(size: 10, design: .monospaced))
           .foregroundStyle(AtlasTheme.ink3)
+          .lineLimit(1)
+          .truncationMode(.middle)
       }
       .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -1339,11 +1376,11 @@ struct QuickActionsPanel: View {
         if state.scanning {
           Label("Cancel scan", systemImage: "xmark.circle")
         } else {
-          Label("Scan saved wallets", systemImage: "arrow.clockwise")
+          Label("Scan all sources", systemImage: "arrow.clockwise")
         }
       }
       .buttonStyle(AtlasPrimaryButtonStyle())
-      .disabled(!state.scanning && !state.hasScanSources)
+      .disabled(!state.scanning && (state.syncing || state.syncPersistencePending || !state.hasScanSources))
       SidebarTrustLine(title: "Storage", copy: "Encrypted on device")
       SidebarTrustLine(title: "Sync", copy: "Encrypted blobs only")
       SidebarTrustLine(title: "Network", copy: "RPC/API from Mac")

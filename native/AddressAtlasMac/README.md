@@ -6,7 +6,7 @@ Native SwiftUI macOS app for Address Atlas.
 
 ```bash
 ./check-toolchain.sh
-PATH="/opt/homebrew/opt/swift/bin:$PATH" swift run AddressAtlasMac
+PATH="$(brew --prefix swift)/bin:$PATH" swift run AddressAtlasMac
 ```
 
 ## Test

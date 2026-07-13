@@ -25,8 +25,7 @@ describe("native endpoint config", () => {
     vi.stubEnv("NATIVE_ENDPOINT_CONFIG_JSON", JSON.stringify({
       priceBaseUrl: "https://api.coingecko.com/api/v3/simple/price",
       chains: {
-        ethereum: { rpcUrl: "https://eth.llamarpc.com/rpc" },
-        unknown: { rpcUrl: "https://unknown.example/rpc" }
+        ethereum: { rpcUrl: "https://eth.llamarpc.com/rpc" }
       },
       exchanges: {
         binance: { baseUrl: "https://evil.example", accountPath: "/0/private/CancelAll" }
@@ -44,23 +43,46 @@ describe("native endpoint config", () => {
     expect(config.exchanges).toEqual({});
   });
 
-  it("falls back on arbitrary origins, HTTP, credentials, fragments, and price queries", () => {
+  it.each([
+    [{ priceBaseUrl: "https://api.coingecko.com/api/v3/simple/price?redirect=evil" }, /priceBaseUrl/i],
+    [{ chains: { ethereum: { rpcUrl: "https://evil.example/rpc" } } }, /ethereum\.rpcUrl/i],
+    [{ chains: { solana: { rpcUrl: "http://127.0.0.1:8899" } } }, /solana\.rpcUrl/i],
+    [{ chains: { scroll: { rpcUrl: "https://user:password@rpc.scroll.io/private" } } }, /scroll\.rpcUrl/i],
+    [{ chains: { polygon: { rpcUrl: "https://polygon-rpc.com/path#fragment" } } }, /polygon\.rpcUrl/i],
+    [{ chains: { ethereum: { rpcUrl: "https://eth.llamarpc.com/rpc?network=other" } } }, /ethereum\.rpcUrl/i]
+  ])("rejects an explicitly unsafe endpoint override", (override, message) => {
+    vi.stubEnv("NATIVE_ENDPOINT_CONFIG_JSON", JSON.stringify(override));
+    expect(() => getNativeEndpointConfig()).toThrow(message);
+  });
+
+  it.each([
+    [{ apiKey: "must-never-be-public" }, /unknown field apiKey/i],
+    [{ chains: { etheruem: { rpcUrl: "https://eth.llamarpc.com" } } }, /unknown chain etheruem/i],
+    [{ chains: { ethereum: [] } }, /ethereum must be an object/i],
+    [{ chains: { ethereum: "https://eth.llamarpc.com" } }, /ethereum must be an object/i],
+    [{ chains: { ethereum: { restUrl: "https://eth.llamarpc.com" } } }, /unsupported field restUrl/i]
+  ])("rejects unknown or malformed nested config instead of silently falling back", (override, message) => {
+    vi.stubEnv("NATIVE_ENDPOINT_CONFIG_JSON", JSON.stringify(override));
+    expect(() => getNativeEndpointConfig()).toThrow(message);
+  });
+
+  it.each([
+    ["NATIVE_ENDPOINT_CONFIG_JSON", "not-json"],
+    ["NATIVE_ENDPOINT_CONFIG_JSON", "[]"],
+    ["NATIVE_ENDPOINT_CONFIG_VERSION", "3.5"],
+    ["NATIVE_ENDPOINT_CONFIG_UPDATED_AT", "not-a-date"],
+    ["NATIVE_ENDPOINT_MIN_APP_VERSION", "latest"]
+  ])("rejects an invalid explicit %s value", (name, value) => {
+    vi.stubEnv(name, value);
+    expect(() => getNativeEndpointConfig()).toThrow(/native|config|version|timestamp|json/i);
+  });
+
+  it("rejects malformed typed fields inside a JSON override", () => {
     vi.stubEnv("NATIVE_ENDPOINT_CONFIG_JSON", JSON.stringify({
-      priceBaseUrl: "https://api.coingecko.com/api/v3/simple/price?redirect=evil",
-      chains: {
-        ethereum: { rpcUrl: "https://evil.example/rpc" },
-        solana: { rpcUrl: "http://127.0.0.1:8899" },
-        scroll: { rpcUrl: "https://user:password@rpc.scroll.io/private" },
-        polygon: { rpcUrl: "https://polygon-rpc.com/path#fragment" }
-      }
+      configVersion: "7",
+      refreshAfterSeconds: 1
     }));
 
-    const config = getNativeEndpointConfig();
-
-    expect(config.priceBaseUrl).toBe(DEFAULT_NATIVE_ENDPOINT_CONFIG.priceBaseUrl);
-    expect(config.chains.ethereum.rpcUrl).toBe(DEFAULT_NATIVE_ENDPOINT_CONFIG.chains.ethereum.rpcUrl);
-    expect(config.chains.solana.rpcUrl).toBe(DEFAULT_NATIVE_ENDPOINT_CONFIG.chains.solana.rpcUrl);
-    expect(config.chains.scroll.rpcUrl).toBe(DEFAULT_NATIVE_ENDPOINT_CONFIG.chains.scroll.rpcUrl);
-    expect(config.chains.polygon.rpcUrl).toBe(DEFAULT_NATIVE_ENDPOINT_CONFIG.chains.polygon.rpcUrl);
+    expect(() => getNativeEndpointConfig()).toThrow(/configVersion|refreshAfter/i);
   });
 });

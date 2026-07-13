@@ -96,7 +96,7 @@ For local sync development, start the bundled Postgres service first:
 npm run sync:db:up
 ```
 
-For a production VPS, copy `.env.production.example` to `.env.production`, fill the production domain and secrets, keep `POSTGRES_PASSWORD` and `SYNC_DATABASE_URL` in agreement, then start the sync-only stack:
+For a production VPS, copy `.env.production.example` to `.env.production`, fill the production domain and secrets, and then start the sync-only stack. Generate the Postgres password with `openssl rand -hex 32` so it is URL-safe, and use that exact value in both `POSTGRES_PASSWORD` and the password component of `SYNC_DATABASE_URL`:
 
 ```bash
 cp server/sync/.env.production.example server/sync/.env.production
@@ -105,6 +105,8 @@ curl https://your-domain.example/healthz
 ```
 
 `server/sync/compose.prod.yml` runs Caddy, the Next sync/auth server, and Postgres. `ADDRESS_ATLAS_SYNC_ONLY=true` limits the public VPS to `/auth/native`, `/auth/passkey/*`, `/config/native`, `/vault/latest`, and `/healthz`.
+
+Startup readiness validates the session secret, Postgres URL and timeouts, passkey RP/origin, capacity limits, and explicit native endpoint configuration. Missing required values or malformed explicit overrides keep `/healthz` at 503 instead of silently using production fallbacks.
 
 Sync endpoints are intentionally narrow: `POST /auth/passkey/options`, `POST /auth/passkey/verify`, `GET /vault/latest`, and `PUT /vault/latest`. The server stores passkey public keys plus encrypted vault snapshot metadata; it does not store decryptable keys or plaintext portfolio data.
 

@@ -1,3 +1,4 @@
+import AddressAtlasCore
 import AppKit
 import AuthenticationServices
 import Foundation
@@ -42,7 +43,11 @@ final class PasskeyWebAuthenticator: NSObject, ASWebAuthenticationPresentationCo
             return
           }
           do {
-            continuation.resume(returning: try Self.parse(callbackURL: callbackURL, expectedState: state))
+            continuation.resume(returning: try Self.parse(
+              callbackURL: callbackURL,
+              expectedState: state,
+              expectedServerURL: serverURL
+            ))
           } catch {
             continuation.resume(throwing: error)
           }
@@ -62,7 +67,11 @@ final class PasskeyWebAuthenticator: NSObject, ASWebAuthenticationPresentationCo
     NSApplication.shared.keyWindow ?? NSApplication.shared.windows.first ?? NSWindow()
   }
 
-  private static func parse(callbackURL: URL, expectedState: String) throws -> PasskeyWebSession {
+  static func parse(
+    callbackURL: URL,
+    expectedState: String,
+    expectedServerURL: URL
+  ) throws -> PasskeyWebSession {
     // Validate the full callback authority (scheme + host), not just the scheme.
     guard callbackURL.scheme == "address-atlas", callbackURL.host == "sync-auth" else {
       throw URLError(.badURL)
@@ -82,6 +91,15 @@ final class PasskeyWebAuthenticator: NSObject, ASWebAuthenticationPresentationCo
     else {
       throw URLError(.badServerResponse)
     }
-    return PasskeyWebSession(userId: userId, sessionToken: token, serverURL: serverURL)
+    guard let returnedOrigin = SyncServerURL.validatedOrigin(serverURL),
+          returnedOrigin.absoluteString == expectedServerURL.absoluteString
+    else {
+      throw URLError(.badServerResponse)
+    }
+    return PasskeyWebSession(
+      userId: userId,
+      sessionToken: token,
+      serverURL: expectedServerURL.absoluteString
+    )
   }
 }

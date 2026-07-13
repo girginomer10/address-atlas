@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
+import { getSyncLimitConfig } from "./config";
 import type { RemoteVaultSnapshot } from "./envelope";
-import { MAX_SNAPSHOT_REQUEST_BYTES } from "./envelope";
 import { getSyncPool } from "./postgres";
 
 export class VaultConflictError extends Error {
@@ -36,8 +36,9 @@ export interface VaultSaveResult {
 }
 
 /**
- * Serialize writes per user, skip exact replays without touching WAL, and charge
- * non-idempotent writes to a durable per-account UTC-day quota.
+ * Serialize writes per user, skip exact replays without touching snapshot WAL,
+ * and charge every accepted upload's bytes to a durable UTC-day quota. Exact
+ * retries do not increment the logical write counter.
  */
 export async function saveVaultSnapshot(
   userId: string,
@@ -45,6 +46,7 @@ export async function saveVaultSnapshot(
   chargedBytes: number
 ): Promise<VaultSaveResult> {
   const client = await getSyncPool().connect();
+  let discardClient = false;
   try {
     await client.query("BEGIN");
     const account = await client.query("SELECT id FROM users WHERE id = $1 FOR UPDATE", [userId]);
@@ -58,7 +60,7 @@ export async function saveVaultSnapshot(
       same_envelope: boolean;
     }>(
       `SELECT version, checksum, byte_size, envelope = $2::jsonb AS same_envelope
-       FROM vault_snapshots WHERE user_id = $1`,
+       FROM vault_snapshots WHERE user_id = $1 FOR UPDATE`,
       [userId, encodedEnvelope]
     );
     const row = current.rows[0];
@@ -68,13 +70,13 @@ export async function saveVaultSnapshot(
       && row.byte_size === snapshot.byteSize
       && row.same_envelope;
     if (isExactReplay) {
+      await chargeDailyQuota(client, userId, chargedBytes, 0);
       await client.query("COMMIT");
       return { idempotent: true };
     }
     if (row && row.version >= snapshot.version) throw new VaultConflictError();
 
-    await chargeDailyQuota(client, userId, chargedBytes);
-    await chargeGlobalStorageCapacity(client, snapshot.byteSize - (row?.byte_size ?? 0));
+    await chargeDailyQuota(client, userId, chargedBytes, 1);
     const stored = await client.query(
       `INSERT INTO vault_snapshots (user_id, version, envelope, byte_size, checksum)
        VALUES ($1, $2, $3::jsonb, $4, $5)
@@ -89,25 +91,25 @@ export async function saveVaultSnapshot(
       [userId, snapshot.version, encodedEnvelope, snapshot.byteSize, snapshot.checksum]
     );
     if (stored.rowCount === 0) throw new VaultConflictError();
+    // Snapshot mutations and the delete trigger both lock the snapshot before
+    // the aggregate counter. Keeping one global order prevents deadlocks and
+    // makes a concurrent administrative delete's byte delta deterministic.
+    await chargeGlobalStorageCapacity(client, snapshot.byteSize - (row?.byte_size ?? 0));
     await client.query("COMMIT");
     return { idempotent: false };
   } catch (error) {
-    await rollbackQuietly(client);
+    discardClient = !(await rollbackQuietly(client));
     throw error;
   } finally {
-    client.release();
+    if (discardClient) client.release(true);
+    else client.release();
   }
 }
 
 async function chargeGlobalStorageCapacity(client: PoolClient, byteDelta: number) {
   if (!Number.isSafeInteger(byteDelta)) throw new VaultStorageCapacityError();
   if (byteDelta === 0) return;
-  const maxBytes = boundedIntegerFromEnv(
-    "SYNC_GLOBAL_VAULT_STORAGE_LIMIT",
-    10_000_000_000,
-    MAX_SNAPSHOT_REQUEST_BYTES,
-    10_000_000_000_000
-  );
+  const maxBytes = getSyncLimitConfig().globalVaultStorageLimit;
   const charged = await client.query(
     `UPDATE sync_storage_usage
      SET total_snapshot_bytes = total_snapshot_bytes + $1, updated_at = now()
@@ -120,28 +122,29 @@ async function chargeGlobalStorageCapacity(client: PoolClient, byteDelta: number
   if (charged.rowCount === 0) throw new VaultStorageCapacityError();
 }
 
-async function chargeDailyQuota(client: PoolClient, userId: string, chargedBytes: number) {
-  const maxWrites = boundedIntegerFromEnv("SYNC_VAULT_DAILY_WRITE_LIMIT", 100, 1, 10_000);
-  const maxBytes = boundedIntegerFromEnv(
-    "SYNC_VAULT_DAILY_BYTE_LIMIT",
-    64_000_000,
-    MAX_SNAPSHOT_REQUEST_BYTES,
-    10_000_000_000
-  );
+async function chargeDailyQuota(
+  client: PoolClient,
+  userId: string,
+  chargedBytes: number,
+  writeIncrement: 0 | 1
+) {
+  const limits = getSyncLimitConfig();
+  const maxWrites = limits.dailyVaultWriteLimit;
+  const maxBytes = limits.dailyVaultByteLimit;
   if (!Number.isSafeInteger(chargedBytes) || chargedBytes < 1 || chargedBytes > maxBytes) {
     throw new VaultQuotaError();
   }
   const usage = await client.query(
     `INSERT INTO vault_write_usage (user_id, usage_date, write_count, byte_count)
-     VALUES ($1, (now() AT TIME ZONE 'UTC')::date, 1, $2)
+     VALUES ($1, (now() AT TIME ZONE 'UTC')::date, $3, $2)
      ON CONFLICT (user_id, usage_date) DO UPDATE SET
-       write_count = vault_write_usage.write_count + 1,
+       write_count = vault_write_usage.write_count + excluded.write_count,
        byte_count = vault_write_usage.byte_count + excluded.byte_count,
        updated_at = now()
-     WHERE vault_write_usage.write_count < $3
-       AND vault_write_usage.byte_count + excluded.byte_count <= $4
+     WHERE vault_write_usage.write_count + excluded.write_count <= $4
+       AND vault_write_usage.byte_count + excluded.byte_count <= $5
      RETURNING write_count`,
-    [userId, chargedBytes, maxWrites, maxBytes]
+    [userId, chargedBytes, writeIncrement, maxWrites, maxBytes]
   );
   if (usage.rowCount === 0) throw new VaultQuotaError();
 }
@@ -149,12 +152,10 @@ async function chargeDailyQuota(client: PoolClient, userId: string, chargedBytes
 async function rollbackQuietly(client: PoolClient) {
   try {
     await client.query("ROLLBACK");
+    return true;
   } catch {
-    // The original error is the actionable one; connection cleanup is best effort.
+    // A timed-out statement may still be active server-side; discard instead of
+    // returning an ambiguous transaction state to the pool.
+    return false;
   }
-}
-
-function boundedIntegerFromEnv(name: string, fallback: number, min: number, max: number) {
-  const parsed = Number(process.env[name]);
-  return Number.isSafeInteger(parsed) && parsed >= min && parsed <= max ? parsed : fallback;
 }

@@ -10,8 +10,17 @@ cd "$ROOT"
 
 "$ROOT/check-toolchain.sh"
 SELECTED_DEVELOPER_DIR="$(xcode-select -p 2>/dev/null || true)"
-if [[ "$SELECTED_DEVELOPER_DIR" == *"CommandLineTools"* && -x "/opt/homebrew/opt/swift/bin/swift" && -d "/Library/Developer/CommandLineTools" ]]; then
-  export PATH="/opt/homebrew/opt/swift/bin:$PATH"
+BREW_SWIFT_PREFIX=""
+if command -v brew >/dev/null 2>&1; then
+  BREW_SWIFT_PREFIX="$(brew --prefix swift 2>/dev/null || true)"
+fi
+if [[ -z "$BREW_SWIFT_PREFIX" ]]; then
+  for candidate in /opt/homebrew/opt/swift /usr/local/opt/swift; do
+    if [[ -x "$candidate/bin/swift" ]]; then BREW_SWIFT_PREFIX="$candidate"; break; fi
+  done
+fi
+if [[ "$SELECTED_DEVELOPER_DIR" == *"CommandLineTools"* && -n "$BREW_SWIFT_PREFIX" && -x "$BREW_SWIFT_PREFIX/bin/swift" && -d "/Library/Developer/CommandLineTools" ]]; then
+  export PATH="$BREW_SWIFT_PREFIX/bin:$PATH"
   export DEVELOPER_DIR="/Library/Developer/CommandLineTools"
 fi
 SDK_PATH="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}"

@@ -33,6 +33,7 @@ public enum ExchangeSigningError: Error, Equatable, LocalizedError, Sendable {
   case invalidCoinbaseKeyName
   case invalidCoinbasePrivateKey
   case invalidCoinbaseRequest
+  case invalidKrakenSecret
 
   public var errorDescription: String? {
     switch self {
@@ -42,6 +43,8 @@ public enum ExchangeSigningError: Error, Equatable, LocalizedError, Sendable {
       return "Coinbase requires an ES256 CDP EC private key in PEM format."
     case .invalidCoinbaseRequest:
       return "Coinbase JWT request metadata is invalid."
+    case .invalidKrakenSecret:
+      return "Kraken requires a standard Base64 API secret."
     }
   }
 }
@@ -120,7 +123,12 @@ public enum ExchangeRequestSigner {
     let bodyHash = SHA256.hash(data: Data("\(nonce)\(body)".utf8))
     var message = Data(path.utf8)
     message.append(Data(bodyHash))
-    let secret = try Base64URL.decode(credentials.secret)
+    // Kraken issues standard Base64 secrets (including +, /, and = padding),
+    // not the unpadded Base64URL format used by our vault wire envelopes.
+    let encodedSecret = credentials.secret.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let secret = Data(base64Encoded: encodedSecret), !secret.isEmpty else {
+      throw ExchangeSigningError.invalidKrakenSecret
+    }
     let key = SymmetricKey(data: secret)
     let signature = HMAC<SHA512>.authenticationCode(for: message, using: key)
     return SignedExchangeRequest(

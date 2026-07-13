@@ -7,7 +7,6 @@ public struct ExportedExchangeConnection: Codable, Equatable, Sendable {
   public var status: ScanStatus
   public var lastTestedAt: Date?
   public var lastSyncAt: Date?
-  public var lastError: String?
   public var createdAt: Date
   public var updatedAt: Date
 
@@ -18,7 +17,6 @@ public struct ExportedExchangeConnection: Codable, Equatable, Sendable {
     status = connection.status
     lastTestedAt = connection.lastTestedAt
     lastSyncAt = connection.lastSyncAt
-    lastError = connection.lastError
     createdAt = connection.createdAt
     updatedAt = connection.updatedAt
   }

@@ -199,10 +199,10 @@ final class VaultSyncMigrationAndExportTests: XCTestCase {
       ciphertext: credentialCiphertext,
       checksum: String(repeating: "a", count: 64)
     )
+    var connection = ExchangeConnectionRecord(provider: .binance, label: "Binance", encryptedCredentials: envelope)
+    connection.lastError = "raw-provider-error-marker"
     let document = VaultDocument(
-      exchangeConnections: [
-        ExchangeConnectionRecord(provider: .binance, label: "Binance", encryptedCredentials: envelope)
-      ],
+      exchangeConnections: [connection],
       syncState: SyncState(
         accountId: "private-account-id",
         serverURL: "https://private-sync.example",
@@ -218,6 +218,8 @@ final class VaultSyncMigrationAndExportTests: XCTestCase {
     XCTAssertFalse(json.contains("live-bearer-token"))
     XCTAssertFalse(json.contains("encryptedCredentials"))
     XCTAssertFalse(json.contains(credentialCiphertext))
+    XCTAssertFalse(json.contains("lastError"))
+    XCTAssertFalse(json.contains("raw-provider-error-marker"))
     XCTAssertTrue(json.contains("Binance"))
   }
 }
@@ -294,6 +296,28 @@ final class VaultSyncKeyRecoveryTests: XCTestCase {
 }
 
 final class VaultSyncEndpointAndEnvelopeTests: XCTestCase {
+  func testSyncServerURLCanonicalizesOriginsAndRejectsEndpointComponents() {
+    XCTAssertEqual(
+      SyncServerURL.validatedOrigin(" HTTPS://Sync.Example.COM:443/ ")?.absoluteString,
+      "https://sync.example.com"
+    )
+    XCTAssertEqual(
+      SyncServerURL.validatedOrigin("http://localhost:80/")?.absoluteString,
+      "http://localhost"
+    )
+    for invalid in [
+      "https:",
+      "https:///vault",
+      "https://user:secret@sync.example.com",
+      "https://sync.example.com/path",
+      "https://sync.example.com?query=1",
+      "https://sync.example.com#fragment",
+      "http://sync.example.com"
+    ] {
+      XCTAssertNil(SyncServerURL.validatedOrigin(invalid), invalid)
+    }
+  }
+
   func testRemoteConfigCannotRedirectExchangeSignedRequests() throws {
     let malicious = NativeEndpointConfig(
       exchanges: [

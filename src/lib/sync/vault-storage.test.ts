@@ -40,7 +40,7 @@ describe("vault storage abuse controls", () => {
     mocks.connect.mockResolvedValue({ query: mocks.query, release: mocks.release });
   });
 
-  it("commits an exact replay without quota or snapshot UPDATE writes", async () => {
+  it("charges exact-replay bytes without incrementing writes or rewriting the snapshot", async () => {
     mocks.query.mockImplementation(async (sql: string) => {
       if (sql.includes("SELECT id FROM users")) return { rowCount: 1, rows: [{ id: USER_ID }] };
       if (sql.includes("FROM vault_snapshots")) {
@@ -51,8 +51,11 @@ describe("vault storage abuse controls", () => {
 
     await expect(saveVaultSnapshot(USER_ID, SNAPSHOT, 500)).resolves.toEqual({ idempotent: true });
     const sql = mocks.query.mock.calls.map(([statement]) => String(statement)).join("\n");
-    expect(sql).not.toContain("INSERT INTO vault_write_usage");
+    expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO vault_write_usage"), [
+      USER_ID, 500, 0, 100, 64_000_000
+    ]);
     expect(sql).not.toContain("INSERT INTO vault_snapshots");
+    expect(sql).not.toContain("UPDATE sync_storage_usage");
     expect(mocks.query).toHaveBeenCalledWith("COMMIT");
   });
 
@@ -92,16 +95,20 @@ describe("vault storage abuse controls", () => {
 
     await expect(saveVaultSnapshot(USER_ID, SNAPSHOT, 777)).resolves.toEqual({ idempotent: false });
     expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO vault_write_usage"), [
-      USER_ID, 777, 100, 64_000_000
+      USER_ID, 777, 1, 100, 64_000_000
     ]);
     expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("UPDATE sync_storage_usage"), [
       200, 10_000_000_000
     ]);
     expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("vault_snapshots.version < excluded.version"), expect.any(Array));
+    const statements = mocks.query.mock.calls.map(([statement]) => String(statement));
+    expect(statements.find((sql) => sql.includes("FROM vault_snapshots"))).toContain("FOR UPDATE");
+    expect(statements.findIndex((sql) => sql.includes("INSERT INTO vault_snapshots")))
+      .toBeLessThan(statements.findIndex((sql) => sql.includes("UPDATE sync_storage_usage")));
     expect(mocks.query).toHaveBeenCalledWith("COMMIT");
   });
 
-  it("atomically rolls back daily usage when aggregate storage is full", async () => {
+  it("atomically rolls back the snapshot and daily usage when aggregate storage is full", async () => {
     mocks.query.mockImplementation(async (sql: string) => {
       if (sql.includes("SELECT id FROM users")) return { rowCount: 1, rows: [{ id: USER_ID }] };
       if (sql.includes("FROM vault_snapshots")) return { rowCount: 0, rows: [] };
@@ -111,7 +118,21 @@ describe("vault storage abuse controls", () => {
     });
 
     await expect(saveVaultSnapshot(USER_ID, SNAPSHOT, 777)).rejects.toBeInstanceOf(VaultStorageCapacityError);
-    expect(mocks.query.mock.calls.map(([statement]) => String(statement)).join("\n")).not.toContain("INSERT INTO vault_snapshots");
+    expect(mocks.query.mock.calls.map(([statement]) => String(statement)).join("\n")).toContain("INSERT INTO vault_snapshots");
     expect(mocks.query).toHaveBeenCalledWith("ROLLBACK");
+  });
+
+  it("destroys a client whose rollback also times out", async () => {
+    mocks.query.mockImplementation(async (sql: string) => {
+      if (sql.includes("SELECT id FROM users")) return { rowCount: 1, rows: [{ id: USER_ID }] };
+      if (sql.includes("FROM vault_snapshots")) {
+        return { rowCount: 1, rows: [{ version: 3, checksum: "different", byte_size: 1, same_envelope: false }] };
+      }
+      if (sql === "ROLLBACK") throw new Error("rollback timed out");
+      return { rowCount: 1, rows: [] };
+    });
+
+    await expect(saveVaultSnapshot(USER_ID, SNAPSHOT, 500)).rejects.toBeInstanceOf(VaultConflictError);
+    expect(mocks.release).toHaveBeenCalledWith(true);
   });
 });

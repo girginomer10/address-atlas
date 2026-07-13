@@ -104,6 +104,6 @@ fi
 
 printf '\nRelease doctor: %d failure(s), %d warning(s).\n' "$failures" "$warnings"
 
-if [[ "$STRICT" -eq 1 && "$failures" -gt 0 ]]; then
+if [[ "$failures" -gt 0 ]]; then
   exit 1
 fi

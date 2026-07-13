@@ -29,4 +29,6 @@ NATIVE_ENDPOINT_CONFIG_VERSION=4
 NATIVE_ENDPOINT_CONFIG_JSON={"chains":{"ethereum":{"rpcUrl":"https://eth.llamarpc.com/rpc"}}}
 ```
 
-Generate `SYNC_SESSION_SECRET` with at least 32 random bytes. The server enforces configurable total-account capacity, persistent per-account daily encrypted-upload quotas, and an atomic aggregate encrypted-snapshot storage ceiling (`SYNC_GLOBAL_VAULT_STORAGE_LIMIT`, 10 GB by default) in addition to short-window request throttles.
+Generate `SYNC_SESSION_SECRET` with at least 32 random bytes. Generate the Postgres password with `openssl rand -hex 32` and use the same URL-safe value in `POSTGRES_PASSWORD` and `SYNC_DATABASE_URL`. The server rejects malformed explicit configuration and keeps `/healthz` unavailable until its database, passkey, secret, limit, and native endpoint settings are valid.
+
+The server enforces configurable total-account capacity, persistent per-account daily encrypted-upload quotas, and an atomic aggregate encrypted-snapshot storage ceiling (`SYNC_GLOBAL_VAULT_STORAGE_LIMIT`, 10 GB by default) in addition to short-window request throttles. Exact idempotent retries consume daily byte quota but do not consume an additional logical-write allowance.

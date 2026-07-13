@@ -26,6 +26,10 @@ let package = Package(
     .testTarget(
       name: "AddressAtlasCoreTests",
       dependencies: ["AddressAtlasCore"]
+    ),
+    .testTarget(
+      name: "AddressAtlasMacTests",
+      dependencies: ["AddressAtlasMac", "AddressAtlasCore"]
     )
   ]
 )

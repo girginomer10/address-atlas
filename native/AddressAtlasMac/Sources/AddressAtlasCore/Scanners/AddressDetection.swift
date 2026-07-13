@@ -121,7 +121,20 @@ public enum AddressDetection {
 
   private static func isEvm(_ address: String) -> Bool {
     guard address.utf8.count == 42 else { return false }
-    return address.range(of: #"^0x[a-fA-F0-9]{40}$"#, options: .regularExpression) != nil
+    guard address.range(of: #"^0x[a-fA-F0-9]{40}$"#, options: .regularExpression) != nil else {
+      return false
+    }
+    let body = String(address.dropFirst(2))
+    // All-lowercase and all-uppercase forms remain valid for EIP-55 backwards
+    // compatibility. Mixed-case input is claiming a checksum, so enforce it.
+    guard body != body.lowercased(), body != body.uppercased() else { return true }
+    let hash = Keccak256.hash(Data(body.lowercased().utf8))
+    for (index, character) in body.enumerated() where character.isLetter {
+      let byte = hash[index / 2]
+      let nibble = index.isMultiple(of: 2) ? byte >> 4 : byte & 0x0f
+      if (nibble >= 8) != character.isUppercase { return false }
+    }
+    return true
   }
 
   private static func isBitcoin(_ address: String) -> Bool {
@@ -171,7 +184,9 @@ public enum AddressDetection {
     guard let decoded = decodeBech32(address), decoded.hrp == prefix.lowercased(), decoded.polymod == 1,
           let bytes = convertBits(decoded.data, from: 5, to: 8, pad: false)
     else { return false }
-    return bytes.count == 20
+    // Cosmos SDK reserves both legacy 20-byte account addresses and newer
+    // 32-byte account/module address forms. Other lengths are not account IDs.
+    return bytes.count == 20 || bytes.count == 32
   }
 
   private static func decodeBase58Check(_ value: String, alphabet: String) -> [UInt8]? {
@@ -263,5 +278,93 @@ public enum AddressDetection {
       return nil
     }
     return result
+  }
+}
+
+/// Minimal Keccak-256 used for EIP-55 address checksums. CryptoKit's SHA3-256
+/// uses different domain padding and therefore cannot validate Ethereum's
+/// Keccak-based checksum format.
+private enum Keccak256 {
+  private static let rate = 136
+  private static let roundConstants: [UInt64] = [
+    0x0000000000000001, 0x0000000000008082, 0x800000000000808a,
+    0x8000000080008000, 0x000000000000808b, 0x0000000080000001,
+    0x8000000080008081, 0x8000000000008009, 0x000000000000008a,
+    0x0000000000000088, 0x0000000080008009, 0x000000008000000a,
+    0x000000008000808b, 0x800000000000008b, 0x8000000000008089,
+    0x8000000000008003, 0x8000000000008002, 0x8000000000000080,
+    0x000000000000800a, 0x800000008000000a, 0x8000000080008081,
+    0x8000000000008080, 0x0000000080000001, 0x8000000080008008
+  ]
+  private static let rotations = [
+     0,  1, 62, 28, 27,
+    36, 44,  6, 55, 20,
+     3, 10, 43, 25, 39,
+    41, 45, 15, 21,  8,
+    18,  2, 61, 56, 14
+  ]
+
+  static func hash(_ data: Data) -> [UInt8] {
+    var state = [UInt64](repeating: 0, count: 25)
+    var offset = 0
+    while data.count - offset >= rate {
+      absorb(Array(data[offset..<(offset + rate)]), into: &state)
+      permute(&state)
+      offset += rate
+    }
+
+    var final = [UInt8](repeating: 0, count: rate)
+    let remainder = Array(data[offset...])
+    final.replaceSubrange(0..<remainder.count, with: remainder)
+    final[remainder.count] ^= 0x01
+    final[rate - 1] ^= 0x80
+    absorb(final, into: &state)
+    permute(&state)
+
+    return (0..<32).map { index in
+      UInt8(truncatingIfNeeded: state[index / 8] >> UInt64((index % 8) * 8))
+    }
+  }
+
+  private static func absorb(_ block: [UInt8], into state: inout [UInt64]) {
+    for (index, byte) in block.enumerated() {
+      state[index / 8] ^= UInt64(byte) << UInt64((index % 8) * 8)
+    }
+  }
+
+  private static func permute(_ state: inout [UInt64]) {
+    for constant in roundConstants {
+      var columns = [UInt64](repeating: 0, count: 5)
+      for x in 0..<5 {
+        columns[x] = state[x] ^ state[x + 5] ^ state[x + 10] ^ state[x + 15] ^ state[x + 20]
+      }
+      for x in 0..<5 {
+        let delta = columns[(x + 4) % 5] ^ rotateLeft(columns[(x + 1) % 5], by: 1)
+        for y in 0..<5 { state[x + 5 * y] ^= delta }
+      }
+
+      var moved = [UInt64](repeating: 0, count: 25)
+      for x in 0..<5 {
+        for y in 0..<5 {
+          moved[y + 5 * ((2 * x + 3 * y) % 5)] = rotateLeft(
+            state[x + 5 * y],
+            by: rotations[x + 5 * y]
+          )
+        }
+      }
+
+      for x in 0..<5 {
+        for y in 0..<5 {
+          state[x + 5 * y] = moved[x + 5 * y]
+            ^ ((~moved[(x + 1) % 5 + 5 * y]) & moved[(x + 2) % 5 + 5 * y])
+        }
+      }
+      state[0] ^= constant
+    }
+  }
+
+  private static func rotateLeft(_ value: UInt64, by amount: Int) -> UInt64 {
+    guard amount != 0 else { return value }
+    return (value << UInt64(amount)) | (value >> UInt64(64 - amount))
   }
 }
