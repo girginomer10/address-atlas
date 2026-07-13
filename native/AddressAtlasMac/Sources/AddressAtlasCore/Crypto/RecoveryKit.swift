@@ -5,6 +5,7 @@ import Security
 public enum RecoveryKitError: Error, Equatable, LocalizedError {
   case invalidCode
   case invalidDocument
+  case fileTooLarge
   case checksumMismatch
   case invalidVaultKey
 
@@ -14,6 +15,8 @@ public enum RecoveryKitError: Error, Equatable, LocalizedError {
       "Recovery code is invalid."
     case .invalidDocument:
       "Recovery file is invalid."
+    case .fileTooLarge:
+      "Recovery file is too large."
     case .checksumMismatch:
       "Recovery file checksum does not match."
     case .invalidVaultKey:
@@ -182,6 +185,8 @@ public struct RecoveredVault: Sendable {
 }
 
 public struct VaultRecoveryService: Sendable {
+  public static let maximumRecoveryFileByteCount = 64 * 1_024
+
   private let codec: RecoveryKitCodec
   private let crypto: VaultCrypto
 
@@ -196,7 +201,7 @@ public struct VaultRecoveryService: Sendable {
     vaultURL: URL,
     keyStore: any VaultKeyStore
   ) throws -> RecoveredVault {
-    let data = try Data(contentsOf: recoveryFileURL)
+    let data = try readRecoveryFile(at: recoveryFileURL)
     let document = try JSONDecoder.addressAtlas.decode(RecoveryKitDocument.self, from: data)
     return try restore(
       document: document,
@@ -221,5 +226,35 @@ public struct VaultRecoveryService: Sendable {
     let document = try store.load()
     try keyStore.saveVaultKey(restoredKey)
     return RecoveredVault(vaultKey: restoredKey, document: document, store: store)
+  }
+
+  /// Recovery kits are tiny JSON documents. Bound the actual read, rather than
+  /// trusting a preflight file-size check that can race a file replacement.
+  /// This also keeps the synchronous import work on AppState's main actor small.
+  private func readRecoveryFile(at url: URL) throws -> Data {
+    let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+    guard values.isRegularFile == true else {
+      throw RecoveryKitError.invalidDocument
+    }
+    if let fileSize = values.fileSize,
+       fileSize > Self.maximumRecoveryFileByteCount {
+      throw RecoveryKitError.fileTooLarge
+    }
+
+    let handle = try FileHandle(forReadingFrom: url)
+    defer { try? handle.close() }
+    var data = Data()
+    while data.count <= Self.maximumRecoveryFileByteCount {
+      let remaining = Self.maximumRecoveryFileByteCount + 1 - data.count
+      guard remaining > 0,
+            let chunk = try handle.read(upToCount: min(8_192, remaining)),
+            !chunk.isEmpty
+      else { break }
+      data.append(chunk)
+    }
+    guard data.count <= Self.maximumRecoveryFileByteCount else {
+      throw RecoveryKitError.fileTooLarge
+    }
+    return data
   }
 }

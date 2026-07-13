@@ -35,21 +35,33 @@ export async function GET(request: NextRequest) {
     }
     await ensureSyncSchema();
     const result = await getSyncPool().query<{
-      version: number;
-      envelope: unknown;
-      byte_size: number;
-      checksum: string;
-      updated_at: Date;
+      version: number | null;
+      envelope: unknown | null;
+      byte_size: number | null;
+      checksum: string | null;
+      updated_at: Date | null;
     }>(
-      "SELECT version, envelope, byte_size, checksum, updated_at FROM vault_snapshots WHERE user_id = $1",
+      `SELECT vault.version, vault.envelope, vault.byte_size, vault.checksum, vault.updated_at
+       FROM users AS account
+       LEFT JOIN vault_snapshots AS vault ON vault.user_id = account.id
+       WHERE account.id = $1`,
       [session.userId]
     );
     const row = result.rows[0];
-    if (!row) {
+    if (!row) throw new VaultAccountMissingError();
+    if (row.version === null) {
       return NextResponse.json(
         { error: "No vault snapshot." },
         { status: 404, headers: { "cache-control": "no-store" } }
       );
+    }
+    if (
+      row.envelope === null
+      || row.byte_size === null
+      || row.checksum === null
+      || row.updated_at === null
+    ) {
+      throw new Error("Vault snapshot row is incomplete.");
     }
     return NextResponse.json(
       {

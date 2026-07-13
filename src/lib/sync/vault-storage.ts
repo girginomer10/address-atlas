@@ -36,10 +36,9 @@ export interface VaultSaveResult {
 }
 
 /**
- * Serialize writes per user, skip exact replays without touching snapshot WAL,
- * and charge snapshot mutations to a durable UTC-day quota. Exact retries are
- * idempotent: request rate limits still bound them, but they consume neither
- * the logical write counter nor the byte quota a second time.
+ * Serialize writes per user and charge actual request bytes for successful
+ * mutations, exact replays, and rejected stale/same-version writes. Only a
+ * committed snapshot mutation increments the logical write counter.
  */
 export async function saveVaultSnapshot(
   userId: string,
@@ -49,7 +48,12 @@ export async function saveVaultSnapshot(
   assertValidChargedBytes(chargedBytes);
   const client = await getSyncPool().connect();
   let discardClient = false;
+  let transactionOpen = false;
   try {
+    // A client-side query timeout is ambiguous: PostgreSQL may still execute
+    // BEGIN after the promise rejects. Mark the transaction as potentially
+    // open before sending it so catch always rolls back or destroys the client.
+    transactionOpen = true;
     await client.query("BEGIN");
     const account = await client.query("SELECT id FROM users WHERE id = $1 FOR UPDATE", [userId]);
     if (account.rowCount === 0) throw new VaultAccountMissingError();
@@ -72,12 +76,21 @@ export async function saveVaultSnapshot(
       && row.byte_size === snapshot.byteSize
       && row.same_envelope;
     if (isExactReplay) {
+      await chargeDailyQuota(client, userId, chargedBytes, 0);
       await client.query("COMMIT");
+      transactionOpen = false;
       return { idempotent: true };
     }
-    if (row && row.version >= snapshot.version) throw new VaultConflictError();
+    if (row && row.version >= snapshot.version) {
+      // Persist the request-byte charge while leaving both the logical write
+      // counter and stored snapshot untouched. The conflict is raised only
+      // after that quota transaction commits.
+      await chargeDailyQuota(client, userId, chargedBytes, 0);
+      await client.query("COMMIT");
+      transactionOpen = false;
+      throw new VaultConflictError();
+    }
 
-    await chargeDailyQuota(client, userId, chargedBytes, 1);
     const stored = await client.query(
       `INSERT INTO vault_snapshots (user_id, version, envelope, byte_size, checksum)
        VALUES ($1, $2, $3::jsonb, $4, $5)
@@ -91,15 +104,26 @@ export async function saveVaultSnapshot(
        RETURNING version`,
       [userId, snapshot.version, encodedEnvelope, snapshot.byteSize, snapshot.checksum]
     );
-    if (stored.rowCount === 0) throw new VaultConflictError();
+    if (stored.rowCount === 0) {
+      // The SQL version gate is a final defense against writers that do not
+      // follow this process's per-account lock. Charge bytes, but not a logical
+      // write, for that committed conflict as well.
+      await chargeDailyQuota(client, userId, chargedBytes, 0);
+      await client.query("COMMIT");
+      transactionOpen = false;
+      throw new VaultConflictError();
+    }
+    // The tentative snapshot and its quota charge commit or roll back together.
+    await chargeDailyQuota(client, userId, chargedBytes, 1);
     // Snapshot mutations and the delete trigger both lock the snapshot before
     // the aggregate counter. Keeping one global order prevents deadlocks and
     // makes a concurrent administrative delete's byte delta deterministic.
     await chargeGlobalStorageCapacity(client, snapshot.byteSize - (row?.byte_size ?? 0));
     await client.query("COMMIT");
+    transactionOpen = false;
     return { idempotent: false };
   } catch (error) {
-    discardClient = !(await rollbackQuietly(client));
+    if (transactionOpen) discardClient = !(await rollbackQuietly(client));
     throw error;
   } finally {
     if (discardClient) client.release(true);

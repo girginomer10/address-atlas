@@ -108,7 +108,7 @@ public struct VaultSyncCodec: Sendable {
     expectedAccountId: String
   ) throws -> OpenedVaultSnapshot {
     let accountId = try validatedAccountId(expectedAccountId)
-    try validateSnapshot(snapshot)
+    try validateRemoteSnapshot(snapshot)
     let key = try crypto.deriveKey(from: vaultKey, purpose: .syncBlob)
 
     switch snapshot.envelope.cryptoVersion {
@@ -187,7 +187,10 @@ public struct VaultSyncCodec: Sendable {
     return Data(SHA256.hash(data: try JSONEncoder.addressAtlas.encode(content))).hexString
   }
 
-  private func validateSnapshot(_ snapshot: RemoteVaultSnapshot) throws {
+  /// Validate all server-controlled snapshot metadata before callers use it for
+  /// conflict decisions or version arithmetic. Decryption performs this check
+  /// again before trusting the encrypted document.
+  public func validateRemoteSnapshot(_ snapshot: RemoteVaultSnapshot) throws {
     try validateVersion(snapshot.version)
     guard snapshot.byteSize > 0,
           snapshot.byteSize <= Self.maximumSnapshotByteCount,
@@ -208,6 +211,17 @@ public struct VaultSyncCodec: Sendable {
     else {
       throw VaultSyncCodecError.invalidSnapshot
     }
+  }
+
+  /// Return the next protocol version without ever evaluating trapping integer
+  /// arithmetic. Zero is the local pre-sync sentinel; remote versions start at 1.
+  public func nextVersion(after latestVersion: Int) throws -> Int {
+    guard latestVersion >= 0 else { throw VaultSyncCodecError.invalidVersion }
+    let (candidate, overflow) = latestVersion.addingReportingOverflow(1)
+    guard !overflow else { throw VaultSyncCodecError.invalidVersion }
+    let next = max(1, candidate)
+    try validateVersion(next)
+    return next
   }
 
   private func validatedAccountId(_ accountId: String) throws -> String {

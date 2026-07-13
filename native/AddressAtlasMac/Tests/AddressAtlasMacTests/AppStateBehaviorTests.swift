@@ -37,6 +37,20 @@ final class AppStateBehaviorTests: XCTestCase {
     XCTAssertEqual(AppState.derivedManualPrice(amount: 2, valueUsd: 10), 5)
   }
 
+  func testCompatibilityPolicyUsesBoundedVersionsAndFailsClosed() {
+    XCTAssertTrue(AppState.supportsAppVersion("0.2.0", minimum: nil))
+    XCTAssertTrue(AppState.supportsAppVersion("0.2.0", minimum: "0.2"))
+    XCTAssertFalse(AppState.supportsAppVersion("0.2.0", minimum: "0.2.1"))
+    XCTAssertFalse(AppState.supportsAppVersion("", minimum: "0.2.0"))
+    XCTAssertFalse(
+      AppState.supportsAppVersion(
+        "0.2.0",
+        minimum: "999999999999999999999999999999.0"
+      )
+    )
+    XCTAssertNil(AppState.compareVersions("0.2.0", "1..2"))
+  }
+
   func testWalletLabelsAreAttributedByCanonicalAddressAndFamily() {
     let address = "0x0000000000000000000000000000000000000001"
     let wallets = [WalletRecord(label: "Treasury", address: address, chainKind: .evm)]

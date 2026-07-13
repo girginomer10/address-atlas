@@ -119,6 +119,55 @@ describe("vault latest route", () => {
     );
   });
 
+  it("passes the actual padded request byte count to replay quota accounting", async () => {
+    mocks.saveVaultSnapshot.mockResolvedValue({ idempotent: true });
+    const body = `${JSON.stringify(snapshot())}${" ".repeat(2_048)}`;
+    const response = await PUT(new NextRequest("http://localhost/vault/latest", {
+      method: "PUT",
+      headers: {
+        authorization: "Bearer token",
+        "content-type": "application/json"
+      },
+      body
+    }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.saveVaultSnapshot).toHaveBeenCalledWith(
+      "11111111-1111-4111-8111-111111111111",
+      expect.objectContaining({ version: 2 }),
+      Buffer.byteLength(body)
+    );
+  });
+
+  it("returns 404 when the authenticated account exists without a snapshot", async () => {
+    mocks.dbQuery.mockResolvedValue({
+      rows: [{ version: null, envelope: null, byte_size: null, checksum: null, updated_at: null }]
+    });
+
+    const response = await GET(new NextRequest("http://localhost/vault/latest", {
+      headers: { authorization: "Bearer token" }
+    }));
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({ error: "No vault snapshot." });
+    expect(mocks.dbQuery).toHaveBeenCalledWith(expect.stringContaining("LEFT JOIN vault_snapshots"), [
+      "11111111-1111-4111-8111-111111111111"
+    ]);
+  });
+
+  it("returns 401 when a valid session refers to a deleted account", async () => {
+    mocks.dbQuery.mockResolvedValue({ rows: [] });
+
+    const response = await GET(new NextRequest("http://localhost/vault/latest", {
+      headers: { authorization: "Bearer token" }
+    }));
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({ error: "Authentication required." });
+  });
+
   it("returns 429 before reading or saving an upload when its request quota is exhausted", async () => {
     mocks.rateLimitMany.mockReturnValue(false);
 

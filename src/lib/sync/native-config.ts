@@ -76,6 +76,10 @@ const NATIVE_CONFIG_KEYS = new Set([
   "exchanges"
 ]);
 const CHAIN_ENDPOINT_KEYS = new Set(["rpcUrl", "restUrl", "explorerUrl"]);
+const APP_VERSION_MIN_COMPONENTS = 2;
+const APP_VERSION_MAX_COMPONENTS = 4;
+const APP_VERSION_MAX_COMPONENT = 2_000_000_000;
+const APP_VERSION_MAX_COMPONENT_DIGITS = 10;
 
 export function getNativeEndpointConfig(): NativeEndpointConfig {
   const envOverride = parseNativeConfigOverride(process.env.NATIVE_ENDPOINT_CONFIG_JSON);
@@ -313,9 +317,28 @@ function isISODate(value: unknown): value is string {
     && Number.isFinite(Date.parse(value));
 }
 
-// Only emit a well-formed dotted version (e.g. "1.2.3"); anything else is
-// dropped so the native client never tries to enforce a garbage kill-switch.
+// Keep this grammar and component ceiling in sync with
+// NativeEndpointConfig.appVersionComponents(_:). A compatibility policy must
+// never contain a component that the native Int parser cannot represent.
 function semverOrUndefined(value: unknown): string | undefined {
   if (typeof value !== "string" || !value) return undefined;
-  return /^\d+(\.\d+){1,3}$/.test(value.trim()) ? value.trim() : undefined;
+  if (value !== value.trim()) return undefined;
+  const components = value.split(".");
+  if (components.length < APP_VERSION_MIN_COMPONENTS || components.length > APP_VERSION_MAX_COMPONENTS) {
+    return undefined;
+  }
+  for (const component of components) {
+    if (
+      component.length < 1
+      || component.length > APP_VERSION_MAX_COMPONENT_DIGITS
+      || !/^[0-9]+$/.test(component)
+    ) {
+      return undefined;
+    }
+    const parsed = Number(component);
+    if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > APP_VERSION_MAX_COMPONENT) {
+      return undefined;
+    }
+  }
+  return value;
 }

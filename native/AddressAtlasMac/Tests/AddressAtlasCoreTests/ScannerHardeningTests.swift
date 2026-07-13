@@ -628,6 +628,99 @@ final class ScannerWorkflowTests: XCTestCase {
     XCTAssertTrue(result.warnings.contains(where: { $0.contains("Liquid balance could not be read") }))
   }
 
+  func testCosmosPaginationFollowsNextKeysAndCombinesAllPages() async throws {
+    let requests = ScannerRequestLog()
+    let http = ScannerHTTPStub { request in
+      _ = requests.append(request)
+      let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+      let nextKey = query.first(where: { $0.name == "pagination.key" })?.value
+      switch request.url?.path {
+      case let path? where path.contains("/cosmos/bank/"):
+        if nextKey == nil {
+          return scannerResponse(
+            request,
+            #"{"balances":[{"denom":"uother","amount":"9"}],"pagination":{"next_key":"bank+/="}}"#
+          )
+        }
+        XCTAssertEqual(nextKey, "bank+/=")
+        return scannerResponse(
+          request,
+          #"{"balances":[{"denom":"uatom","amount":"1200000"}],"pagination":{"next_key":null}}"#
+        )
+      case let path? where path.contains("/cosmos/staking/"):
+        if nextKey == nil {
+          return scannerResponse(
+            request,
+            #"{"delegation_responses":[{"balance":{"denom":"uatom","amount":"1000000"}}],"pagination":{"next_key":"stake-key"}}"#
+          )
+        }
+        XCTAssertEqual(nextKey, "stake-key")
+        return scannerResponse(
+          request,
+          #"{"delegation_responses":[{"balance":{"denom":"uatom","amount":"1500000"}}],"pagination":{"next_key":""}}"#
+        )
+      default:
+        return scannerResponse(request, #"{"total":[]}"#)
+      }
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: ScannerStaticPriceProvider(values: [:])
+    )
+
+    let result = try await scanner.scan(
+      addresses: "cosmos1qqqtduhx4t2xvgcxrqfmrz0heq00vlvjqhuz93nwt6d2y0quqlqqxxec22"
+    )
+
+    XCTAssertEqual(result.holdings.first(where: { $0.source == .native })?.amount, 1.2)
+    XCTAssertEqual(result.holdings.first(where: { $0.source == .staked })?.amount, 2.5)
+    let paginated = requests.snapshot().filter {
+      $0.url?.path.contains("/cosmos/bank/") == true || $0.url?.path.contains("/cosmos/staking/") == true
+    }
+    XCTAssertEqual(paginated.count, 4)
+    XCTAssertTrue(paginated.allSatisfy { request in
+      URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?
+        .contains(where: { $0.name == "pagination.limit" && $0.value == "500" }) == true
+    })
+    let encodedQueries = paginated.compactMap {
+      URLComponents(url: $0.url!, resolvingAgainstBaseURL: false)?.percentEncodedQuery
+    }
+    XCTAssertTrue(encodedQueries.contains(where: {
+      $0.contains("pagination.key=bank%2B%2F%3D")
+    }))
+    XCTAssertFalse(encodedQueries.contains(where: { $0.contains("pagination.key=bank+") }))
+  }
+
+  func testCosmosPaginationStopsOnRepeatedKeysWithAWarning() async throws {
+    let requests = ScannerRequestLog()
+    let http = ScannerHTTPStub { request in
+      switch request.url?.path {
+      case let path? where path.contains("/cosmos/bank/"):
+        _ = requests.append(request)
+        return scannerResponse(
+          request,
+          #"{"balances":[{"denom":"uatom","amount":"1000000"}],"pagination":{"next_key":"repeat"}}"#
+        )
+      case let path? where path.contains("/cosmos/staking/"):
+        return scannerResponse(request, #"{"delegation_responses":[]}"#)
+      default:
+        return scannerResponse(request, #"{"total":[]}"#)
+      }
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: ScannerStaticPriceProvider(values: [:]),
+      maxCosmosPages: 5
+    )
+
+    let result = try await scanner.scan(
+      addresses: "cosmos1qqqtduhx4t2xvgcxrqfmrz0heq00vlvjqhuz93nwt6d2y0quqlqqxxec22"
+    )
+
+    XCTAssertEqual(requests.snapshot().count, 2)
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("repeated key") }))
+  }
+
   func testMalformedTronTokenAmountProducesVisibleWarning() async throws {
     let http = ScannerHTTPStub { request in
       scannerResponse(

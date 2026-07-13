@@ -8,6 +8,7 @@ public struct NativeScanner: Sendable {
   private let chainDeadline: TimeInterval
   private let workflowDeadline: TimeInterval
   private let maxXrpPages: Int
+  private let maxCosmosPages: Int
 
   public init(
     http: JSONHTTPClient = JSONHTTPClient(),
@@ -16,7 +17,8 @@ public struct NativeScanner: Sendable {
     maxConcurrentChainScans: Int = 4,
     chainDeadline: TimeInterval = 45,
     workflowDeadline: TimeInterval = 120,
-    maxXrpPages: Int = 20
+    maxXrpPages: Int = 20,
+    maxCosmosPages: Int = 20
   ) {
     self.http = http
     self.endpointConfig = endpointConfig
@@ -25,6 +27,7 @@ public struct NativeScanner: Sendable {
     self.chainDeadline = chainDeadline.isFinite && chainDeadline > 0 ? chainDeadline : 45
     self.workflowDeadline = workflowDeadline.isFinite && workflowDeadline > 0 ? workflowDeadline : 120
     self.maxXrpPages = max(1, maxXrpPages)
+    self.maxCosmosPages = max(1, maxCosmosPages)
   }
 
   public func scan(addresses input: String, customTokens: [CustomTokenRecord] = []) async throws -> ScanRunRecord {
@@ -455,10 +458,8 @@ public struct NativeScanner: Sendable {
       do {
         switch part {
         case .liquid:
-          let response = try await http.get(
-            rest.appending(path: "cosmos/bank/v1beta1/balances/\(address)"),
-            as: CosmosBankResponse.self
-          )
+          let scan = try await fetchCosmosBalances(rest: rest, address: address)
+          let response = CosmosBankResponse(balances: scan.balances, pagination: nil)
           guard let amount = Self.parseCosmosLiquid(response, denom: denom, decimals: chain.decimals) else {
             throw Self.messageError(domain: "Cosmos", message: "Liquid balance contained an invalid amount.")
           }
@@ -467,14 +468,10 @@ public struct NativeScanner: Sendable {
             address: address,
             chain: chain,
             prices: prices
-          ))
+          ), warnings: scan.warnings)
         case .delegations:
-          let url = Self.cosmosURL(
-            rest: rest,
-            path: "cosmos/staking/v1beta1/delegations/\(address)",
-            queryItems: [URLQueryItem(name: "pagination.limit", value: "500")]
-          )
-          let response = try await http.get(url, as: CosmosDelegationResponse.self)
+          let scan = try await fetchCosmosDelegations(rest: rest, address: address)
+          let response = CosmosDelegationResponse(delegationResponses: scan.delegations, pagination: nil)
           guard let amount = Self.parseCosmosDelegations(response, denom: denom, decimals: chain.decimals) else {
             throw Self.messageError(domain: "Cosmos", message: "Delegations contained an invalid amount.")
           }
@@ -485,7 +482,7 @@ public struct NativeScanner: Sendable {
             prices: prices,
             name: "\(chain.name) Staked",
             source: .staked
-          ))
+          ), warnings: scan.warnings)
         case .rewards:
           let response = try await http.get(
             rest.appending(path: "cosmos/distribution/v1beta1/delegators/\(address)/rewards"),
@@ -513,6 +510,82 @@ public struct NativeScanner: Sendable {
       assets: results.flatMap(\.assets),
       warnings: results.flatMap(\.warnings)
     )
+  }
+
+  private func fetchCosmosBalances(rest: URL, address: String) async throws -> CosmosBalanceScan {
+    var balances: [CosmosBalance] = []
+    var warnings: [String] = []
+    var nextKey: String?
+    var seenKeys = Set<String>()
+
+    for page in 1...maxCosmosPages {
+      try Task.checkCancellation()
+      var queryItems = [URLQueryItem(name: "pagination.limit", value: "500")]
+      if let nextKey { queryItems.append(URLQueryItem(name: "pagination.key", value: nextKey)) }
+      let url = Self.cosmosURL(
+        rest: rest,
+        path: "cosmos/bank/v1beta1/balances/\(address)",
+        queryItems: queryItems
+      )
+      do {
+        let response = try await http.get(url, as: CosmosBankResponse.self)
+        balances.append(contentsOf: response.balances ?? [])
+        guard let candidate = Self.normalizedCosmosNextKey(response.pagination?.nextKey) else { break }
+        guard seenKeys.insert(candidate).inserted else {
+          warnings.append("Cosmos liquid-balance pagination returned a repeated key; later balances were skipped.")
+          break
+        }
+        guard page < maxCosmosPages else {
+          warnings.append("Cosmos liquid-balance pagination reached the \(maxCosmosPages)-page safety limit; later balances were skipped.")
+          break
+        }
+        nextKey = candidate
+      } catch {
+        try throwIfCancellation(error)
+        guard page > 1 else { throw error }
+        warnings.append("Later Cosmos liquid-balance pages could not be read; balances from completed pages were kept.")
+        break
+      }
+    }
+    return CosmosBalanceScan(balances: balances, warnings: warnings)
+  }
+
+  private func fetchCosmosDelegations(rest: URL, address: String) async throws -> CosmosDelegationScan {
+    var delegations: [CosmosDelegation] = []
+    var warnings: [String] = []
+    var nextKey: String?
+    var seenKeys = Set<String>()
+
+    for page in 1...maxCosmosPages {
+      try Task.checkCancellation()
+      var queryItems = [URLQueryItem(name: "pagination.limit", value: "500")]
+      if let nextKey { queryItems.append(URLQueryItem(name: "pagination.key", value: nextKey)) }
+      let url = Self.cosmosURL(
+        rest: rest,
+        path: "cosmos/staking/v1beta1/delegations/\(address)",
+        queryItems: queryItems
+      )
+      do {
+        let response = try await http.get(url, as: CosmosDelegationResponse.self)
+        delegations.append(contentsOf: response.delegationResponses ?? [])
+        guard let candidate = Self.normalizedCosmosNextKey(response.pagination?.nextKey) else { break }
+        guard seenKeys.insert(candidate).inserted else {
+          warnings.append("Cosmos delegation pagination returned a repeated key; later delegations were skipped.")
+          break
+        }
+        guard page < maxCosmosPages else {
+          warnings.append("Cosmos delegation pagination reached the \(maxCosmosPages)-page safety limit; later delegations were skipped.")
+          break
+        }
+        nextKey = candidate
+      } catch {
+        try throwIfCancellation(error)
+        guard page > 1 else { throw error }
+        warnings.append("Later Cosmos delegation pages could not be read; delegations from completed pages were kept.")
+        break
+      }
+    }
+    return CosmosDelegationScan(delegations: delegations, warnings: warnings)
   }
 
   private func scanTron(
@@ -1125,8 +1198,28 @@ public struct NativeScanner: Sendable {
     guard !queryItems.isEmpty, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
       return url
     }
-    components.queryItems = queryItems
+    // Cosmos pagination keys are standard Base64. URLComponents.queryItems
+    // leaves `+` unescaped, but grpc-gateway parses query strings as form data
+    // and turns a raw `+` into a space. Encode each component using only the
+    // RFC 3986 unreserved set so keys such as `+/=` survive the wire exactly.
+    components.percentEncodedQuery = queryItems.map { item in
+      let name = percentEncodedCosmosQueryComponent(item.name)
+      guard let value = item.value else { return name }
+      return "\(name)=\(percentEncodedCosmosQueryComponent(value))"
+    }.joined(separator: "&")
     return components.url ?? url
+  }
+
+  private static func percentEncodedCosmosQueryComponent(_ value: String) -> String {
+    let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+    return value.addingPercentEncoding(withAllowedCharacters: unreserved) ?? ""
+  }
+
+  private static func normalizedCosmosNextKey(_ value: String?) -> String? {
+    guard let candidate = value?.trimmingCharacters(in: .whitespacesAndNewlines), !candidate.isEmpty else {
+      return nil
+    }
+    return candidate
   }
 }
 
@@ -1213,6 +1306,16 @@ private struct XrpTrustLineScan: Sendable {
   var warnings: [String] = []
 }
 
+private struct CosmosBalanceScan: Sendable {
+  var balances: [CosmosBalance] = []
+  var warnings: [String] = []
+}
+
+private struct CosmosDelegationScan: Sendable {
+  var delegations: [CosmosDelegation] = []
+  var warnings: [String] = []
+}
+
 public struct ParsedSplAccount: Equatable, Sendable {
   public var mint: String
   public var rawAmount: Double
@@ -1267,13 +1370,24 @@ public struct SolanaTokenAccount: Decodable, Sendable {
 
 public struct CosmosBankResponse: Decodable, Sendable {
   public var balances: [CosmosBalance]?
+  public var pagination: CosmosPageResponse?
 }
 
 public struct CosmosDelegationResponse: Decodable, Sendable {
   public var delegationResponses: [CosmosDelegation]?
+  public var pagination: CosmosPageResponse?
 
   enum CodingKeys: String, CodingKey {
     case delegationResponses = "delegation_responses"
+    case pagination
+  }
+}
+
+public struct CosmosPageResponse: Decodable, Sendable {
+  public var nextKey: String?
+
+  enum CodingKeys: String, CodingKey {
+    case nextKey = "next_key"
   }
 }
 

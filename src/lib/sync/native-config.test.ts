@@ -86,6 +86,31 @@ describe("native endpoint config", () => {
     expect(() => getNativeEndpointConfig()).toThrow(/configVersion|refreshAfter/i);
   });
 
+  it("uses the native bounded dotted-version grammar for compatibility policy", () => {
+    vi.stubEnv("NATIVE_ENDPOINT_MIN_APP_VERSION", "2000000000.0.0.0");
+    expect(getNativeEndpointConfig().minSupportedAppVersion).toBe("2000000000.0.0.0");
+
+    for (const value of [
+      "2000000001.0",
+      "999999999999999999999999999999.0",
+      "1",
+      "1..2",
+      "1.2.3.4.5",
+      " 1.2.3 "
+    ]) {
+      vi.stubEnv("NATIVE_ENDPOINT_MIN_APP_VERSION", value);
+      expect(() => getNativeEndpointConfig()).toThrow(/version/i);
+    }
+  });
+
+  it("rejects oversized compatibility components in JSON overrides", () => {
+    vi.stubEnv("NATIVE_ENDPOINT_CONFIG_JSON", JSON.stringify({
+      minSupportedAppVersion: "9223372036854775808.0"
+    }));
+
+    expect(() => getNativeEndpointConfig()).toThrow(/minSupportedAppVersion/i);
+  });
+
   it.each(["__proto__", "constructor", "prototype"])(
     "rejects prototype-like chain key %s instead of reading inherited properties",
     (chainId) => {

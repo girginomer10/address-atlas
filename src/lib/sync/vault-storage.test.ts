@@ -45,7 +45,19 @@ describe("vault storage abuse controls", () => {
     expect(mocks.connect).not.toHaveBeenCalled();
   });
 
-  it("does not charge quota or rewrite storage for an exact replay", async () => {
+  it("destroys the client when an ambiguous BEGIN failure cannot be rolled back", async () => {
+    mocks.query.mockImplementation(async (sql: string) => {
+      if (sql === "BEGIN") throw new Error("begin timed out");
+      if (sql === "ROLLBACK") throw new Error("rollback timed out");
+      return { rowCount: 1, rows: [] };
+    });
+
+    await expect(saveVaultSnapshot(USER_ID, SNAPSHOT, 500)).rejects.toThrow("begin timed out");
+    expect(mocks.query).toHaveBeenCalledWith("ROLLBACK");
+    expect(mocks.release).toHaveBeenCalledWith(true);
+  });
+
+  it("charges exact-replay bytes without incrementing writes or rewriting storage", async () => {
     mocks.query.mockImplementation(async (sql: string) => {
       if (sql.includes("SELECT id FROM users")) return { rowCount: 1, rows: [{ id: USER_ID }] };
       if (sql.includes("FROM vault_snapshots")) {
@@ -56,13 +68,15 @@ describe("vault storage abuse controls", () => {
 
     await expect(saveVaultSnapshot(USER_ID, SNAPSHOT, 500)).resolves.toEqual({ idempotent: true });
     const sql = mocks.query.mock.calls.map(([statement]) => String(statement)).join("\n");
-    expect(sql).not.toContain("INSERT INTO vault_write_usage");
+    expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO vault_write_usage"), [
+      USER_ID, 500, 0, 100, 64_000_000
+    ]);
     expect(sql).not.toContain("INSERT INTO vault_snapshots");
     expect(sql).not.toContain("UPDATE sync_storage_usage");
     expect(mocks.query).toHaveBeenCalledWith("COMMIT");
   });
 
-  it("rejects a stale or same-version content change before charging quota", async () => {
+  it("charges stale or same-version request bytes without incrementing writes", async () => {
     mocks.query.mockImplementation(async (sql: string) => {
       if (sql.includes("SELECT id FROM users")) return { rowCount: 1, rows: [{ id: USER_ID }] };
       if (sql.includes("FROM vault_snapshots")) {
@@ -72,11 +86,14 @@ describe("vault storage abuse controls", () => {
     });
 
     await expect(saveVaultSnapshot(USER_ID, SNAPSHOT, 500)).rejects.toBeInstanceOf(VaultConflictError);
-    expect(mocks.query.mock.calls.map(([statement]) => String(statement)).join("\n")).not.toContain("vault_write_usage");
-    expect(mocks.query).toHaveBeenCalledWith("ROLLBACK");
+    expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO vault_write_usage"), [
+      USER_ID, 500, 0, 100, 64_000_000
+    ]);
+    expect(mocks.query).toHaveBeenCalledWith("COMMIT");
+    expect(mocks.query).not.toHaveBeenCalledWith("ROLLBACK");
   });
 
-  it("rolls back when the durable daily byte/write quota is exhausted", async () => {
+  it("rolls back the tentative snapshot when the durable daily quota is exhausted", async () => {
     mocks.query.mockImplementation(async (sql: string) => {
       if (sql.includes("SELECT id FROM users")) return { rowCount: 1, rows: [{ id: USER_ID }] };
       if (sql.includes("FROM vault_snapshots")) return { rowCount: 0, rows: [] };
@@ -85,8 +102,26 @@ describe("vault storage abuse controls", () => {
     });
 
     await expect(saveVaultSnapshot(USER_ID, SNAPSHOT, 500)).rejects.toBeInstanceOf(VaultQuotaError);
-    expect(mocks.query.mock.calls.map(([statement]) => String(statement)).join("\n")).not.toContain("INSERT INTO vault_snapshots");
+    expect(mocks.query.mock.calls.map(([statement]) => String(statement)).join("\n")).toContain("INSERT INTO vault_snapshots");
     expect(mocks.query).toHaveBeenCalledWith("ROLLBACK");
+  });
+
+  it("charges bytes without a logical write when the SQL version gate rejects a race", async () => {
+    mocks.query.mockImplementation(async (sql: string) => {
+      if (sql.includes("SELECT id FROM users")) return { rowCount: 1, rows: [{ id: USER_ID }] };
+      if (sql.includes("FROM vault_snapshots")) {
+        return { rowCount: 1, rows: [{ version: 1, checksum: "older", byte_size: 1, same_envelope: false }] };
+      }
+      if (sql.includes("INSERT INTO vault_snapshots")) return { rowCount: 0, rows: [] };
+      return { rowCount: 1, rows: [] };
+    });
+
+    await expect(saveVaultSnapshot(USER_ID, SNAPSHOT, 600)).rejects.toBeInstanceOf(VaultConflictError);
+    expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO vault_write_usage"), [
+      USER_ID, 600, 0, 100, 64_000_000
+    ]);
+    expect(mocks.query).toHaveBeenCalledWith("COMMIT");
+    expect(mocks.query).not.toHaveBeenCalledWith("ROLLBACK");
   });
 
   it("charges actual request bytes and stores only a strictly newer snapshot", async () => {
@@ -128,14 +163,13 @@ describe("vault storage abuse controls", () => {
   it("destroys a client whose rollback also times out", async () => {
     mocks.query.mockImplementation(async (sql: string) => {
       if (sql.includes("SELECT id FROM users")) return { rowCount: 1, rows: [{ id: USER_ID }] };
-      if (sql.includes("FROM vault_snapshots")) {
-        return { rowCount: 1, rows: [{ version: 3, checksum: "different", byte_size: 1, same_envelope: false }] };
-      }
+      if (sql.includes("FROM vault_snapshots")) return { rowCount: 0, rows: [] };
+      if (sql.includes("INSERT INTO vault_write_usage")) return { rowCount: 0, rows: [] };
       if (sql === "ROLLBACK") throw new Error("rollback timed out");
       return { rowCount: 1, rows: [] };
     });
 
-    await expect(saveVaultSnapshot(USER_ID, SNAPSHOT, 500)).rejects.toBeInstanceOf(VaultConflictError);
+    await expect(saveVaultSnapshot(USER_ID, SNAPSHOT, 500)).rejects.toBeInstanceOf(VaultQuotaError);
     expect(mocks.release).toHaveBeenCalledWith(true);
   });
 });

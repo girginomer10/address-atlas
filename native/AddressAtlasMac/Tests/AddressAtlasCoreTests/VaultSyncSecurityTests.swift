@@ -4,6 +4,41 @@ import XCTest
 @testable import AddressAtlasCore
 
 final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
+  func testRemoteSnapshotRejectsMalformedMetadataBeforeVersionUse() throws {
+    let vaultKey = try VaultCrypto().generateVaultKey()
+    let codec = VaultSyncCodec()
+    let snapshot = try codec.seal(
+      document: VaultDocument(),
+      vaultKey: vaultKey,
+      version: 1,
+      accountId: "account-a"
+    )
+
+    var oversizedVersion = snapshot
+    oversizedVersion.version = Int.max
+    XCTAssertThrowsError(try codec.validateRemoteSnapshot(oversizedVersion)) { error in
+      XCTAssertEqual(error as? VaultSyncCodecError, .invalidVersion)
+    }
+
+    var malformedMetadata = snapshot
+    malformedMetadata.byteSize += 1
+    XCTAssertThrowsError(try codec.validateRemoteSnapshot(malformedMetadata)) { error in
+      XCTAssertEqual(error as? VaultSyncCodecError, .invalidSnapshot)
+    }
+  }
+
+  func testNextSnapshotVersionUsesCheckedArithmetic() throws {
+    let codec = VaultSyncCodec()
+
+    XCTAssertEqual(try codec.nextVersion(after: 0), 1)
+    XCTAssertEqual(try codec.nextVersion(after: 7), 8)
+    for latestVersion in [-1, 2_000_000_000, Int.max] {
+      XCTAssertThrowsError(try codec.nextVersion(after: latestVersion)) { error in
+        XCTAssertEqual(error as? VaultSyncCodecError, .invalidVersion)
+      }
+    }
+  }
+
   func testV2SnapshotRejectsPubliclyRechecksummedVersionRelabel() throws {
     let crypto = VaultCrypto()
     let vaultKey = try crypto.generateVaultKey()
@@ -260,6 +295,61 @@ final class VaultSyncKeyRecoveryTests: XCTestCase {
     XCTAssertEqual(firstKey, secondKey)
     XCTAssertEqual(firstKey, try keyStore.loadVaultKey())
     XCTAssertEqual(keyStore.conditionalSaveAttempts, 2)
+  }
+
+  func testRecoveryFileImportRejectsOversizedInputBeforeDecode() throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let recoveryURL = directory.appending(path: "oversized.atlas-recovery")
+    try Data(
+      repeating: 0x41,
+      count: VaultRecoveryService.maximumRecoveryFileByteCount + 1
+    ).write(to: recoveryURL)
+    let keyStore = InMemoryVaultKeyStore()
+
+    XCTAssertThrowsError(
+      try VaultRecoveryService().restore(
+        from: recoveryURL,
+        recoveryCode: String(repeating: "0", count: 64),
+        vaultURL: directory.appending(path: "vault.sqlite"),
+        keyStore: keyStore
+      )
+    ) { error in
+      XCTAssertEqual(error as? RecoveryKitError, .fileTooLarge)
+    }
+    XCTAssertNil(try keyStore.loadVaultKey())
+    XCTAssertEqual(keyStore.saveCount, 0)
+  }
+
+  func testValidRecoveryFileImportStillRestoresExistingVault() throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let vaultURL = directory.appending(path: "vault.sqlite")
+    let recoveryURL = directory.appending(path: "valid.atlas-recovery")
+    let crypto = VaultCrypto()
+    let vaultKey = try crypto.generateVaultKey()
+    let databaseStore = try EncryptedSQLiteVaultStore(path: vaultURL, vaultKey: vaultKey, crypto: crypto)
+    try databaseStore.save(VaultDocument(wallets: [
+      WalletRecord(label: "Recovered from file", address: "0xabc", chainKind: .evm)
+    ]))
+    let kit = try RecoveryKitCodec().create(vaultKey: vaultKey)
+    let encodedKit = try JSONEncoder.addressAtlas.encode(kit.document)
+    XCTAssertLessThan(encodedKit.count, VaultRecoveryService.maximumRecoveryFileByteCount)
+    try encodedKit.write(to: recoveryURL, options: [.atomic])
+    let keyStore = InMemoryVaultKeyStore()
+
+    let recovered = try VaultRecoveryService().restore(
+      from: recoveryURL,
+      recoveryCode: kit.recoveryCode,
+      vaultURL: vaultURL,
+      keyStore: keyStore
+    )
+
+    XCTAssertEqual(recovered.document.wallets.map(\.label), ["Recovered from file"])
+    XCTAssertEqual(try keyStore.loadVaultKey(), vaultKey)
+    XCTAssertEqual(keyStore.saveCount, 1)
   }
 
   func testRecoveryValidatesDatabaseBeforeAtomicallyInstallingKey() throws {

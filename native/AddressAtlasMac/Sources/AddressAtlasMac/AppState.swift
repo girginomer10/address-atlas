@@ -100,12 +100,9 @@ final class AppState: ObservableObject {
   }
 
   /// False when the server's `minSupportedAppVersion` is newer than this build.
-  /// If the bundle version can't be read (e.g. SPM unit tests) we do not block.
+  /// A present but malformed policy or app version fails closed.
   var isAppVersionSupported: Bool {
-    guard let minimum = endpointConfig.minSupportedAppVersion, !minimum.isEmpty else { return true }
-    let current = appVersion
-    guard !current.isEmpty else { return true }
-    return AppState.compareVersions(current, minimum) >= 0
+    AppState.supportsAppVersion(appVersion, minimum: endpointConfig.minSupportedAppVersion)
   }
 
   /// Accepts the sync server URL only if it is https (http allowed for loopback
@@ -115,10 +112,20 @@ final class AppState: ObservableObject {
     SyncServerURL.validatedOrigin(raw)
   }
 
-  /// Numeric dotted-version comparison: -1 if lhs < rhs, 0 if equal, 1 if greater.
-  static func compareVersions(_ lhs: String, _ rhs: String) -> Int {
-    let a = lhs.split(separator: ".").map { Int($0) ?? 0 }
-    let b = rhs.split(separator: ".").map { Int($0) ?? 0 }
+  static func supportsAppVersion(_ current: String, minimum: String?) -> Bool {
+    guard let minimum else { return true }
+    guard let comparison = compareVersions(current, minimum) else { return false }
+    return comparison >= 0
+  }
+
+  /// Numeric dotted-version comparison: nil for malformed/out-of-range input;
+  /// otherwise -1 if lhs < rhs, 0 if equal, and 1 if greater.
+  static func compareVersions(_ lhs: String, _ rhs: String) -> Int? {
+    guard let a = NativeEndpointConfig.appVersionComponents(lhs),
+          let b = NativeEndpointConfig.appVersionComponents(rhs)
+    else {
+      return nil
+    }
     for index in 0..<max(a.count, b.count) {
       let x = index < a.count ? a[index] : 0
       let y = index < b.count ? b[index] : 0
@@ -715,6 +722,9 @@ final class AppState: ObservableObject {
       await client.setBearerToken(document.syncState.sessionToken)
       var uploadDocument = document
       if let remote = try await client.latestVault() {
+        // GET is an untrusted wire boundary. Validate every field used below
+        // before comparing checksums or feeding its version into arithmetic.
+        try syncCodec.validateRemoteSnapshot(remote)
         guard
           let lastChecksum = uploadDocument.syncState.lastChecksum,
           !lastChecksum.isEmpty,
@@ -727,7 +737,7 @@ final class AppState: ObservableObject {
         }
         uploadDocument.syncState.latestRemoteVersion = max(uploadDocument.syncState.latestRemoteVersion, remote.version)
       }
-      let nextVersion = max(1, uploadDocument.syncState.latestRemoteVersion + 1)
+      let nextVersion = try syncCodec.nextVersion(after: uploadDocument.syncState.latestRemoteVersion)
       let sealedContentChecksum = try syncCodec.contentChecksum(for: uploadDocument)
       let snapshot = try syncCodec.seal(
         document: uploadDocument,
@@ -831,10 +841,11 @@ final class AppState: ObservableObject {
 
       if result.requiresV2Upgrade {
         do {
+          let upgradeVersion = try syncCodec.nextVersion(after: snapshot.version)
           let upgraded = try syncCodec.seal(
             document: opened,
             vaultKey: vaultKey,
-            version: snapshot.version + 1,
+            version: upgradeVersion,
             accountId: accountId
           )
           try await client.upload(snapshot: upgraded)

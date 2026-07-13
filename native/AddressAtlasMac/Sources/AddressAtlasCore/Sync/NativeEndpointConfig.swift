@@ -3,6 +3,10 @@ import Foundation
 public struct NativeEndpointConfig: Codable, Equatable, Sendable {
   public static let minimumRefreshAfterSeconds = 300
   public static let maximumRefreshAfterSeconds = 86_400
+  public static let maximumAppVersionComponent = 2_000_000_000
+  private static let minimumAppVersionComponents = 2
+  private static let maximumAppVersionComponents = 4
+  private static let maximumAppVersionComponentDigits = 10
 
   public var schemaVersion: Int
   public var configVersion: Int
@@ -109,6 +113,10 @@ public struct NativeEndpointConfig: Codable, Equatable, Sendable {
     guard (Self.minimumRefreshAfterSeconds...Self.maximumRefreshAfterSeconds).contains(refreshAfterSeconds) else {
       throw NativeEndpointConfigError.invalidRefreshInterval
     }
+    if let minSupportedAppVersion,
+       Self.appVersionComponents(minSupportedAppVersion) == nil {
+      throw NativeEndpointConfigError.invalidMinimumAppVersion
+    }
     try Self.validateRemoteURL(
       priceBaseURL,
       matching: Self.bundled.priceBaseURL,
@@ -142,6 +150,30 @@ public struct NativeEndpointConfig: Codable, Equatable, Sendable {
       throw NativeEndpointConfigError.invalidEndpoint("exchanges")
     }
     return self
+  }
+
+  /// Bounded dotted-numeric grammar shared with the sync server. Returning nil
+  /// is security-significant: callers enforcing a minimum version fail closed.
+  public static func appVersionComponents(_ version: String) -> [Int]? {
+    let components = version.split(separator: ".", omittingEmptySubsequences: false)
+    guard (minimumAppVersionComponents...maximumAppVersionComponents).contains(components.count) else {
+      return nil
+    }
+
+    var parsed: [Int] = []
+    parsed.reserveCapacity(components.count)
+    for component in components {
+      guard !component.isEmpty,
+            component.count <= maximumAppVersionComponentDigits,
+            component.utf8.allSatisfy({ (48...57).contains($0) }),
+            let value = Int(component),
+            (0...maximumAppVersionComponent).contains(value)
+      else {
+        return nil
+      }
+      parsed.append(value)
+    }
+    return parsed
   }
 
   private static func validateRemoteURL(
@@ -232,6 +264,7 @@ public struct ExchangeEndpointOverride: Codable, Equatable, Sendable {
 public enum NativeEndpointConfigError: Error, Equatable, LocalizedError {
   case invalidSchema
   case invalidRefreshInterval
+  case invalidMinimumAppVersion
   case invalidEndpoint(String)
   case requestFailed(Int, String)
 
@@ -241,6 +274,8 @@ public enum NativeEndpointConfigError: Error, Equatable, LocalizedError {
       return "Endpoint config is not supported by this app version."
     case .invalidRefreshInterval:
       return "Endpoint config contains an invalid refresh interval."
+    case .invalidMinimumAppVersion:
+      return "Endpoint config contains an invalid minimum app version."
     case .invalidEndpoint(let field):
       return "Endpoint config contains an invalid URL or path: \(field)."
     case .requestFailed(_, let message):
