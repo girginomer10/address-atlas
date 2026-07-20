@@ -15,17 +15,36 @@ describe("restored database privilege provision hook", () => {
   let directory: string;
   let fakeDocker: string;
   let invocationLog: string;
+  let invocationModeLog: string;
 
   beforeEach(() => {
     directory = realpathSync(mkdtempSync(join(tmpdir(), "address-atlas-restore-provision-")));
     fakeDocker = join(directory, "docker");
     invocationLog = join(directory, "docker-run-args");
+    invocationModeLog = join(directory, "docker-run-modes");
     writeFileSync(fakeDocker, `#!/bin/sh
 set -eu
 case "\${1:-}:\${2:-}" in
   image:inspect) printf '%s\\n' "$FAKE_IMAGE_ID" ;;
   inspect:--format) printf '%s\\n' true ;;
-  run:*) printf '%s\\n' "$@" > "$FAKE_INVOCATION_LOG" ;;
+  run:*)
+    printf '%s\\n' "$@" > "$FAKE_INVOCATION_LOG"
+    : > "$FAKE_MODE_LOG"
+    expect_volume=false
+    for argument in "$@"; do
+      if [ "$expect_volume" = true ]; then
+        source_path=\${argument%%:*}
+        source_mode=$(stat -c %a "$source_path" 2>/dev/null || stat -f %Lp "$source_path")
+        parent_path=$(dirname -- "$source_path")
+        parent_mode=$(stat -c %a "$parent_path" 2>/dev/null || stat -f %Lp "$parent_path")
+        printf '%s|%s|%s\\n' "$(basename -- "$source_path")" "$source_mode" "$parent_mode" \
+          >> "$FAKE_MODE_LOG"
+        expect_volume=false
+      elif [ "$argument" = --volume ]; then
+        expect_volume=true
+      fi
+    done
+    ;;
   *) exit 70 ;;
 esac
 `, { mode: 0o700 });
@@ -55,6 +74,9 @@ esac
     const volume = args[args.indexOf("--volume") + 1] ?? "";
     expect(volume).toMatch(/address-atlas-restore-provision\.[^/]+\/provision-runtime-role\.sh:\/opt\/address-atlas\/provision-runtime-role\.sh:ro$/);
     expect(volume).not.toContain(provisionScript);
+    expect(readFileSync(invocationModeLog, "utf8").trim()).toBe(
+      "provision-runtime-role.sh|555|700"
+    );
   });
 
   it("rejects any restore provision image outside the reviewed digest", () => {
@@ -92,6 +114,10 @@ esac
     ]));
     expect(volumes.join(" ")).not.toContain(provisionScript);
     expect(volumes.join(" ")).not.toContain(bootstrapScript);
+    expect(readFileSync(invocationModeLog, "utf8").trim().split("\n").sort()).toEqual([
+      "bootstrap-database-roles.sh|555|700",
+      "provision-runtime-role.sh|555|700"
+    ]);
   });
 
   function run(overrides: Record<string, string> = {}) {
@@ -112,6 +138,7 @@ esac
       ADDRESS_ATLAS_RESTORE_STAGING_ROOT: directory,
       FAKE_IMAGE_ID: imageId,
       FAKE_INVOCATION_LOG: invocationLog,
+      FAKE_MODE_LOG: invocationModeLog,
       TMPDIR: directory
     };
   }

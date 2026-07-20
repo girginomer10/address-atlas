@@ -147,7 +147,10 @@ chmod 0700 "$staging_directory"
 before_identity=$(file_identity "$source_script")
 before_digest=$(sha256_file "$source_script")
 cp "$source_script" "$staged_script"
-chmod 0500 "$staged_script"
+# The reviewed PostgreSQL image's entrypoint drops to its unprivileged postgres
+# user before executing our command. Keep the host staging directory private,
+# but make the read-only bind-mounted script executable by that container user.
+chmod 0555 "$staged_script"
 after_identity=$(file_identity "$source_script")
 after_digest=$(sha256_file "$source_script")
 [ "$before_identity" = "$after_identity" ] && [ "$before_digest" = "$after_digest" ] \
@@ -159,7 +162,7 @@ if [ "$provision_mode" = bootstrap ]; then
   bootstrap_before_identity=$(file_identity "$bootstrap_source_script")
   bootstrap_before_digest=$(sha256_file "$bootstrap_source_script")
   cp "$bootstrap_source_script" "$staged_bootstrap_script"
-  chmod 0500 "$staged_bootstrap_script"
+  chmod 0555 "$staged_bootstrap_script"
   bootstrap_after_identity=$(file_identity "$bootstrap_source_script")
   bootstrap_after_digest=$(sha256_file "$bootstrap_source_script")
   [ "$bootstrap_before_identity" = "$bootstrap_after_identity" ] \
