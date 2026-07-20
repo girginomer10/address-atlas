@@ -11,6 +11,11 @@ BACKUP_SCRIPT="${SCRIPT_DIR}/postgres-backup.sh"
 PROVISION_SCRIPT="${SCRIPT_DIR}/provision-runtime-role.sh"
 REAL_OPENSSL_BIN="$(command -v openssl || true)"
 REAL_NODE_BIN="$(command -v node || true)"
+OPS_TEST_BASH_BIN="${OPS_TEST_BASH_BIN:-/bin/bash}"
+[[ "$OPS_TEST_BASH_BIN" == /* && -x "$OPS_TEST_BASH_BIN" ]] || {
+  printf 'OPS_TEST_BASH_BIN must be an absolute executable Bash path.\n' >&2
+  exit 64
+}
 
 TEST_ROOT="$(mktemp -d "${SCRIPT_DIR}/.ops-tests.XXXXXX")"
 TEST_ROOT="$(cd "$TEST_ROOT" && pwd -P)"
@@ -77,6 +82,9 @@ assert_file_equals() {
 new_case() {
   CASE_DIR="$(mktemp -d "${TEST_ROOT}/case.XXXXXX")"
   mkdir -p "$CASE_DIR/bin" "$CASE_DIR/log" "$CASE_DIR/home"
+  if [[ "$OPS_TEST_BASH_BIN" != '/bin/bash' ]]; then
+    ln -s "$OPS_TEST_BASH_BIN" "$CASE_DIR/bin/bash"
+  fi
 }
 
 install_date_fake() {
@@ -163,7 +171,8 @@ run_monitor_capture() {
     MOCK_STDERR_SECRET="$stderr_secret" \
     MOCK_CURL_CALL_LOG="$CASE_DIR/log/curl.calls" \
     MOCK_NOW_EPOCH=1784563200 \
-    /bin/bash "$MONITOR_SCRIPT" > "$CASE_DIR/stdout" 2> "$CASE_DIR/stderr"
+    "$OPS_TEST_BASH_BIN" "$MONITOR_SCRIPT" \
+      > "$CASE_DIR/stdout" 2> "$CASE_DIR/stderr"
   CAPTURE_STATUS=$?
   set -e
 }
@@ -734,6 +743,7 @@ run_backup_capture() {
     HOME="$CASE_DIR/home" \
     DOCKER_BIN="$CASE_DIR/bin/docker" \
     BACKUP_SCRIPT_PATH="$BACKUP_SCRIPT" \
+    BACKUP_BASH_BIN="$OPS_TEST_BASH_BIN" \
     AGE_BIN="$CASE_DIR/bin/age" \
     OPENSSL_BIN="$REAL_OPENSSL_BIN" \
     NODE_BIN="$REAL_NODE_BIN" \
@@ -791,7 +801,8 @@ run_backup_capture() {
     POSTGRES_PASSWORD="$BACKUP_OWNER_PASSWORD" \
     POSTGRES_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
     POSTGRES_RUNTIME_PASSWORD="$RUNTIME_PASSWORD" \
-    /bin/bash "$BACKUP_SCRIPT" "$@" > "$CASE_DIR/stdout" 2> "$CASE_DIR/stderr"
+    "$OPS_TEST_BASH_BIN" "$BACKUP_SCRIPT" "$@" \
+      > "$CASE_DIR/stdout" 2> "$CASE_DIR/stderr"
   CAPTURE_STATUS=$?
   set -e
 }
@@ -998,8 +1009,8 @@ test_backup_lock_run_reentrant_contract() {
   cat > "$CASE_DIR/reentrant-predeploy" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-/bin/bash "$BACKUP_SCRIPT_PATH" assert-lock >/dev/null
-exec /bin/bash "$BACKUP_SCRIPT_PATH" create-predeploy
+"$BACKUP_BASH_BIN" "$BACKUP_SCRIPT_PATH" assert-lock >/dev/null
+exec "$BACKUP_BASH_BIN" "$BACKUP_SCRIPT_PATH" create-predeploy
 EOF
   chmod 0700 "$CASE_DIR/reentrant-predeploy"
   MOCK_WEB_RUNNING=0
@@ -1064,7 +1075,7 @@ EOF
     HOME="$CASE_DIR/home" \
     MOCK_LOG_DIR="$CASE_DIR/log" \
     ADDRESS_ATLAS_BACKUP_DIR="$BACKUP_DIR" \
-    /bin/bash "$BACKUP_SCRIPT" lock-run -- "$CASE_DIR/must-not-start" \
+    "$OPS_TEST_BASH_BIN" "$BACKUP_SCRIPT" lock-run -- "$CASE_DIR/must-not-start" \
       > "$CASE_DIR/stdout" 2> "$CASE_DIR/stderr" &
   wrapper_pid=$!
   for attempt in {1..100}; do
@@ -1105,7 +1116,7 @@ EOF
     PATH="$CASE_DIR/bin:/usr/bin:/bin" \
     HOME="$CASE_DIR/home" \
     ADDRESS_ATLAS_BACKUP_DIR="$BACKUP_DIR" \
-    /bin/bash "$BACKUP_SCRIPT" lock-run -- "$CASE_DIR/long-operation" \
+    "$OPS_TEST_BASH_BIN" "$BACKUP_SCRIPT" lock-run -- "$CASE_DIR/long-operation" \
       > "$CASE_DIR/stdout" 2> "$CASE_DIR/stderr" &
   wrapper_pid=$!
   for attempt in {1..100}; do
@@ -1143,7 +1154,8 @@ EOF
     PATH="$CASE_DIR/bin:/usr/bin:/bin" \
     HOME="$CASE_DIR/home" \
     ADDRESS_ATLAS_BACKUP_DIR="$BACKUP_DIR" \
-    /bin/bash "$BACKUP_SCRIPT" lock-run -- "$CASE_DIR/term-ignoring-operation" \
+    "$OPS_TEST_BASH_BIN" "$BACKUP_SCRIPT" lock-run -- \
+      "$CASE_DIR/term-ignoring-operation" \
       > "$CASE_DIR/stdout" 2> "$CASE_DIR/stderr" &
   wrapper_pid=$!
   for attempt in {1..100}; do
@@ -1981,7 +1993,7 @@ EOF
   cat > "$CASE_DIR/locked-restore" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-exec /bin/bash "\$BACKUP_SCRIPT_PATH" restore "$backup" \
+exec "\$BACKUP_BASH_BIN" "\$BACKUP_SCRIPT_PATH" restore "$backup" \
   --confirm 'RESTORE:address_atlas_sync'
 EOF
   chmod 0700 "$CASE_DIR/locked-restore"
@@ -2023,9 +2035,9 @@ if [[ -n "${ADDRESS_ATLAS_BOOTSTRAP_TARGET_REVISION:-}" ]]; then
   printf '%s\n' "$ADDRESS_ATLAS_BOOTSTRAP_TARGET_REVISION" \
     > "$helper_dir/log/bootstrap.resume-revision"
 fi
-"$BACKUP_SCRIPT_PATH" bootstrap-restore "$backup" \
+"$BACKUP_BASH_BIN" "$BACKUP_SCRIPT_PATH" bootstrap-restore "$backup" \
   --confirm 'BOOTSTRAP-RESTORE:address_atlas_sync'
-"$BACKUP_SCRIPT_PATH" bootstrap-finalize \
+"$BACKUP_BASH_BIN" "$BACKUP_SCRIPT_PATH" bootstrap-finalize \
   --confirm 'BOOTSTRAP-FINALIZE:address_atlas_sync'
 EOF
   chmod 0700 "$BOOTSTRAP_MANAGER"
@@ -2038,7 +2050,7 @@ write_bootstrap_finalize_manager() {
 set -euo pipefail
 [[ "$ADDRESS_ATLAS_BOOTSTRAP_TARGET_REVISION" \
     == 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' ]]
-exec "$BACKUP_SCRIPT_PATH" bootstrap-finalize \
+exec "$BACKUP_BASH_BIN" "$BACKUP_SCRIPT_PATH" bootstrap-finalize \
   --confirm 'BOOTSTRAP-FINALIZE:address_atlas_sync'
 EOF
   chmod 0700 "$BOOTSTRAP_FINALIZE_MANAGER"

@@ -98,7 +98,10 @@ maybeDescribe("diagnostic Postgres runtime readiness", () => {
       await ensureSyncSchema();
       const role = `runtime_${randomUUID().replaceAll("-", "_")}`;
       const quotedRole = `"${role}"`;
-      await getSyncPool().query(`CREATE ROLE ${quotedRole} LOGIN NOINHERIT`);
+      const rolePassword = `${randomUUID().replaceAll("-", "")}${randomUUID().replaceAll("-", "")}`;
+      await getSyncPool().query(
+        `CREATE ROLE ${quotedRole} LOGIN NOINHERIT PASSWORD '${rolePassword}'`
+      );
       let runtimePool: Pool | undefined;
       try {
         await getSyncPool().query(`GRANT USAGE ON SCHEMA "${schema}" TO ${quotedRole}`);
@@ -113,7 +116,7 @@ maybeDescribe("diagnostic Postgres runtime readiness", () => {
 
         const runtimeURL = new URL(isolatedDatabaseURL);
         runtimeURL.username = role;
-        runtimeURL.password = "";
+        runtimeURL.password = rolePassword;
         runtimePool = new Pool({ connectionString: runtimeURL.toString(), max: 1 });
         await expect(assertSyncSchemaReady(runtimePool)).resolves.toBeUndefined();
 

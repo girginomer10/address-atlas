@@ -1146,49 +1146,62 @@ create_backup() {
   signing_key="$(validate_signing_private_key)"
   public_key="$(validate_signature_public_key)"
   prepare_offsite_hook
-  local lock_file="${BACKUP_DIR}/.backup-operation.lock"
-  local owns_operation_lock=false
-  local temporary_backup="" temporary_manifest="" temporary_checksum="" temporary_signature=""
-  local schema_lock_input="" schema_lock_output="" schema_lock_pid=""
-  local schema_lock_start="" schema_lock_fd_open=false
+  # Bash 5 runs a top-level EXIT trap after function locals have unwound.
+  # Mutable state owned by an EXIT cleanup must therefore remain an
+  # operation-prefixed script global; do not casually convert it back to local.
+  CREATE_CLEANUP_LOCK_FILE="${BACKUP_DIR}/.backup-operation.lock"
+  CREATE_CLEANUP_OWNS_OPERATION_LOCK=false
+  CREATE_CLEANUP_TEMPORARY_BACKUP=""
+  CREATE_CLEANUP_TEMPORARY_MANIFEST=""
+  CREATE_CLEANUP_TEMPORARY_CHECKSUM=""
+  CREATE_CLEANUP_TEMPORARY_SIGNATURE=""
+  CREATE_CLEANUP_SCHEMA_LOCK_INPUT=""
+  CREATE_CLEANUP_SCHEMA_LOCK_OUTPUT=""
+  CREATE_CLEANUP_SCHEMA_LOCK_PID=""
+  CREATE_CLEANUP_SCHEMA_LOCK_START=""
+  CREATE_CLEANUP_SCHEMA_LOCK_FD_OPEN=false
   release_schema_backup_lock() {
-    if [[ "$schema_lock_fd_open" == "true" ]]; then
+    if [[ "$CREATE_CLEANUP_SCHEMA_LOCK_FD_OPEN" == "true" ]]; then
       printf '\\q\n' >&7 2>/dev/null || true
       exec 7>&-
-      schema_lock_fd_open=false
+      CREATE_CLEANUP_SCHEMA_LOCK_FD_OPEN=false
     fi
-    if [[ -n "$schema_lock_pid" ]]; then
+    if [[ -n "$CREATE_CLEANUP_SCHEMA_LOCK_PID" ]]; then
       local release_attempt
       for release_attempt in {1..50}; do
-        kill -0 "$schema_lock_pid" 2>/dev/null || break
+        kill -0 "$CREATE_CLEANUP_SCHEMA_LOCK_PID" 2>/dev/null || break
         sleep 0.05
       done
-      if kill -0 "$schema_lock_pid" 2>/dev/null; then
-        kill -TERM "$schema_lock_pid" 2>/dev/null || true
+      if kill -0 "$CREATE_CLEANUP_SCHEMA_LOCK_PID" 2>/dev/null; then
+        kill -TERM "$CREATE_CLEANUP_SCHEMA_LOCK_PID" 2>/dev/null || true
       fi
-      wait "$schema_lock_pid" 2>/dev/null || true
-      schema_lock_pid=""
+      wait "$CREATE_CLEANUP_SCHEMA_LOCK_PID" 2>/dev/null || true
+      CREATE_CLEANUP_SCHEMA_LOCK_PID=""
     fi
-    [[ -z "$schema_lock_input" ]] \
-      || find "$schema_lock_input" -maxdepth 0 \( -type p -o -type f \) -delete 2>/dev/null || true
-    [[ -z "$schema_lock_output" ]] \
-      || find "$schema_lock_output" -maxdepth 0 -type f -delete 2>/dev/null || true
-    schema_lock_input=""
-    schema_lock_output=""
-    schema_lock_start=""
+    [[ -z "$CREATE_CLEANUP_SCHEMA_LOCK_INPUT" ]] \
+      || find "$CREATE_CLEANUP_SCHEMA_LOCK_INPUT" -maxdepth 0 \
+        \( -type p -o -type f \) -delete 2>/dev/null || true
+    [[ -z "$CREATE_CLEANUP_SCHEMA_LOCK_OUTPUT" ]] \
+      || find "$CREATE_CLEANUP_SCHEMA_LOCK_OUTPUT" -maxdepth 0 \
+        -type f -delete 2>/dev/null || true
+    CREATE_CLEANUP_SCHEMA_LOCK_INPUT=""
+    CREATE_CLEANUP_SCHEMA_LOCK_OUTPUT=""
+    CREATE_CLEANUP_SCHEMA_LOCK_START=""
   }
   acquire_schema_backup_lock() {
     local lock_container="$1" lock_user="$2" lock_database="$3"
     if (: >&7) 2>/dev/null; then
       die "Internal file descriptor 7 is already in use." 70
     fi
-    schema_lock_input="${BACKUP_DIR}/.schema-backup-lock-input.$$"
-    schema_lock_output="${BACKUP_DIR}/.schema-backup-lock-output.$$"
-    [[ ! -e "$schema_lock_input" && ! -L "$schema_lock_input" \
-        && ! -e "$schema_lock_output" && ! -L "$schema_lock_output" ]] \
+    CREATE_CLEANUP_SCHEMA_LOCK_INPUT="${BACKUP_DIR}/.schema-backup-lock-input.$$"
+    CREATE_CLEANUP_SCHEMA_LOCK_OUTPUT="${BACKUP_DIR}/.schema-backup-lock-output.$$"
+    [[ ! -e "$CREATE_CLEANUP_SCHEMA_LOCK_INPUT" \
+        && ! -L "$CREATE_CLEANUP_SCHEMA_LOCK_INPUT" \
+        && ! -e "$CREATE_CLEANUP_SCHEMA_LOCK_OUTPUT" \
+        && ! -L "$CREATE_CLEANUP_SCHEMA_LOCK_OUTPUT" ]] \
       || die "A stale schema backup lock staging path exists." 73
-    mkfifo -m 0600 "$schema_lock_input"
-    : > "$schema_lock_output"
+    mkfifo -m 0600 "$CREATE_CLEANUP_SCHEMA_LOCK_INPUT"
+    : > "$CREATE_CLEANUP_SCHEMA_LOCK_OUTPUT"
     "$DOCKER_BIN" exec -i "$lock_container" sh -ceu '
       ADDRESS_ATLAS_SCHEMA_LOCK_SESSION=1
       export ADDRESS_ATLAS_SCHEMA_LOCK_SESSION
@@ -1198,55 +1211,63 @@ create_backup() {
       exec psql --username "$1" --dbname "$2" --no-psqlrc --quiet \
         --tuples-only --no-align --set ON_ERROR_STOP=1
     ' sh "$lock_user" "$lock_database" \
-      < "$schema_lock_input" > "$schema_lock_output" 2>&1 &
-    schema_lock_pid=$!
+      < "$CREATE_CLEANUP_SCHEMA_LOCK_INPUT" \
+      > "$CREATE_CLEANUP_SCHEMA_LOCK_OUTPUT" 2>&1 &
+    CREATE_CLEANUP_SCHEMA_LOCK_PID=$!
     local identity_attempt
     for identity_attempt in {1..20}; do
-      schema_lock_start="$(process_start_identity "$schema_lock_pid")"
-      [[ -n "$schema_lock_start" ]] && break
-      kill -0 "$schema_lock_pid" 2>/dev/null \
+      CREATE_CLEANUP_SCHEMA_LOCK_START="$(process_start_identity \
+        "$CREATE_CLEANUP_SCHEMA_LOCK_PID")"
+      [[ -n "$CREATE_CLEANUP_SCHEMA_LOCK_START" ]] && break
+      kill -0 "$CREATE_CLEANUP_SCHEMA_LOCK_PID" 2>/dev/null \
         || die "The schema advisory-lock client exited during startup." 74
       sleep 0.05
     done
-    [[ -n "$schema_lock_start" ]] \
+    [[ -n "$CREATE_CLEANUP_SCHEMA_LOCK_START" ]] \
       || die "Unable to bind the schema advisory lock to its client process." 74
-    exec 7> "$schema_lock_input"
-    schema_lock_fd_open=true
+    exec 7> "$CREATE_CLEANUP_SCHEMA_LOCK_INPUT"
+    CREATE_CLEANUP_SCHEMA_LOCK_FD_OPEN=true
     printf 'SELECT pg_catalog.pg_advisory_lock(%s);\n' \
       "$SCHEMA_MIGRATION_ADVISORY_LOCK" >&7
     printf '%s\n' \
       '\echo ADDRESS_ATLAS_SCHEMA_LOCK_ACQUIRED' >&7
     local lock_attempt
     for lock_attempt in {1..200}; do
-      if grep -qx 'ADDRESS_ATLAS_SCHEMA_LOCK_ACQUIRED' "$schema_lock_output"; then
+      if grep -qx 'ADDRESS_ATLAS_SCHEMA_LOCK_ACQUIRED' \
+          "$CREATE_CLEANUP_SCHEMA_LOCK_OUTPUT"; then
         return 0
       fi
-      kill -0 "$schema_lock_pid" 2>/dev/null \
+      kill -0 "$CREATE_CLEANUP_SCHEMA_LOCK_PID" 2>/dev/null \
         || die "The schema advisory-lock session exited before acquiring the lock." 74
       sleep 0.05
     done
     die "Timed out acquiring the PostgreSQL schema advisory lock for backup." 75
   }
   prove_schema_backup_lock() {
-    [[ -n "$schema_lock_pid" && -n "$schema_lock_start" ]] \
+    [[ -n "$CREATE_CLEANUP_SCHEMA_LOCK_PID" \
+        && -n "$CREATE_CLEANUP_SCHEMA_LOCK_START" ]] \
       || die "The schema advisory-lock session is not initialized." 74
-    kill -0 "$schema_lock_pid" 2>/dev/null \
+    kill -0 "$CREATE_CLEANUP_SCHEMA_LOCK_PID" 2>/dev/null \
       || die "The schema advisory-lock client exited before pg_dump completed." 74
-    [[ "$(process_start_identity "$schema_lock_pid")" == "$schema_lock_start" ]] \
+    [[ "$(process_start_identity "$CREATE_CLEANUP_SCHEMA_LOCK_PID")" \
+        == "$CREATE_CLEANUP_SCHEMA_LOCK_START" ]] \
       || die "The schema advisory-lock client identity changed before pg_dump completed." 74
     printf '%s\n' \
       "SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_catalog.pg_locks WHERE locktype = 'advisory' AND pid = pg_catalog.pg_backend_pid() AND database = (SELECT oid FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database()) AND classid = 0::pg_catalog.oid AND objid = ${SCHEMA_MIGRATION_ADVISORY_LOCK}::pg_catalog.oid AND objsubid = 1 AND mode = 'ExclusiveLock' AND granted) THEN 'ADDRESS_ATLAS_SCHEMA_LOCK_STILL_HELD' ELSE 'ADDRESS_ATLAS_SCHEMA_LOCK_LOST' END;" >&7
     local proof_attempt
     for proof_attempt in {1..200}; do
-      if grep -qx 'ADDRESS_ATLAS_SCHEMA_LOCK_STILL_HELD' "$schema_lock_output"; then
+      if grep -qx 'ADDRESS_ATLAS_SCHEMA_LOCK_STILL_HELD' \
+          "$CREATE_CLEANUP_SCHEMA_LOCK_OUTPUT"; then
         return 0
       fi
-      if grep -qx 'ADDRESS_ATLAS_SCHEMA_LOCK_LOST' "$schema_lock_output"; then
+      if grep -qx 'ADDRESS_ATLAS_SCHEMA_LOCK_LOST' \
+          "$CREATE_CLEANUP_SCHEMA_LOCK_OUTPUT"; then
         die "The PostgreSQL session no longer held the schema advisory lock after pg_dump." 74
       fi
-      kill -0 "$schema_lock_pid" 2>/dev/null \
+      kill -0 "$CREATE_CLEANUP_SCHEMA_LOCK_PID" 2>/dev/null \
         || die "The schema advisory-lock session exited before post-dump proof." 74
-      [[ "$(process_start_identity "$schema_lock_pid")" == "$schema_lock_start" ]] \
+      [[ "$(process_start_identity "$CREATE_CLEANUP_SCHEMA_LOCK_PID")" \
+          == "$CREATE_CLEANUP_SCHEMA_LOCK_START" ]] \
         || die "The schema advisory-lock client identity changed during post-dump proof." 74
       sleep 0.05
     done
@@ -1254,20 +1275,29 @@ create_backup() {
   }
   cleanup_create() {
     release_schema_backup_lock
-    [[ -z "$temporary_backup" ]] || find "$temporary_backup" -maxdepth 0 -type f -delete 2>/dev/null || true
-    [[ -z "$temporary_manifest" ]] || find "$temporary_manifest" -maxdepth 0 -type f -delete 2>/dev/null || true
-    [[ -z "$temporary_checksum" ]] || find "$temporary_checksum" -maxdepth 0 -type f -delete 2>/dev/null || true
-    [[ -z "$temporary_signature" ]] || find "$temporary_signature" -maxdepth 0 -type f -delete 2>/dev/null || true
-    if [[ "$owns_operation_lock" == "true" ]]; then
-      find "$lock_file" -maxdepth 0 -type f -delete 2>/dev/null || true
+    [[ -z "$CREATE_CLEANUP_TEMPORARY_BACKUP" ]] \
+      || find "$CREATE_CLEANUP_TEMPORARY_BACKUP" -maxdepth 0 \
+        -type f -delete 2>/dev/null || true
+    [[ -z "$CREATE_CLEANUP_TEMPORARY_MANIFEST" ]] \
+      || find "$CREATE_CLEANUP_TEMPORARY_MANIFEST" -maxdepth 0 \
+        -type f -delete 2>/dev/null || true
+    [[ -z "$CREATE_CLEANUP_TEMPORARY_CHECKSUM" ]] \
+      || find "$CREATE_CLEANUP_TEMPORARY_CHECKSUM" -maxdepth 0 \
+        -type f -delete 2>/dev/null || true
+    [[ -z "$CREATE_CLEANUP_TEMPORARY_SIGNATURE" ]] \
+      || find "$CREATE_CLEANUP_TEMPORARY_SIGNATURE" -maxdepth 0 \
+        -type f -delete 2>/dev/null || true
+    if [[ "$CREATE_CLEANUP_OWNS_OPERATION_LOCK" == "true" ]]; then
+      find "$CREATE_CLEANUP_LOCK_FILE" -maxdepth 0 \
+        -type f -delete 2>/dev/null || true
     fi
   }
   if [[ "$BACKUP_OPERATION_LOCK_HELD" != "true" ]]; then
     if [[ -n "${ADDRESS_ATLAS_OPERATION_LOCK_OWNER_PID:-}" ]]; then
-      inherited_operation_lock_is_valid "$lock_file"
+      inherited_operation_lock_is_valid "$CREATE_CLEANUP_LOCK_FILE"
     else
-      acquire_backup_lock "$lock_file"
-      owns_operation_lock=true
+      acquire_backup_lock "$CREATE_CLEANUP_LOCK_FILE"
+      CREATE_CLEANUP_OWNS_OPERATION_LOCK=true
     fi
     BACKUP_OPERATION_LOCK_HELD=true
   fi
@@ -1308,56 +1338,64 @@ create_backup() {
   manifest="$(manifest_path "$backup")"
   checksum="$(checksum_path "$backup")"
   signature="$(signature_path "$backup")"
-  temporary_backup="${backup}.partial.$$"
-  temporary_manifest="${manifest}.partial.$$"
-  temporary_checksum="${checksum}.partial.$$"
-  temporary_signature="${signature}.partial.$$"
+  CREATE_CLEANUP_TEMPORARY_BACKUP="${backup}.partial.$$"
+  CREATE_CLEANUP_TEMPORARY_MANIFEST="${manifest}.partial.$$"
+  CREATE_CLEANUP_TEMPORARY_CHECKSUM="${checksum}.partial.$$"
+  CREATE_CLEANUP_TEMPORARY_SIGNATURE="${signature}.partial.$$"
   [[ ! -e "$backup" && ! -e "$manifest" && ! -e "$checksum" && ! -e "$signature" \
-      && ! -e "$temporary_backup" && ! -e "$temporary_manifest" \
-      && ! -e "$temporary_checksum" && ! -e "$temporary_signature" ]] \
+      && ! -e "$CREATE_CLEANUP_TEMPORARY_BACKUP" \
+      && ! -e "$CREATE_CLEANUP_TEMPORARY_MANIFEST" \
+      && ! -e "$CREATE_CLEANUP_TEMPORARY_CHECKSUM" \
+      && ! -e "$CREATE_CLEANUP_TEMPORARY_SIGNATURE" ]] \
     || die "A backup artifact already exists for ${timestamp}; retry in one second." 73
   "$DOCKER_BIN" exec "$container" sh -ceu '
       export PGPASSWORD="$POSTGRES_PASSWORD"
       exec pg_dump --format=custom --compress=6 --no-owner --no-privileges \
         --username "$1" --dbname "$2"
     ' sh "$DB_USER" "$DB_NAME" \
-    | "$AGE_BIN" --encrypt --recipient "$recipient" --output "$temporary_backup"
-  [[ -s "$temporary_backup" ]] || die "Encrypted backup output is empty." 74
+    | "$AGE_BIN" --encrypt --recipient "$recipient" \
+      --output "$CREATE_CLEANUP_TEMPORARY_BACKUP"
+  [[ -s "$CREATE_CLEANUP_TEMPORARY_BACKUP" ]] \
+    || die "Encrypted backup output is empty." 74
   prove_schema_backup_lock
   release_schema_backup_lock
   local digest size
-  digest="$(sha256_file "$temporary_backup")"
-  size="$(wc -c < "$temporary_backup" | tr -d '[:space:]')"
+  digest="$(sha256_file "$CREATE_CLEANUP_TEMPORARY_BACKUP")"
+  size="$(wc -c < "$CREATE_CLEANUP_TEMPORARY_BACKUP" | tr -d '[:space:]')"
   [[ "$size" =~ ^[1-9][0-9]*$ && "$size" -le "$MAX_BACKUP_BYTES" ]] \
     || die "Encrypted backup exceeds ADDRESS_ATLAS_BACKUP_MAX_BYTES." 74
   completed="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  printf '%s  %s\n' "$digest" "$(basename "$backup")" > "$temporary_checksum"
-  write_manifest "$temporary_manifest" "$snapshot_started" "$completed" \
+  printf '%s  %s\n' "$digest" "$(basename "$backup")" \
+    > "$CREATE_CLEANUP_TEMPORARY_CHECKSUM"
+  write_manifest "$CREATE_CLEANUP_TEMPORARY_MANIFEST" "$snapshot_started" "$completed" \
     "$DB_NAME" "$size" "$digest" \
     "$web_revision" "$web_image_id" "$postgres_image_id" \
     "$NATIVE_CONFIG_VERSION" "$NATIVE_CONFIG_DIGEST" \
     "$NATIVE_CONFIG_UPDATED_AT_EPOCH_MS" "$NATIVE_CONFIG_SERVING_REVISION" \
     "$DETECTED_MIGRATION_HEAD" "$ledger_digest"
   "$OPENSSL_BIN" dgst -sha256 -sign "$signing_key" \
-    -out "$temporary_signature" "$temporary_manifest" >/dev/null 2>&1 \
+    -out "$CREATE_CLEANUP_TEMPORARY_SIGNATURE" \
+    "$CREATE_CLEANUP_TEMPORARY_MANIFEST" >/dev/null 2>&1 \
     || die "Unable to sign the backup manifest." 74
-  [[ -s "$temporary_signature" ]] || die "Backup manifest signature is empty." 74
+  [[ -s "$CREATE_CLEANUP_TEMPORARY_SIGNATURE" ]] \
+    || die "Backup manifest signature is empty." 74
   "$OPENSSL_BIN" dgst -sha256 -verify "$public_key" \
-    -signature "$temporary_signature" "$temporary_manifest" >/dev/null 2>&1 \
+    -signature "$CREATE_CLEANUP_TEMPORARY_SIGNATURE" \
+    "$CREATE_CLEANUP_TEMPORARY_MANIFEST" >/dev/null 2>&1 \
     || die "Backup signing and verification keys do not match." 65
-  sync_durably "$temporary_backup"
-  sync_durably "$temporary_checksum"
-  sync_durably "$temporary_manifest"
-  sync_durably "$temporary_signature"
-  mv "$temporary_checksum" "$checksum"
-  temporary_checksum=""
-  mv "$temporary_manifest" "$manifest"
-  temporary_manifest=""
-  mv "$temporary_signature" "$signature"
-  temporary_signature=""
+  sync_durably "$CREATE_CLEANUP_TEMPORARY_BACKUP"
+  sync_durably "$CREATE_CLEANUP_TEMPORARY_CHECKSUM"
+  sync_durably "$CREATE_CLEANUP_TEMPORARY_MANIFEST"
+  sync_durably "$CREATE_CLEANUP_TEMPORARY_SIGNATURE"
+  mv "$CREATE_CLEANUP_TEMPORARY_CHECKSUM" "$checksum"
+  CREATE_CLEANUP_TEMPORARY_CHECKSUM=""
+  mv "$CREATE_CLEANUP_TEMPORARY_MANIFEST" "$manifest"
+  CREATE_CLEANUP_TEMPORARY_MANIFEST=""
+  mv "$CREATE_CLEANUP_TEMPORARY_SIGNATURE" "$signature"
+  CREATE_CLEANUP_TEMPORARY_SIGNATURE=""
   sync_durably "$BACKUP_DIR"
-  mv "$temporary_backup" "$backup"
-  temporary_backup=""
+  mv "$CREATE_CLEANUP_TEMPORARY_BACKUP" "$backup"
+  CREATE_CLEANUP_TEMPORARY_BACKUP=""
   sync_durably "$BACKUP_DIR"
   verify_artifact_metadata "$backup" "$DB_NAME"
   decrypt_to_pg_restore "$container" "$backup" "$identity" --list >/dev/null \
@@ -1384,8 +1422,8 @@ create_backup() {
     done < <(find "$BACKUP_DIR" -maxdepth 1 -type f \
       -name 'address-atlas-*.dump.age' -mtime "+${RETENTION_DAYS}" -print)
   fi
-  if [[ "$owns_operation_lock" == "true" ]]; then
-    find "$lock_file" -maxdepth 0 -type f -delete
+  if [[ "$CREATE_CLEANUP_OWNS_OPERATION_LOCK" == "true" ]]; then
+    find "$CREATE_CLEANUP_LOCK_FILE" -maxdepth 0 -type f -delete
     BACKUP_OPERATION_LOCK_HELD=false
     sync_durably "$BACKUP_DIR"
   fi
@@ -1417,15 +1455,18 @@ create_predeploy_backup() {
 verify_external_backup() {
   local source_backup="$1"
   prepare_backup_directory
-  local staging_directory="${BACKUP_DIR}/.address-atlas-verify.$$"
-  cleanup_external_verify() { cleanup_staging_directory "$staging_directory"; }
+  EXTERNAL_VERIFY_CLEANUP_STAGING_DIRECTORY="${BACKUP_DIR}/.address-atlas-verify.$$"
+  cleanup_external_verify() {
+    cleanup_staging_directory "$EXTERNAL_VERIFY_CLEANUP_STAGING_DIRECTORY"
+  }
   trap cleanup_external_verify EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
   local staged_backup
-  staged_backup="$(stage_backup_artifacts "$source_backup" "$staging_directory")"
+  staged_backup="$(stage_backup_artifacts "$source_backup" \
+    "$EXTERNAL_VERIFY_CLEANUP_STAGING_DIRECTORY")"
   verify_backup "$staged_backup" >/dev/null
-  cleanup_staging_directory "$staging_directory"
+  cleanup_staging_directory "$EXTERNAL_VERIFY_CLEANUP_STAGING_DIRECTORY"
   trap - EXIT INT TERM
   printf 'Verified encrypted and signed backup: %s\n' "$source_backup"
 }
@@ -1433,13 +1474,16 @@ verify_external_backup() {
 inspect_external_backup() {
   local source_backup="$1"
   prepare_backup_directory
-  local staging_directory="${BACKUP_DIR}/.address-atlas-inspect.$$"
-  cleanup_external_inspect() { cleanup_staging_directory "$staging_directory"; }
+  EXTERNAL_INSPECT_CLEANUP_STAGING_DIRECTORY="${BACKUP_DIR}/.address-atlas-inspect.$$"
+  cleanup_external_inspect() {
+    cleanup_staging_directory "$EXTERNAL_INSPECT_CLEANUP_STAGING_DIRECTORY"
+  }
   trap cleanup_external_inspect EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
   local staged_backup
-  staged_backup="$(stage_backup_artifacts "$source_backup" "$staging_directory")"
+  staged_backup="$(stage_backup_artifacts "$source_backup" \
+    "$EXTERNAL_INSPECT_CLEANUP_STAGING_DIRECTORY")"
   verify_backup "$staged_backup" >/dev/null
   printf 'BACKUP_METADATA|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
     "$MANIFEST_SCHEMA" "$MANIFEST_SHA256" "$MANIFEST_DATABASE" \
@@ -1449,7 +1493,7 @@ inspect_external_backup() {
     "${MANIFEST_NATIVE_CONFIG_SERVING_REVISION:--}" \
     "$MANIFEST_WEB_IMAGE" "$MANIFEST_POSTGRES_IMAGE" \
     "$MANIFEST_MIGRATION_HEAD" "$MANIFEST_SNAPSHOT_STARTED"
-  cleanup_staging_directory "$staging_directory"
+  cleanup_staging_directory "$EXTERNAL_INSPECT_CLEANUP_STAGING_DIRECTORY"
   trap - EXIT INT TERM
 }
 
@@ -1744,9 +1788,6 @@ provision_restored_database() {
     || die "Unable to resolve DOCKER_BIN for restore provisioning." 69
   [[ "$resolved_docker" == /* && -x "$resolved_docker" ]] \
     || die "Resolved DOCKER_BIN is not an absolute executable." 69
-  # The hook may enable LOGIN as its final transaction step. Mark this before
-  # launch so any partial/failing hook is forced back to NOLOGIN by cleanup.
-  runtime_login_restored=true
   if ! (
     scrub_environment
     export PATH=/usr/bin:/bin HOME=/
@@ -1820,7 +1861,7 @@ quiesce_runtime_role() {
   printf -v sql 'ALTER ROLE "%s" NOLOGIN;' "$RUNTIME_USER"
   admin_psql "$container" postgres transaction "$sql" >/dev/null \
     || die "Unable to quiesce the runtime role before restore." 74
-  runtime_quiesced=true
+  PRODUCTION_RESTORE_CLEANUP_RUNTIME_QUIESCED=true
   # Commit NOLOGIN before terminating sessions so a reconnect cannot slip
   # between the termination scan and visibility of the role change.
   printf -v sql 'SELECT pg_catalog.pg_terminate_backend(pid) FROM pg_catalog.pg_stat_activity WHERE usename = '\''%s'\'' AND pid <> pg_catalog.pg_backend_pid();' \
@@ -2158,6 +2199,7 @@ atomic_bootstrap_cutover() {
 bootstrap_restore() {
   local source_backup="$1" confirmation="$2" container
   container="$(resolve_postgres_container)"
+  BOOTSTRAP_RESTORE_CLEANUP_CONTAINER="$container"
   database_context "$container"
   [[ "$confirmation" == "BOOTSTRAP-RESTORE:${DB_NAME}" ]] \
     || die "Confirmation must exactly equal BOOTSTRAP-RESTORE:${DB_NAME}." 64
@@ -2169,30 +2211,38 @@ bootstrap_restore() {
   local lock_file="${BACKUP_DIR}/.backup-operation.lock"
   local state_file="${BACKUP_DIR}/.bootstrap-restore.state"
   local source_staging_directory="${BACKUP_DIR}/.address-atlas-bootstrap-source.$$"
-  local owns_operation_lock=false recovery_required=false
-  local parent_preservation_signal=false restore_succeeded=false
+  BOOTSTRAP_RESTORE_CLEANUP_LOCK_FILE="$lock_file"
+  BOOTSTRAP_RESTORE_CLEANUP_SOURCE_STAGING_DIRECTORY="$source_staging_directory"
+  BOOTSTRAP_RESTORE_CLEANUP_OWNS_OPERATION_LOCK=false
+  BOOTSTRAP_RESTORE_CLEANUP_RECOVERY_REQUIRED=false
+  BOOTSTRAP_RESTORE_CLEANUP_PARENT_PRESERVATION_SIGNAL=false
+  BOOTSTRAP_RESTORE_CLEANUP_RESTORE_SUCCEEDED=false
   local staging_database="" quarantine_database="" storage_identity=""
-  local runtime_login_restored=false roles_may_be_provisioned=false
+  BOOTSTRAP_RESTORE_CLEANUP_ROLES_MAY_BE_PROVISIONED=false
   cleanup_bootstrap_restore() {
-    cleanup_staging_directory "$source_staging_directory"
-    if [[ "$recovery_required" == "true" && "$restore_succeeded" != "true" ]]; then
-      if [[ "$roles_may_be_provisioned" == "true" && -n "${ADMIN_PASSWORD:-}" ]]; then
-        if force_and_confirm_runtime_nologin "$container" >/dev/null 2>&1; then
-          runtime_login_restored=false
-        else
+    cleanup_staging_directory \
+      "$BOOTSTRAP_RESTORE_CLEANUP_SOURCE_STAGING_DIRECTORY"
+    if [[ "$BOOTSTRAP_RESTORE_CLEANUP_RECOVERY_REQUIRED" == "true" \
+        && "$BOOTSTRAP_RESTORE_CLEANUP_RESTORE_SUCCEEDED" != "true" ]]; then
+      if [[ "$BOOTSTRAP_RESTORE_CLEANUP_ROLES_MAY_BE_PROVISIONED" == "true" \
+          && -n "${ADMIN_PASSWORD:-}" ]]; then
+        if ! force_and_confirm_runtime_nologin \
+            "$BOOTSTRAP_RESTORE_CLEANUP_CONTAINER" >/dev/null 2>&1; then
           printf 'CRITICAL The runtime database role could not be proven NOLOGIN after bootstrap failure.\n' >&2
         fi
       fi
-      if ! preserve_operation_lock_for_recovery "$lock_file"; then
+      if ! preserve_operation_lock_for_recovery \
+          "$BOOTSTRAP_RESTORE_CLEANUP_LOCK_FILE"; then
         printf 'CRITICAL Unable to write the bootstrap-restore recovery lock marker; do not start another operation.\n' >&2
         [[ -z "${ADDRESS_ATLAS_OPERATION_LOCK_OWNER_PID:-}" ]] \
-          || parent_preservation_signal=true
+          || BOOTSTRAP_RESTORE_CLEANUP_PARENT_PRESERVATION_SIGNAL=true
       fi
       printf 'CRITICAL Bootstrap restore requires recovery or resume; keep every application service stopped.\n' >&2
-    elif [[ "$owns_operation_lock" == "true" ]]; then
-      find "$lock_file" -maxdepth 0 -type f -delete 2>/dev/null || true
+    elif [[ "$BOOTSTRAP_RESTORE_CLEANUP_OWNS_OPERATION_LOCK" == "true" ]]; then
+      find "$BOOTSTRAP_RESTORE_CLEANUP_LOCK_FILE" -maxdepth 0 \
+        -type f -delete 2>/dev/null || true
     fi
-    if [[ "$parent_preservation_signal" == "true" ]]; then
+    if [[ "$BOOTSTRAP_RESTORE_CLEANUP_PARENT_PRESERVATION_SIGNAL" == "true" ]]; then
       trap - EXIT
       exit 78
     fi
@@ -2201,12 +2251,12 @@ bootstrap_restore() {
     inherited_operation_lock_is_valid "$lock_file"
   else
     acquire_backup_lock "$lock_file"
-    owns_operation_lock=true
+    BOOTSTRAP_RESTORE_CLEANUP_OWNS_OPERATION_LOCK=true
   fi
   BACKUP_OPERATION_LOCK_HELD=true
   trap cleanup_bootstrap_restore EXIT
-  trap 'recovery_required=true; exit 130' INT
-  trap 'recovery_required=true; exit 143' TERM
+  trap 'BOOTSTRAP_RESTORE_CLEANUP_RECOVERY_REQUIRED=true; exit 130' INT
+  trap 'BOOTSTRAP_RESTORE_CLEANUP_RECOVERY_REQUIRED=true; exit 143' TERM
 
   source_backup="$(stage_backup_artifacts "$source_backup" "$source_staging_directory")"
   verify_backup "$source_backup" >/dev/null
@@ -2231,7 +2281,7 @@ bootstrap_restore() {
   storage_identity="$(postgres_storage_identity "$container")"
 
   if [[ -e "$state_file" || -L "$state_file" ]]; then
-    recovery_required=true
+    BOOTSTRAP_RESTORE_CLEANUP_RECOVERY_REQUIRED=true
     read_bootstrap_restore_state "$state_file"
     [[ "$BOOTSTRAP_STATE_DATABASE" == "$DB_NAME" \
         && "$BOOTSTRAP_STATE_BACKUP_SHA256" == "$backup_digest" \
@@ -2260,7 +2310,7 @@ bootstrap_restore() {
     staging_database="$BOOTSTRAP_STATE_STAGING_DATABASE"
     quarantine_database="$BOOTSTRAP_STATE_QUARANTINE_DATABASE"
     [[ "$BOOTSTRAP_STATE_PHASE" == "staging" ]] \
-      || roles_may_be_provisioned=true
+      || BOOTSTRAP_RESTORE_CLEANUP_ROLES_MAY_BE_PROVISIONED=true
   else
     bootstrap_cluster_is_pristine "$container" \
       || die "Bootstrap restore requires an exact pristine dedicated PostgreSQL cluster." 65
@@ -2274,7 +2324,7 @@ bootstrap_restore() {
       "$backup_digest" "$storage_identity" "$staging_database" \
       "$quarantine_database"
     BOOTSTRAP_STATE_PHASE=staging
-    recovery_required=true
+    BOOTSTRAP_RESTORE_CLEANUP_RECOVERY_REQUIRED=true
   fi
 
   if post_bootstrap_cutover_is_valid "$container" "$staging_database" \
@@ -2284,7 +2334,7 @@ bootstrap_restore() {
       "$quarantine_database"
   elif post_bootstrap_cutover_structure_is_valid "$container" \
       "$staging_database" "$quarantine_database"; then
-    roles_may_be_provisioned=true
+    BOOTSTRAP_RESTORE_CLEANUP_ROLES_MAY_BE_PROVISIONED=true
     provision_restored_database "$container" "$DB_NAME" restore
     post_bootstrap_cutover_is_valid "$container" "$staging_database" \
       "$quarantine_database" \
@@ -2312,7 +2362,7 @@ bootstrap_restore() {
         "$backup_digest" "$storage_identity" "$staging_database" \
         "$quarantine_database"
       BOOTSTRAP_STATE_PHASE=provisioning
-      roles_may_be_provisioned=true
+      BOOTSTRAP_RESTORE_CLEANUP_ROLES_MAY_BE_PROVISIONED=true
     fi
     if ! post_split_pre_cutover_is_valid "$container" "$staging_database" \
         "$quarantine_database"; then
@@ -2353,12 +2403,13 @@ bootstrap_restore() {
   write_bootstrap_restore_state "$state_file" awaiting-finalize "$DB_NAME" \
     "$backup_digest" "$storage_identity" "$staging_database" \
     "$quarantine_database"
-  restore_succeeded=true recovery_required=false
+  BOOTSTRAP_RESTORE_CLEANUP_RESTORE_SUCCEEDED=true
+  BOOTSTRAP_RESTORE_CLEANUP_RECOVERY_REQUIRED=false
   cleanup_staging_directory "$source_staging_directory"
   trap - EXIT INT TERM
   printf 'Fresh-cluster bootstrap restore completed for %s; empty database quarantined as %s.\n' \
     "$DB_NAME" "$quarantine_database"
-  [[ "$owns_operation_lock" != "true" ]] \
+  [[ "$BOOTSTRAP_RESTORE_CLEANUP_OWNS_OPERATION_LOCK" != "true" ]] \
     || printf 'Bootstrap state and operation lock remain until bootstrap-finalize acknowledges public smoke and receipt persistence.\n'
   printf 'BOOTSTRAP_RESTORE_RECEIPT|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
     "$backup_digest" "$receipt_version" "$receipt_digest" \
@@ -2385,18 +2436,22 @@ bootstrap_finalize() {
   prepare_backup_directory
   local lock_file="${BACKUP_DIR}/.backup-operation.lock"
   local state_file="${BACKUP_DIR}/.bootstrap-restore.state"
-  local owns_operation_lock=false finalize_succeeded=false
-  local parent_preservation_signal=false
+  BOOTSTRAP_FINALIZE_CLEANUP_LOCK_FILE="$lock_file"
+  BOOTSTRAP_FINALIZE_CLEANUP_OWNS_OPERATION_LOCK=false
+  BOOTSTRAP_FINALIZE_CLEANUP_SUCCEEDED=false
+  BOOTSTRAP_FINALIZE_CLEANUP_PARENT_PRESERVATION_SIGNAL=false
   cleanup_bootstrap_finalize() {
-    if [[ "$finalize_succeeded" != "true" ]]; then
-      if ! preserve_operation_lock_for_recovery "$lock_file"; then
+    if [[ "$BOOTSTRAP_FINALIZE_CLEANUP_SUCCEEDED" != "true" ]]; then
+      if ! preserve_operation_lock_for_recovery \
+          "$BOOTSTRAP_FINALIZE_CLEANUP_LOCK_FILE"; then
         [[ -z "${ADDRESS_ATLAS_OPERATION_LOCK_OWNER_PID:-}" ]] \
-          || parent_preservation_signal=true
+          || BOOTSTRAP_FINALIZE_CLEANUP_PARENT_PRESERVATION_SIGNAL=true
       fi
-    elif [[ "$owns_operation_lock" == "true" ]]; then
-      find "$lock_file" -maxdepth 0 -type f -delete 2>/dev/null || true
+    elif [[ "$BOOTSTRAP_FINALIZE_CLEANUP_OWNS_OPERATION_LOCK" == "true" ]]; then
+      find "$BOOTSTRAP_FINALIZE_CLEANUP_LOCK_FILE" -maxdepth 0 \
+        -type f -delete 2>/dev/null || true
     fi
-    if [[ "$parent_preservation_signal" == "true" ]]; then
+    if [[ "$BOOTSTRAP_FINALIZE_CLEANUP_PARENT_PRESERVATION_SIGNAL" == "true" ]]; then
       trap - EXIT
       exit 78
     fi
@@ -2405,7 +2460,7 @@ bootstrap_finalize() {
     inherited_operation_lock_is_valid "$lock_file"
   else
     acquire_backup_lock "$lock_file"
-    owns_operation_lock=true
+    BOOTSTRAP_FINALIZE_CLEANUP_OWNS_OPERATION_LOCK=true
   fi
   trap cleanup_bootstrap_finalize EXIT
   trap 'exit 130' INT
@@ -2453,17 +2508,17 @@ bootstrap_finalize() {
     "$BOOTSTRAP_STATE_BACKUP_SHA256" "$BOOTSTRAP_STATE_STORAGE_IDENTITY" \
     "$BOOTSTRAP_STATE_STAGING_DATABASE" "$BOOTSTRAP_STATE_QUARANTINE_DATABASE"
   sync_durably "$BACKUP_DIR"
-  if [[ "$owns_operation_lock" == "true" ]]; then
+  if [[ "$BOOTSTRAP_FINALIZE_CLEANUP_OWNS_OPERATION_LOCK" == "true" ]]; then
     find "$state_file" -maxdepth 0 -type f -delete \
       || die "Unable to remove finalized bootstrap-restore state." 74
     sync_durably "$BACKUP_DIR"
-    finalize_succeeded=true
+    BOOTSTRAP_FINALIZE_CLEANUP_SUCCEEDED=true
     find "$lock_file" -maxdepth 0 -type f -delete \
       || die "Unable to release the finalized bootstrap operation lock." 74
     BACKUP_OPERATION_LOCK_HELD=false
     sync_durably "$BACKUP_DIR"
   else
-    finalize_succeeded=true
+    BOOTSTRAP_FINALIZE_CLEANUP_SUCCEEDED=true
   fi
   trap - EXIT INT TERM
   printf 'Bootstrap restore finalized for %s at artifact %s.\n' \
@@ -2475,30 +2530,38 @@ drill_restore() {
   prepare_backup_directory
   assert_no_unfinished_bootstrap_restore
   local lock_file="${BACKUP_DIR}/.backup-operation.lock"
-  local owns_operation_lock=false
-  local container="" drill_db=""
-  local cleanup_uncertain=false parent_preservation_signal=false
+  DRILL_CLEANUP_LOCK_FILE="$lock_file"
+  DRILL_CLEANUP_OWNS_OPERATION_LOCK=false
+  DRILL_CLEANUP_CONTAINER=""
+  DRILL_CLEANUP_DATABASE=""
+  DRILL_CLEANUP_UNCERTAIN=false
+  DRILL_CLEANUP_PARENT_PRESERVATION_SIGNAL=false
   local source_staging_directory="${BACKUP_DIR}/.address-atlas-drill-source.$$"
+  DRILL_CLEANUP_SOURCE_STAGING_DIRECTORY="$source_staging_directory"
   cleanup_drill() {
-    if [[ -n "$container" && -n "$drill_db" && -n "${ADMIN_PASSWORD:-}" ]]; then
-      if admin_dropdb "$container" "$drill_db" >/dev/null 2>&1; then
-        drill_db=""
+    if [[ -n "$DRILL_CLEANUP_CONTAINER" \
+        && -n "$DRILL_CLEANUP_DATABASE" \
+        && -n "${ADMIN_PASSWORD:-}" ]]; then
+      if admin_dropdb "$DRILL_CLEANUP_CONTAINER" \
+          "$DRILL_CLEANUP_DATABASE" >/dev/null 2>&1; then
+        DRILL_CLEANUP_DATABASE=""
       else
-        cleanup_uncertain=true
+        DRILL_CLEANUP_UNCERTAIN=true
         printf 'CRITICAL Unable to remove the restored drill database; treat it as sensitive production data.\n' >&2
       fi
     fi
-    if [[ "$cleanup_uncertain" == "true" ]]; then
-      if ! preserve_operation_lock_for_recovery "$lock_file"; then
+    if [[ "$DRILL_CLEANUP_UNCERTAIN" == "true" ]]; then
+      if ! preserve_operation_lock_for_recovery "$DRILL_CLEANUP_LOCK_FILE"; then
         printf 'CRITICAL Unable to write the manual-recovery lock marker; do not start another operation.\n' >&2
         [[ -z "${ADDRESS_ATLAS_OPERATION_LOCK_OWNER_PID:-}" ]] \
-          || parent_preservation_signal=true
+          || DRILL_CLEANUP_PARENT_PRESERVATION_SIGNAL=true
       fi
-    elif [[ "$owns_operation_lock" == "true" ]]; then
-      find "$lock_file" -maxdepth 0 -type f -delete 2>/dev/null || true
+    elif [[ "$DRILL_CLEANUP_OWNS_OPERATION_LOCK" == "true" ]]; then
+      find "$DRILL_CLEANUP_LOCK_FILE" -maxdepth 0 \
+        -type f -delete 2>/dev/null || true
     fi
-    cleanup_staging_directory "$source_staging_directory"
-    if [[ "$parent_preservation_signal" == "true" ]]; then
+    cleanup_staging_directory "$DRILL_CLEANUP_SOURCE_STAGING_DIRECTORY"
+    if [[ "$DRILL_CLEANUP_PARENT_PRESERVATION_SIGNAL" == "true" ]]; then
       trap - EXIT
       exit 78
     fi
@@ -2509,7 +2572,7 @@ drill_restore() {
   else
     acquire_backup_lock "$lock_file"
     BACKUP_OPERATION_LOCK_HELD=true
-    owns_operation_lock=true
+    DRILL_CLEANUP_OWNS_OPERATION_LOCK=true
   fi
   trap cleanup_drill EXIT
   trap 'exit 130' INT
@@ -2518,27 +2581,32 @@ drill_restore() {
   verify_backup "$backup" >/dev/null
   local source_migration_head="$MANIFEST_MIGRATION_HEAD"
   local identity
-  container="$(resolve_postgres_container)"
+  DRILL_CLEANUP_CONTAINER="$(resolve_postgres_container)"
   identity="$(validate_identity_file)"
-  database_context "$container"
+  database_context "$DRILL_CLEANUP_CONTAINER"
   require_admin_password
   validate_restore_migration_contract
   validate_restore_provision_contract
-  assert_admin_and_owner_context "$container" "$DB_NAME" true
-  drill_db="atlas_drill_$(date -u +%Y%m%d%H%M%S)_$$"
-  validate_identifier "$drill_db" "Restore-drill database"
-  admin_createdb "$container" "$drill_db"
-  assert_admin_and_owner_context "$container" "$drill_db" true
-  decrypt_to_pg_restore "$container" "$backup" "$identity" \
-    --exit-on-error --no-owner --no-privileges --username "$DB_USER" --dbname "$drill_db"
-  migrate_restored_database_if_needed "$container" "$drill_db" "$source_migration_head"
-  run_restore_checks "$container" "$drill_db" "$DB_USER"
-  provision_restored_database "$container" "$drill_db" drill
-  admin_dropdb "$container" "$drill_db" >/dev/null \
+  assert_admin_and_owner_context "$DRILL_CLEANUP_CONTAINER" "$DB_NAME" true
+  DRILL_CLEANUP_DATABASE="atlas_drill_$(date -u +%Y%m%d%H%M%S)_$$"
+  validate_identifier "$DRILL_CLEANUP_DATABASE" "Restore-drill database"
+  admin_createdb "$DRILL_CLEANUP_CONTAINER" "$DRILL_CLEANUP_DATABASE"
+  assert_admin_and_owner_context \
+    "$DRILL_CLEANUP_CONTAINER" "$DRILL_CLEANUP_DATABASE" true
+  decrypt_to_pg_restore "$DRILL_CLEANUP_CONTAINER" "$backup" "$identity" \
+    --exit-on-error --no-owner --no-privileges --username "$DB_USER" \
+    --dbname "$DRILL_CLEANUP_DATABASE"
+  migrate_restored_database_if_needed "$DRILL_CLEANUP_CONTAINER" \
+    "$DRILL_CLEANUP_DATABASE" "$source_migration_head"
+  run_restore_checks \
+    "$DRILL_CLEANUP_CONTAINER" "$DRILL_CLEANUP_DATABASE" "$DB_USER"
+  provision_restored_database \
+    "$DRILL_CLEANUP_CONTAINER" "$DRILL_CLEANUP_DATABASE" drill
+  admin_dropdb "$DRILL_CLEANUP_CONTAINER" "$DRILL_CLEANUP_DATABASE" >/dev/null \
     || die "Unable to remove the restored drill database safely." 74
-  local completed_drill_db="$drill_db"
-  drill_db=""
-  if [[ "$owns_operation_lock" == "true" ]]; then
+  local completed_drill_db="$DRILL_CLEANUP_DATABASE"
+  DRILL_CLEANUP_DATABASE=""
+  if [[ "$DRILL_CLEANUP_OWNS_OPERATION_LOCK" == "true" ]]; then
     find "$lock_file" -maxdepth 0 -type f -delete
     BACKUP_OPERATION_LOCK_HELD=false
     sync_durably "$BACKUP_DIR"
@@ -2580,6 +2648,7 @@ restore_cutover_state() {
 production_restore() {
   local backup="$1" confirmation="$2" container
   container="$(resolve_postgres_container)"
+  PRODUCTION_RESTORE_CLEANUP_CONTAINER="$container"
   database_context "$container"
   [[ "$confirmation" == "RESTORE:${DB_NAME}" ]] \
     || die "Confirmation must exactly equal RESTORE:${DB_NAME}." 64
@@ -2589,82 +2658,108 @@ production_restore() {
   prepare_backup_directory
   assert_no_unfinished_bootstrap_restore
   local restore_lock_file="${BACKUP_DIR}/.backup-operation.lock"
-  local owns_operation_lock=false
+  PRODUCTION_RESTORE_CLEANUP_LOCK_FILE="$restore_lock_file"
+  PRODUCTION_RESTORE_CLEANUP_OWNS_OPERATION_LOCK=false
   if [[ -n "${ADDRESS_ATLAS_OPERATION_LOCK_OWNER_PID:-}" ]]; then
     inherited_operation_lock_is_valid "$restore_lock_file"
   else
     acquire_backup_lock "$restore_lock_file"
-    owns_operation_lock=true
+    PRODUCTION_RESTORE_CLEANUP_OWNS_OPERATION_LOCK=true
   fi
   BACKUP_OPERATION_LOCK_HELD=true
-  local staging_db="" cutover_candidate_db="" quarantine_db="" failed_db=""
   local source_staging_directory="${BACKUP_DIR}/.address-atlas-restore-source.$$"
-  local cutover_attempted=false restore_succeeded=false runtime_quiesced=false
-  local runtime_login_restored=false recovery_uncertain=false
-  local parent_preservation_signal=false
+  PRODUCTION_RESTORE_CLEANUP_SOURCE_STAGING_DIRECTORY="$source_staging_directory"
+  PRODUCTION_RESTORE_CLEANUP_STAGING_DATABASE=""
+  PRODUCTION_RESTORE_CLEANUP_CUTOVER_CANDIDATE_DATABASE=""
+  PRODUCTION_RESTORE_CLEANUP_QUARANTINE_DATABASE=""
+  PRODUCTION_RESTORE_CLEANUP_FAILED_DATABASE=""
+  PRODUCTION_RESTORE_CLEANUP_CUTOVER_ATTEMPTED=false
+  PRODUCTION_RESTORE_CLEANUP_SUCCEEDED=false
+  PRODUCTION_RESTORE_CLEANUP_RUNTIME_QUIESCED=false
+  PRODUCTION_RESTORE_CLEANUP_RUNTIME_LOGIN_RESTORED=false
+  PRODUCTION_RESTORE_CLEANUP_RECOVERY_UNCERTAIN=false
+  PRODUCTION_RESTORE_CLEANUP_PARENT_PRESERVATION_SIGNAL=false
   cleanup_production_restore() {
-    if [[ "$runtime_login_restored" == "true" && "$restore_succeeded" != "true" \
+    if [[ "$PRODUCTION_RESTORE_CLEANUP_RUNTIME_LOGIN_RESTORED" == "true" \
+        && "$PRODUCTION_RESTORE_CLEANUP_SUCCEEDED" != "true" \
         && -n "${ADMIN_PASSWORD:-}" ]]; then
-      if force_and_confirm_runtime_nologin "$container" >/dev/null 2>&1; then
-        runtime_login_restored=false
+      if force_and_confirm_runtime_nologin \
+          "$PRODUCTION_RESTORE_CLEANUP_CONTAINER" >/dev/null 2>&1; then
+        PRODUCTION_RESTORE_CLEANUP_RUNTIME_LOGIN_RESTORED=false
       else
-        recovery_uncertain=true
+        PRODUCTION_RESTORE_CLEANUP_RECOVERY_UNCERTAIN=true
         printf 'CRITICAL The runtime database role could not be proven NOLOGIN after restore failure; keep the web service stopped.\n' >&2
       fi
     fi
-    if [[ "$cutover_attempted" == "true" && -n "${ADMIN_PASSWORD:-}" \
-        && -n "$cutover_candidate_db" && -n "$quarantine_db" && -n "$failed_db" ]]; then
+    if [[ "$PRODUCTION_RESTORE_CLEANUP_CUTOVER_ATTEMPTED" == "true" \
+        && -n "${ADMIN_PASSWORD:-}" \
+        && -n "$PRODUCTION_RESTORE_CLEANUP_CUTOVER_CANDIDATE_DATABASE" \
+        && -n "$PRODUCTION_RESTORE_CLEANUP_QUARANTINE_DATABASE" \
+        && -n "$PRODUCTION_RESTORE_CLEANUP_FAILED_DATABASE" ]]; then
       local observed_cutover_state="ambiguous"
-      observed_cutover_state="$(restore_cutover_state "$container" \
-        "$cutover_candidate_db" "$DB_NAME" "$quarantine_db" 2>/dev/null)" \
+      observed_cutover_state="$(restore_cutover_state \
+        "$PRODUCTION_RESTORE_CLEANUP_CONTAINER" \
+        "$PRODUCTION_RESTORE_CLEANUP_CUTOVER_CANDIDATE_DATABASE" \
+        "$DB_NAME" "$PRODUCTION_RESTORE_CLEANUP_QUARANTINE_DATABASE" \
+        2>/dev/null)" \
         || observed_cutover_state="ambiguous"
       case "$observed_cutover_state" in
         not-cut-over)
-          cutover_attempted=false
+          PRODUCTION_RESTORE_CLEANUP_CUTOVER_ATTEMPTED=false
           ;;
         cut-over)
-          if rollback_cutover "$container" "$DB_NAME" "$quarantine_db" "$failed_db" \
+          if rollback_cutover "$PRODUCTION_RESTORE_CLEANUP_CONTAINER" \
+              "$DB_NAME" "$PRODUCTION_RESTORE_CLEANUP_QUARANTINE_DATABASE" \
+              "$PRODUCTION_RESTORE_CLEANUP_FAILED_DATABASE" \
               >/dev/null 2>&1 \
-              && run_restore_checks "$container" "$DB_NAME" "$DB_USER" >/dev/null 2>&1 \
-              && admin_and_owner_context_is_valid "$container" "$DB_NAME" false; then
-            cutover_attempted=false
+              && run_restore_checks "$PRODUCTION_RESTORE_CLEANUP_CONTAINER" \
+                "$DB_NAME" "$DB_USER" >/dev/null 2>&1 \
+              && admin_and_owner_context_is_valid \
+                "$PRODUCTION_RESTORE_CLEANUP_CONTAINER" "$DB_NAME" false; then
+            PRODUCTION_RESTORE_CLEANUP_CUTOVER_ATTEMPTED=false
           else
-            recovery_uncertain=true
+            PRODUCTION_RESTORE_CLEANUP_RECOVERY_UNCERTAIN=true
             printf 'CRITICAL Automatic restore rollback failed; keep the web service stopped and recover from the safety backup.\n' >&2
           fi
           ;;
         *)
-          recovery_uncertain=true
+          PRODUCTION_RESTORE_CLEANUP_RECOVERY_UNCERTAIN=true
           printf 'CRITICAL Restore cutover state is ambiguous; keep the web service stopped and recover from the safety backup.\n' >&2
           ;;
       esac
     fi
-    if [[ -n "$staging_db" && -n "${ADMIN_PASSWORD:-}" ]]; then
-      if admin_dropdb "$container" "$staging_db" >/dev/null 2>&1; then
-        staging_db=""
+    if [[ -n "$PRODUCTION_RESTORE_CLEANUP_STAGING_DATABASE" \
+        && -n "${ADMIN_PASSWORD:-}" ]]; then
+      if admin_dropdb "$PRODUCTION_RESTORE_CLEANUP_CONTAINER" \
+          "$PRODUCTION_RESTORE_CLEANUP_STAGING_DATABASE" >/dev/null 2>&1; then
+        PRODUCTION_RESTORE_CLEANUP_STAGING_DATABASE=""
       else
-        recovery_uncertain=true
+        PRODUCTION_RESTORE_CLEANUP_RECOVERY_UNCERTAIN=true
         printf 'CRITICAL Unable to remove the restore staging database; treat it as sensitive production data.\n' >&2
       fi
     fi
-    if [[ "$recovery_uncertain" == "true" ]]; then
-      if ! preserve_operation_lock_for_recovery "$restore_lock_file"; then
+    if [[ "$PRODUCTION_RESTORE_CLEANUP_RECOVERY_UNCERTAIN" == "true" ]]; then
+      if ! preserve_operation_lock_for_recovery \
+          "$PRODUCTION_RESTORE_CLEANUP_LOCK_FILE"; then
         printf 'CRITICAL Unable to write the manual-recovery lock marker; do not start another operation.\n' >&2
         [[ -z "${ADDRESS_ATLAS_OPERATION_LOCK_OWNER_PID:-}" ]] \
-          || parent_preservation_signal=true
+          || PRODUCTION_RESTORE_CLEANUP_PARENT_PRESERVATION_SIGNAL=true
       fi
-    elif [[ "$owns_operation_lock" == "true" ]]; then
-      find "$restore_lock_file" -maxdepth 0 -type f -delete 2>/dev/null || true
+    elif [[ "$PRODUCTION_RESTORE_CLEANUP_OWNS_OPERATION_LOCK" == "true" ]]; then
+      find "$PRODUCTION_RESTORE_CLEANUP_LOCK_FILE" -maxdepth 0 \
+        -type f -delete 2>/dev/null || true
     fi
-    cleanup_staging_directory "$source_staging_directory"
-    if [[ "$runtime_quiesced" == "true" && "$restore_succeeded" != "true" ]]; then
-      if [[ "$runtime_login_restored" == "true" ]]; then
+    cleanup_staging_directory \
+      "$PRODUCTION_RESTORE_CLEANUP_SOURCE_STAGING_DIRECTORY"
+    if [[ "$PRODUCTION_RESTORE_CLEANUP_RUNTIME_QUIESCED" == "true" \
+        && "$PRODUCTION_RESTORE_CLEANUP_SUCCEEDED" != "true" ]]; then
+      if [[ "$PRODUCTION_RESTORE_CLEANUP_RUNTIME_LOGIN_RESTORED" == "true" ]]; then
         printf 'CRITICAL The runtime database role login state is uncertain; keep the web service stopped.\n' >&2
       else
         printf 'WARNING The runtime database role remains NOLOGIN; rerun role provisioning only after recovery is verified.\n' >&2
       fi
     fi
-    if [[ "$parent_preservation_signal" == "true" ]]; then
+    if [[ "$PRODUCTION_RESTORE_CLEANUP_PARENT_PRESERVATION_SIGNAL" == "true" ]]; then
       trap - EXIT
       exit 78
     fi
@@ -2689,40 +2784,55 @@ production_restore() {
   local identity timestamp
   identity="$(validate_identity_file)"
   timestamp="$(date -u +%Y%m%d%H%M%S)"
-  staging_db="atlas_restore_${timestamp}_$$"
-  cutover_candidate_db="$staging_db"
-  quarantine_db="atlas_quarantine_${timestamp}_$$"
-  failed_db="atlas_failed_${timestamp}_$$"
-  validate_identifier "$staging_db" "Restore staging database"
-  validate_identifier "$quarantine_db" "Restore quarantine database"
-  validate_identifier "$failed_db" "Failed restore database"
-  admin_createdb "$container" "$staging_db"
-  assert_admin_and_owner_context "$container" "$staging_db" false
+  PRODUCTION_RESTORE_CLEANUP_STAGING_DATABASE="atlas_restore_${timestamp}_$$"
+  PRODUCTION_RESTORE_CLEANUP_CUTOVER_CANDIDATE_DATABASE="$PRODUCTION_RESTORE_CLEANUP_STAGING_DATABASE"
+  PRODUCTION_RESTORE_CLEANUP_QUARANTINE_DATABASE="atlas_quarantine_${timestamp}_$$"
+  PRODUCTION_RESTORE_CLEANUP_FAILED_DATABASE="atlas_failed_${timestamp}_$$"
+  validate_identifier "$PRODUCTION_RESTORE_CLEANUP_STAGING_DATABASE" \
+    "Restore staging database"
+  validate_identifier "$PRODUCTION_RESTORE_CLEANUP_QUARANTINE_DATABASE" \
+    "Restore quarantine database"
+  validate_identifier "$PRODUCTION_RESTORE_CLEANUP_FAILED_DATABASE" \
+    "Failed restore database"
+  admin_createdb \
+    "$container" "$PRODUCTION_RESTORE_CLEANUP_STAGING_DATABASE"
+  assert_admin_and_owner_context \
+    "$container" "$PRODUCTION_RESTORE_CLEANUP_STAGING_DATABASE" false
   decrypt_to_pg_restore "$container" "$backup" "$identity" \
-    --exit-on-error --no-owner --no-privileges --username "$DB_USER" --dbname "$staging_db"
-  migrate_restored_database_if_needed "$container" "$staging_db" "$source_migration_head"
-  run_restore_checks "$container" "$staging_db" "$DB_USER"
+    --exit-on-error --no-owner --no-privileges --username "$DB_USER" \
+    --dbname "$PRODUCTION_RESTORE_CLEANUP_STAGING_DATABASE"
+  migrate_restored_database_if_needed "$container" \
+    "$PRODUCTION_RESTORE_CLEANUP_STAGING_DATABASE" "$source_migration_head"
+  run_restore_checks \
+    "$container" "$PRODUCTION_RESTORE_CLEANUP_STAGING_DATABASE" "$DB_USER"
   assert_web_service_stopped
-  cutover_attempted=true
-  atomic_cutover "$container" "$staging_db" "$DB_NAME" "$quarantine_db"
-  staging_db=""
+  PRODUCTION_RESTORE_CLEANUP_CUTOVER_ATTEMPTED=true
+  atomic_cutover "$container" "$PRODUCTION_RESTORE_CLEANUP_STAGING_DATABASE" \
+    "$DB_NAME" "$PRODUCTION_RESTORE_CLEANUP_QUARANTINE_DATABASE"
+  PRODUCTION_RESTORE_CLEANUP_STAGING_DATABASE=""
   assert_web_service_stopped
   if ! run_restore_checks "$container" "$DB_NAME" "$DB_USER" \
       || ! admin_and_owner_context_is_valid "$container" "$DB_NAME" false; then
-    if ! rollback_cutover "$container" "$DB_NAME" "$quarantine_db" "$failed_db"; then
+    if ! rollback_cutover "$container" "$DB_NAME" \
+        "$PRODUCTION_RESTORE_CLEANUP_QUARANTINE_DATABASE" \
+        "$PRODUCTION_RESTORE_CLEANUP_FAILED_DATABASE"; then
       die "Post-cutover validation failed and automatic database rollback also failed; keep web stopped and recover from the safety backup." 74
     fi
-    cutover_attempted=false
+    PRODUCTION_RESTORE_CLEANUP_CUTOVER_ATTEMPTED=false
     if ! run_restore_checks "$container" "$DB_NAME" "$DB_USER" \
         || ! admin_and_owner_context_is_valid "$container" "$DB_NAME" false; then
-      recovery_uncertain=true
+      PRODUCTION_RESTORE_CLEANUP_RECOVERY_UNCERTAIN=true
       die "Post-cutover validation failed; the old database name was restored but its validation also failed. Keep web stopped." 74
     fi
-    die "Post-cutover validation failed; the previous production database was restored and the failed candidate was quarantined as ${failed_db}." 74
+    die "Post-cutover validation failed; the previous production database was restored and the failed candidate was quarantined as ${PRODUCTION_RESTORE_CLEANUP_FAILED_DATABASE}." 74
   fi
+  # The hook may enable LOGIN as its final transaction step. Mark this before
+  # launch so any partial/failing hook is forced back to NOLOGIN by cleanup.
+  PRODUCTION_RESTORE_CLEANUP_RUNTIME_LOGIN_RESTORED=true
   provision_restored_database "$container" "$DB_NAME" restore
-  restore_succeeded=true cutover_attempted=false
-  if [[ "$owns_operation_lock" == "true" ]]; then
+  PRODUCTION_RESTORE_CLEANUP_SUCCEEDED=true
+  PRODUCTION_RESTORE_CLEANUP_CUTOVER_ATTEMPTED=false
+  if [[ "$PRODUCTION_RESTORE_CLEANUP_OWNS_OPERATION_LOCK" == "true" ]]; then
     find "$restore_lock_file" -maxdepth 0 -type f -delete
     BACKUP_OPERATION_LOCK_HELD=false
     sync_durably "$BACKUP_DIR"
@@ -2730,7 +2840,7 @@ production_restore() {
   cleanup_staging_directory "$source_staging_directory"
   trap - EXIT INT TERM
   printf 'Production restore completed for %s; previous database quarantined as %s.\n' \
-    "$DB_NAME" "$quarantine_db"
+    "$DB_NAME" "$PRODUCTION_RESTORE_CLEANUP_QUARANTINE_DATABASE"
   printf 'Exact database privileges were provisioned and runtime role login was restored.\n'
 }
 
@@ -2831,15 +2941,20 @@ lock_run() {
   (( (permissions & 8#022) == 0 )) \
     || die "lock-run target must not be writable by group or other users." 65
   prepare_backup_directory
-  local lock_file="${BACKUP_DIR}/.backup-operation.lock"
-  acquire_backup_lock "$lock_file"
-  local child_pid="" child_pgid="" preserve_lock=false pending_signal=""
-  local lock_owner_pid="$$"
-  local start_gate="${BACKUP_DIR}/.lock-run-start.$$"
-  [[ ! -e "$start_gate" && ! -L "$start_gate" ]] \
+  LOCK_RUN_CLEANUP_LOCK_FILE="${BACKUP_DIR}/.backup-operation.lock"
+  LOCK_RUN_CLEANUP_CHILD_PID=""
+  LOCK_RUN_CLEANUP_CHILD_PGID=""
+  LOCK_RUN_CLEANUP_PRESERVE_LOCK=false
+  LOCK_RUN_CLEANUP_PENDING_SIGNAL=""
+  LOCK_RUN_CLEANUP_OWNER_PID="$$"
+  LOCK_RUN_CLEANUP_START_GATE="${BACKUP_DIR}/.lock-run-start.$$"
+  acquire_backup_lock "$LOCK_RUN_CLEANUP_LOCK_FILE"
+  [[ ! -e "$LOCK_RUN_CLEANUP_START_GATE" \
+      && ! -L "$LOCK_RUN_CLEANUP_START_GATE" ]] \
     || die "A stale lock-run start gate exists; the operation was not started." 73
   process_group_is_live() {
-    [[ -n "$child_pgid" ]] && kill -0 -- "-${child_pgid}" 2>/dev/null
+    [[ -n "$LOCK_RUN_CLEANUP_CHILD_PGID" ]] \
+      && kill -0 -- "-${LOCK_RUN_CLEANUP_CHILD_PGID}" 2>/dev/null
   }
   wait_for_process_group_exit() {
     local attempt
@@ -2850,43 +2965,49 @@ lock_run() {
     return 1
   }
   cleanup_lock_run() {
-    if [[ "$preserve_lock" != "true" && -n "$child_pgid" ]] \
+    if [[ "$LOCK_RUN_CLEANUP_PRESERVE_LOCK" != "true" \
+        && -n "$LOCK_RUN_CLEANUP_CHILD_PGID" ]] \
         && process_group_is_live; then
-      kill -TERM -- "-${child_pgid}" 2>/dev/null || true
+      kill -TERM -- "-${LOCK_RUN_CLEANUP_CHILD_PGID}" 2>/dev/null || true
       if ! wait_for_process_group_exit; then
-        kill -KILL -- "-${child_pgid}" 2>/dev/null || true
-        wait_for_process_group_exit || preserve_lock=true
+        kill -KILL -- "-${LOCK_RUN_CLEANUP_CHILD_PGID}" 2>/dev/null || true
+        wait_for_process_group_exit || LOCK_RUN_CLEANUP_PRESERVE_LOCK=true
       fi
-      if [[ "$preserve_lock" != "true" && -n "$child_pid" ]]; then
-        wait "$child_pid" 2>/dev/null || true
+      if [[ "$LOCK_RUN_CLEANUP_PRESERVE_LOCK" != "true" \
+          && -n "$LOCK_RUN_CLEANUP_CHILD_PID" ]]; then
+        wait "$LOCK_RUN_CLEANUP_CHILD_PID" 2>/dev/null || true
       fi
     fi
-    if [[ "$preserve_lock" != "true" ]]; then
-      find "$lock_file" -maxdepth 0 -type f -delete 2>/dev/null || true
+    if [[ "$LOCK_RUN_CLEANUP_PRESERVE_LOCK" != "true" ]]; then
+      find "$LOCK_RUN_CLEANUP_LOCK_FILE" -maxdepth 0 \
+        -type f -delete 2>/dev/null || true
     fi
-    [[ ! -d "$start_gate" || -L "$start_gate" ]] || rmdir "$start_gate" 2>/dev/null || true
+    [[ ! -d "$LOCK_RUN_CLEANUP_START_GATE" \
+        || -L "$LOCK_RUN_CLEANUP_START_GATE" ]] \
+      || rmdir "$LOCK_RUN_CLEANUP_START_GATE" 2>/dev/null || true
     cleanup_bootstrap_reclaim_claim
   }
   forward_lock_run_signal() {
     local signal="$1" status="$2"
     trap - INT TERM
     if process_group_is_live; then
-      kill -"$signal" -- "-${child_pgid}" 2>/dev/null || true
+      kill -"$signal" -- "-${LOCK_RUN_CLEANUP_CHILD_PGID}" 2>/dev/null || true
       if ! wait_for_process_group_exit; then
-        kill -KILL -- "-${child_pgid}" 2>/dev/null || true
-        wait_for_process_group_exit || preserve_lock=true
+        kill -KILL -- "-${LOCK_RUN_CLEANUP_CHILD_PGID}" 2>/dev/null || true
+        wait_for_process_group_exit || LOCK_RUN_CLEANUP_PRESERVE_LOCK=true
       fi
-      if [[ "$preserve_lock" != "true" && -n "$child_pid" ]]; then
-        wait "$child_pid" 2>/dev/null || true
+      if [[ "$LOCK_RUN_CLEANUP_PRESERVE_LOCK" != "true" \
+          && -n "$LOCK_RUN_CLEANUP_CHILD_PID" ]]; then
+        wait "$LOCK_RUN_CLEANUP_CHILD_PID" 2>/dev/null || true
       fi
     fi
-    child_pid=""
-    preserve_lock=true
+    LOCK_RUN_CLEANUP_CHILD_PID=""
+    LOCK_RUN_CLEANUP_PRESERVE_LOCK=true
     printf 'WARNING lock-run was cancelled; the stale operation lock was preserved until Docker and service state are verified manually.\n' >&2
     exit "$status"
   }
   record_lock_run_startup_signal() {
-    pending_signal="$1"
+    LOCK_RUN_CLEANUP_PENDING_SIGNAL="$1"
   }
   trap cleanup_lock_run EXIT
   # A dedicated process group lets cancellation reach the trusted wrapper and
@@ -2898,67 +3019,71 @@ lock_run() {
   set -m
   (
     trap - INT TERM
-    while [[ ! -d "$start_gate" ]]; do
-      kill -0 "$lock_owner_pid" 2>/dev/null || exit 75
+    while [[ ! -d "$LOCK_RUN_CLEANUP_START_GATE" ]]; do
+      kill -0 "$LOCK_RUN_CLEANUP_OWNER_PID" 2>/dev/null || exit 75
       sleep 0.05
     done
-    [[ ! -L "$start_gate" ]] || exit 75
-    export ADDRESS_ATLAS_OPERATION_LOCK_OWNER_PID="$lock_owner_pid"
+    [[ ! -L "$LOCK_RUN_CLEANUP_START_GATE" ]] || exit 75
+    export ADDRESS_ATLAS_OPERATION_LOCK_OWNER_PID="$LOCK_RUN_CLEANUP_OWNER_PID"
     exec "$@"
   ) &
-  child_pid=$!
+  LOCK_RUN_CLEANUP_CHILD_PID=$!
   set +m
-  child_pgid="$child_pid"
+  LOCK_RUN_CLEANUP_CHILD_PGID="$LOCK_RUN_CLEANUP_CHILD_PID"
   local observed_child_pgid
-  if ! observed_child_pgid="$(ps -o pgid= -p "$child_pid" 2>/dev/null \
+  if ! observed_child_pgid="$(ps -o pgid= \
+      -p "$LOCK_RUN_CLEANUP_CHILD_PID" 2>/dev/null \
       | tr -d '[:space:]')"; then
     observed_child_pgid=""
   fi
-  if [[ "$observed_child_pgid" != "$child_pid" ]]; then
-    preserve_lock=true
-    kill -TERM -- "-${child_pgid}" 2>/dev/null || kill -TERM "$child_pid" 2>/dev/null || true
+  if [[ "$observed_child_pgid" != "$LOCK_RUN_CLEANUP_CHILD_PID" ]]; then
+    LOCK_RUN_CLEANUP_PRESERVE_LOCK=true
+    kill -TERM -- "-${LOCK_RUN_CLEANUP_CHILD_PGID}" 2>/dev/null \
+      || kill -TERM "$LOCK_RUN_CLEANUP_CHILD_PID" 2>/dev/null || true
     if ! wait_for_process_group_exit; then
-      kill -KILL -- "-${child_pgid}" 2>/dev/null || kill -KILL "$child_pid" 2>/dev/null || true
+      kill -KILL -- "-${LOCK_RUN_CLEANUP_CHILD_PGID}" 2>/dev/null \
+        || kill -KILL "$LOCK_RUN_CLEANUP_CHILD_PID" 2>/dev/null || true
       wait_for_process_group_exit || true
     fi
-    wait "$child_pid" 2>/dev/null || true
-    child_pid=""
+    wait "$LOCK_RUN_CLEANUP_CHILD_PID" 2>/dev/null || true
+    LOCK_RUN_CLEANUP_CHILD_PID=""
     die "Unable to prove lock-run process-group isolation; the stale lock was preserved for operator recovery." 75
   fi
   trap 'forward_lock_run_signal INT 130' INT
   trap 'forward_lock_run_signal TERM 143' TERM
-  case "$pending_signal" in
+  case "$LOCK_RUN_CLEANUP_PENDING_SIGNAL" in
     INT) forward_lock_run_signal INT 130 ;;
     TERM) forward_lock_run_signal TERM 143 ;;
   esac
-  if ! mkdir -m 0700 "$start_gate"; then
-    preserve_lock=true
-    kill -TERM -- "-${child_pgid}" 2>/dev/null || true
+  if ! mkdir -m 0700 "$LOCK_RUN_CLEANUP_START_GATE"; then
+    LOCK_RUN_CLEANUP_PRESERVE_LOCK=true
+    kill -TERM -- "-${LOCK_RUN_CLEANUP_CHILD_PGID}" 2>/dev/null || true
     if ! wait_for_process_group_exit; then
-      kill -KILL -- "-${child_pgid}" 2>/dev/null || true
+      kill -KILL -- "-${LOCK_RUN_CLEANUP_CHILD_PGID}" 2>/dev/null || true
       wait_for_process_group_exit || true
     fi
-    wait "$child_pid" 2>/dev/null || true
-    child_pid=""
+    wait "$LOCK_RUN_CLEANUP_CHILD_PID" 2>/dev/null || true
+    LOCK_RUN_CLEANUP_CHILD_PID=""
     die "Unable to release the trusted child start gate; the stale lock was preserved." 75
   fi
   local child_status
-  if wait "$child_pid"; then
+  if wait "$LOCK_RUN_CLEANUP_CHILD_PID"; then
     child_status=0
   else
     child_status=$?
   fi
-  child_pid=""
+  LOCK_RUN_CLEANUP_CHILD_PID=""
   if ! wait_for_process_group_exit; then
-    preserve_lock=true
+    LOCK_RUN_CLEANUP_PRESERVE_LOCK=true
     die "A lock-run descendant outlived its trusted parent; the stale lock was preserved for operator recovery." 75
   fi
-  if [[ -e "${lock_file}.preserve" || -L "${lock_file}.preserve" ]]; then
-    preserve_lock=true
+  if [[ -e "${LOCK_RUN_CLEANUP_LOCK_FILE}.preserve" \
+      || -L "${LOCK_RUN_CLEANUP_LOCK_FILE}.preserve" ]]; then
+    LOCK_RUN_CLEANUP_PRESERVE_LOCK=true
     die "The child requested manual recovery; the operation lock and recovery marker were preserved." 75
   fi
   if [[ "$child_status" -eq 78 ]]; then
-    preserve_lock=true
+    LOCK_RUN_CLEANUP_PRESERVE_LOCK=true
     die "The child could not persist its recovery marker; the operation lock was preserved." 75
   fi
   local bootstrap_state_file="${BACKUP_DIR}/.bootstrap-restore.state"
@@ -2968,20 +3093,20 @@ lock_run() {
     if [[ "$child_status" -eq 0 && "$BOOTSTRAP_STATE_PHASE" == "finalized" ]]; then
       close_finalized_bootstrap=true
     else
-      preserve_lock=true
-      preserve_operation_lock_for_recovery "$lock_file" \
+      LOCK_RUN_CLEANUP_PRESERVE_LOCK=true
+      preserve_operation_lock_for_recovery "$LOCK_RUN_CLEANUP_LOCK_FILE" \
         || die "An unfinished bootstrap restore exists and its recovery marker could not be written." 75
       die "An unfinished bootstrap restore prevented operation-lock release." 75
     fi
   fi
   if [[ "$close_finalized_bootstrap" == "true" ]]; then
-    preserve_lock=true
+    LOCK_RUN_CLEANUP_PRESERVE_LOCK=true
     find "$bootstrap_state_file" -maxdepth 0 -type f -delete \
       || die "Finalized bootstrap state could not be removed while the operation lock was held." 74
     sync_durably "$BACKUP_DIR"
-    preserve_lock=false
+    LOCK_RUN_CLEANUP_PRESERVE_LOCK=false
   fi
-  find "$lock_file" -maxdepth 0 -type f -delete \
+  find "$LOCK_RUN_CLEANUP_LOCK_FILE" -maxdepth 0 -type f -delete \
     || die "Unable to release the completed operation lock." 74
   sync_durably "$BACKUP_DIR"
   cleanup_bootstrap_reclaim_claim
