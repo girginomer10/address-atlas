@@ -711,7 +711,7 @@ jobs:
                   )
               )
             THEN 'ok' ELSE 'invalid' END;
-            SQL
+          SQL
             } | docker exec -i "$TARGET_POSTGRES_CONTAINER" sh -ceu '
               IFS= read -r PGPASSWORD
               export PGPASSWORD
@@ -802,7 +802,7 @@ jobs:
                   AND owner.rolname <> 'address_atlas'
               )
             THEN 'ok' ELSE 'invalid' END;
-            SQL
+          SQL
             } | docker exec -i "$TARGET_POSTGRES_CONTAINER" sh -ceu '
               IFS= read -r PGPASSWORD
               IFS= read -r quarantine_database

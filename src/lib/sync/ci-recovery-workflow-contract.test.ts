@@ -1,20 +1,28 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const repoRoot = resolve(import.meta.dirname, "../../..");
-const workflow = readFileSync(join(repoRoot, ".github/workflows/ci.yml"), "utf8");
+const workflow = readFileSync(join(repoRoot, ".github/workflows/ci.yml"), "utf8").replace(
+  /\r\n/g,
+  "\n"
+);
+const recoveryStepStart = workflow.indexOf(
+  "- name: Prove destructive fresh-volume PostgreSQL bootstrap recovery"
+);
+const recoveryStepEnd = workflow.indexOf(
+  "- name: Remove CI recovery containers and volumes",
+  recoveryStepStart
+);
+
+expect(recoveryStepStart).toBeGreaterThanOrEqual(0);
+expect(recoveryStepEnd).toBeGreaterThan(recoveryStepStart);
+
+const recoveryStep = workflow.slice(recoveryStepStart, recoveryStepEnd);
 
 describe("CI recovery workflow contract", () => {
   it("binds verification to the source and recovery to the fresh target", () => {
-    const start = workflow.indexOf(
-      "- name: Prove destructive fresh-volume PostgreSQL bootstrap recovery"
-    );
-    const end = workflow.indexOf("- name: Remove CI recovery containers and volumes", start);
-    expect(start).toBeGreaterThanOrEqual(0);
-    expect(end).toBeGreaterThan(start);
-    const recoveryStep = workflow.slice(start, end);
-
     const sourceBinding = recoveryStep.indexOf(
       'export ADDRESS_ATLAS_POSTGRES_CONTAINER="$SOURCE_POSTGRES_CONTAINER"'
     );
@@ -36,5 +44,27 @@ describe("CI recovery workflow contract", () => {
     expect(sourceRemoval).toBeGreaterThan(artifactInspection);
     expect(targetBinding).toBeGreaterThan(sourceRemoval);
     expect(targetClassification).toBeGreaterThan(targetBinding);
+  });
+
+  it("keeps the embedded recovery shell syntactically valid after YAML dedent", () => {
+    const runMarker = "\n        run: |\n";
+    const runBlockStart = recoveryStep.indexOf(runMarker);
+    expect(runBlockStart).toBeGreaterThanOrEqual(0);
+
+    const yamlRunBlock = `${recoveryStep
+      .slice(runBlockStart + runMarker.length)
+      .trimEnd()}\n`;
+    expect(yamlRunBlock.match(/^ {14}cat <<'SQL'$/gm)).toHaveLength(2);
+    expect(yamlRunBlock.match(/^ {10}SQL$/gm)).toHaveLength(2);
+
+    const shellScript = yamlRunBlock.replace(/^ {10}/gm, "");
+    const syntaxCheck = spawnSync("bash", ["-n"], {
+      encoding: "utf8",
+      input: shellScript,
+    });
+
+    expect(syntaxCheck.error).toBeUndefined();
+    expect(syntaxCheck.stderr).toBe("");
+    expect(syntaxCheck.status).toBe(0);
   });
 });
