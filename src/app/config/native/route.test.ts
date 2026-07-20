@@ -34,15 +34,22 @@ describe("native configuration route", () => {
     });
   });
 
-  it("returns an uncached, revision-bound deployment probe", async () => {
-    process.env.ADDRESS_ATLAS_BUILD_REVISION = "a".repeat(40);
-    const response = await GET(new Request("https://sync.example/config/native?release_probe=unique"));
+  it.each(["release_probe", "deployment_probe"])(
+    "returns an uncached, revision-bound response for %s",
+    async (probeName) => {
+      process.env.ADDRESS_ATLAS_BUILD_REVISION = "a".repeat(40);
+      const response = await GET(
+        new Request(`https://sync.example/config/native?${probeName}=unique`)
+      );
 
-    expect(response.status).toBe(200);
-    expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(response.headers.get("x-address-atlas-build-revision")).toBe("a".repeat(40));
-    expect(response.headers.get("etag")).toMatch(/^"sha256-[0-9a-f]{64}"$/);
-  });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("x-address-atlas-build-revision")).toBe(
+        "a".repeat(40)
+      );
+      expect(response.headers.get("etag")).toMatch(/^"sha256-[0-9a-f]{64}"$/);
+    }
+  );
 
   it("returns a generic non-cacheable 503 for invalid server configuration", async () => {
     mocks.getNativeEndpointConfig.mockImplementation(() => {
