@@ -60,6 +60,7 @@ runtime_password_a='RuntimeServiceSecret_3Ld8Qw5Nz7Rx2Km9'
 runtime_password_b='RuntimeRotatedSecret_8Jq2Vn6Gy4Ws9Pc3'
 wrong_admin_password='WrongAdminCredential_2Qx7Nv4Ls8Jm5Tk9'
 active_data_dir=''
+active_server_log=''
 
 cleanup() {
   if [[ -n "$active_data_dir" && -f "${active_data_dir}/postmaster.pid" ]]; then
@@ -73,6 +74,7 @@ start_cluster() {
   local name="$1"
   local password_file="${test_root}/${name}.pw"
   active_data_dir="${test_root}/${name}-data"
+  active_server_log="${test_root}/${name}.postgres.log"
   printf '%s\n' "$owner_password" >"$password_file"
   "${postgres_bin_dir}/initdb" \
     -D "$active_data_dir" \
@@ -86,7 +88,8 @@ start_cluster() {
   rm -f "$password_file"
   "${postgres_bin_dir}/pg_ctl" \
     -D "$active_data_dir" \
-    -o "-F -p ${test_port} -h 127.0.0.1 -k ${socket_dir} -c password_encryption=scram-sha-256 -c ssl=off" \
+    -l "$active_server_log" \
+    -o "-F -p ${test_port} -h 127.0.0.1 -k ${socket_dir} -c password_encryption=scram-sha-256 -c ssl=off -c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c pg_stat_statements.track_utility=on -c pg_stat_statements.track_planning=on" \
     -w start >/dev/null
   PGPASSWORD="$owner_password" "${postgres_bin_dir}/createdb" \
     -h 127.0.0.1 -p "$test_port" -U address_atlas "$database_name"
@@ -95,6 +98,7 @@ start_cluster() {
 stop_cluster() {
   "${postgres_bin_dir}/pg_ctl" -D "$active_data_dir" -m fast -w stop >/dev/null
   active_data_dir=''
+  active_server_log=''
 }
 
 owner_psql() {
@@ -103,20 +107,142 @@ owner_psql() {
     -h 127.0.0.1 -p "$test_port" -U address_atlas -d "$database_name" "$@"
 }
 
+admin_database_psql() {
+  local password="$1"
+  local target_database="$2"
+  shift 2
+  PGPASSWORD="$password" "${postgres_bin_dir}/psql" \
+    -X -v ON_ERROR_STOP=1 -q \
+    -h 127.0.0.1 -p "$test_port" -U address_atlas_admin -d "$target_database" "$@"
+}
+
 admin_psql() {
   local password="$1"
   shift
+  admin_database_psql "$password" "$database_name" "$@"
+}
+
+enable_secret_capture_pressure() {
+  local statement_level="$1"
+  shift
+  case "$statement_level" in
+    all|ddl) ;;
+    *)
+      echo 'Secret-capture test requires log_statement=all or ddl.' >&2
+      exit 1
+      ;;
+  esac
+  "$@" <<SQL
+CREATE SCHEMA IF NOT EXISTS address_atlas_test_telemetry;
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements
+  WITH SCHEMA address_atlas_test_telemetry;
+SELECT address_atlas_test_telemetry.pg_stat_statements_reset();
+ALTER SYSTEM SET log_statement = '${statement_level}';
+ALTER SYSTEM SET log_min_duration_statement = 0;
+ALTER SYSTEM SET log_min_error_statement = 'error';
+ALTER SYSTEM SET log_parameter_max_length = -1;
+ALTER SYSTEM SET log_parameter_max_length_on_error = -1;
+ALTER SYSTEM SET debug_print_parse = on;
+ALTER SYSTEM SET debug_print_rewritten = on;
+ALTER SYSTEM SET debug_print_plan = on;
+SELECT pg_catalog.pg_reload_conf();
+SQL
+  local pressure_ready=false
+  for _ in {1..50}; do
+    if [[ "$("$@" -Atc "SELECT
+          pg_catalog.current_setting('log_statement') = '${statement_level}'
+          AND pg_catalog.current_setting('log_min_duration_statement')::integer = 0
+          AND pg_catalog.current_setting('debug_print_parse')::boolean
+          AND pg_catalog.current_setting('debug_print_rewritten')::boolean
+          AND pg_catalog.current_setting('debug_print_plan')::boolean")" == t ]]; then
+      pressure_ready=true
+      break
+    fi
+    sleep 0.1
+  done
+  [[ "$pressure_ready" == true ]] || {
+    echo 'PostgreSQL secret-capture pressure did not become active.' >&2
+    exit 1
+  }
+}
+
+disable_secret_capture_pressure() {
+  "$@" <<'SQL'
+ALTER SYSTEM RESET log_statement;
+ALTER SYSTEM RESET log_min_duration_statement;
+ALTER SYSTEM RESET log_min_error_statement;
+ALTER SYSTEM RESET log_parameter_max_length;
+ALTER SYSTEM RESET log_parameter_max_length_on_error;
+ALTER SYSTEM RESET debug_print_parse;
+ALTER SYSTEM RESET debug_print_rewritten;
+ALTER SYSTEM RESET debug_print_plan;
+SELECT pg_catalog.pg_reload_conf();
+SQL
+}
+
+assert_secret_collectors_are_safe() {
+  local label="$1"
+  shift
+  local probe="address_atlas_secret_capture_probe_${label}"
+  local statements_file="${test_root}/${label}.pg-stat-statements"
+  local owner_password_hex_for_test
+  owner_password_hex_for_test=$(printf '%s' "$owner_password" \
+    | od -An -v -tx1 | tr -d ' \n')
+  "$@" -Atc "SELECT '${probe}'" >/dev/null
+  local probe_logged=false
+  for _ in {1..50}; do
+    if grep -Fq "$probe" "$active_server_log"; then
+      probe_logged=true
+      break
+    fi
+    sleep 0.1
+  done
+  [[ "$probe_logged" == true ]] || {
+    echo 'PostgreSQL secret-capture pressure was not active.' >&2
+    exit 1
+  }
+  "$@" -Atc \
+    'SELECT query FROM address_atlas_test_telemetry.pg_stat_statements ORDER BY queryid' \
+    > "$statements_file"
+  local secret
+  for secret in \
+      "$owner_password" "$owner_password_hex_for_test" \
+      "$admin_password_a" "$admin_password_b" \
+      "$runtime_password_a" "$runtime_password_b" \
+      "$wrong_admin_password"; do
+    if grep -Fq "$secret" "$active_server_log" \
+        || grep -Fq "$secret" "$statements_file"; then
+      echo 'A database credential entered a PostgreSQL log or statement-statistics record.' >&2
+      exit 1
+    fi
+  done
+  if perl -0777 -e '
+      for my $path (@ARGV) {
+        open my $handle, "<", $path or die "open failed";
+        local $/;
+        my $text = <$handle>;
+        exit 0 if $text =~ /CREATE\s+ROLE\s+address_atlas_role_bridge.{0,2000}?PASSWORD\s+\x27/s;
+      }
+      exit 1;
+    ' "$active_server_log" "$statements_file"; then
+    echo 'The bootstrap bridge credential entered a PostgreSQL statement collector.' >&2
+    exit 1
+  fi
+}
+
+runtime_database_psql() {
+  local password="$1"
+  local target_database="$2"
+  shift 2
   PGPASSWORD="$password" "${postgres_bin_dir}/psql" \
     -X -v ON_ERROR_STOP=1 -q \
-    -h 127.0.0.1 -p "$test_port" -U address_atlas_admin -d "$database_name" "$@"
+    -h 127.0.0.1 -p "$test_port" -U address_atlas_runtime -d "$target_database" "$@"
 }
 
 runtime_psql() {
   local password="$1"
   shift
-  PGPASSWORD="$password" "${postgres_bin_dir}/psql" \
-    -X -v ON_ERROR_STOP=1 -q \
-    -h 127.0.0.1 -p "$test_port" -U address_atlas_runtime -d "$database_name" "$@"
+  runtime_database_psql "$password" "$database_name" "$@"
 }
 
 role_password_verifiers() {
@@ -125,12 +251,26 @@ role_password_verifiers() {
     "SELECT rolname || '|' || rolpassword FROM pg_catalog.pg_authid WHERE rolname IN ('address_atlas_admin', 'address_atlas_runtime') ORDER BY rolname"
 }
 
+protected_role_attributes() {
+  local password="$1"
+  admin_psql "$password" -Atc \
+    "SELECT rolname || '|' || rolcanlogin::text || '|' || rolsuper::text || '|' || rolcreatedb::text || '|' || rolcreaterole::text || '|' || rolreplication::text || '|' || rolbypassrls::text || '|' || rolinherit::text || '|' || rolconnlimit::text || '|' || COALESCE(rolvaliduntil::text, '') || '|' || COALESCE(pg_catalog.array_to_string(rolconfig, ','), '') FROM pg_catalog.pg_roles WHERE rolname IN ('address_atlas', 'address_atlas_admin', 'address_atlas_runtime') ORDER BY rolname"
+}
+
+public_schema_owner() {
+  local password="$1"
+  local target_database="$2"
+  admin_database_psql "$password" "$target_database" -Atc \
+    "SELECT pg_catalog.pg_get_userbyid(nspowner) FROM pg_catalog.pg_namespace WHERE nspname = 'public'"
+}
+
 bootstrap_schema() {
+  local target_database="${1:-$database_name}"
   (
     cd "$repo_root"
     NODE_ENV=production \
       SYNC_SCHEMA_MODE=bootstrap \
-      SYNC_SCHEMA_DATABASE_URL="postgresql://address_atlas:${owner_password}@127.0.0.1:${test_port}/${database_name}" \
+      SYNC_SCHEMA_DATABASE_URL="postgresql://address_atlas:${owner_password}@127.0.0.1:${test_port}/${target_database}" \
       npm run --silent sync:schema:bootstrap
   )
 }
@@ -140,11 +280,12 @@ provision_roles() {
   local current_admin_password="$2"
   local desired_admin_password="$3"
   local desired_runtime_password="$4"
+  local target_database="${5:-$database_name}"
   env \
     ADDRESS_ATLAS_DATABASE_ROLE_MODE="$mode" \
     PGHOST=127.0.0.1 \
     PGPORT="$test_port" \
-    POSTGRES_DB="$database_name" \
+    POSTGRES_DB="$target_database" \
     POSTGRES_PASSWORD="$owner_password" \
     POSTGRES_ADMIN_CURRENT_PASSWORD="$current_admin_password" \
     POSTGRES_ADMIN_PASSWORD="$desired_admin_password" \
@@ -167,7 +308,8 @@ expect_auth_failure() {
 
 assert_catalog_contract() {
   local admin_password="$1"
-  admin_psql "$admin_password" <<'SQL'
+  local target_database="${2:-$database_name}"
+  admin_database_psql "$admin_password" "$target_database" <<'SQL'
 DO $test$
 DECLARE
   owner_oid oid;
@@ -561,7 +703,10 @@ GRANT EXECUTE ON FUNCTION role_test_function() TO PUBLIC;
 GRANT USAGE ON TYPE role_test_enum TO PUBLIC;
 GRANT USAGE ON DOMAIN role_test_domain TO PUBLIC;
 SQL
+enable_secret_capture_pressure all owner_psql
 provision_roles bootstrap "$admin_password_a" "$admin_password_a" "$runtime_password_a"
+assert_secret_collectors_are_safe fresh_bootstrap admin_psql "$admin_password_a"
+disable_secret_capture_pressure admin_psql "$admin_password_a"
 # The renamed bootstrap superuser is no longer the schema credential. Prove
 # that the newly created, non-superuser owner retained the historical password
 # and can execute the next deployment's no-op schema bootstrap.
@@ -593,6 +738,180 @@ SQL
 provision_roles steady "$admin_password_a" "$admin_password_a" "$runtime_password_a"
 assert_catalog_contract "$admin_password_a"
 assert_runtime_behavior "$runtime_password_a"
+
+echo 'database-role-tests: fresh template0 drill normalizes only the expected schema owner'
+fresh_drill_database=atlas_drill_template0
+PGPASSWORD="$admin_password_a" "${postgres_bin_dir}/createdb" \
+  -h 127.0.0.1 -p "$test_port" -U address_atlas_admin \
+  --template=template0 --owner=address_atlas "$fresh_drill_database"
+bootstrap_schema "$fresh_drill_database"
+fresh_schema_owner_before="$(public_schema_owner \
+  "$admin_password_a" "$fresh_drill_database")"
+[[ "$fresh_schema_owner_before" == pg_database_owner ]] || {
+  echo 'Fresh template0 database did not retain the expected pg_database_owner schema owner.' >&2
+  exit 1
+}
+if provision_roles steady "$admin_password_a" "$admin_password_a" \
+    "$runtime_password_a" "$fresh_drill_database" >/dev/null 2>&1; then
+  echo 'Steady provisioning unexpectedly normalized a fresh template0 schema owner.' >&2
+  exit 1
+fi
+fresh_schema_owner_after_steady="$(public_schema_owner \
+  "$admin_password_a" "$fresh_drill_database")"
+[[ "$fresh_schema_owner_after_steady" == pg_database_owner ]] || {
+  echo 'Failed steady provisioning changed the fresh template0 schema owner.' >&2
+  exit 1
+}
+admin_database_psql "$admin_password_a" "$fresh_drill_database" \
+  -c 'ALTER SCHEMA public OWNER TO address_atlas_admin;'
+unapproved_owner_verifiers_before="$(role_password_verifiers "$admin_password_a")"
+unapproved_owner_attributes_before="$(protected_role_attributes "$admin_password_a")"
+if provision_roles drill "$admin_password_a" "$admin_password_a" \
+    "$runtime_password_a" "$fresh_drill_database" >/dev/null 2>&1; then
+  echo 'Restore drill unexpectedly repaired an unapproved public schema owner.' >&2
+  exit 1
+fi
+[[ "$(public_schema_owner "$admin_password_a" "$fresh_drill_database")" \
+    == address_atlas_admin ]] || {
+  echo 'Rejected restore drill changed the unapproved public schema owner.' >&2
+  exit 1
+}
+enable_secret_capture_pressure ddl admin_psql "$admin_password_a"
+if provision_roles restore "$admin_password_a" "$admin_password_a" \
+    "$runtime_password_a" "$fresh_drill_database" >/dev/null 2>&1; then
+  echo 'Production restore unexpectedly repaired an unapproved public schema owner.' >&2
+  exit 1
+fi
+assert_secret_collectors_are_safe rejected_restore admin_psql "$admin_password_a"
+disable_secret_capture_pressure admin_psql "$admin_password_a"
+[[ "$(public_schema_owner "$admin_password_a" "$fresh_drill_database")" \
+    == address_atlas_admin ]] || {
+  echo 'Rejected production restore changed the unapproved public schema owner.' >&2
+  exit 1
+}
+[[ "$(role_password_verifiers "$admin_password_a")" \
+    == "$unapproved_owner_verifiers_before" ]] || {
+  echo 'Rejected production restore changed a protected password verifier.' >&2
+  exit 1
+}
+[[ "$(protected_role_attributes "$admin_password_a")" \
+    == "$unapproved_owner_attributes_before" ]] || {
+  echo 'Rejected production restore changed protected global role attributes.' >&2
+  exit 1
+}
+admin_database_psql "$admin_password_a" "$fresh_drill_database" \
+  -c 'ALTER SCHEMA public OWNER TO pg_database_owner;'
+fresh_drill_verifiers_before="$(role_password_verifiers "$admin_password_a")"
+fresh_drill_attributes_before="$(protected_role_attributes "$admin_password_a")"
+provision_roles drill "$admin_password_a" "$admin_password_a" \
+  "$runtime_password_a" "$fresh_drill_database"
+fresh_schema_owner_after_drill="$(public_schema_owner \
+  "$admin_password_a" "$fresh_drill_database")"
+[[ "$fresh_schema_owner_after_drill" == address_atlas ]] || {
+  echo 'Restore drill did not normalize the public schema owner to address_atlas.' >&2
+  exit 1
+}
+[[ "$(role_password_verifiers "$admin_password_a")" \
+    == "$fresh_drill_verifiers_before" ]] || {
+  echo 'Fresh template0 drill changed a protected role password verifier.' >&2
+  exit 1
+}
+[[ "$(protected_role_attributes "$admin_password_a")" \
+    == "$fresh_drill_attributes_before" ]] || {
+  echo 'Fresh template0 drill changed protected global role attributes.' >&2
+  exit 1
+}
+PGPASSWORD="$admin_password_a" "${postgres_bin_dir}/dropdb" \
+  -h 127.0.0.1 -p "$test_port" -U address_atlas_admin \
+  "$fresh_drill_database"
+
+echo 'database-role-tests: failed drill rolls schema-owner convergence back atomically'
+failed_drill_database=atlas_drill_rollback_template0
+PGPASSWORD="$admin_password_a" "${postgres_bin_dir}/createdb" \
+  -h 127.0.0.1 -p "$test_port" -U address_atlas_admin \
+  --template=template0 --owner=address_atlas "$failed_drill_database"
+bootstrap_schema "$failed_drill_database"
+admin_database_psql "$admin_password_a" "$failed_drill_database" \
+  -c 'DROP TABLE public.account_deletion_receipts;'
+failed_drill_verifiers_before="$(role_password_verifiers "$admin_password_a")"
+failed_drill_attributes_before="$(protected_role_attributes "$admin_password_a")"
+if provision_roles drill "$admin_password_a" "$admin_password_a" \
+    "$runtime_password_a" "$failed_drill_database" >/dev/null 2>&1; then
+  echo 'Incomplete restored schema unexpectedly passed drill provisioning.' >&2
+  exit 1
+fi
+[[ "$(public_schema_owner "$admin_password_a" "$failed_drill_database")" \
+    == pg_database_owner ]] || {
+  echo 'Failed drill did not roll public schema ownership back transactionally.' >&2
+  exit 1
+}
+[[ "$(role_password_verifiers "$admin_password_a")" \
+    == "$failed_drill_verifiers_before" ]] || {
+  echo 'Failed drill changed a protected password verifier.' >&2
+  exit 1
+}
+[[ "$(protected_role_attributes "$admin_password_a")" \
+    == "$failed_drill_attributes_before" ]] || {
+  echo 'Failed drill changed protected global role attributes.' >&2
+  exit 1
+}
+PGPASSWORD="$admin_password_a" "${postgres_bin_dir}/dropdb" \
+  -h 127.0.0.1 -p "$test_port" -U address_atlas_admin \
+  "$failed_drill_database"
+
+echo 'database-role-tests: fresh template0 restore reactivates exact SCRAM runtime access'
+fresh_restore_database=atlas_restore_template0
+PGPASSWORD="$admin_password_a" "${postgres_bin_dir}/createdb" \
+  -h 127.0.0.1 -p "$test_port" -U address_atlas_admin \
+  --template=template0 --owner=address_atlas "$fresh_restore_database"
+bootstrap_schema "$fresh_restore_database"
+[[ "$(public_schema_owner "$admin_password_a" "$fresh_restore_database")" \
+    == pg_database_owner ]] || {
+  echo 'Fresh restore database did not retain the expected pg_database_owner schema owner.' >&2
+  exit 1
+}
+{
+  printf '\\set runtime_password %s\n' "$runtime_password_b"
+  cat <<'SQL'
+SET password_encryption = 'scram-sha-256';
+ALTER ROLE address_atlas_runtime PASSWORD :'runtime_password' NOLOGIN;
+SQL
+} | admin_psql "$admin_password_a"
+if runtime_database_psql "$runtime_password_a" "$fresh_restore_database" \
+    -Atc 'SELECT current_user' >/dev/null 2>&1; then
+  echo 'Runtime role remained usable after the restore precondition set NOLOGIN.' >&2
+  exit 1
+fi
+enable_secret_capture_pressure all admin_psql "$admin_password_a"
+provision_roles restore "$admin_password_a" "$admin_password_a" \
+  "$runtime_password_a" "$fresh_restore_database"
+assert_secret_collectors_are_safe successful_restore admin_psql "$admin_password_a"
+disable_secret_capture_pressure admin_psql "$admin_password_a"
+[[ "$(public_schema_owner "$admin_password_a" "$fresh_restore_database")" \
+    == address_atlas ]] || {
+  echo 'Production restore provisioning did not normalize the public schema owner.' >&2
+  exit 1
+}
+[[ "$(runtime_database_psql "$runtime_password_a" "$fresh_restore_database" \
+      -Atc 'SELECT current_user')" == address_atlas_runtime ]] || {
+  echo 'Production restore provisioning did not reactivate the desired runtime credential.' >&2
+  exit 1
+}
+if runtime_database_psql "$runtime_password_b" "$fresh_restore_database" \
+    -Atc 'SELECT current_user' >/dev/null 2>&1; then
+  echo 'Production restore left the superseded runtime credential active.' >&2
+  exit 1
+fi
+restored_scram_role_count="$(admin_psql "$admin_password_a" -Atc \
+  "SELECT pg_catalog.count(*) FROM pg_catalog.pg_authid WHERE rolname IN ('address_atlas_admin', 'address_atlas_runtime') AND rolpassword LIKE 'SCRAM-SHA-256%'")"
+[[ "$restored_scram_role_count" == 2 ]] || {
+  echo 'Production restore provisioning did not install SCRAM verifiers for both login roles.' >&2
+  exit 1
+}
+assert_catalog_contract "$admin_password_a" "$fresh_restore_database"
+PGPASSWORD="$admin_password_a" "${postgres_bin_dir}/dropdb" \
+  -h 127.0.0.1 -p "$test_port" -U address_atlas_admin \
+  "$fresh_restore_database"
 
 echo 'database-role-tests: steady and drill convergence preserve global password verifiers'
 verifiers_before="$(role_password_verifiers "$admin_password_a")"
@@ -642,7 +961,10 @@ GRANT EXECUTE ON ALL ROUTINES IN SCHEMA public TO address_atlas_runtime;
 ALTER DEFAULT PRIVILEGES FOR ROLE address_atlas
   GRANT ALL PRIVILEGES ON TABLES TO address_atlas_runtime;
 SQL
+enable_secret_capture_pressure ddl owner_psql
 provision_roles bootstrap "$admin_password_a" "$admin_password_a" "$runtime_password_a"
+assert_secret_collectors_are_safe legacy_bootstrap admin_psql "$admin_password_a"
+disable_secret_capture_pressure admin_psql "$admin_password_a"
 bootstrap_schema
 assert_catalog_contract "$admin_password_a"
 assert_runtime_behavior "$runtime_password_a"

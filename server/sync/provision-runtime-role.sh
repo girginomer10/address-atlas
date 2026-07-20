@@ -1,4 +1,5 @@
 #!/bin/sh
+set +x
 set -eu
 
 mode="${ADDRESS_ATLAS_DATABASE_ROLE_MODE:-steady}"
@@ -66,7 +67,7 @@ fi
 # convergence operation rather than a hidden credential rotation with a crash
 # window that could strand the still-running web container.
 if [ "$mode" = steady ] || [ "$mode" = drill ]; then
-  runtime_identity="$({
+  if ! runtime_identity="$({
     PGPASSWORD="$runtime_password" "$psql_bin" \
       --host "$database_host" \
       --port "$database_port" \
@@ -76,12 +77,15 @@ if [ "$mode" = steady ] || [ "$mode" = drill ]; then
       --tuples-only \
       --no-align \
       --set ON_ERROR_STOP=1 \
-      --command 'SELECT current_user;'
-  })" || {
+      --command 'SELECT current_user;' \
+      2>/dev/null
+  })"; then
+    printf 'ROLE_PROVISION_FAILED mode=%s stage=runtime-auth\n' "$mode" >&2
     echo 'The desired runtime credential is not already active; refusing implicit rotation.' >&2
     exit 65
-  }
+  fi
   if [ "$runtime_identity" != "address_atlas_runtime" ]; then
+    printf 'ROLE_PROVISION_FAILED mode=%s stage=runtime-auth\n' "$mode" >&2
     echo 'Runtime credential preflight authenticated as an unexpected role.' >&2
     exit 65
   fi
@@ -89,11 +93,12 @@ fi
 
 export PGPASSWORD="$admin_current_password"
 
-{
-  # Desired secrets travel on stdin and are parsed as SQL literals by psql.
-  # The current secret is used only by libpq for this single admin connection.
-  printf '\\set admin_password %s\n' "$admin_password"
-  printf '\\set runtime_password %s\n' "$runtime_password"
+# Desired credentials never appear in client-submitted SQL statement text.
+# Restore mode copies them as data into a transaction-scoped temporary table,
+# then server-side code consumes them. Built-in statement logging remains
+# available for audit; error context, nested-statement collectors, and audit
+# statement/parameter capture are redacted before COPY starts.
+if ! {
   if [ "$mode" = restore ]; then
     printf '\\set mutate_global_roles true\n'
   else
@@ -104,11 +109,72 @@ export PGPASSWORD="$admin_current_password"
   else
     printf '\\set cleanup_bridge true\n'
   fi
+  if [ "$mode" = restore ] || [ "$mode" = drill ]; then
+    printf '\\set normalize_restored_schema_owner true\n'
+  else
+    printf '\\set normalize_restored_schema_owner false\n'
+  fi
   cat <<'SQL'
 \set ON_ERROR_STOP on
+SQL
+  if [ "$mode" = restore ]; then
+    cat <<'SQL'
+
+SET SESSION log_error_verbosity = 'terse';
+SET SESSION log_parameter_max_length_on_error = 0;
+SET SESSION debug_print_parse = off;
+SET SESSION debug_print_rewritten = off;
+SET SESSION debug_print_plan = off;
+SET SESSION pgaudit.log_statement = off;
+SET SESSION pgaudit.log_parameter = off;
+SET SESSION pg_stat_statements.track = 'none';
+SET SESSION pg_stat_statements.track_utility = off;
+SET SESSION pg_stat_statements.track_planning = off;
+DO $extension_logging$
+BEGIN
+  IF pg_catalog.current_setting('log_error_verbosity') <> 'terse'
+     OR pg_catalog.current_setting('log_parameter_max_length_on_error') <> '0'
+     OR pg_catalog.current_setting('debug_print_parse') <> 'off'
+     OR pg_catalog.current_setting('debug_print_rewritten') <> 'off'
+     OR pg_catalog.current_setting('debug_print_plan') <> 'off'
+     OR pg_catalog.current_setting('pgaudit.log_statement') <> 'off'
+     OR pg_catalog.current_setting('pgaudit.log_parameter') <> 'off' THEN
+    RAISE EXCEPTION 'audit statement redaction could not be enabled';
+  END IF;
+  IF pg_catalog.current_setting('pg_stat_statements.track') <> 'none'
+     OR pg_catalog.current_setting('pg_stat_statements.track_utility') <> 'off'
+     OR pg_catalog.current_setting('pg_stat_statements.track_planning') <> 'off' THEN
+    RAISE EXCEPTION 'statement-statistics redaction could not be enabled';
+  END IF;
+  IF pg_catalog.current_setting('auto_explain.log_min_duration', true) IS NOT NULL THEN
+    PERFORM pg_catalog.set_config('auto_explain.log_min_duration', '-1', false);
+    IF pg_catalog.current_setting('auto_explain.log_min_duration') <> '-1' THEN
+      RAISE EXCEPTION 'automatic explain logging could not be disabled';
+    END IF;
+  END IF;
+END
+$extension_logging$;
+SQL
+  fi
+  cat <<'SQL'
 
 BEGIN;
 SET LOCAL password_encryption = 'scram-sha-256';
+SQL
+  if [ "$mode" = restore ]; then
+    cat <<'SQL'
+CREATE TEMP TABLE address_atlas_role_secrets (
+  secret_name text PRIMARY KEY
+    CHECK (secret_name IN ('admin_password', 'runtime_password')),
+  secret_value text NOT NULL
+) ON COMMIT DROP;
+COPY pg_temp.address_atlas_role_secrets (secret_name, secret_value) FROM STDIN;
+SQL
+    printf 'admin_password\t%s\n' "$admin_password"
+    printf 'runtime_password\t%s\n' "$runtime_password"
+    printf '\\.\n'
+  fi
+  cat <<'SQL'
 
 -- Reject a drifted control plane before changing anything. In particular,
 -- steady mode cannot silently regain the historical owner's authority through
@@ -203,6 +269,31 @@ BEGIN
 END
 $preflight$;
 
+-- PostgreSQL 16's template0 intentionally gives public to the dynamic
+-- pg_database_owner role. Restored databases retain that owner because restore
+-- runs with --no-owner. Only the isolated restore paths may converge this
+-- expected template state; steady deployment must continue to reject ownership
+-- drift instead of repairing it implicitly.
+\if :normalize_restored_schema_owner
+DO $restored_schema_owner_preflight$
+DECLARE
+  public_schema_owner text;
+BEGIN
+  SELECT pg_catalog.pg_get_userbyid(namespace.nspowner)
+  INTO public_schema_owner
+  FROM pg_catalog.pg_namespace AS namespace
+  WHERE namespace.nspname = 'public';
+
+  IF public_schema_owner IS NULL
+     OR public_schema_owner NOT IN ('pg_database_owner', 'address_atlas') THEN
+    RAISE EXCEPTION 'restored public schema owner is outside the expected template or application contract';
+  END IF;
+END
+$restored_schema_owner_preflight$;
+
+ALTER SCHEMA public OWNER TO address_atlas;
+\endif
+
 \if :cleanup_bridge
   SELECT 'DROP ROLE address_atlas_role_bridge'
   WHERE EXISTS (
@@ -214,22 +305,56 @@ $preflight$;
 -- already proved both desired credentials, while drills must be side-effect
 -- free outside their isolated temporary database (including password hashes).
 \if :mutate_global_roles
-  SELECT pg_catalog.format(
-    'CREATE ROLE address_atlas_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE '
-    'NOREPLICATION NOBYPASSRLS NOINHERIT CONNECTION LIMIT -1 PASSWORD %L VALID UNTIL %L',
-    :'runtime_password',
-    'infinity'
-  )
-  WHERE NOT EXISTS (
-    SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'address_atlas_runtime'
-  ) \gexec
+  DO $global_roles$
+  DECLARE
+    desired_admin_password text;
+    desired_runtime_password text;
+  BEGIN
+    BEGIN
+      SELECT secret_value INTO STRICT desired_admin_password
+      FROM pg_temp.address_atlas_role_secrets
+      WHERE secret_name = 'admin_password';
+      SELECT secret_value INTO STRICT desired_runtime_password
+      FROM pg_temp.address_atlas_role_secrets
+      WHERE secret_name = 'runtime_password';
 
-  ALTER ROLE address_atlas_admin
-    WITH LOGIN SUPERUSER NOCREATEDB CREATEROLE NOREPLICATION NOBYPASSRLS
-    NOINHERIT CONNECTION LIMIT -1 PASSWORD :'admin_password' VALID UNTIL 'infinity';
-  ALTER ROLE address_atlas_runtime
-    WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS
-    NOINHERIT CONNECTION LIMIT -1 PASSWORD :'runtime_password' VALID UNTIL 'infinity';
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'address_atlas_runtime'
+      ) THEN
+        EXECUTE pg_catalog.format(
+          'CREATE ROLE address_atlas_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE '
+          'NOREPLICATION NOBYPASSRLS NOINHERIT CONNECTION LIMIT -1 PASSWORD %L VALID UNTIL %L',
+          desired_runtime_password,
+          'infinity'
+        );
+      END IF;
+
+      EXECUTE pg_catalog.format(
+        'ALTER ROLE address_atlas_admin '
+        'WITH LOGIN SUPERUSER NOCREATEDB CREATEROLE NOREPLICATION NOBYPASSRLS '
+        'NOINHERIT CONNECTION LIMIT -1 PASSWORD %L VALID UNTIL %L',
+        desired_admin_password,
+        'infinity'
+      );
+      EXECUTE pg_catalog.format(
+        'ALTER ROLE address_atlas_runtime '
+        'WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS '
+        'NOINHERIT CONNECTION LIMIT -1 PASSWORD %L VALID UNTIL %L',
+        desired_runtime_password,
+        'infinity'
+      );
+    EXCEPTION
+      WHEN query_canceled OR assert_failure THEN
+        RAISE EXCEPTION USING
+          MESSAGE = 'sanitized role credential mutation failed',
+          ERRCODE = '55000';
+      WHEN OTHERS THEN
+      RAISE EXCEPTION USING
+        MESSAGE = 'sanitized role credential mutation failed',
+        ERRCODE = '55000';
+    END;
+  END
+  $global_roles$;
   ALTER ROLE address_atlas_runtime RESET ALL;
 \endif
 SELECT pg_catalog.format(
@@ -656,7 +781,13 @@ SQL
   --username address_atlas_admin \
   --dbname "$database_name" \
   --no-psqlrc \
-  --quiet
+  --quiet \
+  2>/dev/null
+then
+  printf 'ROLE_PROVISION_FAILED mode=%s stage=convergence-transaction\n' \
+    "$mode" >&2
+  exit 74
+fi
 
 unset PGPASSWORD POSTGRES_ADMIN_CURRENT_PASSWORD
 echo 'Validated isolated admin/owner roles and the exact address_atlas_runtime privilege contract.'

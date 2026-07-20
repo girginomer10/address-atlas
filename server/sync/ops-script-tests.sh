@@ -9,6 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MONITOR_SCRIPT="${SCRIPT_DIR}/monitor-sync.sh"
 BACKUP_SCRIPT="${SCRIPT_DIR}/postgres-backup.sh"
 PROVISION_SCRIPT="${SCRIPT_DIR}/provision-runtime-role.sh"
+BOOTSTRAP_ROLE_SCRIPT="${SCRIPT_DIR}/bootstrap-database-roles.sh"
 REAL_OPENSSL_BIN="$(command -v openssl || true)"
 REAL_NODE_BIN="$(command -v node || true)"
 OPS_TEST_BASH_BIN="${OPS_TEST_BASH_BIN:-/bin/bash}"
@@ -1897,6 +1898,8 @@ test_restore_rolls_back_failed_privilege_provisioning() {
   make_backup_fixture "$backup"
   cat > "$CASE_DIR/restore-provision-fail" <<'EOF'
 #!/usr/bin/env bash
+printf '%s\n' 'hook stdout secret: RuntimeServiceSecret_3Ld8Qw5Nz7Rx2Km9'
+printf '%s\n' 'ROLE_PROVISION_FAILED mode=restore stage=convergence-transaction' >&2
 exit 29
 EOF
   chmod 0700 "$CASE_DIR/restore-provision-fail"
@@ -1908,6 +1911,15 @@ EOF
   assert_path_exists "$CASE_DIR/log/cutover.done" 'privilege-provisioning failure did not reach validated cutover'
   assert_path_exists "$CASE_DIR/log/rollback.done" 'privilege-provisioning failure did not restore previous database'
   assert_file_contains "$CASE_DIR/stderr" 'privilege provisioning failed' 'restore privilege-provisioning failure message'
+  assert_file_contains "$CASE_DIR/stderr" \
+    'ROLE_PROVISION_FAILED mode=restore stage=convergence-transaction' \
+    'restore wrapper suppressed the fixed privilege-provisioning diagnostic'
+  assert_file_not_contains "$CASE_DIR/stdout" \
+    'hook stdout secret: RuntimeServiceSecret_3Ld8Qw5Nz7Rx2Km9' \
+    'restore wrapper exposed privilege-provisioning hook stdout'
+  assert_file_not_contains "$CASE_DIR/stderr" \
+    'hook stdout secret: RuntimeServiceSecret_3Ld8Qw5Nz7Rx2Km9' \
+    'restore wrapper redirected privilege-provisioning hook stdout to stderr'
   assert_file_contains "$CASE_DIR/log/admin.sql" 'ALTER ROLE "address_atlas_runtime" NOLOGIN' \
     'failed privilege provisioning did not force runtime back to NOLOGIN'
 }
@@ -2353,14 +2365,19 @@ set -euo pipefail
   printf '\n'
 } > "$MOCK_LOG_DIR/psql.argv"
 printf '%s' "${PGPASSWORD:-}" > "$MOCK_LOG_DIR/psql.password"
-/bin/cat > "$MOCK_LOG_DIR/psql.stdin"
 case " $* " in
   *' --username address_atlas_runtime '*' --command SELECT current_user; '*)
+    : > "$MOCK_LOG_DIR/psql.stdin"
+    if [[ "${MOCK_PSQL_RUNTIME_EXIT:-0}" != '0' ]]; then
+      printf '%s\n' "${MOCK_PSQL_STDERR:-}" >&2
+    fi
     printf '%s\n' address_atlas_runtime
     exit "${MOCK_PSQL_RUNTIME_EXIT:-0}"
     ;;
 esac
+/bin/cat > "$MOCK_LOG_DIR/psql.stdin"
 if [[ "${MOCK_PSQL_EXIT:-0}" != '0' ]]; then
+  printf '%s\n' "${MOCK_PSQL_STDERR:-}" >&2
   exit "$MOCK_PSQL_EXIT"
 fi
 EOF
@@ -2372,13 +2389,19 @@ run_provision_capture() {
   local desired_admin_password="$2"
   local current_admin_password="$3"
   local owner_password_decoy="$4"
+  local provision_mode="${5:-steady}"
+  local trace_mode="${6:-false}"
+  local -a shell_command=(/bin/sh)
+  [[ "$trace_mode" != true ]] || shell_command+=(-x)
   set +e
   env -i \
     PATH="$CASE_DIR/bin:/usr/bin:/bin" \
     HOME="$CASE_DIR/home" \
     MOCK_LOG_DIR="$CASE_DIR/log" \
     MOCK_PSQL_EXIT="${MOCK_PROVISION_PSQL_EXIT:-0}" \
-    ADDRESS_ATLAS_DATABASE_ROLE_MODE=steady \
+    MOCK_PSQL_RUNTIME_EXIT="${MOCK_PROVISION_PSQL_RUNTIME_EXIT:-0}" \
+    MOCK_PSQL_STDERR="${MOCK_PROVISION_PSQL_STDERR:-}" \
+    ADDRESS_ATLAS_DATABASE_ROLE_MODE="$provision_mode" \
     POSTGRES_RUNTIME_PASSWORD="$runtime_password" \
     POSTGRES_ADMIN_PASSWORD="$desired_admin_password" \
     POSTGRES_ADMIN_CURRENT_PASSWORD="$current_admin_password" \
@@ -2387,7 +2410,8 @@ run_provision_capture() {
     PGHOST='postgres.test' \
     PGPORT=5432 \
     PSQL_BIN="$CASE_DIR/bin/psql" \
-    /bin/sh "$PROVISION_SCRIPT" > "$CASE_DIR/stdout" 2> "$CASE_DIR/stderr"
+    "${shell_command[@]}" "$PROVISION_SCRIPT" \
+      > "$CASE_DIR/stdout" 2> "$CASE_DIR/stderr"
   CAPTURE_STATUS=$?
   set -e
 }
@@ -2442,12 +2466,10 @@ test_provision_steady_admin_only_secret_safety() {
     assert_file_not_contains "$CASE_DIR/stdout" "$secret" 'database secret leaked to stdout'
     assert_file_not_contains "$CASE_DIR/stderr" "$secret" 'database secret leaked to stderr'
   done
-  assert_file_contains "$CASE_DIR/log/psql.stdin" "\\set admin_password ${desired_admin_password}" 'desired admin password was not sent over stdin'
-  assert_file_contains "$CASE_DIR/log/psql.stdin" "\\set runtime_password ${runtime_password}" 'runtime password was not sent over stdin'
-  if [[ "$current_admin_password" != "$desired_admin_password" ]]; then
-    assert_file_not_contains "$CASE_DIR/log/psql.stdin" "$current_admin_password" \
-      'current admin password leaked into SQL stdin'
-  fi
+  assert_file_not_contains "$CASE_DIR/log/psql.stdin" "$desired_admin_password" \
+    'steady mode sent the admin credential into SQL'
+  assert_file_not_contains "$CASE_DIR/log/psql.stdin" "$runtime_password" \
+    'steady mode sent the runtime credential into SQL'
   assert_file_not_contains "$CASE_DIR/log/psql.stdin" "$owner_password_decoy" 'owner fallback password entered SQL stdin'
   assert_file_contains "$CASE_DIR/log/psql.stdin" "current_user <> 'address_atlas_admin'" 'direct admin authentication preflight'
   assert_file_contains "$CASE_DIR/log/psql.stdin" 'REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public' 'ambient DML revocation'
@@ -2455,6 +2477,42 @@ test_provision_steady_admin_only_secret_safety() {
   assert_file_contains "$CASE_DIR/log/psql.stdin" 'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.users TO address_atlas_runtime;' 'users exact grant'
   assert_file_contains "$CASE_DIR/log/psql.stdin" 'GRANT SELECT, INSERT ON TABLE public.account_deletion_receipts TO address_atlas_runtime;' 'deletion receipt exact grant'
   assert_file_not_contains "$CASE_DIR/log/psql.stdin" 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES' 'broad runtime table grant remains'
+}
+
+test_provision_restore_secret_transport() {
+  local runtime_password='RuntimeServiceSecret_3Ld8Qw5Nz7Rx2Km9'
+  local admin_password='AdminControlSecret_4Fx8Lm2Qs7Vz9Tr5'
+  local owner_decoy='OWNER_PASSWORD_MUST_NOT_BE_USED_72cd'
+  new_case
+  install_psql_fake
+  run_provision_capture "$runtime_password" "$admin_password" \
+    "$admin_password" "$owner_decoy" restore true
+  assert_status "$CAPTURE_STATUS" 0 'restore credential transport status'
+  assert_file_contains "$CASE_DIR/log/psql.stdin" \
+    'COPY pg_temp.address_atlas_role_secrets' \
+    'restore did not use COPY data transport for credentials'
+  assert_file_contains "$CASE_DIR/log/psql.stdin" \
+    $'admin_password\t'"$admin_password" \
+    'restore admin credential was not transported as COPY data'
+  assert_file_contains "$CASE_DIR/log/psql.stdin" \
+    $'runtime_password\t'"$runtime_password" \
+    'restore runtime credential was not transported as COPY data'
+  assert_file_not_contains "$CASE_DIR/log/psql.stdin" \
+    "\\set admin_password ${admin_password}" \
+    'restore expanded the admin credential into psql statement text'
+  assert_file_not_contains "$CASE_DIR/log/psql.stdin" \
+    "PASSWORD '${runtime_password}'" \
+    'restore expanded the runtime credential into SQL statement text'
+  assert_file_contains "$CASE_DIR/log/psql.stdin" \
+    "SET SESSION pg_stat_statements.track = 'none';" \
+    'restore did not disable nested statement statistics before COPY'
+  assert_file_contains "$CASE_DIR/log/psql.stdin" \
+    'SET SESSION pgaudit.log_statement = off;' \
+    'restore did not redact audit statement text before COPY'
+  for secret in "$runtime_password" "$admin_password" "$owner_decoy"; do
+    assert_file_not_contains "$CASE_DIR/stderr" "$secret" \
+      'restore shell tracing disclosed a database credential'
+  done
 }
 
 test_provision_bad_admin_never_falls_back_to_owner() {
@@ -2472,6 +2530,162 @@ test_provision_bad_admin_never_falls_back_to_owner() {
   assert_file_not_contains "$CASE_DIR/log/psql.argv" "$owner_password_decoy" 'owner fallback secret leaked to argv'
   assert_file_not_contains "$CASE_DIR/stdout" "$owner_password_decoy" 'owner fallback secret leaked to stdout'
   assert_file_not_contains "$CASE_DIR/stderr" "$owner_password_decoy" 'owner fallback secret leaked to stderr'
+}
+
+test_provision_failure_diagnostics_are_secret_safe() {
+  local runtime_password='RuntimeServiceSecret_3Ld8Qw5Nz7Rx2Km9'
+  local admin_password='AdminControlSecret_4Fx8Lm2Qs7Vz9Tr5'
+  local owner_decoy='OWNER_PASSWORD_MUST_NOT_BE_USED_72cd'
+  local leaked_detail='psql expanded secret: RuntimeServiceSecret_3Ld8Qw5Nz7Rx2Km9'
+  new_case
+  install_psql_fake
+  MOCK_PROVISION_PSQL_RUNTIME_EXIT=28
+  MOCK_PROVISION_PSQL_STDERR="$leaked_detail"
+  run_provision_capture "$runtime_password" "$admin_password" \
+    "$admin_password" "$owner_decoy"
+  assert_status "$CAPTURE_STATUS" 65 'runtime authentication diagnostic status'
+  assert_file_contains "$CASE_DIR/stderr" \
+    'ROLE_PROVISION_FAILED mode=steady stage=runtime-auth' \
+    'runtime authentication failure lacked a fixed diagnostic marker'
+  assert_file_not_contains "$CASE_DIR/stderr" "$leaked_detail" \
+    'runtime authentication leaked raw psql stderr'
+
+  new_case
+  install_psql_fake
+  MOCK_PROVISION_PSQL_RUNTIME_EXIT=0
+  MOCK_PROVISION_PSQL_EXIT=28
+  MOCK_PROVISION_PSQL_STDERR="$leaked_detail"
+  run_provision_capture "$runtime_password" "$admin_password" \
+    "$admin_password" "$owner_decoy"
+  assert_status "$CAPTURE_STATUS" 74 'convergence transaction diagnostic status'
+  assert_file_contains "$CASE_DIR/stderr" \
+    'ROLE_PROVISION_FAILED mode=steady stage=convergence-transaction' \
+    'convergence failure lacked a fixed diagnostic marker'
+  assert_file_not_contains "$CASE_DIR/stderr" "$leaked_detail" \
+    'convergence transaction leaked raw psql stderr'
+}
+
+install_bootstrap_psql_failure_fake() {
+  cat > "$CASE_DIR/bin/psql" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${MOCK_LOG_DIR:?}"
+call=1
+if [[ -f "$MOCK_LOG_DIR/psql.calls" ]]; then
+  call=$(( $(< "$MOCK_LOG_DIR/psql.calls") + 1 ))
+fi
+printf '%s\n' "$call" > "$MOCK_LOG_DIR/psql.calls"
+/bin/cat >/dev/null
+if [[ "$call" -eq "${MOCK_PSQL_FAIL_CALL:?}" ]]; then
+  printf '%s\n' "${MOCK_PSQL_STDERR:?}" >&2
+  exit 28
+fi
+EOF
+  chmod 0700 "$CASE_DIR/bin/psql"
+}
+
+run_bootstrap_provision_capture() {
+  local fail_call="$1"
+  local leaked_detail="$2"
+  local trace_mode="${3:-false}"
+  local -a shell_command=(/bin/sh)
+  [[ "$trace_mode" != true ]] || shell_command+=(-x)
+  set +e
+  env -i \
+    PATH="$CASE_DIR/bin:/usr/bin:/bin" \
+    HOME="$CASE_DIR/home" \
+    MOCK_LOG_DIR="$CASE_DIR/log" \
+    MOCK_PSQL_FAIL_CALL="$fail_call" \
+    MOCK_PSQL_STDERR="$leaked_detail" \
+    ADDRESS_ATLAS_DATABASE_ROLE_MODE=bootstrap \
+    POSTGRES_PASSWORD='OwnerBootstrapSecret_7Gm2Qv9Lx4Np8Yk6' \
+    POSTGRES_ADMIN_PASSWORD='AdminControlSecret_4Fx8Lm2Qs7Vz9Tr5' \
+    POSTGRES_RUNTIME_PASSWORD='RuntimeServiceSecret_3Ld8Qw5Nz7Rx2Km9' \
+    POSTGRES_DB=address_atlas_sync \
+    PGHOST='postgres.test' \
+    PGPORT=5432 \
+    PSQL_BIN="$CASE_DIR/bin/psql" \
+    "${shell_command[@]}" "$BOOTSTRAP_ROLE_SCRIPT" \
+      > "$CASE_DIR/stdout" 2> "$CASE_DIR/stderr"
+  CAPTURE_STATUS=$?
+  set -e
+}
+
+test_bootstrap_failure_diagnostics_are_secret_safe() {
+  local leaked_detail='psql expanded secret: OwnerBootstrapSecret_7Gm2Qv9Lx4Np8Yk6'
+  new_case
+  install_bootstrap_psql_failure_fake
+  run_bootstrap_provision_capture 1 "$leaked_detail" true
+  assert_status "$CAPTURE_STATUS" 74 'bridge creation diagnostic status'
+  assert_file_contains "$CASE_DIR/stderr" \
+    'ROLE_PROVISION_FAILED mode=bootstrap stage=bridge-create' \
+    'bridge creation failure lacked a fixed diagnostic marker'
+  assert_file_not_contains "$CASE_DIR/stderr" "$leaked_detail" \
+    'bridge creation leaked raw psql stderr'
+  assert_file_not_contains "$CASE_DIR/stderr" \
+    'OwnerBootstrapSecret_7Gm2Qv9Lx4Np8Yk6' \
+    'bridge creation shell tracing disclosed the owner credential'
+  assert_file_not_contains "$CASE_DIR/stderr" \
+    'AdminControlSecret_4Fx8Lm2Qs7Vz9Tr5' \
+    'bridge creation shell tracing disclosed the admin credential'
+  assert_file_not_contains "$CASE_DIR/stderr" \
+    'RuntimeServiceSecret_3Ld8Qw5Nz7Rx2Km9' \
+    'bridge creation shell tracing disclosed the runtime credential'
+
+  new_case
+  install_bootstrap_psql_failure_fake
+  run_bootstrap_provision_capture 2 "$leaked_detail" true
+  assert_status "$CAPTURE_STATUS" 74 'role split diagnostic status'
+  assert_file_contains "$CASE_DIR/stderr" \
+    'ROLE_PROVISION_FAILED mode=bootstrap stage=role-split' \
+    'role split failure lacked a fixed diagnostic marker'
+  assert_file_not_contains "$CASE_DIR/stderr" "$leaked_detail" \
+    'role split leaked raw psql stderr'
+  assert_file_not_contains "$CASE_DIR/stderr" \
+    'OwnerBootstrapSecret_7Gm2Qv9Lx4Np8Yk6' \
+    'role split shell tracing disclosed the owner credential'
+  assert_file_not_contains "$CASE_DIR/stderr" \
+    'AdminControlSecret_4Fx8Lm2Qs7Vz9Tr5' \
+    'role split shell tracing disclosed the admin credential'
+  assert_file_not_contains "$CASE_DIR/stderr" \
+    'RuntimeServiceSecret_3Ld8Qw5Nz7Rx2Km9' \
+    'role split shell tracing disclosed the runtime credential'
+}
+
+test_secret_entrypoints_disable_shell_trace() {
+  local owner_secret='OwnerTraceSentinel_7Gm2Qv9Lx4Np8Yk6'
+  local admin_secret='AdminTraceSentinel_4Fx8Lm2Qs7Vz9Tr5'
+  local runtime_secret='RuntimeTraceSentinel_3Ld8Qw5Nz7Rx2Km9'
+  local script output status secret
+  local -a scripts=(
+    "$BACKUP_SCRIPT"
+    "$SCRIPT_DIR/manage-prod.sh"
+    "$SCRIPT_DIR/provision-restored-database.sh"
+    "$SCRIPT_DIR/migrate-restored-database.sh"
+    "$PROVISION_SCRIPT"
+    "$BOOTSTRAP_ROLE_SCRIPT"
+  )
+  new_case
+  for script in "${scripts[@]}"; do
+    output="$CASE_DIR/$(basename "$script").trace"
+    status=0
+    env -i \
+      PATH=/usr/bin:/bin \
+      HOME="$CASE_DIR/home" \
+      POSTGRES_PASSWORD="$owner_secret" \
+      POSTGRES_ADMIN_PASSWORD="$admin_secret" \
+      POSTGRES_ADMIN_CURRENT_PASSWORD="$admin_secret" \
+      POSTGRES_RUNTIME_PASSWORD="$runtime_secret" \
+      "$OPS_TEST_BASH_BIN" -x "$script" \
+        > /dev/null 2> "$output" || status=$?
+    [[ "$status" -ne 0 ]] || fail "trace probe unexpectedly executed ${script}"
+    assert_file_contains "$output" '+ set +x' \
+      "${script} did not disable shell tracing immediately"
+    for secret in "$owner_secret" "$admin_secret" "$runtime_secret"; do
+      assert_file_not_contains "$output" "$secret" \
+        "${script} disclosed a credential under shell tracing"
+    done
+  done
 }
 run_case() {
   local name="$1"
@@ -2549,7 +2763,11 @@ run_case 'bootstrap pre-split drift fails closed' test_bootstrap_pre_split_drift
 run_case 'bootstrap finalized no-lock dead-claim closure' test_bootstrap_finalized_no_lock_dead_claim_closes_safely
 run_case 'runtime role password validation' test_provision_password_validation
 run_case 'runtime role steady admin-only secret safety' test_provision_steady_admin_only_secret_safety
+run_case 'runtime role restore secret transport' test_provision_restore_secret_transport
 run_case 'runtime role never falls back to owner' test_provision_bad_admin_never_falls_back_to_owner
+run_case 'runtime role failure diagnostics are secret-safe' test_provision_failure_diagnostics_are_secret_safe
+run_case 'bootstrap role failure diagnostics are secret-safe' test_bootstrap_failure_diagnostics_are_secret_safe
+run_case 'secret-bearing entrypoints disable shell trace' test_secret_entrypoints_disable_shell_trace
 
 printf '%d passed, %d failed\n' "$PASSED" "$FAILED"
 [[ "$FAILED" -eq 0 ]]

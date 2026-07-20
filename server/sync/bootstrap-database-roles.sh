@@ -1,4 +1,5 @@
 #!/bin/sh
+set +x
 set -eu
 
 # This is the only database-role path that accepts the historical owner
@@ -69,12 +70,59 @@ fi
 
 export PGPASSWORD="$POSTGRES_PASSWORD"
 
-{
-  printf '\\set bridge_password %s\n' "$bridge_password"
+# Credentials are copied as data into transaction-scoped temporary tables and
+# consumed only by server-side code. Built-in statement logging remains useful
+# for audit while error context and nested statement/parameter collectors are
+# redacted before COPY begins.
+if ! {
   cat <<'SQL'
 \set ON_ERROR_STOP on
+SET SESSION log_error_verbosity = 'terse';
+SET SESSION log_parameter_max_length_on_error = 0;
+SET SESSION debug_print_parse = off;
+SET SESSION debug_print_rewritten = off;
+SET SESSION debug_print_plan = off;
+SET SESSION pgaudit.log_statement = off;
+SET SESSION pgaudit.log_parameter = off;
+SET SESSION pg_stat_statements.track = 'none';
+SET SESSION pg_stat_statements.track_utility = off;
+SET SESSION pg_stat_statements.track_planning = off;
+DO $extension_logging$
+BEGIN
+  IF pg_catalog.current_setting('log_error_verbosity') <> 'terse'
+     OR pg_catalog.current_setting('log_parameter_max_length_on_error') <> '0'
+     OR pg_catalog.current_setting('debug_print_parse') <> 'off'
+     OR pg_catalog.current_setting('debug_print_rewritten') <> 'off'
+     OR pg_catalog.current_setting('debug_print_plan') <> 'off'
+     OR pg_catalog.current_setting('pgaudit.log_statement') <> 'off'
+     OR pg_catalog.current_setting('pgaudit.log_parameter') <> 'off' THEN
+    RAISE EXCEPTION 'audit statement redaction could not be enabled';
+  END IF;
+  IF pg_catalog.current_setting('pg_stat_statements.track') <> 'none'
+     OR pg_catalog.current_setting('pg_stat_statements.track_utility') <> 'off'
+     OR pg_catalog.current_setting('pg_stat_statements.track_planning') <> 'off' THEN
+    RAISE EXCEPTION 'statement-statistics redaction could not be enabled';
+  END IF;
+  IF pg_catalog.current_setting('auto_explain.log_min_duration', true) IS NOT NULL THEN
+    PERFORM pg_catalog.set_config('auto_explain.log_min_duration', '-1', false);
+    IF pg_catalog.current_setting('auto_explain.log_min_duration') <> '-1' THEN
+      RAISE EXCEPTION 'automatic explain logging could not be disabled';
+    END IF;
+  END IF;
+END
+$extension_logging$;
+
 BEGIN;
 SET LOCAL password_encryption = 'scram-sha-256';
+CREATE TEMP TABLE address_atlas_bootstrap_secrets (
+  secret_name text PRIMARY KEY CHECK (secret_name = 'bridge_password'),
+  secret_value text NOT NULL
+) ON COMMIT DROP;
+COPY pg_temp.address_atlas_bootstrap_secrets (secret_name, secret_value) FROM STDIN;
+SQL
+  printf 'bridge_password\t%s\n' "$bridge_password"
+  printf '\\.\n'
+  cat <<'SQL'
 
 DO $guard$
 DECLARE
@@ -98,9 +146,33 @@ SELECT 'DROP ROLE address_atlas_role_bridge'
 WHERE EXISTS (
   SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'address_atlas_role_bridge'
 ) \gexec
-CREATE ROLE address_atlas_role_bridge
-  WITH LOGIN SUPERUSER NOCREATEDB CREATEROLE NOREPLICATION NOBYPASSRLS
-  NOINHERIT CONNECTION LIMIT -1 PASSWORD :'bridge_password' VALID UNTIL 'infinity';
+DO $bridge_role$
+DECLARE
+  desired_bridge_password text;
+BEGIN
+  BEGIN
+    SELECT secret_value INTO STRICT desired_bridge_password
+    FROM pg_temp.address_atlas_bootstrap_secrets
+    WHERE secret_name = 'bridge_password';
+    EXECUTE pg_catalog.format(
+      'CREATE ROLE address_atlas_role_bridge '
+      'WITH LOGIN SUPERUSER NOCREATEDB CREATEROLE NOREPLICATION NOBYPASSRLS '
+      'NOINHERIT CONNECTION LIMIT -1 PASSWORD %L VALID UNTIL %L',
+      desired_bridge_password,
+      'infinity'
+    );
+  EXCEPTION
+    WHEN query_canceled OR assert_failure THEN
+      RAISE EXCEPTION USING
+        MESSAGE = 'sanitized bootstrap bridge credential mutation failed',
+        ERRCODE = '55000';
+    WHEN OTHERS THEN
+      RAISE EXCEPTION USING
+        MESSAGE = 'sanitized bootstrap bridge credential mutation failed',
+        ERRCODE = '55000';
+  END;
+END
+$bridge_role$;
 COMMIT;
 SQL
 } | "$psql_bin" \
@@ -109,7 +181,12 @@ SQL
   --username address_atlas \
   --dbname "$database_name" \
   --no-psqlrc \
-  --quiet
+  --quiet \
+  2>/dev/null
+then
+  printf '%s\n' 'ROLE_PROVISION_FAILED mode=bootstrap stage=bridge-create' >&2
+  exit 74
+fi
 
 # Best-effort crash cleanup covers both sides of the transactional rename: the
 # old owner can remove the bridge before the split commits, while the new admin
@@ -138,17 +215,61 @@ trap cleanup_role_bridge EXIT HUP INT TERM
 
 export PGPASSWORD="$bridge_password"
 
-{
-  # The restricted desired-password alphabet makes these psql variable
-  # assignments unambiguous. Secrets remain on stdin rather than argv.
-  printf '\\set admin_password %s\n' "$admin_password"
-  printf '\\set runtime_password %s\n' "$runtime_password"
-  printf '\\set owner_password_hex %s\n' "$owner_password_hex"
+# This second session repeats the logging guard before receiving the long-lived
+# owner, administrator, and runtime credentials.
+if ! {
   cat <<'SQL'
 \set ON_ERROR_STOP on
+SET SESSION log_error_verbosity = 'terse';
+SET SESSION log_parameter_max_length_on_error = 0;
+SET SESSION debug_print_parse = off;
+SET SESSION debug_print_rewritten = off;
+SET SESSION debug_print_plan = off;
+SET SESSION pgaudit.log_statement = off;
+SET SESSION pgaudit.log_parameter = off;
+SET SESSION pg_stat_statements.track = 'none';
+SET SESSION pg_stat_statements.track_utility = off;
+SET SESSION pg_stat_statements.track_planning = off;
+DO $extension_logging$
+BEGIN
+  IF pg_catalog.current_setting('log_error_verbosity') <> 'terse'
+     OR pg_catalog.current_setting('log_parameter_max_length_on_error') <> '0'
+     OR pg_catalog.current_setting('debug_print_parse') <> 'off'
+     OR pg_catalog.current_setting('debug_print_rewritten') <> 'off'
+     OR pg_catalog.current_setting('debug_print_plan') <> 'off'
+     OR pg_catalog.current_setting('pgaudit.log_statement') <> 'off'
+     OR pg_catalog.current_setting('pgaudit.log_parameter') <> 'off' THEN
+    RAISE EXCEPTION 'audit statement redaction could not be enabled';
+  END IF;
+  IF pg_catalog.current_setting('pg_stat_statements.track') <> 'none'
+     OR pg_catalog.current_setting('pg_stat_statements.track_utility') <> 'off'
+     OR pg_catalog.current_setting('pg_stat_statements.track_planning') <> 'off' THEN
+    RAISE EXCEPTION 'statement-statistics redaction could not be enabled';
+  END IF;
+  IF pg_catalog.current_setting('auto_explain.log_min_duration', true) IS NOT NULL THEN
+    PERFORM pg_catalog.set_config('auto_explain.log_min_duration', '-1', false);
+    IF pg_catalog.current_setting('auto_explain.log_min_duration') <> '-1' THEN
+      RAISE EXCEPTION 'automatic explain logging could not be disabled';
+    END IF;
+  END IF;
+END
+$extension_logging$;
 
 BEGIN;
 SET LOCAL password_encryption = 'scram-sha-256';
+CREATE TEMP TABLE address_atlas_bootstrap_secrets (
+  secret_name text PRIMARY KEY CHECK (
+    secret_name IN ('admin_password', 'runtime_password', 'owner_password_hex')
+  ),
+  secret_value text NOT NULL
+) ON COMMIT DROP;
+COPY pg_temp.address_atlas_bootstrap_secrets (secret_name, secret_value) FROM STDIN;
+SQL
+  printf 'admin_password\t%s\n' "$admin_password"
+  printf 'runtime_password\t%s\n' "$runtime_password"
+  printf 'owner_password_hex\t%s\n' "$owner_password_hex"
+  printf '\\.\n'
+  cat <<'SQL'
 
 DO $guard$
 DECLARE
@@ -176,29 +297,69 @@ $guard$;
 
 ALTER ROLE address_atlas RENAME TO address_atlas_admin;
 
-SELECT pg_catalog.format(
-  'CREATE ROLE address_atlas LOGIN SUPERUSER NOCREATEDB NOCREATEROLE '
-  'NOREPLICATION NOBYPASSRLS NOINHERIT CONNECTION LIMIT -1 PASSWORD %L VALID UNTIL %L',
-  pg_catalog.convert_from(pg_catalog.decode(:'owner_password_hex', 'hex'), 'UTF8'),
-  'infinity'
-) \gexec
+DO $split_roles$
+DECLARE
+  desired_owner_password text;
+  desired_admin_password text;
+  desired_runtime_password text;
+BEGIN
+  BEGIN
+    SELECT pg_catalog.convert_from(
+             pg_catalog.decode(secret_value, 'hex'),
+             'UTF8'
+           )
+    INTO STRICT desired_owner_password
+    FROM pg_temp.address_atlas_bootstrap_secrets
+    WHERE secret_name = 'owner_password_hex';
+    SELECT secret_value INTO STRICT desired_admin_password
+    FROM pg_temp.address_atlas_bootstrap_secrets
+    WHERE secret_name = 'admin_password';
+    SELECT secret_value INTO STRICT desired_runtime_password
+    FROM pg_temp.address_atlas_bootstrap_secrets
+    WHERE secret_name = 'runtime_password';
 
-SELECT pg_catalog.format(
-  'CREATE ROLE address_atlas_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE '
-  'NOREPLICATION NOBYPASSRLS NOINHERIT CONNECTION LIMIT -1 PASSWORD %L VALID UNTIL %L',
-  :'runtime_password',
-  'infinity'
-)
-WHERE NOT EXISTS (
-  SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'address_atlas_runtime'
-) \gexec
-
-ALTER ROLE address_atlas_admin
-  WITH LOGIN SUPERUSER NOCREATEDB CREATEROLE NOREPLICATION NOBYPASSRLS
-  NOINHERIT CONNECTION LIMIT -1 PASSWORD :'admin_password' VALID UNTIL 'infinity';
-ALTER ROLE address_atlas_runtime
-  WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS
-  NOINHERIT CONNECTION LIMIT -1 PASSWORD :'runtime_password' VALID UNTIL 'infinity';
+    EXECUTE pg_catalog.format(
+      'CREATE ROLE address_atlas LOGIN SUPERUSER NOCREATEDB NOCREATEROLE '
+      'NOREPLICATION NOBYPASSRLS NOINHERIT CONNECTION LIMIT -1 PASSWORD %L VALID UNTIL %L',
+      desired_owner_password,
+      'infinity'
+    );
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'address_atlas_runtime'
+    ) THEN
+      EXECUTE pg_catalog.format(
+        'CREATE ROLE address_atlas_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE '
+        'NOREPLICATION NOBYPASSRLS NOINHERIT CONNECTION LIMIT -1 PASSWORD %L VALID UNTIL %L',
+        desired_runtime_password,
+        'infinity'
+      );
+    END IF;
+    EXECUTE pg_catalog.format(
+      'ALTER ROLE address_atlas_admin '
+      'WITH LOGIN SUPERUSER NOCREATEDB CREATEROLE NOREPLICATION NOBYPASSRLS '
+      'NOINHERIT CONNECTION LIMIT -1 PASSWORD %L VALID UNTIL %L',
+      desired_admin_password,
+      'infinity'
+    );
+    EXECUTE pg_catalog.format(
+      'ALTER ROLE address_atlas_runtime '
+      'WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS '
+      'NOINHERIT CONNECTION LIMIT -1 PASSWORD %L VALID UNTIL %L',
+      desired_runtime_password,
+      'infinity'
+    );
+  EXCEPTION
+    WHEN query_canceled OR assert_failure THEN
+      RAISE EXCEPTION USING
+        MESSAGE = 'sanitized bootstrap role credential mutation failed',
+        ERRCODE = '55000';
+    WHEN OTHERS THEN
+      RAISE EXCEPTION USING
+        MESSAGE = 'sanitized bootstrap role credential mutation failed',
+        ERRCODE = '55000';
+  END;
+END
+$split_roles$;
 
 -- Protected roles never inherit from, grant to, or SET ROLE through another
 -- role. Bootstrap converges legacy installations by removing both directions.
@@ -438,7 +599,12 @@ SQL
   --username address_atlas_role_bridge \
   --dbname "$database_name" \
   --no-psqlrc \
-  --quiet
+  --quiet \
+  2>/dev/null
+then
+  printf '%s\n' 'ROLE_PROVISION_FAILED mode=bootstrap stage=role-split' >&2
+  exit 74
+fi
 
 export PGPASSWORD="$admin_password"
 printf '%s\n' 'DROP ROLE address_atlas_role_bridge;' | "$psql_bin" \

@@ -1,19 +1,54 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 const repoRoot = resolve(import.meta.dirname, "../../..");
 const releaseDoctor = join(repoRoot, "scripts/release-doctor.sh");
 
 describe("release doctor invariants", () => {
+  let dispatcherDirectory: string;
+  let dispatcher: string;
   let temporaryDirectory: string;
+  let commandDirectory: string;
+  let commandBodyDirectory: string;
+
+  beforeAll(() => {
+    dispatcherDirectory = realpathSync(
+      mkdtempSync(join(tmpdir(), "address-atlas-release-doctor-dispatcher-"))
+    );
+    dispatcher = join(dispatcherDirectory, "command-dispatcher");
+    writeFileSync(dispatcher, `#!/bin/sh
+set -eu
+command_name=\$(basename "$0")
+command_body="\${FAKE_COMMAND_BODY_DIR:?}/\${command_name}"
+test -f "$command_body"
+exec /bin/sh "$command_body" "$@"
+`);
+    chmodSync(dispatcher, 0o755);
+  });
+
+  afterAll(() => {
+    rmSync(dispatcherDirectory, { recursive: true, force: true });
+  });
 
   beforeEach(() => {
     temporaryDirectory = realpathSync(
       mkdtempSync(join(tmpdir(), "address-atlas-release-doctor-"))
     );
+    commandDirectory = join(temporaryDirectory, "bin");
+    commandBodyDirectory = join(temporaryDirectory, "command-bodies");
+    mkdirSync(commandDirectory, { mode: 0o700 });
+    mkdirSync(commandBodyDirectory, { mode: 0o700 });
   });
 
   afterEach(() => {
@@ -117,9 +152,11 @@ exit 0`);
   }, 15_000);
 
   function installExecutable(name: string, body: string) {
-    const path = join(temporaryDirectory, name);
-    writeFileSync(path, `#!/bin/sh\n${body}\n`);
-    chmodSync(path, 0o755);
+    const commandPath = join(commandDirectory, name);
+    const bodyPath = join(commandBodyDirectory, name);
+    writeFileSync(bodyPath, `${body}\n`, { mode: 0o600 });
+    rmSync(commandPath, { force: true });
+    symlinkSync(dispatcher, commandPath);
   }
 
   function runReleaseDoctor(
@@ -207,7 +244,8 @@ esac
       encoding: "utf8",
       env: {
         ...process.env,
-        PATH: `${temporaryDirectory}:/usr/bin:/bin`,
+        PATH: `${commandDirectory}:/usr/bin:/bin`,
+        FAKE_COMMAND_BODY_DIR: commandBodyDirectory,
         ADDRESS_ATLAS_PROD_ENV_FILE: productionEnv,
         ADDRESS_ATLAS_BACKUP_SCRIPT: backupScript,
         ADDRESS_ATLAS_CODESIGN_IDENTITY: identity,

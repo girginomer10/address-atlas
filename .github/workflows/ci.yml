@@ -147,7 +147,7 @@ jobs:
             | sha256sum --check --strict
           mkdir -p "$RUNNER_TEMP/age-bin"
           tar --extract --gzip --file "$archive" --directory "$RUNNER_TEMP/age-bin" --strip-components=1
-      - name: Prove encrypted backup, verification, and isolated restore drill
+      - name: Prove encrypted backup, drill, and atomic production restore
         env:
           ADDRESS_ATLAS_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
           POSTGRES_ADMIN_PASSWORD: admin_ci_4Rx8Lm2Qs7Vz9Tr5Nc6Hw3Kp1Jf0Yb
@@ -294,6 +294,76 @@ jobs:
           bash server/sync/postgres-backup.sh verify "$backup"
           test "$(bash server/sync/postgres-backup.sh latest)" = "$backup"
           bash server/sync/postgres-backup.sh drill "$backup"
+          docker stop address-atlas-web-ci >/dev/null
+          {
+            printf '%s\n' "$POSTGRES_PASSWORD"
+            cat <<'SQL'
+          UPDATE public.passkey_credentials
+          SET counter = 99
+          WHERE id = 'Y2ktcGFzc2tleS0wMDE';
+          SELECT CASE WHEN
+            (SELECT counter FROM public.passkey_credentials
+             WHERE id = 'Y2ktcGFzc2tleS0wMDE') = 99
+          THEN 'mutated' ELSE 'invalid' END;
+          SQL
+          } | docker exec -i "$ADDRESS_ATLAS_POSTGRES_CONTAINER" sh -ceu '
+            IFS= read -r PGPASSWORD
+            export PGPASSWORD
+            PGOPTIONS="-c search_path=pg_catalog"
+            export PGOPTIONS
+            exec psql --username address_atlas --dbname address_atlas_sync \
+              --no-psqlrc --quiet --tuples-only --no-align \
+              --set ON_ERROR_STOP=1
+          ' | grep -qx mutated
+          sleep 1
+          export ADDRESS_ATLAS_ALLOW_PRODUCTION_RESTORE=YES_I_UNDERSTAND_DATA_WILL_BE_REPLACED
+          bash server/sync/postgres-backup.sh restore "$backup" \
+            --confirm 'RESTORE:address_atlas_sync'
+          {
+            printf '%s\n' "$POSTGRES_PASSWORD"
+            cat <<'SQL'
+          SELECT CASE WHEN
+            (SELECT pg_catalog.count(*) FROM public.users) = 1
+            AND (SELECT pg_catalog.count(*) FROM public.passkey_credentials) = 1
+            AND (SELECT counter FROM public.passkey_credentials
+                 WHERE id = 'Y2ktcGFzc2tleS0wMDE') = 7
+            AND (SELECT pg_catalog.count(*) FROM public.vault_snapshots) = 1
+            AND (SELECT total_snapshot_bytes FROM public.sync_storage_usage
+                 WHERE singleton = true) = 123
+            AND (SELECT pg_catalog.count(*)
+                 FROM public.account_deletion_receipts) = 1
+          THEN 'restored' ELSE 'invalid' END;
+          SQL
+          } | docker exec -i "$ADDRESS_ATLAS_POSTGRES_CONTAINER" sh -ceu '
+            IFS= read -r PGPASSWORD
+            export PGPASSWORD
+            PGOPTIONS="-c search_path=pg_catalog"
+            export PGOPTIONS
+            exec psql --username address_atlas --dbname address_atlas_sync \
+              --no-psqlrc --quiet --tuples-only --no-align \
+              --set ON_ERROR_STOP=1
+          ' | grep -qx restored
+          safety_backup="$(bash server/sync/postgres-backup.sh latest)"
+          test "$safety_backup" != "$backup"
+          bash server/sync/postgres-backup.sh verify "$safety_backup"
+          test ! -e "$backup_dir/.backup-operation.lock"
+          test ! -e "$backup_dir/.backup-operation.lock.preserve"
+          test -z "$(find "$backup_dir" -mindepth 1 -maxdepth 1 -type d \
+            -name '.address-atlas-restore-source.*' -print -quit)"
+          docker start address-atlas-web-ci >/dev/null
+          ready=false
+          for attempt in $(seq 1 45); do
+            if test "$(curl --fail --silent http://127.0.0.1:3000/healthz 2>/dev/null || true)" = '{"ok":true,"service":"address-atlas-sync"}'; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if test "$ready" != true; then
+            docker logs address-atlas-web-ci
+            exit 1
+          fi
+          test "$(curl --fail --silent http://127.0.0.1:3000/livez)" = '{"ok":true,"service":"address-atlas-sync"}'
           printf '%s\n' "$backup" > "$RUNNER_TEMP/address-atlas-ci-backup-path"
           chmod 600 "$RUNNER_TEMP/address-atlas-ci-backup-path"
       - name: Prove destructive fresh-volume PostgreSQL bootstrap recovery

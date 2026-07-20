@@ -1,4 +1,5 @@
 #!/bin/sh
+set +x
 set -eu
 
 if [ "$#" -ne 4 ]; then

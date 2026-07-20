@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set +x
 set -euo pipefail
 
 # Encrypted, signed PostgreSQL backup/restore tooling for the production
@@ -1803,7 +1804,7 @@ provision_restored_database() {
     export ADDRESS_ATLAS_RESTORE_PROVISION_MODE="$provision_mode"
     export ADDRESS_ATLAS_RESTORE_STAGING_ROOT="$BACKUP_DIR"
     exec "$RESTORE_PROVISION_HOOK" "$container" "$database"
-  ) >/dev/null 2>&1; then
+  ) >/dev/null; then
     die "Database privilege provisioning failed." 74
   fi
   admin_and_owner_context_is_valid "$container" "$database" true \
