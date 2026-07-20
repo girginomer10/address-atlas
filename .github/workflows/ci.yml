@@ -393,6 +393,7 @@ jobs:
           export ADDRESS_ATLAS_RESTORE_PROVISION_IMAGE="$postgres_image"
           export ADDRESS_ATLAS_RESTORE_STAGING_ROOT="$backup_dir"
           export ADDRESS_ATLAS_ALLOW_BOOTSTRAP_RESTORE=YES_I_UNDERSTAND_FRESH_CLUSTER_ONLY
+          export ADDRESS_ATLAS_POSTGRES_CONTAINER="$SOURCE_POSTGRES_CONTAINER"
           [[ "$backup" == "$backup_dir"/address-atlas-*.dump.age \
             && -f "$backup" && ! -L "$backup" ]]
           metadata="$(bash "$backup_script" inspect "$backup")"
