@@ -7,6 +7,14 @@
 **/*.p12
 **/*.pfx
 **/*.pem
+**/AuthKey_*.p8
+**/*.agekey
+**/*.dump.age*
+**/*.atlas-recovery
+**/*.keychain
+**/*.keychain-db
+**/*.mobileprovision
+**/*.cer
 **/.netrc
 **/.npmrc
 **/.yarnrc*

@@ -11,9 +11,12 @@ import {
 import { resetRateLimitsForTests } from "@/lib/sync/rate-limit";
 
 const mocks = vi.hoisted(() => ({
+  acquireConcurrencyMany: vi.fn(),
+  authenticateBearerSession: vi.fn(),
+  chargeVaultIngress: vi.fn(),
+  releaseConcurrency: vi.fn(),
   saveVaultSnapshot: vi.fn(),
   dbQuery: vi.fn(),
-  readBearerToken: vi.fn(),
   rateLimitMany: vi.fn()
 }));
 
@@ -22,24 +25,26 @@ vi.mock("@/lib/sync/postgres", () => ({
   getSyncPool: () => ({ query: mocks.dbQuery })
 }));
 
-vi.mock("@/lib/sync/tokens", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/sync/tokens")>()),
-  readBearerToken: mocks.readBearerToken
+vi.mock("@/lib/sync/sessions", () => ({
+  authenticateBearerSession: mocks.authenticateBearerSession
 }));
 
 vi.mock("@/lib/sync/rate-limit", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/sync/rate-limit")>()),
+  acquireConcurrencyMany: mocks.acquireConcurrencyMany,
+  clientKey: () => "client",
   rateLimitMany: mocks.rateLimitMany
 }));
 
 vi.mock("@/lib/sync/vault-storage", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/sync/vault-storage")>()),
+  chargeVaultIngress: mocks.chargeVaultIngress,
   saveVaultSnapshot: mocks.saveVaultSnapshot
 }));
 
 import { GET, PUT } from "./route";
 import { TokenValidationError } from "@/lib/sync/tokens";
-import { VaultConflictError } from "@/lib/sync/vault-storage";
+import { VaultConflictError, VaultQuotaError } from "@/lib/sync/vault-storage";
 
 function snapshot(schemaVersion: 1 | 2 = 2): RemoteVaultSnapshot {
   const nonce = Buffer.alloc(12, 3);
@@ -83,13 +88,79 @@ describe("vault latest route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetRateLimitsForTests();
+    mocks.acquireConcurrencyMany.mockReturnValue(mocks.releaseConcurrency);
+    mocks.chargeVaultIngress.mockResolvedValue(undefined);
     mocks.saveVaultSnapshot.mockResolvedValue({ idempotent: false });
     mocks.rateLimitMany.mockReturnValue(true);
-    mocks.readBearerToken.mockReturnValue({
+    mocks.authenticateBearerSession.mockResolvedValue({
       userId: "11111111-1111-4111-8111-111111111111",
+      sessionId: "22222222-2222-4222-8222-222222222222",
       expiresAt: Date.now() + 60_000
     });
     mocks.dbQuery.mockResolvedValue({ rows: [] });
+  });
+
+  it("rejects GET before database authentication when preflight capacity is exhausted", async () => {
+    mocks.rateLimitMany.mockReturnValue(false);
+
+    const response = await GET(new NextRequest("http://localhost/vault/latest", {
+      headers: { authorization: "Bearer revoked-token" }
+    }));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("retry-after")).toBe("60");
+    expect(mocks.rateLimitMany).toHaveBeenCalledWith([
+      { key: "vault-get-preflight:global", limit: 3_000, windowMs: 60_000 },
+      { key: "vault-get-preflight:client:client", limit: 120, windowMs: 60_000 }
+    ]);
+    expect(mocks.authenticateBearerSession).not.toHaveBeenCalled();
+    expect(mocks.dbQuery).not.toHaveBeenCalled();
+  });
+
+  it("rejects PUT before authentication, body reads, or durable ingress work", async () => {
+    mocks.rateLimitMany.mockReturnValue(false);
+
+    const response = await PUT(request(snapshot()));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("retry-after")).toBe("60");
+    expect(mocks.rateLimitMany).toHaveBeenCalledWith([
+      { key: "vault-put-preflight:global", limit: 300, windowMs: 60_000 },
+      { key: "vault-put-preflight:client:client", limit: 10, windowMs: 60_000 }
+    ]);
+    expect(mocks.authenticateBearerSession).not.toHaveBeenCalled();
+    expect(mocks.chargeVaultIngress).not.toHaveBeenCalled();
+    expect(mocks.acquireConcurrencyMany).not.toHaveBeenCalled();
+  });
+
+  it("rejects an authenticated upload before reading its body when active capacity is full", async () => {
+    mocks.acquireConcurrencyMany.mockReturnValue(null);
+
+    const response = await PUT(request(snapshot()));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("60");
+    expect(mocks.acquireConcurrencyMany).toHaveBeenCalledWith([
+      { key: "vault-put-active:global", limit: 8 },
+      { key: "vault-put-active:client:client", limit: 2 },
+      {
+        key: "vault-put-active:account:11111111-1111-4111-8111-111111111111",
+        limit: 2
+      }
+    ]);
+    expect(mocks.chargeVaultIngress).not.toHaveBeenCalled();
+    expect(mocks.saveVaultSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("releases active upload capacity after a durable quota failure", async () => {
+    mocks.chargeVaultIngress.mockRejectedValue(new VaultQuotaError());
+
+    const response = await PUT(request(snapshot()));
+
+    expect(response.status).toBe(429);
+    expect(mocks.releaseConcurrency).toHaveBeenCalledOnce();
   });
 
   it("returns 409 when storage detects a version conflict", async () => {
@@ -104,6 +175,52 @@ describe("vault latest route", () => {
     const response = await PUT(request(snapshot(1)));
     expect(response.status).toBe(400);
     expect((await response.json()).error).toMatch(/version 2/i);
+    expect(mocks.chargeVaultIngress).toHaveBeenCalledOnce();
+    expect(mocks.saveVaultSnapshot).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["application/json", "not-json", 400],
+    ["text/plain", JSON.stringify(snapshot()), 415]
+  ])("charges %s request bytes before a body-level %s rejection", async (contentType, body, status) => {
+    const response = await PUT(new NextRequest("http://localhost/vault/latest", {
+      method: "PUT",
+      headers: { authorization: "Bearer token", "content-type": contentType },
+      body
+    }));
+
+    expect(response.status).toBe(status);
+    expect(mocks.chargeVaultIngress).toHaveBeenCalledWith(
+      "11111111-1111-4111-8111-111111111111",
+      Buffer.byteLength(body)
+    );
+    expect(mocks.saveVaultSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("charges a bounded full request before rejecting an oversized declaration", async () => {
+    const response = await PUT(new NextRequest("http://localhost/vault/latest", {
+      method: "PUT",
+      headers: {
+        authorization: "Bearer token",
+        "content-type": "application/json",
+        "content-length": "9000000"
+      },
+      body: "{}"
+    }));
+
+    expect(response.status).toBe(413);
+    expect(mocks.chargeVaultIngress).toHaveBeenCalledWith(
+      "11111111-1111-4111-8111-111111111111",
+      8_100_000
+    );
+  });
+
+  it("returns durable quota exhaustion before replay or conflict semantics", async () => {
+    mocks.chargeVaultIngress.mockRejectedValue(new VaultQuotaError());
+    mocks.saveVaultSnapshot.mockRejectedValue(new VaultConflictError());
+    const response = await PUT(request(snapshot()));
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("3600");
     expect(mocks.saveVaultSnapshot).not.toHaveBeenCalled();
   });
 
@@ -114,8 +231,7 @@ describe("vault latest route", () => {
     expect(await response.json()).toEqual({ ok: true, idempotent: true });
     expect(mocks.saveVaultSnapshot).toHaveBeenCalledWith(
       "11111111-1111-4111-8111-111111111111",
-      expect.objectContaining({ version: 2 }),
-      expect.any(Number)
+      expect.objectContaining({ version: 2 })
     );
   });
 
@@ -132,9 +248,8 @@ describe("vault latest route", () => {
     }));
 
     expect(response.status).toBe(200);
-    expect(mocks.saveVaultSnapshot).toHaveBeenCalledWith(
+    expect(mocks.chargeVaultIngress).toHaveBeenCalledWith(
       "11111111-1111-4111-8111-111111111111",
-      expect.objectContaining({ version: 2 }),
       Buffer.byteLength(body)
     );
   });
@@ -187,7 +302,7 @@ describe("vault latest route", () => {
   });
 
   it("returns 401 when a valid session refers to a deleted account", async () => {
-    mocks.dbQuery.mockResolvedValue({ rows: [] });
+    mocks.authenticateBearerSession.mockRejectedValue(new TokenValidationError());
 
     const response = await GET(new NextRequest("http://localhost/vault/latest", {
       headers: { authorization: "Bearer token" }
@@ -198,8 +313,8 @@ describe("vault latest route", () => {
     expect(await response.json()).toEqual({ error: "Authentication required." });
   });
 
-  it("returns 429 before reading or saving an upload when its request quota is exhausted", async () => {
-    mocks.rateLimitMany.mockReturnValue(false);
+  it("durably charges an upload before returning an in-memory rate limit", async () => {
+    mocks.rateLimitMany.mockReturnValueOnce(true).mockReturnValueOnce(false);
 
     const response = await PUT(request(snapshot()));
 
@@ -207,15 +322,19 @@ describe("vault latest route", () => {
     expect(response.headers.get("retry-after")).toBe("60");
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(await response.json()).toEqual({ error: "Too many requests." });
+    expect(mocks.chargeVaultIngress).toHaveBeenCalledWith(
+      "11111111-1111-4111-8111-111111111111",
+      expect.any(Number)
+    );
     expect(mocks.saveVaultSnapshot).not.toHaveBeenCalled();
-    expect(mocks.rateLimitMany).toHaveBeenCalledWith([
+    expect(mocks.rateLimitMany).toHaveBeenLastCalledWith([
       { key: "vault-put:global", limit: 300, windowMs: 60_000 },
       { key: "vault-put:account:11111111-1111-4111-8111-111111111111", limit: 10, windowMs: 60_000 }
     ]);
   });
 
   it("returns 429 before querying storage when its read quota is exhausted", async () => {
-    mocks.rateLimitMany.mockReturnValue(false);
+    mocks.rateLimitMany.mockReturnValueOnce(true).mockReturnValueOnce(false);
 
     const response = await GET(new NextRequest("http://localhost/vault/latest", {
       headers: { authorization: "Bearer token" }
@@ -226,34 +345,39 @@ describe("vault latest route", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(await response.json()).toEqual({ error: "Too many requests." });
     expect(mocks.dbQuery).not.toHaveBeenCalled();
-    expect(mocks.rateLimitMany).toHaveBeenCalledWith([
+    expect(mocks.rateLimitMany).toHaveBeenLastCalledWith([
       { key: "vault-get:global", limit: 3_000, windowMs: 60_000 },
       { key: "vault-get:account:11111111-1111-4111-8111-111111111111", limit: 120, windowMs: 60_000 }
     ]);
   });
 
-  it("does not let unauthenticated traffic consume shared vault quota", async () => {
-    mocks.readBearerToken.mockImplementationOnce(() => {
-      throw new TokenValidationError();
-    });
+  it("meters unauthenticated traffic only against the preflight quota", async () => {
+    mocks.authenticateBearerSession.mockRejectedValueOnce(new TokenValidationError());
 
     const response = await GET(new NextRequest("http://localhost/vault/latest"));
 
     expect(response.status).toBe(401);
-    expect(mocks.rateLimitMany).not.toHaveBeenCalled();
+    expect(mocks.rateLimitMany).toHaveBeenCalledOnce();
+    expect(mocks.rateLimitMany).toHaveBeenCalledWith([
+      { key: "vault-get-preflight:global", limit: 3_000, windowMs: 60_000 },
+      { key: "vault-get-preflight:client:client", limit: 120, windowMs: 60_000 }
+    ]);
     expect(mocks.dbQuery).not.toHaveBeenCalled();
   });
 
-  it("rejects an unauthenticated upload before quota or storage work", async () => {
-    mocks.readBearerToken.mockImplementationOnce(() => {
-      throw new TokenValidationError();
-    });
+  it("rejects an unauthenticated upload before body, account quota, or storage work", async () => {
+    mocks.authenticateBearerSession.mockRejectedValueOnce(new TokenValidationError());
 
     const response = await PUT(request(snapshot()));
 
     expect(response.status).toBe(401);
     expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(mocks.rateLimitMany).not.toHaveBeenCalled();
+    expect(mocks.rateLimitMany).toHaveBeenCalledOnce();
+    expect(mocks.rateLimitMany).toHaveBeenCalledWith([
+      { key: "vault-put-preflight:global", limit: 300, windowMs: 60_000 },
+      { key: "vault-put-preflight:client:client", limit: 10, windowMs: 60_000 }
+    ]);
+    expect(mocks.chargeVaultIngress).not.toHaveBeenCalled();
     expect(mocks.saveVaultSnapshot).not.toHaveBeenCalled();
   });
 

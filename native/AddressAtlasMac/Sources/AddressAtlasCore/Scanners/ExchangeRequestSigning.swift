@@ -20,7 +20,9 @@ public struct SignedExchangeRequest: Equatable, Sendable {
   public var body: String
   public var headers: [String: String]
 
-  public init(method: String, path: String, query: String = "", body: String = "", headers: [String: String]) {
+  public init(
+    method: String, path: String, query: String = "", body: String = "", headers: [String: String]
+  ) {
     self.method = method
     self.path = path
     self.query = query
@@ -62,6 +64,17 @@ public enum ExchangeRequestSigner {
       path: path,
       query: "\(query)&signature=\(signature)",
       headers: ["X-MBX-APIKEY": credentials.apiKey]
+    )
+  }
+
+  public static func binanceAPIRestrictionsRequest(
+    credentials: ExchangeCredentials,
+    timestampMs: Int64
+  ) -> SignedExchangeRequest {
+    binanceAccountRequest(
+      credentials: credentials,
+      timestampMs: timestampMs,
+      path: "/sapi/v1/account/apiRestrictions"
     )
   }
 
@@ -137,7 +150,7 @@ public enum ExchangeRequestSigner {
       body: body,
       headers: [
         "API-Key": credentials.apiKey,
-        "API-Sign": Data(signature).base64EncodedString()
+        "API-Sign": Data(signature).base64EncodedString(),
       ]
     )
   }

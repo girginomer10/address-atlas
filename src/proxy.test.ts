@@ -27,6 +27,10 @@ describe("sync-only proxy gate", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("x-middleware-next")).toBe("1");
+
+    const lifecycleResponse = proxy(request("/account/session"));
+    expect(lifecycleResponse.status).toBe(200);
+    expect(lifecycleResponse.headers.get("x-middleware-next")).toBe("1");
   });
 
   it("passes all routes through only when sync-only mode is explicitly disabled", () => {

@@ -23,6 +23,10 @@ import { getSyncPasskeyConfig } from "./config";
 import { verifyPasskey } from "./passkeys";
 import { closeSyncPoolForTests, ensureSyncSchema, getSyncPool } from "./postgres";
 import { resetRateLimitsForTests } from "./rate-limit";
+import {
+  RegistrationAdmissionQuotaError,
+  reserveRegistrationAdmission
+} from "./registration";
 import { issueChallengeToken, readBearerToken, readChallengeToken } from "./tokens";
 
 const maybeDescribe = process.env.TEST_SYNC_DATABASE_URL ? describe : describe.skip;
@@ -33,13 +37,18 @@ maybeDescribe("passkey invariants against real Postgres", () => {
   let previousDatabaseURL: string | undefined;
   let previousSessionSecret: string | undefined;
   let previousMaxAccounts: string | undefined;
+  let previousRegistrationEnabled: string | undefined;
+  let previousRegistrationHourlyLimit: string | undefined;
 
   beforeAll(async () => {
     previousDatabaseURL = process.env.SYNC_DATABASE_URL;
     previousSessionSecret = process.env.SYNC_SESSION_SECRET;
     previousMaxAccounts = process.env.SYNC_MAX_ACCOUNTS;
+    previousRegistrationEnabled = process.env.SYNC_REGISTRATION_ENABLED;
+    previousRegistrationHourlyLimit = process.env.SYNC_REGISTRATION_HOURLY_LIMIT;
     process.env.SYNC_DATABASE_URL = process.env.TEST_SYNC_DATABASE_URL;
     process.env.SYNC_SESSION_SECRET = "ci-only-public-session-secret-for-integration-tests";
+    process.env.SYNC_REGISTRATION_ENABLED = "true";
     await ensureSyncSchema();
   });
 
@@ -50,6 +59,7 @@ maybeDescribe("passkey invariants against real Postgres", () => {
   afterEach(async () => {
     resetRateLimitsForTests();
     restoreEnv("SYNC_MAX_ACCOUNTS", previousMaxAccounts);
+    restoreEnv("SYNC_REGISTRATION_HOURLY_LIMIT", previousRegistrationHourlyLimit);
     if (testUserIds.size > 0) {
       await getSyncPool().query("DELETE FROM users WHERE id = ANY($1::uuid[])", [[...testUserIds]]);
       testUserIds.clear();
@@ -65,6 +75,8 @@ maybeDescribe("passkey invariants against real Postgres", () => {
     restoreEnv("SYNC_DATABASE_URL", previousDatabaseURL);
     restoreEnv("SYNC_SESSION_SECRET", previousSessionSecret);
     restoreEnv("SYNC_MAX_ACCOUNTS", previousMaxAccounts);
+    restoreEnv("SYNC_REGISTRATION_ENABLED", previousRegistrationEnabled);
+    restoreEnv("SYNC_REGISTRATION_HOURLY_LIMIT", previousRegistrationHourlyLimit);
   });
 
   function challenge(prefix: string) {
@@ -310,6 +322,138 @@ maybeDescribe("passkey invariants against real Postgres", () => {
     );
     expect(Number(stored.rows[0]?.counter)).toBe(9);
     expect(consumed.rows[0]?.count).toBe(1);
+  });
+
+  it("allows exactly one concurrent consumer of a real registration challenge", async () => {
+    const pendingUserId = randomUUID();
+    const credentialId = `concurrent-registration-${randomUUID()}`;
+    const challengeValue = challenge("concurrent-registration");
+    testUserIds.add(pendingUserId);
+    const challengeToken = issueChallengeToken({
+      mode: "register",
+      challenge: challengeValue,
+      pendingUserId,
+      expiresAt: Date.now() + 60_000
+    });
+    mocks.verifyRegistrationResponse.mockResolvedValue({
+      verified: true,
+      registrationInfo: {
+        credential: { id: credentialId, publicKey: new Uint8Array([1, 2, 3, 4]), counter: 0 }
+      }
+    });
+    const input = {
+      mode: "register",
+      challengeToken,
+      response: { id: credentialId }
+    };
+
+    const results = await Promise.allSettled([verifyPasskey(input), verifyPasskey(input)]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    const consumed = await getSyncPool().query(
+      "SELECT count(*)::int AS count FROM consumed_challenges WHERE challenge = $1",
+      [challengeValue]
+    );
+    const credentials = await getSyncPool().query(
+      "SELECT count(*)::int AS count FROM passkey_credentials WHERE id = $1",
+      [credentialId]
+    );
+    expect(consumed.rows[0]?.count).toBe(1);
+    expect(credentials.rows[0]?.count).toBe(1);
+  });
+
+  it("serializes concurrent registrations at the real account-cap boundary", async () => {
+    const base = await getSyncPool().query<{ count: string }>("SELECT count(*)::text AS count FROM users");
+    process.env.SYNC_MAX_ACCOUNTS = String(Number(base.rows[0]?.count ?? 0) + 1);
+
+    const attempts = [0, 1].map((index) => {
+      const pendingUserId = randomUUID();
+      const challengeValue = challenge(`account-cap-${index}`);
+      const credentialId = `account-cap-${index}-${randomUUID()}`;
+      testUserIds.add(pendingUserId);
+      return {
+        pendingUserId,
+        challengeValue,
+        credentialId,
+        input: {
+          mode: "register",
+          challengeToken: issueChallengeToken({
+            mode: "register",
+            challenge: challengeValue,
+            pendingUserId,
+            expiresAt: Date.now() + 60_000
+          }),
+          response: { id: credentialId }
+        }
+      };
+    });
+    mocks.verifyRegistrationResponse.mockImplementation(async ({ response }) => ({
+      verified: true,
+      registrationInfo: {
+        credential: {
+          id: response.id,
+          publicKey: new Uint8Array([1, 2, 3, 4]),
+          counter: 0
+        }
+      }
+    }));
+
+    const results = await Promise.allSettled(attempts.map(({ input }) => verifyPasskey(input)));
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    const persisted = await getSyncPool().query(
+      "SELECT count(*)::int AS count FROM users WHERE id = ANY($1::uuid[])",
+      [attempts.map(({ pendingUserId }) => pendingUserId)]
+    );
+    expect(persisted.rows[0]?.count).toBe(1);
+  });
+
+  it("locks the real credential row across concurrent counter verifications", async () => {
+    const userId = randomUUID();
+    const credentialId = `counter-race-${randomUUID()}`;
+    testUserIds.add(userId);
+    await getSyncPool().query("INSERT INTO users (id) VALUES ($1)", [userId]);
+    await getSyncPool().query(
+      `INSERT INTO passkey_credentials (id, user_id, public_key_base64url, counter)
+       VALUES ($1, $2, 'AQIDBA', 8)`,
+      [credentialId, userId]
+    );
+    const inputs = [0, 1].map((index) => ({
+      mode: "authenticate",
+      challengeToken: issueChallengeToken({
+        mode: "authenticate",
+        challenge: challenge(`counter-race-${index}`),
+        expiresAt: Date.now() + 60_000
+      }),
+      response: { id: credentialId }
+    }));
+    mocks.verifyAuthenticationResponse.mockImplementation(async ({ credential }) => ({
+      verified: true,
+      authenticationInfo: { newCounter: credential.counter + 1 }
+    }));
+
+    const results = await Promise.all(inputs.map((input) => verifyPasskey(input)));
+    expect(results).toHaveLength(2);
+    expect(mocks.verifyAuthenticationResponse.mock.calls.map(([input]) => input.credential.counter).sort())
+      .toEqual([8, 9]);
+    const stored = await getSyncPool().query(
+      "SELECT counter FROM passkey_credentials WHERE id = $1",
+      [credentialId]
+    );
+    expect(Number(stored.rows[0]?.counter)).toBe(10);
+  });
+
+  it("keeps the global registration admission ceiling across a pool restart", async () => {
+    const current = await getSyncPool().query<{ admission_count: number }>(
+      `SELECT admission_count FROM registration_usage
+       WHERE window_started_at = date_trunc('hour', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`
+    );
+    const currentCount = Number(current.rows[0]?.admission_count ?? 0);
+    process.env.SYNC_REGISTRATION_HOURLY_LIMIT = String(currentCount + 1);
+
+    await expect(reserveRegistrationAdmission()).resolves.toBeUndefined();
+    await closeSyncPoolForTests();
+    await expect(reserveRegistrationAdmission()).rejects.toBeInstanceOf(RegistrationAdmissionQuotaError);
   });
 });
 

@@ -11,6 +11,16 @@ export async function register() {
     // Dynamic import inside the runtime guard keeps this Node-only module
     // (and its transitive dependencies) out of the edge bundle.
     const { validateSyncRuntimeConfig } = await import("@/lib/sync/config");
-    validateSyncRuntimeConfig();
+    try {
+      validateSyncRuntimeConfig();
+    } catch (error) {
+      const { generatedDiagnostics, recordSecurityEvent } = await import("@/lib/sync/diagnostics");
+      recordSecurityEvent("config.unavailable", generatedDiagnostics("instrumentation.register"), {
+        status: 503,
+        reason: "startup_configuration_invalid",
+        severity: "error"
+      });
+      throw error;
+    }
   }
 }

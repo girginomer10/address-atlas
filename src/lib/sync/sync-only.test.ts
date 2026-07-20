@@ -3,6 +3,8 @@ import { isSyncOnlyPathAllowed } from "./sync-only";
 
 describe("sync-only route allowlist", () => {
   it("allows only native auth, passkey, vault, health, liveness, and Next assets", () => {
+    expect(isSyncOnlyPathAllowed("/account")).toBe(true);
+    expect(isSyncOnlyPathAllowed("/account/session")).toBe(true);
     expect(isSyncOnlyPathAllowed("/auth/native")).toBe(true);
     expect(isSyncOnlyPathAllowed("/auth/passkey/options")).toBe(true);
     expect(isSyncOnlyPathAllowed("/auth/passkey/verify")).toBe(true);

@@ -17,6 +17,14 @@ export class VaultQuotaError extends Error {
   }
 }
 
+export class VaultGlobalIngressQuotaError extends VaultQuotaError {
+  constructor() {
+    super();
+    this.message = "Service-wide encrypted vault ingress quota exceeded.";
+    this.name = "VaultGlobalIngressQuotaError";
+  }
+}
+
 export class VaultStorageCapacityError extends Error {
   constructor() {
     super("Encrypted vault storage capacity has been reached.");
@@ -36,16 +44,77 @@ export interface VaultSaveResult {
 }
 
 /**
- * Serialize writes per user and charge actual request bytes for successful
- * mutations, exact replays, and rejected stale/same-version writes. Only a
- * committed snapshot mutation increments the logical write counter.
+ * Durably charge every authenticated request body before interpreting its JSON
+ * or snapshot semantics. The service-wide charge commits in its own transaction
+ * before the account transaction begins, so an exhausted or concurrently deleted
+ * account cannot roll back bytes the service already received. Both counters are
+ * row-serialized by PostgreSQL and remain exact across processes/restarts.
+ */
+export async function chargeVaultIngress(
+  userId: string,
+  chargedBytes: number
+): Promise<void> {
+  assertValidChargedBytes(chargedBytes);
+  const client = await getSyncPool().connect();
+  let discardClient = false;
+  let transactionOpen = false;
+  try {
+    const limits = getSyncLimitConfig();
+
+    // Commit received service-wide bytes independently. Do not merge this with
+    // the account transaction: account-quota rejection must not refund traffic
+    // that already crossed the public request boundary.
+    transactionOpen = true;
+    await client.query("BEGIN");
+    const globalUsage = await client.query(
+      `INSERT INTO vault_global_ingress_usage (usage_date, byte_count)
+       VALUES ((now() AT TIME ZONE 'UTC')::date, $1)
+       ON CONFLICT (usage_date) DO UPDATE SET
+         byte_count = vault_global_ingress_usage.byte_count + excluded.byte_count,
+         updated_at = now()
+       WHERE vault_global_ingress_usage.byte_count + excluded.byte_count <= $2
+       RETURNING byte_count`,
+      [chargedBytes, limits.globalDailyVaultIngressByteLimit]
+    );
+    if (globalUsage.rowCount === 0) throw new VaultGlobalIngressQuotaError();
+    await client.query("COMMIT");
+    transactionOpen = false;
+
+    transactionOpen = true;
+    await client.query("BEGIN");
+    const account = await client.query("SELECT id FROM users WHERE id = $1 FOR UPDATE", [userId]);
+    if (account.rowCount === 0) throw new VaultAccountMissingError();
+    const usage = await client.query(
+      `INSERT INTO vault_write_usage (user_id, usage_date, write_count, byte_count)
+       VALUES ($1, (now() AT TIME ZONE 'UTC')::date, 0, $2)
+       ON CONFLICT (user_id, usage_date) DO UPDATE SET
+         byte_count = vault_write_usage.byte_count + excluded.byte_count,
+         updated_at = now()
+       WHERE vault_write_usage.byte_count + excluded.byte_count <= $3
+       RETURNING byte_count`,
+      [userId, chargedBytes, limits.dailyVaultByteLimit]
+    );
+    if (usage.rowCount === 0) throw new VaultQuotaError();
+    await client.query("COMMIT");
+    transactionOpen = false;
+  } catch (error) {
+    if (transactionOpen) discardClient = !(await rollbackQuietly(client));
+    throw error;
+  } finally {
+    if (discardClient) client.release(true);
+    else client.release();
+  }
+}
+
+/**
+ * Serialize snapshot semantics per account. Ingress bytes were committed by
+ * `chargeVaultIngress` before this function is called, so validation failures,
+ * replays, conflicts, and rolled-back mutations cannot erase their charge.
  */
 export async function saveVaultSnapshot(
   userId: string,
-  snapshot: RemoteVaultSnapshot,
-  chargedBytes: number
+  snapshot: RemoteVaultSnapshot
 ): Promise<VaultSaveResult> {
-  assertValidChargedBytes(chargedBytes);
   const client = await getSyncPool().connect();
   let discardClient = false;
   let transactionOpen = false;
@@ -76,24 +145,12 @@ export async function saveVaultSnapshot(
       && row.byte_size === snapshot.byteSize
       && row.same_envelope;
     if (isExactReplay) {
-      await chargeDailyQuota(client, userId, chargedBytes, 0);
       await client.query("COMMIT");
       transactionOpen = false;
       return { idempotent: true };
     }
     if (row && row.version >= snapshot.version) {
-      // Persist the request-byte charge while leaving both the logical write
-      // counter and stored snapshot untouched. The conflict is raised only
-      // after that quota transaction settles. The 409 outranks the 429: a
-      // stale writer must be told to download the newer snapshot, so if the
-      // charge itself fails (for example the daily quota is already
-      // exhausted) it is rolled back and the conflict is still raised.
-      try {
-        await chargeDailyQuota(client, userId, chargedBytes, 0);
-        await client.query("COMMIT");
-      } catch {
-        discardClient = !(await rollbackQuietly(client));
-      }
+      await client.query("COMMIT");
       transactionOpen = false;
       throw new VaultConflictError();
     }
@@ -113,20 +170,14 @@ export async function saveVaultSnapshot(
     );
     if (stored.rowCount === 0) {
       // The SQL version gate is a final defense against writers that do not
-      // follow this process's per-account lock. Charge bytes, but not a logical
-      // write, for that conflict as well — and, as above, a failed charge is
-      // rolled back without masking the conflict.
-      try {
-        await chargeDailyQuota(client, userId, chargedBytes, 0);
-        await client.query("COMMIT");
-      } catch {
-        discardClient = !(await rollbackQuietly(client));
-      }
+      // follow this process's per-account lock.
+      await client.query("COMMIT");
       transactionOpen = false;
       throw new VaultConflictError();
     }
-    // The tentative snapshot and its quota charge commit or roll back together.
-    await chargeDailyQuota(client, userId, chargedBytes, 1);
+    // Only committed mutations consume the logical write budget. Ingress bytes
+    // were already charged in their own durable transaction.
+    await chargeDailyWrite(client, userId);
     // Snapshot mutations and the delete trigger both lock the snapshot before
     // the aggregate counter. Keeping one global order prevents deadlocks and
     // makes a concurrent administrative delete's byte delta deterministic.
@@ -159,27 +210,18 @@ async function chargeGlobalStorageCapacity(client: PoolClient, byteDelta: number
   if (charged.rowCount === 0) throw new VaultStorageCapacityError();
 }
 
-async function chargeDailyQuota(
-  client: PoolClient,
-  userId: string,
-  chargedBytes: number,
-  writeIncrement: 0 | 1
-) {
+async function chargeDailyWrite(client: PoolClient, userId: string) {
   const limits = getSyncLimitConfig();
   const maxWrites = limits.dailyVaultWriteLimit;
-  const maxBytes = limits.dailyVaultByteLimit;
-  assertValidChargedBytes(chargedBytes, maxBytes);
   const usage = await client.query(
     `INSERT INTO vault_write_usage (user_id, usage_date, write_count, byte_count)
-     VALUES ($1, (now() AT TIME ZONE 'UTC')::date, $3, $2)
+     VALUES ($1, (now() AT TIME ZONE 'UTC')::date, 1, 0)
      ON CONFLICT (user_id, usage_date) DO UPDATE SET
-       write_count = vault_write_usage.write_count + excluded.write_count,
-       byte_count = vault_write_usage.byte_count + excluded.byte_count,
+       write_count = vault_write_usage.write_count + 1,
        updated_at = now()
-     WHERE vault_write_usage.write_count + excluded.write_count <= $4
-       AND vault_write_usage.byte_count + excluded.byte_count <= $5
+     WHERE vault_write_usage.write_count + 1 <= $2
      RETURNING write_count`,
-    [userId, chargedBytes, writeIncrement, maxWrites, maxBytes]
+    [userId, maxWrites]
   );
   if (usage.rowCount === 0) throw new VaultQuotaError();
 }

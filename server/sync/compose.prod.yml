@@ -1,8 +1,14 @@
 name: address-atlas-sync
 
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "10"
+
 services:
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
     restart: unless-stopped
     environment:
       ADDRESS_ATLAS_DOMAIN: "${ADDRESS_ATLAS_DOMAIN:?ADDRESS_ATLAS_DOMAIN is required}"
@@ -17,13 +23,30 @@ services:
     depends_on:
       web:
         condition: service_healthy
+    networks:
+      - edge
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    pids_limit: 128
+    mem_limit: "${ADDRESS_ATLAS_CADDY_MEMORY_LIMIT:-256m}"
+    mem_reservation: "${ADDRESS_ATLAS_CADDY_MEMORY_RESERVATION:-64m}"
+    init: true
     security_opt:
       - no-new-privileges:true
+    logging: *default-logging
 
   web:
     build:
       context: ../..
       dockerfile: server/sync/Dockerfile
+      args:
+        ADDRESS_ATLAS_BUILD_REVISION: "${ADDRESS_ATLAS_BUILD_REVISION:?ADDRESS_ATLAS_BUILD_REVISION is required}"
+    image: "address-atlas-sync:${ADDRESS_ATLAS_BUILD_REVISION:?ADDRESS_ATLAS_BUILD_REVISION is required}"
     restart: unless-stopped
     environment:
       ADDRESS_ATLAS_DOMAIN: "${ADDRESS_ATLAS_DOMAIN:?ADDRESS_ATLAS_DOMAIN is required}"
@@ -32,9 +55,13 @@ services:
       SYNC_DATABASE_URL: "${SYNC_DATABASE_URL:?SYNC_DATABASE_URL is required}"
       SYNC_SESSION_SECRET: "${SYNC_SESSION_SECRET:?SYNC_SESSION_SECRET is required}"
       SYNC_MAX_ACCOUNTS: "${SYNC_MAX_ACCOUNTS:-100000}"
+      SYNC_REGISTRATION_ENABLED: "${SYNC_REGISTRATION_ENABLED:-false}"
+      SYNC_REGISTRATION_HOURLY_LIMIT: "${SYNC_REGISTRATION_HOURLY_LIMIT:-100}"
       SYNC_VAULT_DAILY_WRITE_LIMIT: "${SYNC_VAULT_DAILY_WRITE_LIMIT:-100}"
       SYNC_VAULT_DAILY_BYTE_LIMIT: "${SYNC_VAULT_DAILY_BYTE_LIMIT:-64000000}"
+      SYNC_GLOBAL_VAULT_DAILY_INGRESS_BYTE_LIMIT: "${SYNC_GLOBAL_VAULT_DAILY_INGRESS_BYTE_LIMIT:-2000000000}"
       SYNC_GLOBAL_VAULT_STORAGE_LIMIT: "${SYNC_GLOBAL_VAULT_STORAGE_LIMIT:-10000000000}"
+      SYNC_SCHEMA_MODE: "validate"
       SYNC_DB_POOL_SIZE: "${SYNC_DB_POOL_SIZE:-10}"
       SYNC_DB_CONNECT_TIMEOUT_MS: "${SYNC_DB_CONNECT_TIMEOUT_MS:-5000}"
       SYNC_DB_IDLE_TIMEOUT_MS: "${SYNC_DB_IDLE_TIMEOUT_MS:-30000}"
@@ -53,6 +80,21 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    networks:
+      - edge
+      - data
+    # The request-serving image has no reason to mutate its filesystem or
+    # retain Linux capabilities. Keep a small, non-executable temporary mount
+    # for runtime/library scratch space.
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: "${ADDRESS_ATLAS_WEB_MEMORY_LIMIT:-1g}"
+    mem_reservation: "${ADDRESS_ATLAS_WEB_MEMORY_RESERVATION:-256m}"
+    init: true
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3000/healthz | grep -q '\"ok\":true'"]
       interval: 15s
@@ -61,9 +103,113 @@ services:
       start_period: 20s
     security_opt:
       - no-new-privileges:true
+    labels:
+      org.opencontainers.image.revision: "${ADDRESS_ATLAS_BUILD_REVISION:?ADDRESS_ATLAS_BUILD_REVISION is required}"
+    logging: *default-logging
+
+  # Administrative services are profile-gated and invoked explicitly by
+  # manage-prod.sh before the web image is replaced. Owner credentials never
+  # enter the long-running application container.
+  schema:
+    profiles: ["admin"]
+    image: "address-atlas-sync:${ADDRESS_ATLAS_BUILD_REVISION:?ADDRESS_ATLAS_BUILD_REVISION is required}"
+    pull_policy: never
+    command: ["node", "dist/sync-bootstrap.cjs"]
+    restart: "no"
+    environment:
+      NODE_ENV: "production"
+      SYNC_SCHEMA_DATABASE_URL: "${SYNC_SCHEMA_DATABASE_URL:?SYNC_SCHEMA_DATABASE_URL is required}"
+      SYNC_DB_CONNECT_TIMEOUT_MS: "${SYNC_DB_CONNECT_TIMEOUT_MS:-5000}"
+      SYNC_DB_IDLE_TIMEOUT_MS: "${SYNC_DB_IDLE_TIMEOUT_MS:-30000}"
+      SYNC_DB_STATEMENT_TIMEOUT_MS: "${SYNC_DB_STATEMENT_TIMEOUT_MS:-10000}"
+      SYNC_DB_QUERY_TIMEOUT_MS: "${SYNC_DB_QUERY_TIMEOUT_MS:-12000}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    mem_limit: "${ADDRESS_ATLAS_ADMIN_MEMORY_LIMIT:-768m}"
+    mem_reservation: "${ADDRESS_ATLAS_ADMIN_MEMORY_RESERVATION:-128m}"
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+
+  # Explicit one-time path for a new/legacy cluster whose bootstrap OID is the
+  # historical address_atlas superuser. manage-prod.sh selects this service
+  # only when ADDRESS_ATLAS_DATABASE_ROLE_MODE=bootstrap.
+  db-role-bootstrap:
+    profiles: ["admin"]
+    image: postgres:16.14-alpine3.24@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    restart: "no"
+    environment:
+      ADDRESS_ATLAS_DATABASE_ROLE_MODE: "bootstrap"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
+      POSTGRES_ADMIN_PASSWORD: "${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}"
+      POSTGRES_RUNTIME_PASSWORD: "${POSTGRES_RUNTIME_PASSWORD:?POSTGRES_RUNTIME_PASSWORD is required}"
+    volumes:
+      - ./provision-runtime-role.sh:/opt/address-atlas/provision-runtime-role.sh:ro
+      - ./bootstrap-database-roles.sh:/opt/address-atlas/bootstrap-database-roles.sh:ro
+    command: ["/bin/sh", "/opt/address-atlas/provision-runtime-role.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    cap_drop:
+      - ALL
+    pids_limit: 64
+    mem_limit: "${ADDRESS_ATLAS_DB_ADMIN_MEMORY_LIMIT:-256m}"
+    mem_reservation: "${ADDRESS_ATLAS_DB_ADMIN_MEMORY_RESERVATION:-64m}"
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+
+  # Normal deploys authenticate only as the isolated cluster administrator.
+  # The owner password is intentionally absent, so an admin-auth failure can
+  # never fall back to the schema owner.
+  db-provision:
+    profiles: ["admin"]
+    image: postgres:16.14-alpine3.24@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    restart: "no"
+    environment:
+      ADDRESS_ATLAS_DATABASE_ROLE_MODE: "steady"
+      POSTGRES_ADMIN_PASSWORD: "${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}"
+      POSTGRES_RUNTIME_PASSWORD: "${POSTGRES_RUNTIME_PASSWORD:?POSTGRES_RUNTIME_PASSWORD is required}"
+    volumes:
+      - ./provision-runtime-role.sh:/opt/address-atlas/provision-runtime-role.sh:ro
+      - ./bootstrap-database-roles.sh:/opt/address-atlas/bootstrap-database-roles.sh:ro
+    command: ["/bin/sh", "/opt/address-atlas/provision-runtime-role.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    cap_drop:
+      - ALL
+    pids_limit: 64
+    mem_limit: "${ADDRESS_ATLAS_DB_ADMIN_MEMORY_LIMIT:-256m}"
+    mem_reservation: "${ADDRESS_ATLAS_DB_ADMIN_MEMORY_RESERVATION:-64m}"
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16.14-alpine3.24@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     restart: unless-stopped
     environment:
       POSTGRES_USER: address_atlas
@@ -76,8 +222,14 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    networks:
+      - data
+    pids_limit: 256
+    mem_limit: "${ADDRESS_ATLAS_POSTGRES_MEMORY_LIMIT:-2g}"
+    mem_reservation: "${ADDRESS_ATLAS_POSTGRES_MEMORY_RESERVATION:-512m}"
     security_opt:
       - no-new-privileges:true
+    logging: *default-logging
 
 volumes:
   address-atlas-prod-postgres:
@@ -89,3 +241,10 @@ volumes:
     name: "${ADDRESS_ATLAS_CADDY_DATA_VOLUME:-address-atlas-caddy-data}"
   caddy-config:
     name: "${ADDRESS_ATLAS_CADDY_CONFIG_VOLUME:-address-atlas-caddy-config}"
+
+networks:
+  # Caddy cannot address PostgreSQL directly. Only the application joins both
+  # trust zones; one-shot administrative jobs live exclusively on data.
+  edge:
+  data:
+    internal: true

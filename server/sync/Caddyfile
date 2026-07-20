@@ -1,48 +1,68 @@
 {
-  email {$ACME_EMAIL}
-  servers {
-    timeouts {
-      # Bound slow uploads before they can hold a proxy and application stream
-      # indefinitely. The app independently enforces the same wall-clock limit.
-      read_body 60s
-      read_header 10s
-    }
-  }
+	email {$ACME_EMAIL}
+	servers {
+		timeouts {
+			# Bound slow uploads before they can hold a proxy and application stream
+			# indefinitely. The app independently enforces the same wall-clock limit.
+			read_body 60s
+			read_header 10s
+		}
+	}
 }
 
 {$ADDRESS_ATLAS_DOMAIN} {
-  encode zstd gzip
+	encode zstd gzip
 
-  # Reject oversized uploads at the edge (vault snapshots are small encrypted
-  # blobs). Backstops the app-level content-length check on /vault/latest.
-  request_body {
-    max_size 9MB
-  }
+	# Emit structured access records to the container log stream. Keep enough
+	# network prefix information for incident correlation while removing auth
+	# material, callback state, and exact client addresses. Docker applies the
+	# bounded rotation policy declared in compose.prod.yml.
+	log {
+		output stdout
+		format filter {
+			request>remote_ip ip_mask 16 32
+			request>client_ip ip_mask 16 32
+			# Headers are unnecessary for availability/latency diagnosis and can
+			# grow a future sensitive surface beyond today's known auth names.
+			request>headers delete
+			# All public routes are fixed; the application emits their allow-listed
+			# names in security events. Removing URI here prevents arbitrary paths
+			# or future query keys from becoming a logging exfiltration channel.
+			request>uri delete
+			wrap json
+		}
+	}
 
-  header {
-    # HTTPS is terminated here, so HSTS belongs at this layer.
-    Strict-Transport-Security "max-age=31536000; includeSubDomains"
-    X-Content-Type-Options "nosniff"
-    X-Frame-Options "DENY"
-    Referrer-Policy "no-referrer"
-    -Server
-  }
+	# Reject oversized uploads at the edge (vault snapshots are small encrypted
+	# blobs). Backstops the app-level content-length check on /vault/latest.
+	request_body {
+		max_size 9MB
+	}
 
-  # Caddy is the public trust boundary. X-Forwarded-For is explicitly set to
-  # the direct client IP below, replacing any client-sent value; the app's
-  # rate limiter keys on this header. Do not enable trusted_proxies unless a
-  # real upstream proxy is introduced and its CIDRs are explicitly constrained.
-  reverse_proxy web:3000 {
-    header_up X-Forwarded-For {client_ip}
-    # Probe the DB-free /livez so a Postgres blip cannot make Caddy 502 every
-    # route; deep DB health remains the container healthcheck's job.
-    health_uri /livez
-    health_interval 15s
-    health_timeout 5s
-    fail_duration 30s
-    transport http {
-      dial_timeout 5s
-      response_header_timeout 35s
-    }
-  }
+	header {
+		# HTTPS is terminated here, so HSTS belongs at this layer.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# Caddy is the public trust boundary. X-Forwarded-For is explicitly set to
+	# the direct client IP below, replacing any client-sent value; the app's
+	# rate limiter keys on this header. Do not enable trusted_proxies unless a
+	# real upstream proxy is introduced and its CIDRs are explicitly constrained.
+	reverse_proxy web:3000 {
+		header_up X-Forwarded-For {client_ip}
+		# Probe the DB-free /livez so a Postgres blip cannot make Caddy 502 every
+		# route; deep DB health remains the container healthcheck's job.
+		health_uri /livez
+		health_interval 15s
+		health_timeout 5s
+		fail_duration 30s
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 35s
+		}
+	}
 }

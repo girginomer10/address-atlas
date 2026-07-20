@@ -1,0 +1,12 @@
+[Unit]
+Description=Probe Address Atlas sync every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Persistent=true
+Unit=address-atlas-monitor.service
+
+[Install]
+WantedBy=timers.target

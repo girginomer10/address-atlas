@@ -3,7 +3,7 @@ title: Bootstrap surface gate must tolerate missing repairable constraints
 date: 2026-07-20
 status: active
 tags: [bugfix, postgres, bootstrap, schema-contract, trigger]
-related_files: [src/lib/sync/postgres.ts, src/lib/sync/postgres.integration.test.ts]
+related_files: [src/lib/sync/postgres-schema.ts, src/lib/sync/postgres-readiness.ts, src/lib/sync/postgres-schema-migration.integration.test.ts, src/lib/sync/vault-storage.integration.test.ts]
 ---
 
 ## Symptom
@@ -32,12 +32,11 @@ trigger raising "snapshot usage counter is missing or inconsistent".
 
 ## Fix and invariant
 
-The pre-DDL surface gate's job is to reject only what bootstrap must never
-touch: constraints outside the known-safe shapes (e.g. same-name-but-weaker
-checks), any trigger on the storage table, or a stray index. Missing contract
-constraints are tolerated — repair re-adds them and final readiness still
-enforces the full contract. Keep this division of labor: gate = "nothing
-unexpected", repair = "restore the expected", readiness = "everything exact".
+This incident predates the numbered-migration refactor. The current invariant is
+stricter and simpler: immutable, checksummed migrations own every supported
+schema transition, while readiness validates the exact resulting contract.
+Never reintroduce a generic catalog-deparse/repair machine. Known historical
+layouts need an explicit adoption migration; unknown drift remains fail-closed.
 
 Any test (or admin script) that inserts `vault_snapshots` rows directly MUST
 mirror the production counter charge on `sync_storage_usage`, or its deletes
@@ -45,8 +44,9 @@ will fail closed by design.
 
 ## Verification
 
-- Fresh-database run of `postgres.integration.test.ts` (11/11) plus a second
-  bootstrap over the existing schema — the second run exercises the strict
-  marker-present gate path that a fresh run skips. Never trust the mocked
-  suite alone for this file; the drift/migration semantics only exist against
+- Run the split real-PostgreSQL suites, including
+  `postgres-schema-migration.integration.test.ts`, readiness, passkey, session,
+  and vault-storage integration tests, on both a fresh database and a second
+  bootstrap over the existing migration ledger. Never trust the mocked suite
+  alone; drift, trigger, privilege, and migration semantics only exist against
   a real PostgreSQL 16.

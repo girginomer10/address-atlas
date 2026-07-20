@@ -19,7 +19,8 @@ public struct KeychainVaultKeyStore: VaultKeyStore {
   public let service: String
   public let account: String
 
-  public init(service: String = "com.addressatlas.mac.vault", account: String = "primary-vault-key") {
+  public init(service: String = "com.addressatlas.mac.vault", account: String = "primary-vault-key")
+  {
     self.service = service
     self.account = account
   }
@@ -55,7 +56,7 @@ public struct KeychainVaultKeyStore: VaultKeyStore {
     // destructive window where a transient Keychain error loses the only key.
     let attributes: [String: Any] = [
       kSecValueData as String: key,
-      kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+      kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
     ]
     let updateStatus = SecItemUpdate(baseQuery() as CFDictionary, attributes as CFDictionary)
     if updateStatus == errSecSuccess {
@@ -66,7 +67,9 @@ public struct KeychainVaultKeyStore: VaultKeyStore {
     }
 
     var item = baseQuery()
-    attributes.forEach { item[$0.key] = $0.value }
+    for (key, value) in attributes {
+      item[key] = value
+    }
     let addStatus = SecItemAdd(item as CFDictionary, nil)
     if addStatus == errSecDuplicateItem {
       // Another process may have inserted the item between update and add.
@@ -114,7 +117,7 @@ public struct KeychainVaultKeyStore: VaultKeyStore {
     [
       kSecClass as String: kSecClassGenericPassword,
       kSecAttrService as String: service,
-      kSecAttrAccount as String: account
+      kSecAttrAccount as String: account,
     ]
   }
 }

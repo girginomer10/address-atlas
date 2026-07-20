@@ -1,0 +1,21 @@
+[Unit]
+Description=Probe Address Atlas sync liveness and readiness
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=nobody
+Group=nogroup
+WorkingDirectory=/opt/address-atlas
+EnvironmentFile=/etc/address-atlas/monitor.env
+ExecStart=/usr/bin/bash server/sync/monitor-sync.sh
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+TimeoutStartSec=30s

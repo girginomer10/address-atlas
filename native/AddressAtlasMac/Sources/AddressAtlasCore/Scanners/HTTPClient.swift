@@ -45,10 +45,12 @@ enum ProviderErrorSanitizer {
   static let maximumScalarCount = 320
 
   static func sanitize(_ raw: String, fallback: String = "Provider request failed.") -> String {
-    let withoutControls = String(raw.unicodeScalars.map { scalar -> Character in
-      CharacterSet.controlCharacters.contains(scalar) ? " " : Character(String(scalar))
-    })
-    var cleaned = withoutControls
+    let withoutControls = String(
+      raw.unicodeScalars.map { scalar -> Character in
+        CharacterSet.controlCharacters.contains(scalar) ? " " : Character(String(scalar))
+      })
+    var cleaned =
+      withoutControls
       .split(whereSeparator: { $0.isWhitespace })
       .joined(separator: " ")
 
@@ -58,7 +60,8 @@ enum ProviderErrorSanitizer {
       options: .regularExpression
     )
     cleaned = cleaned.replacingOccurrences(
-      of: #"(?i)(api[_ -]?key|secret|token|passphrase|authorization)[\"']?\s*[:=]\s*[\"']?[^,\s\"'}]+"#,
+      of:
+        #"(?i)(api[_ -]?key|secret|token|passphrase|authorization)[\"']?\s*[:=]\s*[\"']?[^,\s\"'}]+"#,
       with: "$1=[redacted]",
       options: .regularExpression
     )
@@ -67,6 +70,18 @@ enum ProviderErrorSanitizer {
       with: "[redacted]",
       options: .regularExpression
     )
+
+    // Framework domains and Swift's default `Module.Type error N` strings are
+    // implementation details, not recovery guidance. Scanner failures can
+    // become durable warnings, so fail to a reviewed provider message here as
+    // well as at the app's primary error boundary.
+    if cleaned.range(
+      of:
+        #"(?i)(NS[A-Za-z0-9_]*ErrorDomain|[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+Error error -?[0-9]+)"#,
+      options: .regularExpression
+    ) != nil {
+      return fallback
+    }
 
     guard !cleaned.isEmpty else { return fallback }
     let scalars = cleaned.unicodeScalars
@@ -91,7 +106,8 @@ public enum ScanWarningPolicy {
     var omitted = 0
 
     for warning in warnings {
-      let sanitized = ProviderErrorSanitizer.sanitize(warning, fallback: "Provider warning unavailable.")
+      let sanitized = ProviderErrorSanitizer.sanitize(
+        warning, fallback: "Provider warning unavailable.")
       guard seen.insert(sanitized).inserted else { continue }
       if result.count < maximumCount - 1 {
         result.append(sanitized)
@@ -101,7 +117,8 @@ public enum ScanWarningPolicy {
     }
 
     if omitted > 0 {
-      result.append("\(omitted) additional unique scan warning\(omitted == 1 ? " was" : "s were") omitted.")
+      result.append(
+        "\(omitted) additional unique scan warning\(omitted == 1 ? " was" : "s were") omitted.")
     }
     return result
   }
@@ -131,8 +148,8 @@ func withWorkflowTimeout<Value: Sendable>(
   guard seconds.isFinite, seconds > 0 else { throw WorkflowTimeoutError(seconds: seconds) }
   let rawNanoseconds = seconds * 1_000_000_000
   guard rawNanoseconds.isFinite,
-        rawNanoseconds > 0,
-        rawNanoseconds < Double(UInt64.max)
+    rawNanoseconds > 0,
+    rawNanoseconds < Double(UInt64.max)
   else {
     throw WorkflowTimeoutError(seconds: seconds)
   }
@@ -232,9 +249,9 @@ final class NonRedirectingSessionDelegate: NSObject, URLSessionTaskDelegate, @un
   }
 }
 
-public extension URLSession {
+extension URLSession {
   /// Shared session that does not follow redirects (used for signed requests).
-  static let nonRedirecting: URLSession = {
+  public static let nonRedirecting: URLSession = {
     let configuration = URLSessionConfiguration.ephemeral
     // URLRequest.timeoutInterval is an inactivity timeout and can be kept alive
     // forever by a slow-drip response. This resource timeout is an independent
@@ -269,7 +286,8 @@ public struct BoundedURLSessionHTTPClient: HTTPClient {
   }
 
   public func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-    let requestTimeout = request.timeoutInterval.isFinite && request.timeoutInterval > 0
+    let requestTimeout =
+      request.timeoutInterval.isFinite && request.timeoutInterval > 0
       ? request.timeoutInterval
       : resourceTimeout
     let deadline = min(requestTimeout, resourceTimeout)
@@ -331,10 +349,12 @@ public struct JSONHTTPClient: Sendable {
     maxRateLimitRetries: Int = 1
   ) {
     let responseLimit = max(1, maxResponseBytes)
-    self.http = http ?? BoundedURLSessionHTTPClient(
-      maxResponseBytes: responseLimit,
-      resourceTimeout: 30
-    )
+    self.http =
+      http
+      ?? BoundedURLSessionHTTPClient(
+        maxResponseBytes: responseLimit,
+        resourceTimeout: 30
+      )
     self.maxResponseBytes = responseLimit
     self.maxRateLimitRetries = max(0, min(maxRateLimitRetries, 3))
   }
@@ -347,7 +367,9 @@ public struct JSONHTTPClient: Sendable {
     return try JSONDecoder.addressAtlas.decode(T.self, from: data)
   }
 
-  public func post<T: Decodable, B: Encodable>(_ url: URL, body: B, as type: T.Type = T.self) async throws -> T {
+  public func post<T: Decodable, B: Encodable>(_ url: URL, body: B, as type: T.Type = T.self)
+    async throws -> T
+  {
     var request = URLRequest(url: url)
     request.timeoutInterval = 30
     request.httpMethod = "POST"
@@ -364,8 +386,9 @@ public struct JSONHTTPClient: Sendable {
       try Task.checkCancellation()
       let (data, response) = try await http.data(for: request)
       if response.statusCode == 429,
-         rateLimitRetries < maxRateLimitRetries,
-         let delay = Self.boundedRetryDelay(response.value(forHTTPHeaderField: "Retry-After")) {
+        rateLimitRetries < maxRateLimitRetries,
+        let delay = Self.boundedRetryDelay(response.value(forHTTPHeaderField: "Retry-After"))
+      {
         rateLimitRetries += 1
         if delay > 0 {
           try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
@@ -385,9 +408,9 @@ public struct JSONHTTPClient: Sendable {
   private static func boundedRetryDelay(_ value: String?) -> TimeInterval? {
     guard let value else { return 0.25 }
     guard let seconds = TimeInterval(value.trimmingCharacters(in: .whitespacesAndNewlines)),
-          seconds.isFinite,
-          seconds >= 0,
-          seconds <= 2
+      seconds.isFinite,
+      seconds >= 0,
+      seconds <= 2
     else { return nil }
     return seconds
   }

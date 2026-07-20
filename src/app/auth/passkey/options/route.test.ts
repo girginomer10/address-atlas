@@ -17,6 +17,10 @@ vi.mock("@/lib/sync/rate-limit", () => ({
 }));
 
 import { POST } from "./route";
+import {
+  RegistrationAdmissionQuotaError,
+  RegistrationDisabledError
+} from "@/lib/sync/registration";
 
 describe("passkey options request ordering", () => {
   beforeEach(() => {
@@ -120,5 +124,26 @@ describe("passkey options request ordering", () => {
     expect(response.status).toBe(429);
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(mocks.createPasskeyOptions).not.toHaveBeenCalled();
+  });
+
+  it("maps durable production registration controls without exposing internals", async () => {
+    mocks.createPasskeyOptions.mockRejectedValueOnce(new RegistrationDisabledError());
+    const closed = await POST(new NextRequest("https://sync.example/auth/passkey/options", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-request-id": "register_req-1234" },
+      body: JSON.stringify({ mode: "register" })
+    }));
+    expect(closed.status).toBe(403);
+    expect(closed.headers.get("x-request-id")).toBe("register_req-1234");
+    expect((await closed.json()).error).toMatch(/closed/i);
+
+    mocks.createPasskeyOptions.mockRejectedValueOnce(new RegistrationAdmissionQuotaError());
+    const full = await POST(new NextRequest("https://sync.example/auth/passkey/options", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode: "register" })
+    }));
+    expect(full.status).toBe(429);
+    expect(full.headers.get("retry-after")).toBe("3600");
   });
 });

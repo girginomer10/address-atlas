@@ -5,6 +5,7 @@ public struct ExportedExchangeConnection: Codable, Equatable, Sendable {
   public var provider: ExchangeProvider
   public var label: String
   public var status: ScanStatus
+  public var credentialScopeAssurance: ExchangeCredentialScopeAssurance?
   public var lastTestedAt: Date?
   public var lastSyncAt: Date?
   public var createdAt: Date
@@ -15,6 +16,7 @@ public struct ExportedExchangeConnection: Codable, Equatable, Sendable {
     provider = connection.provider
     label = connection.label
     status = connection.status
+    credentialScopeAssurance = connection.credentialScopeAssurance
     lastTestedAt = connection.lastTestedAt
     lastSyncAt = connection.lastSyncAt
     createdAt = connection.createdAt
@@ -58,7 +60,7 @@ public enum AddressAtlasExporter {
       "amount",
       "price_usd",
       "value_usd",
-      "source"
+      "source",
     ].joined(separator: ",")
     let rows = assets.map { asset in
       [
@@ -69,7 +71,7 @@ public enum AddressAtlasExporter {
         String(asset.amount),
         String(asset.priceUsd),
         String(asset.valueUsd),
-        csvEscape(asset.source.rawValue)
+        csvEscape(asset.source.rawValue),
       ].joined(separator: ",")
     }
     return ([header] + rows).joined(separator: "\n")

@@ -14,6 +14,23 @@ enum PasskeyWebMode: String, Sendable {
   case authenticate
 }
 
+enum PasskeyAuthenticationError: Error, Equatable, LocalizedError, Sendable {
+  case cancelled
+  case invalidCallback
+  case unavailable
+
+  var errorDescription: String? {
+    switch self {
+    case .cancelled:
+      return nil
+    case .invalidCallback:
+      return "Passkey sign-in returned an invalid response. Nothing was changed."
+    case .unavailable:
+      return "Passkey sign-in could not be started. Check the sync server and try again."
+    }
+  }
+}
+
 /// Injection seam for AppState behavior tests. Production always uses the real
 /// ASWebAuthenticationSession ceremony implemented by PasskeyWebAuthenticator.
 @MainActor
@@ -22,52 +39,75 @@ protocol PasskeyAuthenticating {
 }
 
 @MainActor
-final class PasskeyWebAuthenticator: NSObject, PasskeyAuthenticating, ASWebAuthenticationPresentationContextProviding {
+final class PasskeyWebAuthenticator: NSObject, PasskeyAuthenticating,
+  ASWebAuthenticationPresentationContextProviding
+{
   private var session: ASWebAuthenticationSession?
 
   func authenticate(serverURL: URL, mode: PasskeyWebMode) async throws -> PasskeyWebSession {
+    try Task.checkCancellation()
     let state = UUID().uuidString
-    var components = URLComponents(url: serverURL.appending(path: "auth/native"), resolvingAgainstBaseURL: false)
+    var components = URLComponents(
+      url: serverURL.appending(path: "auth/native"), resolvingAgainstBaseURL: false)
     components?.queryItems = [
       URLQueryItem(name: "mode", value: mode.rawValue),
       URLQueryItem(name: "callback", value: "address-atlas://sync-auth"),
-      URLQueryItem(name: "state", value: state)
+      URLQueryItem(name: "state", value: state),
     ]
     guard let authURL = components?.url else {
       throw URLError(.badURL)
     }
 
-    return try await withCheckedThrowingContinuation { continuation in
-      let webSession = ASWebAuthenticationSession(url: authURL, callbackURLScheme: "address-atlas") { [weak self] callbackURL, error in
-        Task { @MainActor in
-          self?.session = nil
-          if let error {
-            continuation.resume(throwing: error)
-            return
-          }
-          guard let callbackURL else {
-            continuation.resume(throwing: URLError(.badServerResponse))
-            return
-          }
-          do {
-            continuation.resume(returning: try Self.parse(
-              callbackURL: callbackURL,
-              expectedState: state,
-              expectedServerURL: serverURL
-            ))
-          } catch {
-            continuation.resume(throwing: error)
+    return try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { continuation in
+        let webSession = ASWebAuthenticationSession(
+          url: authURL, callbackURLScheme: "address-atlas"
+        ) { [weak self] callbackURL, error in
+          Task { @MainActor in
+            self?.session = nil
+            if let authenticationError = error as? ASWebAuthenticationSessionError,
+              authenticationError.code == .canceledLogin
+            {
+              continuation.resume(throwing: PasskeyAuthenticationError.cancelled)
+              return
+            }
+            if error != nil {
+              continuation.resume(throwing: PasskeyAuthenticationError.unavailable)
+              return
+            }
+            guard let callbackURL else {
+              continuation.resume(throwing: PasskeyAuthenticationError.invalidCallback)
+              return
+            }
+            do {
+              continuation.resume(
+                returning: try Self.parse(
+                  callbackURL: callbackURL,
+                  expectedState: state,
+                  expectedServerURL: serverURL
+                ))
+            } catch {
+              continuation.resume(throwing: PasskeyAuthenticationError.invalidCallback)
+            }
           }
         }
+        webSession.presentationContextProvider = self
+        // The passkey ceremony does not require Safari cookies. Avoid retaining
+        // or reusing web-session state on shared Macs.
+        webSession.prefersEphemeralWebBrowserSession = true
+        if Task.isCancelled {
+          continuation.resume(throwing: CancellationError())
+          return
+        }
+        session = webSession
+        if !webSession.start() {
+          session = nil
+          continuation.resume(throwing: PasskeyAuthenticationError.unavailable)
+        }
       }
-      webSession.presentationContextProvider = self
-      // The passkey ceremony does not require Safari cookies. Avoid retaining
-      // or reusing web-session state on shared Macs.
-      webSession.prefersEphemeralWebBrowserSession = true
-      session = webSession
-      if !webSession.start() {
-        session = nil
-        continuation.resume(throwing: URLError(.cannotLoadFromNetwork))
+    } onCancel: { [weak self] in
+      Task { @MainActor in
+        self?.session?.cancel()
       }
     }
   }
@@ -85,12 +125,12 @@ final class PasskeyWebAuthenticator: NSObject, PasskeyAuthenticating, ASWebAuthe
     // Userinfo, ports, paths, and fragments are not part of that callback and
     // accepting them would make authority validation needlessly ambiguous.
     guard callbackURL.scheme == "address-atlas",
-          callbackURL.host == "sync-auth",
-          callbackURL.user == nil,
-          callbackURL.password == nil,
-          callbackURL.port == nil,
-          callbackURL.path.isEmpty,
-          callbackURL.fragment == nil
+      callbackURL.host == "sync-auth",
+      callbackURL.user == nil,
+      callbackURL.password == nil,
+      callbackURL.port == nil,
+      callbackURL.path.isEmpty,
+      callbackURL.fragment == nil
     else {
       throw URLError(.badURL)
     }
@@ -112,7 +152,7 @@ final class PasskeyWebAuthenticator: NSObject, PasskeyAuthenticating, ASWebAuthe
       throw URLError(.badServerResponse)
     }
     guard let returnedOrigin = SyncServerURL.validatedOrigin(serverURL),
-          returnedOrigin.absoluteString == expectedServerURL.absoluteString
+      returnedOrigin.absoluteString == expectedServerURL.absoluteString
     else {
       throw URLError(.badServerResponse)
     }

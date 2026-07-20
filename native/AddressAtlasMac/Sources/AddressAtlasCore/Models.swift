@@ -191,6 +191,11 @@ public struct ManualHoldingRecord: Codable, Identifiable, Hashable, Sendable {
   }
 }
 
+public enum ExchangeCredentialScopeAssurance: String, Codable, Hashable, Sendable {
+  case verifiedReadOnly
+  case manualVerificationRequired
+}
+
 public struct ExchangeConnectionRecord: Codable, Identifiable, Hashable, Sendable {
   public var id: UUID
   public var provider: ExchangeProvider
@@ -200,6 +205,9 @@ public struct ExchangeConnectionRecord: Codable, Identifiable, Hashable, Sendabl
   /// an API key. Binding each Kraken connection to one local installation keeps
   /// a synced credential from being used concurrently by unsynchronised Macs.
   public var krakenDeviceIdentifier: String?
+  /// Nil only for records created before provider-aware scope validation was
+  /// introduced. The UI treats nil conservatively as unverified.
+  public var credentialScopeAssurance: ExchangeCredentialScopeAssurance?
   public var status: ScanStatus
   public var lastTestedAt: Date?
   public var lastSyncAt: Date?
@@ -213,6 +221,7 @@ public struct ExchangeConnectionRecord: Codable, Identifiable, Hashable, Sendabl
     label: String,
     encryptedCredentials: EncryptedVaultEnvelope,
     krakenDeviceIdentifier: String? = nil,
+    credentialScopeAssurance: ExchangeCredentialScopeAssurance? = nil,
     status: ScanStatus = .empty,
     lastTestedAt: Date? = nil,
     lastSyncAt: Date? = nil,
@@ -225,6 +234,7 @@ public struct ExchangeConnectionRecord: Codable, Identifiable, Hashable, Sendabl
     self.label = label
     self.encryptedCredentials = encryptedCredentials
     self.krakenDeviceIdentifier = krakenDeviceIdentifier
+    self.credentialScopeAssurance = credentialScopeAssurance
     self.status = status
     self.lastTestedAt = lastTestedAt
     self.lastSyncAt = lastSyncAt
@@ -250,7 +260,8 @@ public enum SyncAccountIdentifier {
       if hyphenIndexes.contains(index) {
         guard byte == 45 else { return nil }
       } else {
-        guard (48...57).contains(byte) || (65...70).contains(byte) || (97...102).contains(byte) else {
+        guard (48...57).contains(byte) || (65...70).contains(byte) || (97...102).contains(byte)
+        else {
           return nil
         }
       }
@@ -284,8 +295,27 @@ public enum SyncSessionToken {
         || byte == 47  // /
         || byte == 61  // =
         || byte == 95  // _
-        || byte == 126 // ~
+        || byte == 126  // ~
     }
+  }
+}
+
+/// A deletion operation key is persisted before the destructive request and
+/// replayed until the server acknowledges it. Exactly 32 random bytes encoded
+/// as canonical, unpadded base64url gives one stable 43-character identity
+/// without accepting alternate textual representations.
+public enum AccountDeletionIdempotencyKey {
+  public static let encodedCharacterCount = 43
+  public static let decodedByteCount = 32
+
+  public static func normalized(_ candidate: String?) -> String? {
+    guard let candidate, candidate.count == encodedCharacterCount,
+      let decoded = try? Base64URL.decode(candidate),
+      decoded.count == decodedByteCount
+    else {
+      return nil
+    }
+    return candidate
   }
 }
 
@@ -425,6 +455,9 @@ public struct SyncState: Codable, Equatable, Sendable {
   /// SHA-256 of the user-controlled vault content at the last successful sync.
   /// Authentication/session fields are deliberately excluded from this digest.
   public var lastSyncedContentChecksum: String?
+  /// Local-only operation identity for replay-safe remote account deletion.
+  /// VaultSyncCodec strips it from encrypted server snapshots.
+  public var accountDeletionIdempotencyKey: String?
 
   enum CodingKeys: String, CodingKey {
     case accountId
@@ -434,6 +467,7 @@ public struct SyncState: Codable, Equatable, Sendable {
     case lastSyncedAt
     case lastChecksum
     case lastSyncedContentChecksum
+    case accountDeletionIdempotencyKey
   }
 
   public init(
@@ -443,7 +477,8 @@ public struct SyncState: Codable, Equatable, Sendable {
     latestRemoteVersion: Int = 0,
     lastSyncedAt: Date? = nil,
     lastChecksum: String? = nil,
-    lastSyncedContentChecksum: String? = nil
+    lastSyncedContentChecksum: String? = nil,
+    accountDeletionIdempotencyKey: String? = nil
   ) {
     self.accountId = accountId
     self.serverURL = serverURL
@@ -452,6 +487,9 @@ public struct SyncState: Codable, Equatable, Sendable {
     self.lastSyncedAt = lastSyncedAt
     self.lastChecksum = lastChecksum
     self.lastSyncedContentChecksum = lastSyncedContentChecksum
+    self.accountDeletionIdempotencyKey = AccountDeletionIdempotencyKey.normalized(
+      accountDeletionIdempotencyKey
+    )
   }
 
   /// Decode old schema-v1 documents whose sync state predates server/session
@@ -462,15 +500,21 @@ public struct SyncState: Codable, Equatable, Sendable {
     accountId = storedAccountId.flatMap(SyncAccountIdentifier.normalized)
     serverURL = try container.decodeIfPresent(String.self, forKey: .serverURL) ?? ""
     sessionToken = try container.decodeIfPresent(String.self, forKey: .sessionToken) ?? ""
-    latestRemoteVersion = max(0, try container.decodeIfPresent(Int.self, forKey: .latestRemoteVersion) ?? 0)
+    latestRemoteVersion = max(
+      0, try container.decodeIfPresent(Int.self, forKey: .latestRemoteVersion) ?? 0)
     lastSyncedAt = try container.decodeIfPresent(Date.self, forKey: .lastSyncedAt)
     lastChecksum = try container.decodeIfPresent(String.self, forKey: .lastChecksum)
-    lastSyncedContentChecksum = try container.decodeIfPresent(String.self, forKey: .lastSyncedContentChecksum)
+    lastSyncedContentChecksum = try container.decodeIfPresent(
+      String.self, forKey: .lastSyncedContentChecksum)
+    accountDeletionIdempotencyKey = AccountDeletionIdempotencyKey.normalized(
+      try container.decodeIfPresent(String.self, forKey: .accountDeletionIdempotencyKey)
+    )
     if accountId == nil {
       // Missing and malformed persisted identities cannot safely authorize
       // requests or identify a remote baseline. Force a fresh passkey sign-in
       // instead of carrying bearer or version metadata forward.
       sessionToken = ""
+      accountDeletionIdempotencyKey = nil
       clearRemoteTracking()
     } else if !sessionToken.isEmpty, !SyncSessionToken.isValid(sessionToken) {
       // Preserve the authenticated remote baseline, but force a fresh sign-in
@@ -487,6 +531,7 @@ public struct SyncState: Codable, Equatable, Sendable {
     self.serverURL = nextServer
     accountId = nil
     sessionToken = ""
+    accountDeletionIdempotencyKey = nil
     clearRemoteTracking()
   }
 
@@ -495,10 +540,11 @@ public struct SyncState: Codable, Equatable, Sendable {
   @discardableResult
   public mutating func connect(accountId: String, serverURL: String, sessionToken: String) -> Bool {
     guard let accountId = SyncAccountIdentifier.normalized(accountId),
-          SyncSessionToken.isValid(sessionToken)
+      SyncSessionToken.isValid(sessionToken)
     else { return false }
     let nextServer = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
     if self.accountId != accountId || self.serverURL != nextServer {
+      accountDeletionIdempotencyKey = nil
       clearRemoteTracking()
     }
     self.accountId = accountId
@@ -512,6 +558,23 @@ public struct SyncState: Codable, Equatable, Sendable {
     lastSyncedAt = nil
     lastChecksum = nil
     lastSyncedContentChecksum = nil
+  }
+
+  /// Forget only the bearer grant after the server has revoked this device's
+  /// session. The account identity and authenticated remote baseline remain
+  /// useful after the user signs back in to the same account.
+  public mutating func clearSession() {
+    sessionToken = ""
+  }
+
+  /// Disconnect a deleted remote account without deleting any local vault
+  /// content. Keep the selected server so the user can create a replacement
+  /// account explicitly, but never carry the deleted account's baseline into it.
+  public mutating func disconnectAccount() {
+    accountId = nil
+    sessionToken = ""
+    accountDeletionIdempotencyKey = nil
+    clearRemoteTracking()
   }
 
   public mutating func markSynced(
@@ -589,11 +652,16 @@ public struct VaultDocument: Codable, Equatable, Sendable {
     }
 
     schemaVersion = Self.currentSchemaVersion
-    preferences = try container.decodeIfPresent(Preferences.self, forKey: .preferences) ?? Preferences()
+    preferences =
+      try container.decodeIfPresent(Preferences.self, forKey: .preferences) ?? Preferences()
     wallets = try container.decodeIfPresent([WalletRecord].self, forKey: .wallets) ?? []
-    customTokens = try container.decodeIfPresent([CustomTokenRecord].self, forKey: .customTokens) ?? []
-    manualHoldings = try container.decodeIfPresent([ManualHoldingRecord].self, forKey: .manualHoldings) ?? []
-    exchangeConnections = try container.decodeIfPresent([ExchangeConnectionRecord].self, forKey: .exchangeConnections) ?? []
+    customTokens =
+      try container.decodeIfPresent([CustomTokenRecord].self, forKey: .customTokens) ?? []
+    manualHoldings =
+      try container.decodeIfPresent([ManualHoldingRecord].self, forKey: .manualHoldings) ?? []
+    exchangeConnections =
+      try container.decodeIfPresent([ExchangeConnectionRecord].self, forKey: .exchangeConnections)
+      ?? []
     scanRuns = try container.decodeIfPresent([ScanRunRecord].self, forKey: .scanRuns) ?? []
     syncState = try container.decodeIfPresent(SyncState.self, forKey: .syncState) ?? SyncState()
     updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()

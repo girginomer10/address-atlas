@@ -22,6 +22,14 @@ build
 *.key
 *.p12
 *.pfx
+AuthKey_*.p8
+*.agekey
+*.dump.age*
+*.atlas-recovery
+*.keychain
+*.keychain-db
+*.mobileprovision
+*.cer
 .netrc
 .npmrc
 .yarnrc*

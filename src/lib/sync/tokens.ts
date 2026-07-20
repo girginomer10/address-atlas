@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { base64urlDecode, base64urlEncode } from "./base64url";
 import { getSyncSessionSecret } from "./config";
 
@@ -11,6 +11,8 @@ export interface ChallengeToken {
 
 export interface SessionToken {
   userId: string;
+  sessionId: string;
+  issuedAt: number;
   expiresAt: number;
 }
 
@@ -26,6 +28,7 @@ export class TokenValidationError extends Error {
 const TOKEN_VERSION = "v1";
 const TOKEN_CONTEXT = "address-atlas-sync";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+export const SESSION_TTL_MS = 1000 * 60 * 60 * 12;
 
 function secret() {
   return getSyncSessionSecret();
@@ -95,18 +98,15 @@ export function readChallengeToken(token: string) {
   return parsed;
 }
 
-export function issueSessionToken(userId: string) {
+export function issueSessionToken(userId: string, sessionId: string = randomUUID(), issuedAt = Date.now()) {
   if (!UUID_RE.test(userId)) throw new Error("Invalid session user id.");
-  // Deliberately short-lived and stateless: the single-instance sync service
-  // has no long-lived refresh tokens or server-side login sessions. Account
-  // deletion is an out-of-band administrative operation (no production route
-  // performs it); when an operator deletes a user row, the FK cascade plus the
-  // snapshot usage trigger keep vault data and counters correct. Rotating
-  // SYNC_SESSION_SECRET remains the emergency mechanism for invalidating
-  // every outstanding bearer.
+  if (!UUID_RE.test(sessionId)) throw new Error("Invalid session id.");
+  if (!Number.isSafeInteger(issuedAt) || issuedAt < 0) throw new Error("Invalid session issue time.");
   return signToken<SessionToken>("session", {
     userId,
-    expiresAt: Date.now() + 1000 * 60 * 60 * 12
+    sessionId,
+    issuedAt,
+    expiresAt: issuedAt + SESSION_TTL_MS
   });
 }
 
@@ -114,6 +114,15 @@ export function readBearerToken(header: string | null) {
   const match = header?.match(/^Bearer\s+(.+)$/i);
   if (!match || match[1].length > 4_096) throw new TokenValidationError();
   const parsed = verifyToken<SessionToken>("session", match[1]);
-  if (!UUID_RE.test(parsed.userId)) throw new TokenValidationError();
+  if (
+    !UUID_RE.test(parsed.userId)
+    || !UUID_RE.test(parsed.sessionId)
+    || !Number.isSafeInteger(parsed.issuedAt)
+    || parsed.issuedAt > Date.now() + 30_000
+    || parsed.expiresAt <= parsed.issuedAt
+    || parsed.expiresAt - parsed.issuedAt > SESSION_TTL_MS
+  ) {
+    throw new TokenValidationError();
+  }
   return parsed;
 }

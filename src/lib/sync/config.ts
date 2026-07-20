@@ -27,8 +27,16 @@ export interface SyncLimitConfig {
   maxAccounts: number;
   dailyVaultWriteLimit: number;
   dailyVaultByteLimit: number;
+  globalDailyVaultIngressByteLimit: number;
   globalVaultStorageLimit: number;
 }
+
+export interface SyncRegistrationConfig {
+  enabled: boolean;
+  hourlyLimit: number;
+}
+
+export type SyncSchemaMode = "validate" | "bootstrap";
 
 const PLACEHOLDER_RE = /(replace[-_ ]?with|change[-_ ]?me|example|your[-_ ]?secret|password)/i;
 const RP_ID_RE = /^(?:localhost|(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)$/;
@@ -121,11 +129,35 @@ export function getSyncPasskeyConfig(): SyncPasskeyConfig {
 
 export function getSyncDatabaseConfig(): SyncDatabaseConfig {
   const connectionString = requiredStringFromEither("SYNC_DATABASE_URL", "DATABASE_URL");
+  return parseDatabaseConfig(connectionString, "SYNC_DATABASE_URL");
+}
+
+/**
+ * Returns the privileged, one-shot bootstrap connection. Production bootstrap
+ * deliberately requires a distinct URL so the request-serving role can remain
+ * DML-only. Development keeps a convenient single-role fallback.
+ */
+export function getSyncSchemaDatabaseConfig(): SyncDatabaseConfig {
+  const raw = process.env.SYNC_SCHEMA_DATABASE_URL;
+  const configured = raw?.trim();
+  if (raw !== undefined && !configured) {
+    throw new SyncConfigurationError("SYNC_SCHEMA_DATABASE_URL must not be blank.");
+  }
+  if (!configured && isProduction()) {
+    throw new SyncConfigurationError(
+      "SYNC_SCHEMA_DATABASE_URL is required for production schema bootstrap."
+    );
+  }
+  const connectionString = configured || requiredStringFromEither("SYNC_DATABASE_URL", "DATABASE_URL");
+  return parseDatabaseConfig(connectionString, configured ? "SYNC_SCHEMA_DATABASE_URL" : "SYNC_DATABASE_URL");
+}
+
+function parseDatabaseConfig(connectionString: string, sourceName: string): SyncDatabaseConfig {
   let databaseURL: URL;
   try {
     databaseURL = new URL(connectionString);
   } catch {
-    throw new SyncConfigurationError("SYNC_DATABASE_URL must be a valid Postgres URL.");
+    throw new SyncConfigurationError(`${sourceName} must be a valid Postgres URL.`);
   }
   if (
     (databaseURL.protocol !== "postgres:" && databaseURL.protocol !== "postgresql:")
@@ -133,17 +165,17 @@ export function getSyncDatabaseConfig(): SyncDatabaseConfig {
     || !databaseURL.pathname
     || databaseURL.pathname === "/"
   ) {
-    throw new SyncConfigurationError("SYNC_DATABASE_URL must point to a Postgres database.");
+    throw new SyncConfigurationError(`${sourceName} must point to a Postgres database.`);
   }
   if (isProduction()) {
     let decodedPassword: string;
     try {
       decodedPassword = decodeURIComponent(databaseURL.password);
     } catch {
-      throw new SyncConfigurationError("SYNC_DATABASE_URL contains invalid password encoding.");
+      throw new SyncConfigurationError(`${sourceName} contains invalid password encoding.`);
     }
     if (!databaseURL.username || !decodedPassword || PLACEHOLDER_RE.test(decodedPassword)) {
-      throw new SyncConfigurationError("SYNC_DATABASE_URL must include a non-placeholder username and password in production.");
+      throw new SyncConfigurationError(`${sourceName} must include a non-placeholder username and password in production.`);
     }
   }
 
@@ -175,6 +207,12 @@ export function getSyncLimitConfig(): SyncLimitConfig {
       MAX_SNAPSHOT_REQUEST_BYTES,
       10_000_000_000
     ),
+    globalDailyVaultIngressByteLimit: boundedIntegerFromEnv(
+      "SYNC_GLOBAL_VAULT_DAILY_INGRESS_BYTE_LIMIT",
+      2_000_000_000,
+      MAX_SNAPSHOT_REQUEST_BYTES,
+      10_000_000_000_000
+    ),
     globalVaultStorageLimit: boundedIntegerFromEnv(
       "SYNC_GLOBAL_VAULT_STORAGE_LIMIT",
       10_000_000_000,
@@ -184,12 +222,32 @@ export function getSyncLimitConfig(): SyncLimitConfig {
   };
 }
 
+export function getSyncRegistrationConfig(): SyncRegistrationConfig {
+  return {
+    enabled: strictBooleanFromEnv("SYNC_REGISTRATION_ENABLED", !isProduction()),
+    hourlyLimit: boundedIntegerFromEnv("SYNC_REGISTRATION_HOURLY_LIMIT", 100, 1, 100_000)
+  };
+}
+
+export function getSyncSchemaMode(): SyncSchemaMode {
+  const fallback: SyncSchemaMode = isProduction() ? "validate" : "bootstrap";
+  const raw = process.env.SYNC_SCHEMA_MODE;
+  if (raw === undefined) return fallback;
+  const value = raw.trim().toLowerCase();
+  if (value !== "validate" && value !== "bootstrap") {
+    throw new SyncConfigurationError("SYNC_SCHEMA_MODE must be validate or bootstrap.");
+  }
+  return value;
+}
+
 export function validateSyncRuntimeConfig() {
   return {
     sessionSecret: getSyncSessionSecret(),
     passkeys: getSyncPasskeyConfig(),
     database: getSyncDatabaseConfig(),
-    limits: getSyncLimitConfig()
+    limits: getSyncLimitConfig(),
+    registration: getSyncRegistrationConfig(),
+    schemaMode: getSyncSchemaMode()
   };
 }
 
@@ -231,6 +289,15 @@ function boundedIntegerFromEnv(name: string, fallback: number, min: number, max:
     throw new SyncConfigurationError(`${name} must be an integer between ${min} and ${max}.`);
   }
   return parsed;
+}
+
+function strictBooleanFromEnv(name: string, fallback: boolean) {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const value = raw.trim().toLowerCase();
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw new SyncConfigurationError(`${name} must be true or false.`);
 }
 
 function isProduction() {

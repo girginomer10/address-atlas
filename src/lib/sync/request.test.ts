@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readLimitedJSON } from "./request";
+import { readLimitedBody, readLimitedJSON } from "./request";
 
 describe("limited JSON request reader", () => {
   afterEach(() => {
@@ -33,7 +33,19 @@ describe("limited JSON request reader", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ data: "x".repeat(200) })
-    }), 50)).rejects.toMatchObject({ status: 413 });
+    }), 50)).rejects.toMatchObject({ status: 413, byteLength: 50 });
+  });
+
+  it("reports chargeable bytes even when Content-Length is malformed", async () => {
+    const body = "{\"ok\":true}";
+    await expect(readLimitedBody(new Request("https://sync.example", {
+      method: "POST",
+      headers: { "content-length": "not-a-number" },
+      body
+    }), 1_000)).rejects.toMatchObject({
+      status: 400,
+      byteLength: Buffer.byteLength(body)
+    });
   });
 
   it("cancels a slow-drip stream at an absolute body deadline", async () => {

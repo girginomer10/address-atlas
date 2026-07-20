@@ -17,6 +17,7 @@ vi.mock("@/lib/sync/rate-limit", () => ({
 }));
 
 import { PasskeyVerificationError } from "@/lib/sync/passkeys";
+import { RegistrationDisabledError } from "@/lib/sync/registration";
 import { POST } from "./route";
 
 function request() {
@@ -127,5 +128,20 @@ describe("passkey verification error boundary", () => {
       { key: "auth-register-verify:global", limit: 100, windowMs: 3_600_000 },
       { key: "auth-register-verify:client:client", limit: 5, windowMs: 3_600_000 }
     ]);
+  });
+
+  it("honors a registration kill-switch change after options were issued", async () => {
+    mocks.verifyPasskey.mockRejectedValueOnce(new RegistrationDisabledError());
+    const response = await POST(new NextRequest("https://sync.example/auth/passkey/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        mode: "register",
+        challengeToken: "token",
+        response: { id: "credential" }
+      })
+    }));
+    expect(response.status).toBe(403);
+    expect((await response.json()).error).toMatch(/closed/i);
   });
 });

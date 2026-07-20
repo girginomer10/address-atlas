@@ -13,16 +13,47 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  repository-hygiene:
+    name: Repository secret-artifact hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Reject tracked private-key and release-secret artifacts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          violations=()
+          while IFS= read -r -d '' tracked_path; do
+            normalized="${tracked_path,,}"
+            case "$normalized" in
+              authkey_*.p8|*/authkey_*.p8|*.agekey|*.dump.age|*.dump.age.*|*.atlas-recovery|*.keychain|*.keychain-db|*.mobileprovision|*.cer|*.p12|*.pfx|*.pem|*.key)
+                violations+=("$tracked_path")
+                ;;
+            esac
+          done < <(git ls-files -z)
+          if (( ${#violations[@]} > 0 )); then
+            printf 'Tracked private artifact: %s\n' "${violations[@]}" >&2
+            exit 1
+          fi
+          private_material_files="$(git grep -I -l -E \
+            -e '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|AGE-SECRET-KEY-1[A-Z0-9]{40,}' \
+            -- . || true)"
+          if [[ -n "$private_material_files" ]]; then
+            printf 'Tracked file contains private-key material: %s\n' "$private_material_files" >&2
+            exit 1
+          fi
+
   web:
     name: Web and sync server
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:16.14-alpine3.24@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
         env:
           POSTGRES_USER: address_atlas
-          POSTGRES_PASSWORD: address_atlas_ci
+          POSTGRES_PASSWORD: owner_ci_6Vr2Kx8Qm4Np7Ts9Lc3Hw5Jf1Zd0By8Ua
           POSTGRES_DB: address_atlas_sync
         ports:
           - 5432:5432
@@ -32,24 +63,790 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      TEST_SYNC_DATABASE_URL: postgresql://address_atlas:address_atlas_ci@127.0.0.1:5432/address_atlas_sync
+      TEST_SYNC_DATABASE_URL: postgresql://address_atlas:owner_ci_6Vr2Kx8Qm4Np7Ts9Lc3Hw5Jf1Zd0By8Ua@127.0.0.1:5432/address_atlas_sync
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: 22
+          node-version: 22.23.1
           cache: npm
       - run: npm ci
-      # RELEASE_CHECKLIST requires zero known production vulnerabilities.
-      - run: npm audit --omit=dev
+      # Release policy requires zero known vulnerabilities in the complete
+      # resolved dependency graph, including build/test tooling.
+      - run: npm audit
       - run: npm test
       - run: npm run typecheck
       - run: npm run build
+      - name: Exercise the production schema bootstrap entrypoint
+        env:
+          NODE_ENV: production
+          SYNC_SCHEMA_DATABASE_URL: ${{ env.TEST_SYNC_DATABASE_URL }}
+        run: npm run sync:schema:bootstrap
+      - name: Prove fresh, legacy, rotation, and least-privilege database-role contracts
+        env:
+          POSTGRES_BIN_DIR: /usr/lib/postgresql/16/bin
+        run: bash server/sync/database-role-tests.sh
+      - name: Split the service database bootstrap role and provision exact runtime privileges
+        run: |
+          docker run --rm --network host \
+            --env PGHOST=127.0.0.1 \
+            --env ADDRESS_ATLAS_DATABASE_ROLE_MODE=bootstrap \
+            --env POSTGRES_PASSWORD=owner_ci_6Vr2Kx8Qm4Np7Ts9Lc3Hw5Jf1Zd0By8Ua \
+            --env POSTGRES_ADMIN_PASSWORD=admin_ci_4Rx8Lm2Qs7Vz9Tr5Nc6Hw3Kp1Jf0Yb \
+            --env POSTGRES_RUNTIME_PASSWORD=runtime_ci_7MdkP2Yw4Jq9Vs8Nx3Fb6Lc1Hr5Tz0Qa \
+            --volume "$PWD/server/sync/provision-runtime-role.sh:/opt/address-atlas/provision-runtime-role.sh:ro" \
+            --volume "$PWD/server/sync/bootstrap-database-roles.sh:/opt/address-atlas/bootstrap-database-roles.sh:ro" \
+            postgres:16.14-alpine3.24@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777 \
+            /bin/sh /opt/address-atlas/provision-runtime-role.sh
+      - name: Build and smoke-test the exact production image
+        run: |
+          image="address-atlas-sync-ci:${GITHUB_SHA}"
+          docker build \
+            --file server/sync/Dockerfile \
+            --build-arg "ADDRESS_ATLAS_BUILD_REVISION=${GITHUB_SHA}" \
+            --tag "$image" \
+            .
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")" = "$GITHUB_SHA"
+          docker run --rm --network host \
+            --env NODE_ENV=production \
+            --env SYNC_SCHEMA_DATABASE_URL=postgresql://address_atlas:owner_ci_6Vr2Kx8Qm4Np7Ts9Lc3Hw5Jf1Zd0By8Ua@127.0.0.1:5432/address_atlas_sync \
+            "$image" node dist/sync-bootstrap.cjs
+          docker run --detach --name address-atlas-web-ci --network host \
+            --label com.docker.compose.project=address-atlas-sync \
+            --label com.docker.compose.service=web \
+            --env ADDRESS_ATLAS_DOMAIN=sync.addressatlas.app \
+            --env ADDRESS_ATLAS_SYNC_ONLY=true \
+            --env SYNC_DATABASE_URL=postgresql://address_atlas_runtime:runtime_ci_7MdkP2Yw4Jq9Vs8Nx3Fb6Lc1Hr5Tz0Qa@127.0.0.1:5432/address_atlas_sync \
+            --env SYNC_SESSION_SECRET=ci_9Fv3uJ7sQ2mX8kR5tL1wN6zB4cH0pD7y \
+            --env SYNC_REGISTRATION_ENABLED=false \
+            --env SYNC_SCHEMA_MODE=validate \
+            --env PASSKEY_RP_ID=addressatlas.app \
+            --env PASSKEY_RP_NAME='Address Atlas CI' \
+            --env PASSKEY_ORIGIN=https://sync.addressatlas.app \
+            "$image"
+          ready=false
+          for attempt in $(seq 1 45); do
+            if test "$(curl --fail --silent http://127.0.0.1:3000/healthz 2>/dev/null || true)" = '{"ok":true,"service":"address-atlas-sync"}'; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if test "$ready" != true; then
+            docker logs address-atlas-web-ci
+            exit 1
+          fi
+          test "$(curl --fail --silent http://127.0.0.1:3000/livez)" = '{"ok":true,"service":"address-atlas-sync"}'
+      - name: Install checksum-verified age 1.3.1
+        run: |
+          archive="$RUNNER_TEMP/age-v1.3.1-linux-amd64.tar.gz"
+          curl --fail --silent --show-error --location \
+            --output "$archive" \
+            https://github.com/FiloSottile/age/releases/download/v1.3.1/age-v1.3.1-linux-amd64.tar.gz
+          echo 'bdc69c09cbdd6cf8b1f333d372a1f58247b3a33146406333e30c0f26e8f51377  '"$archive" \
+            | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/age-bin"
+          tar --extract --gzip --file "$archive" --directory "$RUNNER_TEMP/age-bin" --strip-components=1
+      - name: Prove encrypted backup, verification, and isolated restore drill
+        env:
+          ADDRESS_ATLAS_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+          POSTGRES_ADMIN_PASSWORD: admin_ci_4Rx8Lm2Qs7Vz9Tr5Nc6Hw3Kp1Jf0Yb
+          POSTGRES_PASSWORD: owner_ci_6Vr2Kx8Qm4Np7Ts9Lc3Hw5Jf1Zd0By8Ua
+          POSTGRES_RUNTIME_PASSWORD: runtime_ci_7MdkP2Yw4Jq9Vs8Nx3Fb6Lc1Hr5Tz0Qa
+        run: |
+          identity="$RUNNER_TEMP/address-atlas-ci.agekey"
+          signing_private="$RUNNER_TEMP/address-atlas-backup-signing-private.pem"
+          signing_public="$RUNNER_TEMP/address-atlas-backup-signing-public.pem"
+          backup_dir="$RUNNER_TEMP/address-atlas-backups"
+          age_bin="$RUNNER_TEMP/age-bin/age"
+          age_keygen_bin="$RUNNER_TEMP/age-bin/age-keygen"
+          "$age_keygen_bin" --output "$identity" >/dev/null 2>&1
+          chmod 600 "$identity"
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$signing_private" >/dev/null 2>&1
+          openssl pkey -in "$signing_private" -pubout -out "$signing_public" >/dev/null 2>&1
+          chmod 600 "$signing_private"
+          chmod 644 "$signing_public"
+          recipient="$("$age_keygen_bin" -y "$identity")"
+          export AGE_BIN="$age_bin"
+          export ADDRESS_ATLAS_BACKUP_DIR="$backup_dir"
+          export ADDRESS_ATLAS_BACKUP_AGE_RECIPIENT="$recipient"
+          export ADDRESS_ATLAS_BACKUP_AGE_IDENTITY_FILE="$identity"
+          export ADDRESS_ATLAS_BACKUP_SIGNING_PRIVATE_KEY_FILE="$signing_private"
+          export ADDRESS_ATLAS_BACKUP_SIGNATURE_PUBLIC_KEY_FILE="$signing_public"
+          export ADDRESS_ATLAS_BACKUP_OFFSITE_REQUIRED=false
+          export ADDRESS_ATLAS_BACKUP_RESTORE_MIGRATION_HOOK="$PWD/server/sync/migrate-restored-database.sh"
+          export ADDRESS_ATLAS_BACKUP_RESTORE_PROVISION_HOOK="$PWD/server/sync/provision-restored-database.sh"
+          export ADDRESS_ATLAS_RESTORE_BUILD_REVISION="$GITHUB_SHA"
+          export ADDRESS_ATLAS_RESTORE_IMAGE="address-atlas-sync-ci:$GITHUB_SHA"
+          export ADDRESS_ATLAS_RESTORE_PROVISION_IMAGE="postgres:16.14-alpine3.24@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
+          export ADDRESS_ATLAS_RESTORE_STAGING_ROOT="$backup_dir"
+          {
+            printf '%s\n' "$POSTGRES_PASSWORD"
+            cat <<'SQL'
+          BEGIN;
+          TRUNCATE TABLE
+            public.passkey_credentials,
+            public.consumed_challenges,
+            public.registration_usage,
+            public.session_grants,
+            public.vault_global_ingress_usage,
+            public.vault_write_usage,
+            public.vault_snapshots,
+            public.account_deletion_receipts,
+            public.users;
+          INSERT INTO public.users (id, created_at, updated_at)
+          VALUES (
+            '11111111-2222-4333-8444-555555555555',
+            '2026-07-20T12:00:00Z',
+            '2026-07-20T12:00:01Z'
+          );
+          INSERT INTO public.passkey_credentials (
+            id, user_id, public_key_base64url, counter, transports,
+            created_at, updated_at
+          ) VALUES (
+            'Y2ktcGFzc2tleS0wMDE',
+            '11111111-2222-4333-8444-555555555555',
+            'Y2ktcHVibGljLWtleQ',
+            7,
+            '["internal"]'::jsonb,
+            '2026-07-20T12:00:02Z',
+            '2026-07-20T12:00:03Z'
+          );
+          INSERT INTO public.consumed_challenges (challenge, consumed_at)
+          VALUES ('ci-bootstrap-consumed-challenge', '2026-07-20T12:00:04Z');
+          INSERT INTO public.registration_usage (
+            window_started_at, admission_count, updated_at
+          ) VALUES ('2026-07-20T12:00:00Z', 2, '2026-07-20T12:00:05Z');
+          INSERT INTO public.session_grants (id, user_id, expires_at, created_at)
+          VALUES (
+            '66666666-7777-4888-8999-aaaaaaaaaaaa',
+            '11111111-2222-4333-8444-555555555555',
+            '2099-07-20T12:00:00Z',
+            '2026-07-20T12:00:06Z'
+          );
+          INSERT INTO public.vault_global_ingress_usage (
+            usage_date, byte_count, updated_at
+          ) VALUES ('2026-07-20', 1234, '2026-07-20T12:00:07Z');
+          INSERT INTO public.vault_write_usage (
+            user_id, usage_date, write_count, byte_count, updated_at
+          ) VALUES (
+            '11111111-2222-4333-8444-555555555555',
+            '2026-07-20',
+            3,
+            123,
+            '2026-07-20T12:00:08Z'
+          );
+          INSERT INTO public.vault_snapshots (
+            user_id, version, envelope, byte_size, checksum,
+            created_at, updated_at
+          ) VALUES (
+            '11111111-2222-4333-8444-555555555555',
+            7,
+            '{"schemaVersion":1,"ciphertext":"ci-ciphertext","nonce":"ci-nonce"}'::jsonb,
+            123,
+            'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            '2026-07-20T12:00:09Z',
+            '2026-07-20T12:00:10Z'
+          );
+          UPDATE public.sync_storage_usage
+          SET total_snapshot_bytes = 123,
+              reconciled_contract_version = 1,
+              reconcile_required = false,
+              updated_at = '2026-07-20T12:00:11Z'
+          WHERE singleton = true;
+          INSERT INTO public.account_deletion_receipts (
+            idempotency_key_digest, created_at
+          ) VALUES (
+            pg_catalog.decode(pg_catalog.repeat('ab', 32), 'hex'),
+            '2026-07-20T12:00:12Z'
+          );
+          COMMIT;
+          SELECT CASE WHEN
+            (SELECT pg_catalog.count(*) FROM public.users) = 1
+            AND (SELECT pg_catalog.count(*) FROM public.passkey_credentials) = 1
+            AND (SELECT pg_catalog.count(*) FROM public.vault_snapshots) = 1
+            AND (SELECT total_snapshot_bytes FROM public.sync_storage_usage
+                 WHERE singleton = true) = 123
+            AND (SELECT pg_catalog.count(*)
+                 FROM public.account_deletion_receipts) = 1
+          THEN 'seeded' ELSE 'invalid' END;
+          SQL
+          } | docker exec -i "$ADDRESS_ATLAS_POSTGRES_CONTAINER" sh -ceu '
+            IFS= read -r PGPASSWORD
+            export PGPASSWORD
+            PGOPTIONS="-c search_path=pg_catalog"
+            export PGOPTIONS
+            exec psql --username address_atlas --dbname address_atlas_sync \
+              --no-psqlrc --quiet --tuples-only --no-align \
+              --set ON_ERROR_STOP=1
+          ' | grep -qx seeded
+          native_config="$(curl --fail --silent http://127.0.0.1:3000/config/native)"
+          native_record="$(printf '%s' "$native_config" \
+            | node server/sync/native-config-deploy-state.mjs fingerprint)"
+          IFS='|' read -r native_version native_digest native_updated_at native_extra \
+            <<< "$native_record"
+          test -z "$native_extra"
+          export ADDRESS_ATLAS_BACKUP_NATIVE_CONFIG_VERSION="$native_version"
+          export ADDRESS_ATLAS_BACKUP_NATIVE_CONFIG_SHA256="$native_digest"
+          export ADDRESS_ATLAS_BACKUP_NATIVE_CONFIG_UPDATED_AT_EPOCH_MS="$native_updated_at"
+          export ADDRESS_ATLAS_BACKUP_NATIVE_CONFIG_SERVING_REVISION="$GITHUB_SHA"
+          backup="$(bash server/sync/postgres-backup.sh create)"
+          bash server/sync/postgres-backup.sh verify "$backup"
+          test "$(bash server/sync/postgres-backup.sh latest)" = "$backup"
+          bash server/sync/postgres-backup.sh drill "$backup"
+          printf '%s\n' "$backup" > "$RUNNER_TEMP/address-atlas-ci-backup-path"
+          chmod 600 "$RUNNER_TEMP/address-atlas-ci-backup-path"
+      - name: Prove destructive fresh-volume PostgreSQL bootstrap recovery
+        env:
+          SOURCE_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+          TARGET_POSTGRES_CONTAINER: address-atlas-postgres-bootstrap-ci
+          TARGET_POSTGRES_VOLUME: address-atlas-postgres-bootstrap-ci-data
+          POSTGRES_ADMIN_PASSWORD: admin_ci_4Rx8Lm2Qs7Vz9Tr5Nc6Hw3Kp1Jf0Yb
+          POSTGRES_PASSWORD: owner_ci_6Vr2Kx8Qm4Np7Ts9Lc3Hw5Jf1Zd0By8Ua
+          POSTGRES_RUNTIME_PASSWORD: runtime_ci_7MdkP2Yw4Jq9Vs8Nx3Fb6Lc1Hr5Tz0Qa
+        run: |
+          set -Eeuo pipefail
+          postgres_image='postgres:16.14-alpine3.24@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777'
+          backup_script="$PWD/server/sync/postgres-backup.sh"
+          backup_dir="$RUNNER_TEMP/address-atlas-backups"
+          backup="$(< "$RUNNER_TEMP/address-atlas-ci-backup-path")"
+          identity="$RUNNER_TEMP/address-atlas-ci.agekey"
+          signing_public="$RUNNER_TEMP/address-atlas-backup-signing-public.pem"
+          export AGE_BIN="$RUNNER_TEMP/age-bin/age"
+          export ADDRESS_ATLAS_BACKUP_DIR="$backup_dir"
+          export ADDRESS_ATLAS_BACKUP_AGE_IDENTITY_FILE="$identity"
+          export ADDRESS_ATLAS_BACKUP_SIGNATURE_PUBLIC_KEY_FILE="$signing_public"
+          export ADDRESS_ATLAS_BACKUP_RESTORE_MIGRATION_HOOK="$PWD/server/sync/migrate-restored-database.sh"
+          export ADDRESS_ATLAS_BACKUP_RESTORE_PROVISION_HOOK="$PWD/server/sync/provision-restored-database.sh"
+          export ADDRESS_ATLAS_RESTORE_BUILD_REVISION="$GITHUB_SHA"
+          export ADDRESS_ATLAS_RESTORE_IMAGE="address-atlas-sync-ci:$GITHUB_SHA"
+          export ADDRESS_ATLAS_RESTORE_PROVISION_IMAGE="$postgres_image"
+          export ADDRESS_ATLAS_RESTORE_STAGING_ROOT="$backup_dir"
+          export ADDRESS_ATLAS_ALLOW_BOOTSTRAP_RESTORE=YES_I_UNDERSTAND_FRESH_CLUSTER_ONLY
+          [[ "$backup" == "$backup_dir"/address-atlas-*.dump.age \
+            && -f "$backup" && ! -L "$backup" ]]
+          metadata="$(bash "$backup_script" inspect "$backup")"
+          IFS='|' read -r metadata_marker artifact_schema artifact_sha artifact_database \
+            native_version native_digest native_updated_at native_revision \
+            source_web_image source_postgres_image source_migration_head \
+            source_snapshot_started metadata_extra <<< "$metadata"
+          [[ "$metadata_marker" == BACKUP_METADATA && -z "$metadata_extra" \
+            && "$artifact_schema" == 4 && "$artifact_database" == address_atlas_sync \
+            && "$artifact_sha" =~ ^[0-9a-f]{64}$ \
+            && "$native_version" =~ ^[1-9][0-9]*$ \
+            && "$native_digest" =~ ^[0-9a-f]{64}$ \
+            && "$native_updated_at" =~ ^[1-9][0-9]*$ \
+            && "$native_revision" == "$GITHUB_SHA" \
+            && "$source_web_image" =~ ^sha256:[0-9a-f]{64}$ \
+            && "$source_postgres_image" =~ ^sha256:[0-9a-f]{64}$ \
+            && "$source_migration_head" == 3 \
+            && "$source_snapshot_started" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]]
+          export ADDRESS_ATLAS_EXPECTED_BACKUP_SHA256="$artifact_sha"
+
+          source_mount="$(docker inspect --format \
+            '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Type}}|{{.Name}}{{println}}{{end}}{{end}}' \
+            "$SOURCE_POSTGRES_CONTAINER")"
+          IFS='|' read -r source_mount_type source_volume source_mount_extra \
+            <<< "$source_mount"
+          [[ "$source_mount_type" == volume && -z "$source_mount_extra" \
+            && "$source_volume" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]
+          printf '%s\n' "$source_volume" \
+            > "$RUNNER_TEMP/address-atlas-ci-source-postgres-volume"
+          chmod 600 "$RUNNER_TEMP/address-atlas-ci-source-postgres-volume"
+          docker rm --force address-atlas-web-ci >/dev/null
+          docker rm --force "$SOURCE_POSTGRES_CONTAINER" >/dev/null
+          docker volume rm "$source_volume" >/dev/null
+          ! docker inspect "$SOURCE_POSTGRES_CONTAINER" >/dev/null 2>&1
+          ! docker volume inspect "$source_volume" >/dev/null 2>&1
+
+          ! docker inspect "$TARGET_POSTGRES_CONTAINER" >/dev/null 2>&1
+          ! docker volume inspect "$TARGET_POSTGRES_VOLUME" >/dev/null 2>&1
+          docker volume create "$TARGET_POSTGRES_VOLUME" >/dev/null
+          docker run --detach --name "$TARGET_POSTGRES_CONTAINER" \
+            --publish 127.0.0.1:5432:5432 \
+            --mount "type=volume,source=${TARGET_POSTGRES_VOLUME},target=/var/lib/postgresql/data" \
+            --env POSTGRES_USER=address_atlas \
+            --env "POSTGRES_PASSWORD=$POSTGRES_PASSWORD" \
+            --env POSTGRES_DB=address_atlas_sync \
+            "$postgres_image" >/dev/null
+          target_ready=false
+          for attempt in $(seq 1 45); do
+            if docker exec "$TARGET_POSTGRES_CONTAINER" \
+                pg_isready --username address_atlas \
+                  --dbname address_atlas_sync >/dev/null 2>&1; then
+              target_ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$target_ready" != true ]]; then
+            docker logs "$TARGET_POSTGRES_CONTAINER"
+            exit 1
+          fi
+          export ADDRESS_ATLAS_POSTGRES_CONTAINER="$TARGET_POSTGRES_CONTAINER"
+          [[ "$(bash "$backup_script" classify-source)" == brand-new-empty ]]
+          target_restore_image="$(docker image inspect --format '{{.Id}}' \
+            "$ADDRESS_ATLAS_RESTORE_IMAGE")"
+          target_provision_image="$(docker image inspect --format '{{.Id}}' \
+            "$postgres_image")"
+          [[ "$target_restore_image" =~ ^sha256:[0-9a-f]{64}$ \
+            && "$target_provision_image" =~ ^sha256:[0-9a-f]{64}$ \
+            && "$target_provision_image" == "$source_postgres_image" ]]
+          export CI_BOOTSTRAP_SCRIPT="$backup_script"
+          export CI_BOOTSTRAP_BACKUP="$backup"
+          export CI_ARTIFACT_SHA="$artifact_sha"
+          export CI_NATIVE_VERSION="$native_version"
+          export CI_NATIVE_DIGEST="$native_digest"
+          export CI_NATIVE_UPDATED_AT="$native_updated_at"
+          export CI_NATIVE_REVISION="$native_revision"
+          export CI_SOURCE_WEB_IMAGE="$source_web_image"
+          export CI_TARGET_RESTORE_IMAGE="$target_restore_image"
+          export CI_TARGET_PROVISION_IMAGE="$target_provision_image"
+          trusted_bash="$(realpath "$(command -v bash)")"
+          [[ "$trusted_bash" == /* && -f "$trusted_bash" \
+            && -x "$trusted_bash" && ! -L "$trusted_bash" ]]
+
+          ci_fresh_volume_recovery() {
+            set -Eeuo pipefail
+            bash "$CI_BOOTSTRAP_SCRIPT" assert-lock >/dev/null
+            restore_output="$(bash "$CI_BOOTSTRAP_SCRIPT" bootstrap-restore \
+              "$CI_BOOTSTRAP_BACKUP" \
+              --confirm BOOTSTRAP-RESTORE:address_atlas_sync)"
+            printf '%s\n' "$restore_output"
+            restore_receipt="$(printf '%s\n' "$restore_output" \
+              | awk '/^BOOTSTRAP_RESTORE_RECEIPT\|/{print}')"
+            [[ "$(printf '%s\n' "$restore_receipt" | wc -l)" -eq 1 ]]
+            IFS='|' read -r receipt_marker receipt_artifact_sha \
+              receipt_native_version receipt_native_digest \
+              receipt_native_updated_at receipt_native_revision \
+              receipt_source_web_image receipt_database receipt_storage_identity \
+              receipt_quarantine_database receipt_target_revision \
+              receipt_restore_image receipt_provision_image receipt_migration_head \
+              receipt_migration_hook_digest receipt_provision_hook_digest \
+              receipt_provision_source_digest receipt_bootstrap_source_digest \
+              receipt_extra <<< "$restore_receipt"
+            [[ "$receipt_marker" == BOOTSTRAP_RESTORE_RECEIPT \
+              && -z "$receipt_extra" \
+              && "$receipt_artifact_sha" == "$CI_ARTIFACT_SHA" \
+              && "$receipt_native_version" == "$CI_NATIVE_VERSION" \
+              && "$receipt_native_digest" == "$CI_NATIVE_DIGEST" \
+              && "$receipt_native_updated_at" == "$CI_NATIVE_UPDATED_AT" \
+              && "$receipt_native_revision" == "$CI_NATIVE_REVISION" \
+              && "$receipt_source_web_image" == "$CI_SOURCE_WEB_IMAGE" \
+              && "$receipt_source_web_image" == "$receipt_restore_image" \
+              && "$receipt_database" == address_atlas_sync \
+              && "$receipt_storage_identity" =~ ^sha256:[0-9a-f]{64}$ \
+              && "$receipt_quarantine_database" =~ ^[A-Za-z_][A-Za-z0-9_]*$ \
+              && "$receipt_target_revision" == "$GITHUB_SHA" \
+              && "$receipt_restore_image" == "$CI_TARGET_RESTORE_IMAGE" \
+              && "$receipt_provision_image" == "$CI_TARGET_PROVISION_IMAGE" \
+              && "$receipt_migration_head" == 3 \
+              && "$receipt_migration_hook_digest" =~ ^[0-9a-f]{64}$ \
+              && "$receipt_provision_hook_digest" =~ ^[0-9a-f]{64}$ \
+              && "$receipt_provision_source_digest" =~ ^[0-9a-f]{64}$ \
+              && "$receipt_bootstrap_source_digest" =~ ^[0-9a-f]{64}$ ]]
+
+            runtime_contract="$({
+              printf '%s\n' "$POSTGRES_RUNTIME_PASSWORD"
+              cat <<'SQL'
+            WITH expected(table_name, privilege_type) AS (
+              VALUES
+                ('sync_schema_migrations', 'SELECT'),
+                ('users', 'SELECT'), ('users', 'INSERT'),
+                  ('users', 'UPDATE'), ('users', 'DELETE'),
+                ('passkey_credentials', 'SELECT'),
+                  ('passkey_credentials', 'INSERT'),
+                  ('passkey_credentials', 'UPDATE'),
+                ('consumed_challenges', 'SELECT'),
+                  ('consumed_challenges', 'INSERT'),
+                  ('consumed_challenges', 'DELETE'),
+                ('registration_usage', 'SELECT'),
+                  ('registration_usage', 'INSERT'),
+                  ('registration_usage', 'UPDATE'),
+                  ('registration_usage', 'DELETE'),
+                ('session_grants', 'SELECT'), ('session_grants', 'INSERT'),
+                  ('session_grants', 'UPDATE'), ('session_grants', 'DELETE'),
+                ('vault_global_ingress_usage', 'SELECT'),
+                  ('vault_global_ingress_usage', 'INSERT'),
+                  ('vault_global_ingress_usage', 'UPDATE'),
+                  ('vault_global_ingress_usage', 'DELETE'),
+                ('vault_write_usage', 'SELECT'),
+                  ('vault_write_usage', 'INSERT'),
+                  ('vault_write_usage', 'UPDATE'),
+                  ('vault_write_usage', 'DELETE'),
+                ('sync_storage_usage', 'SELECT'),
+                  ('sync_storage_usage', 'UPDATE'),
+                ('vault_snapshots', 'SELECT'), ('vault_snapshots', 'INSERT'),
+                  ('vault_snapshots', 'UPDATE'),
+                ('account_deletion_receipts', 'SELECT'),
+                  ('account_deletion_receipts', 'INSERT')
+            ), table_privilege(privilege_type) AS (
+              VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'),
+                ('TRUNCATE'), ('REFERENCES'), ('TRIGGER')
+            )
+            SELECT CASE WHEN
+              CURRENT_USER = 'address_atlas_runtime'
+              AND (SELECT pg_catalog.array_agg(version ORDER BY version)
+                   FROM public.sync_schema_migrations) = ARRAY[1, 2, 3]
+              AND (SELECT pg_catalog.array_agg(name ORDER BY version)
+                   FROM public.sync_schema_migrations) = ARRAY[
+                     'core-schema-ledger',
+                     'vault-accounting-trigger',
+                     'account-deletion-receipts'
+                   ]::text[]
+              AND NOT EXISTS (
+                SELECT 1 FROM public.sync_schema_migrations
+                WHERE checksum !~ '^[0-9a-f]{64}$'
+              )
+              AND EXISTS (
+                SELECT 1 FROM public.users
+                WHERE id = '11111111-2222-4333-8444-555555555555'
+                  AND created_at = '2026-07-20T12:00:00Z'
+                  AND updated_at = '2026-07-20T12:00:01Z'
+              )
+              AND EXISTS (
+                SELECT 1 FROM public.passkey_credentials
+                WHERE id = 'Y2ktcGFzc2tleS0wMDE' AND counter = 7
+                  AND transports = '["internal"]'::jsonb
+              )
+              AND EXISTS (
+                SELECT 1 FROM public.consumed_challenges
+                WHERE challenge = 'ci-bootstrap-consumed-challenge'
+              )
+              AND EXISTS (
+                SELECT 1 FROM public.registration_usage
+                WHERE window_started_at = '2026-07-20T12:00:00Z'
+                  AND admission_count = 2
+              )
+              AND EXISTS (
+                SELECT 1 FROM public.session_grants
+                WHERE id = '66666666-7777-4888-8999-aaaaaaaaaaaa'
+                  AND user_id = '11111111-2222-4333-8444-555555555555'
+              )
+              AND EXISTS (
+                SELECT 1 FROM public.vault_global_ingress_usage
+                WHERE usage_date = '2026-07-20' AND byte_count = 1234
+              )
+              AND EXISTS (
+                SELECT 1 FROM public.vault_write_usage
+                WHERE user_id = '11111111-2222-4333-8444-555555555555'
+                  AND usage_date = '2026-07-20' AND write_count = 3
+                  AND byte_count = 123
+              )
+              AND EXISTS (
+                SELECT 1 FROM public.vault_snapshots
+                WHERE user_id = '11111111-2222-4333-8444-555555555555'
+                  AND version = 7 AND byte_size = 123
+                  AND checksum = pg_catalog.repeat('b', 64)
+              )
+              AND EXISTS (
+                SELECT 1 FROM public.sync_storage_usage
+                WHERE singleton = true AND total_snapshot_bytes = 123
+                  AND reconciled_contract_version = 1
+                  AND reconcile_required = false
+              )
+              AND EXISTS (
+                SELECT 1 FROM public.account_deletion_receipts
+                WHERE idempotency_key_digest =
+                  pg_catalog.decode(pg_catalog.repeat('ab', 32), 'hex')
+              )
+              AND (SELECT pg_catalog.count(*) FROM public.users) = 1
+              AND (SELECT pg_catalog.count(*)
+                   FROM public.passkey_credentials) = 1
+              AND (SELECT pg_catalog.count(*)
+                   FROM public.consumed_challenges) = 1
+              AND (SELECT pg_catalog.count(*)
+                   FROM public.registration_usage) = 1
+              AND (SELECT pg_catalog.count(*) FROM public.session_grants) = 1
+              AND (SELECT pg_catalog.count(*)
+                   FROM public.vault_global_ingress_usage) = 1
+              AND (SELECT pg_catalog.count(*)
+                   FROM public.vault_write_usage) = 1
+              AND (SELECT pg_catalog.count(*) FROM public.vault_snapshots) = 1
+              AND (SELECT pg_catalog.count(*)
+                   FROM public.account_deletion_receipts) = 1
+              AND pg_catalog.has_database_privilege(
+                CURRENT_USER, pg_catalog.current_database(), 'CONNECT'
+              )
+              AND NOT pg_catalog.has_database_privilege(
+                CURRENT_USER, pg_catalog.current_database(), 'CREATE'
+              )
+              AND NOT pg_catalog.has_database_privilege(
+                CURRENT_USER, pg_catalog.current_database(), 'TEMPORARY'
+              )
+              AND pg_catalog.has_schema_privilege(CURRENT_USER, 'public', 'USAGE')
+              AND NOT pg_catalog.has_schema_privilege(
+                CURRENT_USER, 'public', 'CREATE'
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM pg_catalog.pg_class AS relation
+                JOIN pg_catalog.pg_namespace AS namespace
+                  ON namespace.oid = relation.relnamespace
+                CROSS JOIN table_privilege AS candidate
+                WHERE namespace.nspname = 'public'
+                  AND relation.relkind IN ('r', 'p', 'v', 'm', 'f')
+                  AND pg_catalog.has_table_privilege(
+                    CURRENT_USER, relation.oid, candidate.privilege_type
+                  ) IS DISTINCT FROM EXISTS (
+                    SELECT 1 FROM expected
+                    WHERE expected.table_name = relation.relname
+                      AND expected.privilege_type = candidate.privilege_type
+                  )
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM pg_catalog.pg_proc AS routine
+                JOIN pg_catalog.pg_namespace AS namespace
+                  ON namespace.oid = routine.pronamespace
+                WHERE namespace.nspname = 'public'
+                  AND pg_catalog.has_function_privilege(
+                    CURRENT_USER, routine.oid, 'EXECUTE'
+                  )
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM pg_catalog.pg_class AS sequence
+                JOIN pg_catalog.pg_namespace AS namespace
+                  ON namespace.oid = sequence.relnamespace
+                WHERE namespace.nspname = 'public'
+                  AND sequence.relkind = 'S'
+                  AND (
+                    pg_catalog.has_sequence_privilege(
+                      CURRENT_USER, sequence.oid, 'USAGE'
+                    )
+                    OR pg_catalog.has_sequence_privilege(
+                      CURRENT_USER, sequence.oid, 'SELECT'
+                    )
+                    OR pg_catalog.has_sequence_privilege(
+                      CURRENT_USER, sequence.oid, 'UPDATE'
+                    )
+                  )
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM pg_catalog.pg_type AS item
+                JOIN pg_catalog.pg_namespace AS namespace
+                  ON namespace.oid = item.typnamespace
+                LEFT JOIN pg_catalog.pg_class AS relation
+                  ON relation.oid = item.typrelid
+                WHERE namespace.nspname = 'public'
+                  AND (
+                    item.typtype IN ('d', 'e', 'r', 'm')
+                    OR (item.typtype = 'c' AND relation.relkind = 'c')
+                  )
+                  AND pg_catalog.has_type_privilege(
+                    CURRENT_USER, item.oid, 'USAGE'
+                  )
+              )
+            THEN 'ok' ELSE 'invalid' END;
+            SQL
+            } | docker exec -i "$TARGET_POSTGRES_CONTAINER" sh -ceu '
+              IFS= read -r PGPASSWORD
+              export PGPASSWORD
+              PGOPTIONS="-c search_path=pg_catalog"
+              export PGOPTIONS
+              exec psql --username address_atlas_runtime \
+                --dbname address_atlas_sync --no-psqlrc --quiet \
+                --tuples-only --no-align --set ON_ERROR_STOP=1
+            ')"
+            [[ "$runtime_contract" == ok ]]
+
+            admin_contract="$({
+              printf '%s\n' "$POSTGRES_ADMIN_PASSWORD"
+              printf '%s\n' "$receipt_quarantine_database"
+              cat <<'SQL'
+            SELECT CASE WHEN
+              CURRENT_USER = 'address_atlas_admin'
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_catalog.pg_roles
+                WHERE rolname !~ '^pg_'
+                  AND rolname NOT IN (
+                    'address_atlas_admin',
+                    'address_atlas',
+                    'address_atlas_runtime'
+                  )
+              )
+              AND EXISTS (
+                SELECT 1 FROM pg_catalog.pg_roles
+                WHERE rolname = 'address_atlas_admin' AND rolcanlogin
+                  AND rolsuper AND NOT rolcreatedb AND rolcreaterole
+                  AND NOT rolreplication AND NOT rolbypassrls AND NOT rolinherit
+                  AND rolconnlimit = -1 AND rolconfig IS NULL
+                  AND (rolvaliduntil IS NULL OR rolvaliduntil = 'infinity')
+              )
+              AND EXISTS (
+                SELECT 1 FROM pg_catalog.pg_roles
+                WHERE rolname = 'address_atlas' AND rolcanlogin
+                  AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole
+                  AND NOT rolreplication AND NOT rolbypassrls AND NOT rolinherit
+                  AND rolconnlimit = -1 AND rolconfig IS NULL
+                  AND (rolvaliduntil IS NULL OR rolvaliduntil = 'infinity')
+              )
+              AND EXISTS (
+                SELECT 1 FROM pg_catalog.pg_roles
+                WHERE rolname = 'address_atlas_runtime' AND rolcanlogin
+                  AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole
+                  AND NOT rolreplication AND NOT rolbypassrls AND NOT rolinherit
+                  AND rolconnlimit = -1 AND rolconfig IS NULL
+                  AND (rolvaliduntil IS NULL OR rolvaliduntil = 'infinity')
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_catalog.pg_auth_members AS edge
+                JOIN pg_catalog.pg_roles AS granted ON granted.oid = edge.roleid
+                JOIN pg_catalog.pg_roles AS member ON member.oid = edge.member
+                WHERE granted.rolname !~ '^pg_' OR member.rolname !~ '^pg_'
+              )
+              AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_db_role_setting)
+              AND EXISTS (
+                SELECT 1 FROM pg_catalog.pg_database AS database
+                JOIN pg_catalog.pg_roles AS owner ON owner.oid = database.datdba
+                WHERE database.datname = 'address_atlas_sync'
+                  AND database.datallowconn AND owner.rolname = 'address_atlas'
+              )
+              AND EXISTS (
+                SELECT 1 FROM pg_catalog.pg_database AS database
+                JOIN pg_catalog.pg_roles AS owner ON owner.oid = database.datdba
+                WHERE database.datname = :'quarantine_database'
+                  AND NOT database.datallowconn
+                  AND owner.rolname = 'address_atlas_admin'
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM pg_catalog.pg_class AS relation
+                JOIN pg_catalog.pg_namespace AS namespace
+                  ON namespace.oid = relation.relnamespace
+                JOIN pg_catalog.pg_roles AS owner ON owner.oid = relation.relowner
+                WHERE namespace.nspname = 'public'
+                  AND relation.relkind IN ('r', 'p', 'S', 'v', 'm', 'f')
+                  AND owner.rolname <> 'address_atlas'
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM pg_catalog.pg_proc AS routine
+                JOIN pg_catalog.pg_namespace AS namespace
+                  ON namespace.oid = routine.pronamespace
+                JOIN pg_catalog.pg_roles AS owner ON owner.oid = routine.proowner
+                WHERE namespace.nspname = 'public'
+                  AND owner.rolname <> 'address_atlas'
+              )
+            THEN 'ok' ELSE 'invalid' END;
+            SQL
+            } | docker exec -i "$TARGET_POSTGRES_CONTAINER" sh -ceu '
+              IFS= read -r PGPASSWORD
+              IFS= read -r quarantine_database
+              export PGPASSWORD
+              PGOPTIONS="-c search_path=pg_catalog"
+              export PGOPTIONS
+              exec psql --username address_atlas_admin \
+                --dbname address_atlas_sync \
+                --no-psqlrc --quiet --tuples-only --no-align \
+                --set ON_ERROR_STOP=1 \
+                --set "quarantine_database=$quarantine_database"
+            ')"
+            [[ "$admin_contract" == ok ]]
+
+            docker run --detach --name address-atlas-web-ci --network host \
+              --label com.docker.compose.project=address-atlas-sync \
+              --label com.docker.compose.service=web \
+              --env ADDRESS_ATLAS_DOMAIN=sync.addressatlas.app \
+              --env ADDRESS_ATLAS_SYNC_ONLY=true \
+              --env "SYNC_DATABASE_URL=postgresql://address_atlas_runtime:${POSTGRES_RUNTIME_PASSWORD}@127.0.0.1:5432/address_atlas_sync" \
+              --env SYNC_SESSION_SECRET=ci_9Fv3uJ7sQ2mX8kR5tL1wN6zB4cH0pD7y \
+              --env SYNC_REGISTRATION_ENABLED=false \
+              --env SYNC_SCHEMA_MODE=validate \
+              --env PASSKEY_RP_ID=addressatlas.app \
+              --env "PASSKEY_RP_NAME=Address Atlas CI" \
+              --env PASSKEY_ORIGIN=https://sync.addressatlas.app \
+              "$ADDRESS_ATLAS_RESTORE_IMAGE" >/dev/null
+            web_ready=false
+            for attempt in $(seq 1 45); do
+              if [[ "$(curl --fail --silent \
+                  http://127.0.0.1:3000/healthz 2>/dev/null || true)" \
+                  == '{"ok":true,"service":"address-atlas-sync"}' ]]; then
+                web_ready=true
+                break
+              fi
+              sleep 1
+            done
+            if [[ "$web_ready" != true ]]; then
+              docker logs address-atlas-web-ci
+              exit 1
+            fi
+            [[ "$(curl --fail --silent http://127.0.0.1:3000/livez)" \
+              == '{"ok":true,"service":"address-atlas-sync"}' ]]
+            receipt_dir="$RUNNER_TEMP/address-atlas-bootstrap-receipt"
+            mkdir -m 700 "$receipt_dir"
+            umask 077
+            headers="$receipt_dir/native-config.headers"
+            body="$receipt_dir/native-config.json"
+            state="$receipt_dir/native-config-deployment.json"
+            curl --fail --silent --show-error \
+              --dump-header "$headers" --output "$body" \
+              http://127.0.0.1:3000/config/native
+            served_record="$(node server/sync/native-config-deploy-state.mjs \
+              fingerprint < "$body")"
+            [[ "$served_record" \
+              == "${CI_NATIVE_VERSION}|${CI_NATIVE_DIGEST}|${CI_NATIVE_UPDATED_AT}" ]]
+            node server/sync/native-config-deploy-state.mjs verify-response \
+              "$headers" "$CI_NATIVE_DIGEST" "$CI_NATIVE_REVISION"
+            persisted_record="$(node server/sync/native-config-deploy-state.mjs \
+              write "$state" "$CI_NATIVE_VERSION" "$CI_NATIVE_DIGEST" \
+              "$CI_NATIVE_UPDATED_AT" "$CI_NATIVE_REVISION" \
+              "$CI_TARGET_RESTORE_IMAGE")"
+            [[ "$persisted_record" \
+              == "${CI_NATIVE_VERSION}|${CI_NATIVE_DIGEST}|${CI_NATIVE_UPDATED_AT}|${CI_NATIVE_REVISION}|${CI_TARGET_RESTORE_IMAGE}" ]]
+            [[ "$(node server/sync/native-config-deploy-state.mjs read "$state")" \
+              == "$persisted_record" ]]
+            export ADDRESS_ATLAS_BOOTSTRAP_FINALIZE_ACK=PUBLIC_SMOKE_AND_RECEIPT_PERSISTED
+            bash "$CI_BOOTSTRAP_SCRIPT" bootstrap-finalize \
+              --confirm BOOTSTRAP-FINALIZE:address_atlas_sync
+          }
+          export -f ci_fresh_volume_recovery
+          bash "$backup_script" lock-run -- \
+            "$trusted_bash" -c ci_fresh_volume_recovery
+          [[ ! -e "$backup_dir/.bootstrap-restore.state" \
+            && ! -e "$backup_dir/.backup-operation.lock" \
+            && ! -e "$backup_dir/.backup-operation.lock.preserve" ]]
+      - name: Remove CI recovery containers and volumes
+        if: always()
+        env:
+          SOURCE_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+          TARGET_POSTGRES_CONTAINER: address-atlas-postgres-bootstrap-ci
+          TARGET_POSTGRES_VOLUME: address-atlas-postgres-bootstrap-ci-data
+        run: |
+          set +e
+          source_volume=""
+          if docker inspect "$SOURCE_POSTGRES_CONTAINER" >/dev/null 2>&1; then
+            source_mount="$(docker inspect --format \
+              '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Type}}|{{.Name}}{{println}}{{end}}{{end}}' \
+              "$SOURCE_POSTGRES_CONTAINER" 2>/dev/null)"
+            IFS='|' read -r source_mount_type inspected_volume source_mount_extra \
+              <<< "$source_mount"
+            if [[ "$source_mount_type" == volume && -z "$source_mount_extra" \
+                && "$inspected_volume" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+              source_volume="$inspected_volume"
+            fi
+          elif [[ -f "$RUNNER_TEMP/address-atlas-ci-source-postgres-volume" ]]; then
+            inspected_volume="$(< "$RUNNER_TEMP/address-atlas-ci-source-postgres-volume")"
+            if [[ "$inspected_volume" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+              source_volume="$inspected_volume"
+            fi
+          fi
+          docker rm --force address-atlas-web-ci >/dev/null 2>&1 || true
+          docker rm --force "$TARGET_POSTGRES_CONTAINER" >/dev/null 2>&1 || true
+          docker rm --force "$SOURCE_POSTGRES_CONTAINER" >/dev/null 2>&1 || true
+          docker volume rm "$TARGET_POSTGRES_VOLUME" >/dev/null 2>&1 || true
+          if [[ -n "$source_volume" && "$source_volume" != "$TARGET_POSTGRES_VOLUME" ]]; then
+            docker volume rm "$source_volume" >/dev/null 2>&1 || true
+          fi
 
   native:
     name: Native macOS package
-    runs-on: macos-latest
-    timeout-minutes: 20
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -58,9 +855,26 @@ jobs:
           # checkout must fail closed rather than silently reusing "1".
           fetch-depth: 0
       - name: Validate macOS bundle version derivation
-        run: bash Tests/build-mac-app-version-tests.sh
+        run: |
+          bash Tests/build-mac-app-version-tests.sh
+          bash Tests/notarize-mac-app-tests.sh
         working-directory: native/AddressAtlasMac
       - run: swift test
+        working-directory: native/AddressAtlasMac
+      - name: Detect data races under Thread Sanitizer
+        run: swift test --sanitize=thread
+        working-directory: native/AddressAtlasMac
+      - name: Compile release product
+        run: swift build --configuration release --product AddressAtlasMac
+        working-directory: native/AddressAtlasMac
+      - name: Build and validate universal signed app bundle
+        run: |
+          ./build-mac-app.sh
+          codesign --verify --deep --strict "dist/Address Atlas.app"
+          plutil -lint "dist/Address Atlas.app/Contents/Info.plist"
+          architectures="$(lipo -archs "dist/Address Atlas.app/Contents/MacOS/Address Atlas")"
+          [[ " $architectures " == *" arm64 "* ]]
+          [[ " $architectures " == *" x86_64 "* ]]
         working-directory: native/AddressAtlasMac
 
   deployment-config:
@@ -70,13 +884,25 @@ jobs:
     env:
       ADDRESS_ATLAS_DOMAIN: sync.addressatlas.test
       ACME_EMAIL: ci@addressatlas.test
-      POSTGRES_PASSWORD: address_atlas_ci
-      SYNC_DATABASE_URL: postgresql://address_atlas:address_atlas_ci@postgres:5432/address_atlas_sync
+      POSTGRES_PASSWORD: owner_ci_6Vr2Kx8Qm4Np7Ts9Lc3Hw5Jf1Zd0By8Ua
+      POSTGRES_ADMIN_PASSWORD: admin_ci_4Rx8Lm2Qs7Vz9Tr5Nc6Hw3Kp1Jf0Yb
+      POSTGRES_RUNTIME_PASSWORD: runtime_ci_7MdkP2Yw4Jq9Vs8Nx3Fb6Lc1Hr5Tz0Qa
+      ADDRESS_ATLAS_DATABASE_ROLE_MODE: steady
+      SYNC_SCHEMA_DATABASE_URL: postgresql://address_atlas:owner_ci_6Vr2Kx8Qm4Np7Ts9Lc3Hw5Jf1Zd0By8Ua@postgres:5432/address_atlas_sync
+      SYNC_DATABASE_URL: postgresql://address_atlas_runtime:runtime_ci_7MdkP2Yw4Jq9Vs8Nx3Fb6Lc1Hr5Tz0Qa@postgres:5432/address_atlas_sync
       SYNC_SESSION_SECRET: ci-only-public-value-for-config-validation-2026 # Not a credential.
+      SYNC_REGISTRATION_ENABLED: "false"
       PASSKEY_RP_ID: sync.addressatlas.test
       PASSKEY_RP_NAME: Address Atlas CI
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Validate operations script syntax and hermetic behavior
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          bash -n server/sync/manage-prod.sh server/sync/postgres-backup.sh server/sync/monitor-sync.sh server/sync/database-role-tests.sh
+          sh -n server/sync/provision-runtime-role.sh server/sync/bootstrap-database-roles.sh server/sync/migrate-restored-database.sh server/sync/provision-restored-database.sh
+          bash server/sync/ops-script-tests.sh
       - name: Validate Compose configuration and volume preflight
         run: bash server/sync/manage-prod.sh config
       - name: Validate Caddy configuration
@@ -85,7 +911,5 @@ jobs:
           --env ADDRESS_ATLAS_DOMAIN
           --env ACME_EMAIL
           --volume "$PWD/server/sync/Caddyfile:/etc/caddy/Caddyfile:ro"
-          caddy:2-alpine
+          caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
           caddy validate --config /etc/caddy/Caddyfile
-      - name: Build production image
-        run: docker build --file server/sync/Dockerfile .

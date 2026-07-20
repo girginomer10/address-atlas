@@ -12,6 +12,8 @@ It runs only the zero-knowledge sync/auth surface:
 - `POST /auth/passkey/verify`
 - `GET /vault/latest`
 - `PUT /vault/latest`
+- `DELETE /account/session`
+- `DELETE /account`
 
 The server stores passkey public credentials and encrypted vault snapshots. It does not receive the Mac vault key, recovery material, wallet balances in plaintext, exchange credentials in plaintext, or scan history in plaintext.
 
@@ -67,6 +69,34 @@ Do not run the production Compose file directly during an upgrade: the wrapper
 is what protects installations whose environment file predates the stable
 volume name.
 
+Deployment also requires a fresh, decrypt-verified encrypted PostgreSQL backup
+before any existing image is replaced; only a catalog-proven pristine first
+installation may skip a backup because it has no user state. The wrapper holds
+one host-wide lock, snapshots the production environment, and exports the exact
+authorized Git SHA into a private read-only source tree. Compose, build context,
+Caddy mounts, recovery hooks, and config receipts all use that verified tree.
+It builds an image tagged with the clean checkout's exact Git SHA, runs schema bootstrap through a one-shot owner
+connection, provisions and verifies the separate DML-only runtime role, and
+only then starts the web service. See [Production Operations](../../docs/OPERATIONS.md)
+for key setup, scheduled backups, restore drills, monitoring, rollback, and
+incident response.
+
+The first install records durable candidate/schema/role phases bound to the
+exact image and PostgreSQL volume, so an interrupted bootstrap resumes only from
+that recorded revision. Existing installations without the newer native-config
+receipt require the explicit, fingerprint-bound `adopt-native-config` recovery
+documented in the operations runbook; normal `up` never invents or overwrites a
+receipt.
+
+New backups use signed manifest schema v4, which also binds the exact native
+configuration version, digest, timestamp, and serving revision observed by
+clients. Normal restore requires the existing protected role topology. Loss of
+the PostgreSQL volume uses the separately authorized, crash-resumable
+`sync:restore:bootstrap` procedure and only a v4 artifact on a catalog-proven
+pristine PostgreSQL 16 cluster. See the full-host dependency list, confirmation
+gates, failure semantics, and quarterly timed-drill requirement in
+[Production Operations](../../docs/OPERATIONS.md).
+
 Before `up`, the wrapper also checks every selected volume's running mounts. It
 allows only the fixed `address-atlas-sync` project and the expected service;
 an active legacy, custom-project, or unlabeled container fails closed. Stop the
@@ -115,15 +145,42 @@ In production, boot-time configuration validation runs via
 `SYNC_SESSION_SECRET`, `PASSKEY_*`, or database configuration instead of
 serving requests with invalid settings.
 
-Generate `SYNC_SESSION_SECRET` with at least 32 random bytes. Generate the Postgres password with `openssl rand -hex 32` and use the same URL-safe value in `POSTGRES_PASSWORD` and `SYNC_DATABASE_URL`. `PASSKEY_ORIGIN` is derived as `https://ADDRESS_ATLAS_DOMAIN`; production startup and `/healthz` also verify the exact match, so Caddy cannot be healthy while WebAuthn ceremonies target a different host. The server rejects malformed explicit configuration and keeps `/healthz` unavailable until its database connection, required schema, passkey, secret, limit, and native endpoint settings are valid.
+Generate `SYNC_SESSION_SECRET` with at least 32 random bytes. Generate two
+independent URL-safe PostgreSQL passwords with `openssl rand -hex 32`:
+`POSTGRES_PASSWORD`/`SYNC_SCHEMA_DATABASE_URL` belong to the schema owner, while
+`POSTGRES_RUNTIME_PASSWORD`/`SYNC_DATABASE_URL` belong to
+`address_atlas_runtime`. The owner URL is never passed to the long-running web
+container. `PASSKEY_ORIGIN` is derived as `https://ADDRESS_ATLAS_DOMAIN`;
+production startup and `/healthz` verify the exact match, so Caddy cannot be
+healthy while WebAuthn ceremonies target a different host. The server rejects
+malformed explicit configuration and keeps `/healthz` unavailable until its
+database connection, required schema, passkey, secret, limits, and native
+endpoint settings are valid.
 
 `SYNC_DB_POOL_SIZE`, `SYNC_DB_CONNECT_TIMEOUT_MS`,
 `SYNC_DB_IDLE_TIMEOUT_MS`, `SYNC_DB_STATEMENT_TIMEOUT_MS`, and
 `SYNC_DB_QUERY_TIMEOUT_MS` are forwarded to the web container. Keep the pool
 small enough for the Postgres instance's connection limit.
 
-The server enforces configurable total-account capacity, persistent per-account daily encrypted-upload quotas, and an atomic aggregate encrypted-snapshot storage ceiling (`SYNC_GLOBAL_VAULT_STORAGE_LIMIT`, 10 GB by default) in addition to short-window request throttles. Exact idempotent retries and rejected stale or same-version uploads consume daily byte quota but do not consume an additional logical-write allowance.
+New-account registration is closed by default in production and guarded by a
+durable global hourly admission counter while intentionally open. The server
+also enforces total-account capacity, persistent per-account daily encrypted
+upload ingress, a global daily ingress ceiling, and an atomic aggregate
+encrypted-snapshot storage ceiling (`SYNC_GLOBAL_VAULT_STORAGE_LIMIT`, 10 GB by
+default) in addition to short-window request throttles. Every authenticated PUT
+body consumes ingress allowance even when its envelope is invalid, stale, or
+same-version; rejected traffic cannot bypass durable byte budgets.
 
 Caddy and the application independently cap request-body reads at 60 seconds;
 Caddy also limits request-header reads to 10 seconds. These are absolute elapsed-time
 deadlines, so do not raise them without reviewing slow-upload abuse exposure.
+
+`DELETE /account/session` revokes the active bearer session. `DELETE /account`
+also requires passkey authentication within the last five minutes plus
+`X-Address-Atlas-Confirm: delete-account`, then transactionally
+deletes the account's passkeys, sessions, quota state, and opaque snapshot. The
+global stored-byte counter remains trigger-protected.
+
+Caddy emits structured JSON access logs to stdout. Exact IPs are masked and
+authentication/cookie/callback values are removed before Compose's bounded log
+rotation stores the record.

@@ -8,7 +8,10 @@ public struct RemoteVaultSnapshot: Codable, Equatable, Sendable {
   public var checksum: String
   public var updatedAt: Date
 
-  public init(version: Int, envelope: EncryptedVaultEnvelope, byteSize: Int, checksum: String, updatedAt: Date = Date()) {
+  public init(
+    version: Int, envelope: EncryptedVaultEnvelope, byteSize: Int, checksum: String,
+    updatedAt: Date = Date()
+  ) {
     self.version = version
     self.envelope = envelope
     self.byteSize = byteSize
@@ -175,7 +178,7 @@ public struct VaultSyncCodec: Sendable {
     switch snapshot.envelope.cryptoVersion {
     case 2:
       guard snapshot.envelope.keyId == "sync-v2",
-            snapshot.envelope.schemaVersion == VaultDocument.currentSchemaVersion
+        snapshot.envelope.schemaVersion == VaultDocument.currentSchemaVersion
       else {
         throw VaultSyncCodecError.invalidSnapshot
       }
@@ -254,21 +257,21 @@ public struct VaultSyncCodec: Sendable {
   public func validateRemoteSnapshot(_ snapshot: RemoteVaultSnapshot) throws {
     try validateVersion(snapshot.version)
     guard snapshot.byteSize > 0,
-          snapshot.byteSize <= Self.maximumSnapshotByteCount,
-          snapshot.checksum.count == 64,
-          snapshot.checksum.unicodeScalars.allSatisfy({ scalar in
-            (48...57).contains(scalar.value) || (97...102).contains(scalar.value)
-          })
+      snapshot.byteSize <= Self.maximumSnapshotByteCount,
+      snapshot.checksum.count == 64,
+      snapshot.checksum.unicodeScalars.allSatisfy({ scalar in
+        (48...57).contains(scalar.value) || (97...102).contains(scalar.value)
+      })
     else {
       throw VaultSyncCodecError.invalidSnapshot
     }
     let encoded = try JSONEncoder.addressAtlas.encode(snapshot.envelope)
     guard encoded.count == snapshot.byteSize,
-          snapshotChecksum(
-            envelopeData: encoded,
-            version: snapshot.version,
-            cryptoVersion: snapshot.envelope.cryptoVersion
-          ) == snapshot.checksum
+      snapshotChecksum(
+        envelopeData: encoded,
+        version: snapshot.version,
+        cryptoVersion: snapshot.envelope.cryptoVersion
+      ) == snapshot.checksum
     else {
       throw VaultSyncCodecError.invalidSnapshot
     }
@@ -320,6 +323,7 @@ public struct VaultSyncCodec: Sendable {
     // encrypted backup. Never preserve a live token in historical snapshots.
     remoteDocument.syncState.sessionToken = ""
     remoteDocument.syncState.serverURL = ""
+    remoteDocument.syncState.accountDeletionIdempotencyKey = nil
     return remoteDocument
   }
 
@@ -358,7 +362,8 @@ public struct VaultSyncCodec: Sendable {
     case 1: trailingCharacters = 2
     default: trailingCharacters = 3
     }
-    let (total, additionOverflow) = fullTripletCharacters.addingReportingOverflow(trailingCharacters)
+    let (total, additionOverflow) = fullTripletCharacters.addingReportingOverflow(
+      trailingCharacters)
     guard !additionOverflow else { throw VaultSyncCodecError.invalidSnapshot }
     return total
   }
@@ -428,17 +433,21 @@ public enum SyncClientError: Error, Equatable, LocalizedError {
 }
 
 public actor ZeroKnowledgeSyncClient {
-  private static let maximumWireSnapshotByteCount = VaultSyncCodec.maximumSnapshotByteCount + 100_000
+  private static let maximumWireSnapshotByteCount =
+    VaultSyncCodec.maximumSnapshotByteCount + 100_000
+  private static let maximumLifecycleResponseByteCount = 64_000
   private let baseURL: URL
   private let http: HTTPClient
   private var bearerToken: String?
 
   public init(baseURL: URL, http: HTTPClient? = nil) {
     self.baseURL = baseURL
-    self.http = http ?? BoundedURLSessionHTTPClient(
-      maxResponseBytes: Self.maximumWireSnapshotByteCount,
-      resourceTimeout: 30
-    )
+    self.http =
+      http
+      ?? BoundedURLSessionHTTPClient(
+        maxResponseBytes: Self.maximumWireSnapshotByteCount,
+        resourceTimeout: 30
+      )
   }
 
   public func setBearerToken(_ token: String?) {
@@ -492,6 +501,65 @@ public actor ZeroKnowledgeSyncClient {
     _ = data
   }
 
+  /// Revoke only the bearer grant used by this client. This operation remains
+  /// available even when compatibility policy refresh is unavailable so users
+  /// can always terminate an active session.
+  public func revokeCurrentSession() async throws {
+    try await performLifecycleDelete(path: "account/session")
+  }
+
+  /// Permanently delete the authenticated sync account. The fixed confirmation
+  /// header is part of the server contract and cannot be influenced by remote
+  /// configuration or user-provided text.
+  public func deleteAccount(idempotencyKey: String) async throws {
+    guard AccountDeletionIdempotencyKey.normalized(idempotencyKey) != nil else {
+      throw SyncClientError.requestFailed(400, "Account deletion operation is invalid.")
+    }
+    try await performLifecycleDelete(
+      path: "account",
+      confirmation: (field: "x-address-atlas-confirm", value: "delete-account"),
+      idempotencyKey: idempotencyKey,
+      requiresBearer: false
+    )
+  }
+
+  private func performLifecycleDelete(
+    path: String,
+    confirmation: (field: String, value: String)? = nil,
+    idempotencyKey: String? = nil,
+    requiresBearer: Bool = true
+  ) async throws {
+    guard !requiresBearer || bearerToken != nil else {
+      throw SyncClientError.authenticationRequired("Authentication required.")
+    }
+    var request = URLRequest(url: baseURL.appending(path: path))
+    request.timeoutInterval = 30
+    request.httpMethod = "DELETE"
+    request.setValue("application/json", forHTTPHeaderField: "accept")
+    if let bearerToken {
+      request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "authorization")
+    }
+    if let confirmation {
+      request.setValue(confirmation.value, forHTTPHeaderField: confirmation.field)
+    }
+    if let idempotencyKey {
+      request.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")
+    }
+    let (data, response) = try await http.data(for: request)
+    guard (200..<300).contains(response.statusCode) else {
+      throw Self.error(statusCode: response.statusCode, data: data)
+    }
+    guard data.count <= Self.maximumLifecycleResponseByteCount,
+      let acknowledgement = try? JSONDecoder.addressAtlas.decode(
+        ServerAcknowledgement.self,
+        from: data
+      ),
+      acknowledgement.ok
+    else {
+      throw SyncClientError.requestFailed(502, "Sync server returned an invalid response.")
+    }
+  }
+
   private static func error(statusCode: Int, data: Data) -> SyncClientError {
     let fallback = HTTPURLResponse.localizedString(forStatusCode: statusCode)
     // Error bodies share the large snapshot response ceiling, but user-facing
@@ -499,7 +567,8 @@ public actor ZeroKnowledgeSyncClient {
     // Bound decode work first, then reuse the scanner's centralized sanitizer.
     let cappedData = Data(data.prefix(16_384))
     let decoded = try? JSONDecoder.addressAtlas.decode(ServerError.self, from: cappedData).error
-    let message = decoded.map { ProviderErrorSanitizer.sanitize($0, fallback: fallback) } ?? fallback
+    let message =
+      decoded.map { ProviderErrorSanitizer.sanitize($0, fallback: fallback) } ?? fallback
     if statusCode == 401 {
       return .authenticationRequired(message)
     }
@@ -509,4 +578,8 @@ public actor ZeroKnowledgeSyncClient {
 
 private struct ServerError: Decodable {
   var error: String
+}
+
+private struct ServerAcknowledgement: Decodable {
+  var ok: Bool
 }

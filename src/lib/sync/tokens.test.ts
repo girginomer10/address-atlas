@@ -9,6 +9,7 @@ import {
 
 const SECRET = "f4L7p9Q2v6N8x1R3m5K0s2T4u7W9y1Z3b6D8g0H2";
 const USER_ID = "11111111-1111-4111-8111-111111111111";
+const SESSION_ID = "22222222-2222-4222-8222-222222222222";
 
 describe("sync tokens", () => {
   beforeEach(() => {
@@ -33,16 +34,26 @@ describe("sync tokens", () => {
       challenge: "x".repeat(43),
       expiresAt: Date.now() + 60_000
     });
-    const session = issueSessionToken(USER_ID);
+    const session = issueSessionToken(USER_ID, SESSION_ID);
 
     expect(readChallengeToken(challenge).mode).toBe("authenticate");
-    expect(readBearerToken(`Bearer ${session}`).userId).toBe(USER_ID);
+    expect(readBearerToken(`Bearer ${session}`)).toMatchObject({
+      userId: USER_ID,
+      sessionId: SESSION_ID,
+      issuedAt: expect.any(Number)
+    });
     expect(() => readBearerToken(`Bearer ${challenge}`)).toThrow(/invalid|expired/i);
     expect(() => readChallengeToken(session)).toThrow(/invalid|expired/i);
   });
 
   it("rejects a non-UUID account identifier before issuing a session", () => {
     expect(() => issueSessionToken("legacy-account-name")).toThrow(/invalid session user id/i);
+    expect(() => issueSessionToken(USER_ID, "legacy-session")).toThrow(/invalid session id/i);
+  });
+
+  it("rejects a session issued implausibly in the future", () => {
+    const token = issueSessionToken(USER_ID, SESSION_ID, Date.now() + 31_000);
+    expect(() => readBearerToken(`Bearer ${token}`)).toThrow(/invalid|expired/i);
   });
 
   it("rejects expired, malformed, and tampered tokens", () => {

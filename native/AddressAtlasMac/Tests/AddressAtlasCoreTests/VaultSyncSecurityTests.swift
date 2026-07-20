@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import XCTest
+
 @testable import AddressAtlasCore
 
 private let syncAccountA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
@@ -48,13 +49,13 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
     XCTAssertNil(decodedMalformed.lastSyncedContentChecksum)
 
     let missingAccountJSON = #"""
-    {
-      "serverURL": "https://sync.example",
-      "sessionToken": "orphaned-token",
-      "latestRemoteVersion": 5,
-      "lastChecksum": "orphaned-baseline"
-    }
-    """#
+      {
+        "serverURL": "https://sync.example",
+        "sessionToken": "orphaned-token",
+        "latestRemoteVersion": 5,
+        "lastChecksum": "orphaned-baseline"
+      }
+      """#
     let decodedMissing = try JSONDecoder.addressAtlas.decode(
       SyncState.self,
       from: Data(missingAccountJSON.utf8)
@@ -69,7 +70,7 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
     for token in [
       "unsafe\r\nheader",
       "contains a space",
-      String(repeating: "a", count: SyncSessionToken.maximumUTF8ByteCount + 1)
+      String(repeating: "a", count: SyncSessionToken.maximumUTF8ByteCount + 1),
     ] {
       let state = SyncState(
         accountId: syncAccountA,
@@ -92,12 +93,38 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
     }
 
     var state = SyncState()
-    XCTAssertFalse(state.connect(
-      accountId: syncAccountA,
-      serverURL: "https://sync.example",
-      sessionToken: "bad\nvalue"
-    ))
+    XCTAssertFalse(
+      state.connect(
+        accountId: syncAccountA,
+        serverURL: "https://sync.example",
+        sessionToken: "bad\nvalue"
+      ))
     XCTAssertNil(state.accountId)
+  }
+
+  func testAccountDeletionOperationKeyRequiresCanonical32ByteBase64URL() throws {
+    let valid = Base64URL.encode(Data(repeating: 0xA5, count: 32))
+    XCTAssertEqual(valid.count, 43)
+    XCTAssertEqual(AccountDeletionIdempotencyKey.normalized(valid), valid)
+    for invalid in [
+      valid + "=",
+      String(valid.dropLast()),
+      String(repeating: "!", count: 43),
+      Base64URL.encode(Data(repeating: 0xA5, count: 31)),
+    ] {
+      XCTAssertNil(AccountDeletionIdempotencyKey.normalized(invalid), invalid)
+    }
+
+    let decoded = try JSONDecoder.addressAtlas.decode(
+      SyncState.self,
+      from: JSONEncoder.addressAtlas.encode(
+        SyncState(
+          accountId: syncAccountA,
+          accountDeletionIdempotencyKey: valid
+        )
+      )
+    )
+    XCTAssertEqual(decoded.accountDeletionIdempotencyKey, valid)
   }
 
   func testCodecUsesTheCanonicalServerUUIDAccountRule() throws {
@@ -111,10 +138,12 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
       "00000000-0000-0000-0000-000000000000",
       "aaaaaaaa-aaaa-9aaa-8aaa-aaaaaaaaaaaa",
       "aaaaaaaa-aaaa-4aaa-7aaa-aaaaaaaaaaaa",
-      String(repeating: "a", count: 200)
+      String(repeating: "a", count: 200),
     ] {
       XCTAssertFalse(codec.isValidAccountId(invalid), invalid)
-      XCTAssertThrowsError(try codec.encodedSnapshotByteCount(document: VaultDocument(), accountId: invalid)) {
+      XCTAssertThrowsError(
+        try codec.encodedSnapshotByteCount(document: VaultDocument(), accountId: invalid)
+      ) {
         XCTAssertEqual($0 as? VaultSyncCodecError, .invalidAccount)
       }
     }
@@ -308,11 +337,14 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
       accountId: accountId
     )
 
-    XCTAssertFalse(try codec.open(snapshot: snapshot, vaultKey: vaultKey, expectedAccountId: accountId).requiresV2Upgrade)
+    XCTAssertFalse(
+      try codec.open(snapshot: snapshot, vaultKey: vaultKey, expectedAccountId: accountId)
+        .requiresV2Upgrade)
 
     var relabeled = snapshot
     relabeled.version = 99
-    relabeled.checksum = try v2SnapshotChecksum(version: relabeled.version, envelope: relabeled.envelope)
+    relabeled.checksum = try v2SnapshotChecksum(
+      version: relabeled.version, envelope: relabeled.envelope)
 
     XCTAssertThrowsError(
       try codec.open(snapshot: relabeled, vaultKey: vaultKey, expectedAccountId: accountId)
@@ -358,7 +390,8 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
     )
     let codec = VaultSyncCodec(crypto: crypto)
 
-    let opened = try codec.open(snapshot: snapshot, vaultKey: vaultKey, expectedAccountId: accountId)
+    let opened = try codec.open(
+      snapshot: snapshot, vaultKey: vaultKey, expectedAccountId: accountId)
 
     XCTAssertTrue(opened.requiresV2Upgrade)
     XCTAssertEqual(opened.document.schemaVersion, VaultDocument.currentSchemaVersion)
@@ -376,13 +409,30 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
   func testContentBaselineDetectsLocalEditsAndIgnoresSessionRefresh() throws {
     let codec = VaultSyncCodec()
     let vaultKey = try VaultCrypto().generateVaultKey()
-    var document = VaultDocument(syncState: SyncState(accountId: syncAccountA, sessionToken: "first"))
-    let snapshot = try codec.seal(document: document, vaultKey: vaultKey, version: 1, accountId: syncAccountA)
+    var document = VaultDocument(
+      syncState: SyncState(accountId: syncAccountA, sessionToken: "first"))
+    let snapshot = try codec.seal(
+      document: document, vaultKey: vaultKey, version: 1, accountId: syncAccountA)
     try codec.markSynced(document: &document, snapshot: snapshot)
 
     XCTAssertFalse(try codec.hasLocalChanges(in: document))
     document.syncState.sessionToken = "refreshed"
     XCTAssertFalse(try codec.hasLocalChanges(in: document))
+    let deletionOperation = Base64URL.encode(Data(repeating: 0x4D, count: 32))
+    document.syncState.accountDeletionIdempotencyKey = deletionOperation
+    XCTAssertFalse(try codec.hasLocalChanges(in: document))
+    let pendingSnapshot = try codec.seal(
+      document: document,
+      vaultKey: vaultKey,
+      version: 2,
+      accountId: syncAccountA
+    )
+    let opened = try codec.open(
+      snapshot: pendingSnapshot,
+      vaultKey: vaultKey,
+      expectedAccountId: syncAccountA
+    )
+    XCTAssertNil(opened.document.syncState.accountDeletionIdempotencyKey)
     document.wallets.append(WalletRecord(label: "New", address: "0xabc", chainKind: .evm))
     XCTAssertTrue(try codec.hasLocalChanges(in: document))
   }
@@ -394,7 +444,8 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
       sessionToken: "token-a",
       latestRemoteVersion: 9,
       lastChecksum: "snapshot-a",
-      lastSyncedContentChecksum: "content-a"
+      lastSyncedContentChecksum: "content-a",
+      accountDeletionIdempotencyKey: Base64URL.encode(Data(repeating: 3, count: 32))
     )
 
     state.changeServer(to: "https://sync-b.example")
@@ -405,11 +456,29 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
     XCTAssertEqual(state.latestRemoteVersion, 0)
     XCTAssertNil(state.lastChecksum)
     XCTAssertNil(state.lastSyncedContentChecksum)
+    XCTAssertNil(state.accountDeletionIdempotencyKey)
 
-    XCTAssertTrue(state.connect(accountId: syncAccountB, serverURL: state.serverURL, sessionToken: "token-b"))
+    XCTAssertTrue(
+      state.connect(accountId: syncAccountB, serverURL: state.serverURL, sessionToken: "token-b"))
     XCTAssertEqual(state.accountId, syncAccountB)
     XCTAssertEqual(state.sessionToken, "token-b")
     XCTAssertEqual(state.latestRemoteVersion, 0)
+
+    state.latestRemoteVersion = 4
+    state.lastChecksum = "snapshot-b"
+    state.clearSession()
+    XCTAssertEqual(state.accountId, syncAccountB)
+    XCTAssertEqual(state.serverURL, "https://sync-b.example")
+    XCTAssertEqual(state.sessionToken, "")
+    XCTAssertEqual(state.latestRemoteVersion, 4)
+    XCTAssertEqual(state.lastChecksum, "snapshot-b")
+
+    state.disconnectAccount()
+    XCTAssertNil(state.accountId)
+    XCTAssertEqual(state.serverURL, "https://sync-b.example")
+    XCTAssertEqual(state.sessionToken, "")
+    XCTAssertEqual(state.latestRemoteVersion, 0)
+    XCTAssertNil(state.lastChecksum)
   }
 
   func testV2SnapshotChecksumMatchesBackendWireFixture() throws {
@@ -446,361 +515,7 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
   }
 }
 
-final class VaultSyncMigrationAndExportTests: XCTestCase {
-  func testSchemaV1DocumentDecodesMissingSyncFieldsWithSafeDefaults() throws {
-    let json = #"""
-    {
-      "schemaVersion": 1,
-      "preferences": {
-        "darkMode": false,
-        "density": "comfy",
-        "mono": false,
-        "hideDust": false,
-        "dustThreshold": 5,
-        "autoRefresh": true,
-        "currency": "USD"
-      },
-      "wallets": [],
-      "customTokens": [],
-      "manualHoldings": [],
-      "exchangeConnections": [],
-      "scanRuns": [],
-      "syncState": {
-        "accountId": "legacy-user",
-        "latestRemoteVersion": 3,
-        "lastChecksum": "abc"
-      },
-      "updatedAt": "2026-07-01T12:00:00Z"
-    }
-    """#
-
-    let document = try JSONDecoder.addressAtlas.decode(VaultDocument.self, from: Data(json.utf8))
-
-    XCTAssertEqual(document.schemaVersion, VaultDocument.currentSchemaVersion)
-    XCTAssertNil(document.syncState.accountId)
-    XCTAssertEqual(document.syncState.serverURL, "")
-    XCTAssertEqual(document.syncState.sessionToken, "")
-    XCTAssertEqual(document.syncState.latestRemoteVersion, 0)
-    XCTAssertNil(document.syncState.lastChecksum)
-    XCTAssertNil(document.syncState.lastSyncedContentChecksum)
-  }
-
-  func testJSONExportOmitsSyncAndCredentialSecrets() throws {
-    let credentialCiphertext = "credential-ciphertext-marker"
-    let envelope = EncryptedVaultEnvelope(
-      keyId: "exchange-id",
-      nonce: Base64URL.encode(Data(repeating: 1, count: 12)),
-      ciphertext: credentialCiphertext,
-      checksum: String(repeating: "a", count: 64)
-    )
-    var connection = ExchangeConnectionRecord(provider: .binance, label: "Binance", encryptedCredentials: envelope)
-    connection.lastError = "raw-provider-error-marker"
-    let document = VaultDocument(
-      exchangeConnections: [connection],
-      syncState: SyncState(
-        accountId: "private-account-id",
-        serverURL: "https://private-sync.example",
-        sessionToken: "live-bearer-token",
-        lastChecksum: "private-sync-checksum"
-      )
-    )
-
-    let json = try XCTUnwrap(String(data: AddressAtlasExporter.json(for: document), encoding: .utf8))
-
-    XCTAssertFalse(json.contains("syncState"))
-    XCTAssertFalse(json.contains("sessionToken"))
-    XCTAssertFalse(json.contains("live-bearer-token"))
-    XCTAssertFalse(json.contains("encryptedCredentials"))
-    XCTAssertFalse(json.contains(credentialCiphertext))
-    XCTAssertFalse(json.contains("lastError"))
-    XCTAssertFalse(json.contains("raw-provider-error-marker"))
-    XCTAssertTrue(json.contains("Binance"))
-  }
-}
-
-final class VaultSyncKeyRecoveryTests: XCTestCase {
-  func testManagerRefusesToGenerateUnrelatedKeyForExistingVault() async throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let vaultURL = directory.appending(path: "vault.sqlite")
-    try Data([1]).write(to: vaultURL)
-    let keyStore = InMemoryVaultKeyStore()
-    let manager = VaultKeyManager(store: keyStore)
-
-    do {
-      _ = try await manager.loadOrCreateVaultKey(existingVaultAt: vaultURL)
-      XCTFail("Expected recovery requirement.")
-    } catch {
-      XCTAssertEqual(error as? VaultKeyManagerError, .recoveryRequired)
-    }
-    XCTAssertNil(try keyStore.loadVaultKey())
-    XCTAssertEqual(keyStore.saveCount, 0)
-  }
-
-  func testConcurrentFirstRunManagersConvergeOnOneInstalledKey() async throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let keyStore = SimulatedFirstRunRaceVaultKeyStore()
-    let firstManager = VaultKeyManager(store: keyStore)
-    let secondManager = VaultKeyManager(store: keyStore)
-    let vaultURL = directory.appending(path: "vault.sqlite")
-
-    async let first = firstManager.loadOrCreateVaultKey(existingVaultAt: vaultURL)
-    async let second = secondManager.loadOrCreateVaultKey(existingVaultAt: vaultURL)
-    let (firstKey, secondKey) = try await (first, second)
-
-    XCTAssertEqual(firstKey, secondKey)
-    XCTAssertEqual(firstKey, try keyStore.loadVaultKey())
-    XCTAssertEqual(keyStore.conditionalSaveAttempts, 2)
-  }
-
-  func testRecoveryFileImportRejectsOversizedInputBeforeDecode() throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let recoveryURL = directory.appending(path: "oversized.atlas-recovery")
-    try Data(
-      repeating: 0x41,
-      count: VaultRecoveryService.maximumRecoveryFileByteCount + 1
-    ).write(to: recoveryURL)
-    let keyStore = InMemoryVaultKeyStore()
-
-    XCTAssertThrowsError(
-      try VaultRecoveryService().restore(
-        from: recoveryURL,
-        recoveryCode: String(repeating: "0", count: 64),
-        vaultURL: directory.appending(path: "vault.sqlite"),
-        keyStore: keyStore
-      )
-    ) { error in
-      XCTAssertEqual(error as? RecoveryKitError, .fileTooLarge)
-    }
-    XCTAssertNil(try keyStore.loadVaultKey())
-    XCTAssertEqual(keyStore.saveCount, 0)
-  }
-
-  func testValidRecoveryFileImportStillRestoresExistingVault() throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let vaultURL = directory.appending(path: "vault.sqlite")
-    let recoveryURL = directory.appending(path: "valid.atlas-recovery")
-    let crypto = VaultCrypto()
-    let vaultKey = try crypto.generateVaultKey()
-    let databaseStore = try EncryptedSQLiteVaultStore(path: vaultURL, vaultKey: vaultKey, crypto: crypto)
-    try databaseStore.save(VaultDocument(wallets: [
-      WalletRecord(label: "Recovered from file", address: "0xabc", chainKind: .evm)
-    ]))
-    let kit = try RecoveryKitCodec().create(vaultKey: vaultKey)
-    let encodedKit = try JSONEncoder.addressAtlas.encode(kit.document)
-    XCTAssertLessThan(encodedKit.count, VaultRecoveryService.maximumRecoveryFileByteCount)
-    try encodedKit.write(to: recoveryURL, options: [.atomic])
-    let keyStore = InMemoryVaultKeyStore()
-
-    let recovered = try VaultRecoveryService().restore(
-      from: recoveryURL,
-      recoveryCode: kit.recoveryCode,
-      vaultURL: vaultURL,
-      keyStore: keyStore
-    )
-
-    XCTAssertEqual(recovered.document.wallets.map(\.label), ["Recovered from file"])
-    XCTAssertEqual(try keyStore.loadVaultKey(), vaultKey)
-    XCTAssertEqual(keyStore.saveCount, 1)
-  }
-
-  func testRecoveryValidatesDatabaseBeforeAtomicallyInstallingKey() throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let vaultURL = directory.appending(path: "vault.sqlite")
-    let crypto = VaultCrypto()
-    let correctKey = try crypto.generateVaultKey()
-    let oldKeychainKey = try crypto.generateVaultKey()
-    let store = try EncryptedSQLiteVaultStore(path: vaultURL, vaultKey: correctKey, crypto: crypto)
-    try store.save(VaultDocument(wallets: [WalletRecord(label: "Recovered", address: "0xabc", chainKind: .evm)]))
-    let kit = try RecoveryKitCodec().create(vaultKey: correctKey)
-    let keyStore = InMemoryVaultKeyStore(key: oldKeychainKey)
-
-    let recovered = try VaultRecoveryService().restore(
-      document: kit.document,
-      recoveryCode: kit.recoveryCode,
-      vaultURL: vaultURL,
-      keyStore: keyStore
-    )
-
-    XCTAssertEqual(recovered.document.wallets.first?.label, "Recovered")
-    XCTAssertEqual(try keyStore.loadVaultKey(), correctKey)
-    XCTAssertEqual(keyStore.saveCount, 1)
-  }
-
-  func testRecoveryDoesNotReplaceKeyWhenKitCannotDecryptExistingVault() throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let vaultURL = directory.appending(path: "vault.sqlite")
-    let crypto = VaultCrypto()
-    let databaseKey = try crypto.generateVaultKey()
-    let unrelatedKit = try RecoveryKitCodec().create(vaultKey: try crypto.generateVaultKey())
-    let existingKeychainKey = try crypto.generateVaultKey()
-    let store = try EncryptedSQLiteVaultStore(path: vaultURL, vaultKey: databaseKey, crypto: crypto)
-    try store.save(VaultDocument(wallets: [WalletRecord(label: "Protected", address: "0xabc", chainKind: .evm)]))
-    let keyStore = InMemoryVaultKeyStore(key: existingKeychainKey)
-
-    XCTAssertThrowsError(
-      try VaultRecoveryService().restore(
-        document: unrelatedKit.document,
-        recoveryCode: unrelatedKit.recoveryCode,
-        vaultURL: vaultURL,
-        keyStore: keyStore
-      )
-    )
-    XCTAssertEqual(try keyStore.loadVaultKey(), existingKeychainKey)
-    XCTAssertEqual(keyStore.saveCount, 0)
-  }
-}
-
-final class KeychainVaultKeyStoreTests: XCTestCase {
-  func testRealKeychainStoreRoundTripsAndPreservesFirstInsertWinner() throws {
-    let identifier = UUID().uuidString
-    let store = KeychainVaultKeyStore(
-      service: "com.addressatlas.tests.\(identifier)",
-      account: "vault-key-\(identifier)"
-    )
-    defer { try? store.deleteVaultKey() }
-    let first = Data(repeating: 0x11, count: VaultCrypto.vaultKeyByteCount)
-    let competing = Data(repeating: 0x22, count: VaultCrypto.vaultKeyByteCount)
-    let replacement = Data(repeating: 0x33, count: VaultCrypto.vaultKeyByteCount)
-
-    XCTAssertNil(try store.loadVaultKey())
-    XCTAssertEqual(try store.saveVaultKeyIfAbsent(first), first)
-    XCTAssertEqual(try store.saveVaultKeyIfAbsent(competing), first)
-    XCTAssertEqual(try store.loadVaultKey(), first)
-
-    try store.saveVaultKey(replacement)
-    XCTAssertEqual(try store.loadVaultKey(), replacement)
-    try store.deleteVaultKey()
-    XCTAssertNil(try store.loadVaultKey())
-  }
-}
-
-final class VaultSyncEndpointAndEnvelopeTests: XCTestCase {
-  func testSyncServerURLCanonicalizesOriginsAndRejectsEndpointComponents() {
-    XCTAssertEqual(
-      SyncServerURL.validatedOrigin(" HTTPS://Sync.Example.COM:443/ ")?.absoluteString,
-      "https://sync.example.com"
-    )
-    XCTAssertEqual(
-      SyncServerURL.validatedOrigin("http://localhost:80/")?.absoluteString,
-      "http://localhost"
-    )
-    XCTAssertEqual(
-      SyncServerURL.validatedOrigin("http://localhost:8787/")?.absoluteString,
-      "http://localhost:8787"
-    )
-    XCTAssertEqual(
-      SyncServerURL.validatedOrigin("https://sync.example.com:8443/")?.absoluteString,
-      "https://sync.example.com:8443"
-    )
-    XCTAssertEqual(
-      SyncServerURL.validatedOrigin("https://localhost:8443/")?.absoluteString,
-      "https://localhost:8443"
-    )
-    for invalid in [
-      "https:",
-      "https:///vault",
-      "https://user:secret@sync.example.com",
-      "https://sync.example.com/path",
-      "https://sync.example.com?query=1",
-      "https://sync.example.com#fragment",
-      "http://sync.example.com",
-      "https://sync.example.com:0",
-      "https://sync.example.com:65536",
-      "http://127.0.0.1",
-      "http://127.0.0.1:8787",
-      "http://[::1]",
-      "http://[::1]:8787",
-      "http://[::1]:99999",
-      "https://127.0.0.1",
-      "https://127.1:8443",
-      "https://0x7f000001:8443",
-      "https://[::1]",
-      "https://[2001:db8::1]:8443",
-      "https://intranet",
-      "https://sync.example.com.",
-      "https://bad_label.example.com",
-      "https://-sync.example.com",
-      "https://sync-.example.com"
-    ] {
-      XCTAssertNil(SyncServerURL.validatedOrigin(invalid), invalid)
-    }
-  }
-
-  func testRemoteConfigCannotRedirectExchangeSignedRequests() throws {
-    let malicious = NativeEndpointConfig(
-      exchanges: [
-        ExchangeProvider.kraken.rawValue: ExchangeEndpointOverride(
-          baseURL: URL(string: "https://attacker.example")!,
-          accountPath: "/0/private/CancelAll"
-        )
-      ]
-    )
-
-    XCTAssertThrowsError(try malicious.validated()) { error in
-      XCTAssertEqual(error as? NativeEndpointConfigError, .invalidEndpoint("exchanges"))
-    }
-    XCTAssertEqual(malicious.exchangeBaseURL(for: .kraken)?.absoluteString, "https://api.kraken.com")
-    XCTAssertEqual(malicious.exchangeAccountPath(for: .kraken), "/0/private/Balance")
-  }
-
-  func testRemoteEndpointConfigIsPinnedToBundledOrigins() throws {
-    XCTAssertNoThrow(
-      try NativeEndpointConfig(
-        priceBaseURL: URL(string: "https://api.coingecko.com/api/v3/simple/price")!,
-        chains: [
-          "ethereum": ChainEndpointOverride(rpcURL: URL(string: "https://ethereum-rpc.publicnode.com/alternate-path"))
-        ]
-      ).validated()
-    )
-    XCTAssertThrowsError(
-      try NativeEndpointConfig(priceBaseURL: URL(string: "http://prices.example/price")!).validated()
-    )
-    XCTAssertThrowsError(
-      try NativeEndpointConfig(priceBaseURL: URL(string: "http://127.0.0.1:8080/price")!).validated()
-    )
-    XCTAssertThrowsError(
-      try NativeEndpointConfig(priceBaseURL: URL(string: "https://api.coingecko.com/api/v3/coins/list")!).validated()
-    )
-    XCTAssertThrowsError(
-      try NativeEndpointConfig(
-        chains: ["ethereum": ChainEndpointOverride(rpcURL: URL(string: "https://attacker.example/rpc"))]
-      ).validated()
-    )
-    XCTAssertThrowsError(
-      try NativeEndpointConfig(
-        chains: ["ethereum": ChainEndpointOverride(rpcURL: URL(string: "http://127.0.0.1:8545"))]
-      ).validated()
-    )
-  }
-
-  func testEnvelopeRejectsWrongNonceLengthAndNonCanonicalBase64URL() throws {
-    let crypto = VaultCrypto()
-    let key = try crypto.deriveKey(from: try crypto.generateVaultKey(), purpose: .localDatabase)
-    var envelope = try crypto.seal(Data("vault".utf8), with: key, keyId: "local-db")
-    envelope.nonce = Base64URL.encode(Data(repeating: 0, count: 11))
-
-    XCTAssertThrowsError(try crypto.open(envelope, with: key)) { error in
-      XCTAssertEqual(error as? VaultCryptoError, .invalidEnvelope)
-    }
-    XCTAssertThrowsError(try Base64URL.decode("AA==")) { error in
-      XCTAssertEqual(error as? VaultCryptoError, .invalidBase64)
-    }
-  }
-}
-
-private final class InMemoryVaultKeyStore: VaultKeyStore, @unchecked Sendable {
+final class InMemoryVaultKeyStore: VaultKeyStore, @unchecked Sendable {
   private let lock = NSLock()
   private var key: Data?
   private(set) var saveCount = 0
@@ -836,7 +551,7 @@ private final class InMemoryVaultKeyStore: VaultKeyStore, @unchecked Sendable {
 
 /// Simulates two processes that both observed a missing Keychain item before
 /// either attempted the atomic insert.
-private final class SimulatedFirstRunRaceVaultKeyStore: VaultKeyStore, @unchecked Sendable {
+final class SimulatedFirstRunRaceVaultKeyStore: VaultKeyStore, @unchecked Sendable {
   private let lock = NSLock()
   private var key: Data?
   private var staleMissingReads = 2

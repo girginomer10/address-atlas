@@ -16,7 +16,8 @@ public enum EncryptedSQLiteVaultStoreError: Error, Equatable, LocalizedError {
   public var errorDescription: String? {
     switch self {
     case .staleDocument:
-      return "The local vault changed in another Address Atlas process. Reopen the app before saving again."
+      return
+        "The local vault changed in another Address Atlas process. Reopen the app before saving again."
     default:
       return nil
     }
@@ -49,7 +50,8 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
   }
 
   private func initializeLocked() throws {
-    try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(
+      at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
     let db = try openDatabase()
     defer { sqlite3_close(db) }
     try exec(
@@ -105,7 +107,8 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
     let db = try openDatabase()
     defer { sqlite3_close(db) }
 
-    let sql = "SELECT envelope_json, revision FROM encrypted_vault_documents WHERE id = 'primary' LIMIT 1;"
+    let sql =
+      "SELECT envelope_json, revision FROM encrypted_vault_documents WHERE id = 'primary' LIMIT 1;"
     var statement: OpaquePointer?
     guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
       throw EncryptedSQLiteVaultStoreError.prepareFailed(errorMessage(db))
@@ -160,6 +163,15 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
       keyId: "local-db",
       schemaVersion: next.schemaVersion
     )
+    // ISO-8601 encoding canonicalizes every nested Date to whole seconds, not
+    // only the root timestamp. Return the exact decoded plaintext represented
+    // by the durable envelope so in-memory revision checks never compare a
+    // subtly different document after a successful save.
+    let canonicalPersistedDocument = try crypto.openJSON(
+      VaultDocument.self,
+      envelope: envelope,
+      with: key
+    )
     let encoded = try JSONEncoder.addressAtlas.encode(envelope)
 
     let db = try openDatabase()
@@ -178,22 +190,23 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
       revision = current
     }
 
-    let sql = revision == 0
+    let sql =
+      revision == 0
       ? """
-        INSERT INTO encrypted_vault_documents (id, envelope_json, updated_at, revision)
-        VALUES ('primary', ?, ?, 1)
-        ON CONFLICT(id) DO NOTHING
-        RETURNING revision;
-        """
+      INSERT INTO encrypted_vault_documents (id, envelope_json, updated_at, revision)
+      VALUES ('primary', ?, ?, 1)
+      ON CONFLICT(id) DO NOTHING
+      RETURNING revision;
+      """
       : """
-        UPDATE encrypted_vault_documents
-        SET envelope_json = ?, updated_at = ?, revision = revision + 1
-        WHERE id = 'primary'
-          AND revision = ?
-          AND envelope_json = ?
-          AND revision < 9223372036854775807
-        RETURNING revision;
-        """
+      UPDATE encrypted_vault_documents
+      SET envelope_json = ?, updated_at = ?, revision = revision + 1
+      WHERE id = 'primary'
+        AND revision = ?
+        AND envelope_json = ?
+        AND revision < 9223372036854775807
+      RETURNING revision;
+      """
     var statement: OpaquePointer?
     guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
       throw EncryptedSQLiteVaultStoreError.prepareFailed(errorMessage(db))
@@ -201,17 +214,20 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
     defer { sqlite3_finalize(statement) }
 
     let bindDataStatus = encoded.withUnsafeBytes { buffer in
-      sqlite3_bind_blob(statement, 1, buffer.baseAddress, Int32(encoded.count), SQLITE_TRANSIENT)
+      sqlite3_bind_blob(
+        statement, 1, buffer.baseAddress, Int32(encoded.count), sqliteTransientDestructor)
     }
     guard bindDataStatus == SQLITE_OK else {
       throw EncryptedSQLiteVaultStoreError.bindFailed(errorMessage(db))
     }
     let timestamp = ISO8601DateFormatter().string(from: next.updatedAt)
-    guard sqlite3_bind_text(statement, 2, timestamp, -1, SQLITE_TRANSIENT) == SQLITE_OK else {
+    guard sqlite3_bind_text(statement, 2, timestamp, -1, sqliteTransientDestructor) == SQLITE_OK
+    else {
       throw EncryptedSQLiteVaultStoreError.bindFailed(errorMessage(db))
     }
     if revision > 0,
-       sqlite3_bind_int64(statement, 3, Int64(revision)) != SQLITE_OK {
+      sqlite3_bind_int64(statement, 3, Int64(revision)) != SQLITE_OK
+    {
       throw EncryptedSQLiteVaultStoreError.bindFailed(errorMessage(db))
     }
     if revision > 0 {
@@ -219,7 +235,9 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
         throw EncryptedSQLiteVaultStoreError.staleDocument
       }
       let bindExpectedStatus = expectedEnvelopeBytes.withUnsafeBytes { buffer in
-        sqlite3_bind_blob(statement, 4, buffer.baseAddress, Int32(expectedEnvelopeBytes.count), SQLITE_TRANSIENT)
+        sqlite3_bind_blob(
+          statement, 4, buffer.baseAddress, Int32(expectedEnvelopeBytes.count),
+          sqliteTransientDestructor)
       }
       guard bindExpectedStatus == SQLITE_OK else {
         throw EncryptedSQLiteVaultStoreError.bindFailed(errorMessage(db))
@@ -234,14 +252,14 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
     }
     let storedRevision = sqlite3_column_int64(statement, 0)
     guard storedRevision >= 1,
-          storedRevision <= Int64(Int.max),
-          sqlite3_step(statement) == SQLITE_DONE
+      storedRevision <= Int64(Int.max),
+      sqlite3_step(statement) == SQLITE_DONE
     else {
       throw EncryptedSQLiteVaultStoreError.stepFailed(errorMessage(db))
     }
     expectedRevision = Int(storedRevision)
     expectedEnvelopeBytes = encoded
-    return next
+    return canonicalPersistedDocument
   }
 
   public func rawStoredEnvelopeBytes() throws -> Data? {
@@ -268,7 +286,8 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
   private func openDatabase() throws -> OpaquePointer {
     try secureDatabaseFile()
     var db: OpaquePointer?
-    let status = sqlite3_open_v2(path.path, &db, SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil)
+    let status = sqlite3_open_v2(
+      path.path, &db, SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil)
     guard status == SQLITE_OK, let opened = db else {
       let message = db.map(errorMessage) ?? "unknown"
       if let db { sqlite3_close(db) }
@@ -305,7 +324,10 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
 
   private func hasRevisionColumn(_ db: OpaquePointer) throws -> Bool {
     var statement: OpaquePointer?
-    guard sqlite3_prepare_v2(db, "PRAGMA table_info(encrypted_vault_documents);", -1, &statement, nil) == SQLITE_OK else {
+    guard
+      sqlite3_prepare_v2(db, "PRAGMA table_info(encrypted_vault_documents);", -1, &statement, nil)
+        == SQLITE_OK
+    else {
       throw EncryptedSQLiteVaultStoreError.prepareFailed(errorMessage(db))
     }
     defer { sqlite3_finalize(statement) }
@@ -325,13 +347,15 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
 
   private func currentRevision(_ db: OpaquePointer) throws -> Int {
     var statement: OpaquePointer?
-    guard sqlite3_prepare_v2(
-      db,
-      "SELECT revision FROM encrypted_vault_documents WHERE id = 'primary' LIMIT 1;",
-      -1,
-      &statement,
-      nil
-    ) == SQLITE_OK else {
+    guard
+      sqlite3_prepare_v2(
+        db,
+        "SELECT revision FROM encrypted_vault_documents WHERE id = 'primary' LIMIT 1;",
+        -1,
+        &statement,
+        nil
+      ) == SQLITE_OK
+    else {
       throw EncryptedSQLiteVaultStoreError.prepareFailed(errorMessage(db))
     }
     defer { sqlite3_finalize(statement) }
@@ -352,4 +376,4 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
   }
 }
 
-private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+private let sqliteTransientDestructor = unsafeBitCast(-1, to: sqlite3_destructor_type.self)

@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   verifyAuthenticationResponse: vi.fn(),
   readChallengeToken: vi.fn(),
   issueSessionToken: vi.fn(),
+  createSessionGrant: vi.fn(),
   issueChallengeToken: vi.fn()
 }));
 
@@ -34,8 +35,14 @@ vi.mock("./config", () => ({
     maxAccounts: 100_000,
     dailyVaultWriteLimit: 100,
     dailyVaultByteLimit: 64_000_000,
+    globalDailyVaultIngressByteLimit: 2_000_000_000,
     globalVaultStorageLimit: 10_000_000_000
-  })
+  }),
+  getSyncRegistrationConfig: () => ({ enabled: true, hourlyLimit: 100 })
+}));
+
+vi.mock("./sessions", () => ({
+  createSessionGrant: mocks.createSessionGrant
 }));
 
 vi.mock("./tokens", () => ({
@@ -59,9 +66,10 @@ describe("passkey account safety", () => {
     vi.clearAllMocks();
     resetPasskeyMaintenanceForTests();
     mocks.ensureSyncSchema.mockResolvedValue(undefined);
-    mocks.poolQuery.mockResolvedValue({ rowCount: 0, rows: [] });
+    mocks.poolQuery.mockResolvedValue({ rowCount: 1, rows: [{ admission_count: 1 }] });
     mocks.connect.mockResolvedValue({ query: mocks.clientQuery, release: mocks.release });
     mocks.issueSessionToken.mockReturnValue("session-token");
+    mocks.createSessionGrant.mockResolvedValue({ sessionToken: "session-token" });
     mocks.issueChallengeToken.mockReturnValue("challenge-token");
   });
 
@@ -121,7 +129,7 @@ describe("passkey account safety", () => {
     expect(credentialCall?.[1]).toHaveLength(4);
     expect(JSON.stringify(credentialCall?.[1])).not.toContain("attacker-controlled");
     expect(mocks.clientQuery).toHaveBeenCalledWith("ROLLBACK");
-    expect(mocks.issueSessionToken).not.toHaveBeenCalled();
+    expect(mocks.createSessionGrant).not.toHaveBeenCalled();
   });
 
   it("destroys a registration client when rollback also fails", async () => {
@@ -180,7 +188,7 @@ describe("passkey account safety", () => {
     expect(mocks.verifyRegistrationResponse).toHaveBeenCalledOnce();
     expect(mocks.clientQuery).toHaveBeenCalledWith("ROLLBACK");
     expect(mocks.clientQuery.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO users"))).toBe(false);
-    expect(mocks.issueSessionToken).not.toHaveBeenCalled();
+    expect(mocks.createSessionGrant).not.toHaveBeenCalled();
   });
 
   it("locks a credential through verification and updates its counter monotonically", async () => {
@@ -264,7 +272,7 @@ describe("passkey account safety", () => {
     expect(mocks.verifyAuthenticationResponse).toHaveBeenCalledOnce();
     expect(mocks.clientQuery).toHaveBeenCalledWith("ROLLBACK");
     expect(mocks.clientQuery.mock.calls.some(([sql]) => String(sql).includes("UPDATE passkey_credentials"))).toBe(false);
-    expect(mocks.issueSessionToken).not.toHaveBeenCalled();
+    expect(mocks.createSessionGrant).not.toHaveBeenCalled();
   });
 
   it("keeps best-effort challenge pruning single-flight and rate limited", async () => {

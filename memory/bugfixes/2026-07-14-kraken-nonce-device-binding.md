@@ -3,7 +3,7 @@ title: Kraken credentials and nonce state are installation-bound
 date: 2026-07-14
 status: active
 tags: [bugfix, kraken, nonce, security, sync]
-related_files: [native/AddressAtlasMac/Sources/AddressAtlasCore/Models.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/ExchangeClients.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/AppState.swift, native/AddressAtlasMac/Tests/AddressAtlasCoreTests/ScannerHardeningTests.swift]
+related_files: [native/AddressAtlasMac/Sources/AddressAtlasCore/Models.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/KrakenNonce.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/ExchangeOrchestration.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/AppState.swift, native/AddressAtlasMac/Tests/AddressAtlasCoreTests/KrakenNonceSecurityTests.swift, native/AddressAtlasMac/Tests/AddressAtlasCoreTests/ExchangeScannerCredentialSafetyTests.swift]
 ---
 
 ## Symptom

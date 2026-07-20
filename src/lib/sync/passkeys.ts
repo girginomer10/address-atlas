@@ -8,7 +8,9 @@ import {
 import { base64urlDecode, base64urlEncode } from "./base64url";
 import { getSyncLimitConfig, getSyncPasskeyConfig, type SyncPasskeyConfig } from "./config";
 import { ensureSyncSchema, getSyncPool } from "./postgres";
-import { ChallengeToken, issueChallengeToken, issueSessionToken, readChallengeToken } from "./tokens";
+import { assertRegistrationEnabled, reserveRegistrationAdmission } from "./registration";
+import { createSessionGrant } from "./sessions";
+import { ChallengeToken, issueChallengeToken, readChallengeToken } from "./tokens";
 
 type RegistrationResponseJSON = Parameters<typeof verifyRegistrationResponse>[0]["response"];
 type AuthenticationResponseJSON = Parameters<typeof verifyAuthenticationResponse>[0]["response"];
@@ -99,6 +101,7 @@ export async function createPasskeyOptions(body: unknown) {
   // SimpleWebAuthn treats string challenges as UTF-8 input and encodes them
   // again. Pass raw entropy and bind the token to its exact browser output.
   if (input.mode === "register") {
+    await reserveRegistrationAdmission();
     const pendingUserId = randomUUID();
     const publicKey = await generateRegistrationOptions({
       rpName: config.rpName,
@@ -163,6 +166,8 @@ export async function verifyPasskey(body: unknown) {
   // verifyRegistration/verifyAuthentication), so a malformed or forged response
   // can no longer burn a legitimate single-use challenge.
   if (challenge.mode === "register") {
+    // A kill-switch change must also stop already-issued registration options.
+    assertRegistrationEnabled();
     return verifyRegistration(
       challenge,
       input.response as RegistrationResponseJSON,
@@ -234,6 +239,7 @@ async function verifyRegistration(
   const credential = verification.registrationInfo.credential;
   const client = await getSyncPool().connect();
   let discardClient = false;
+  let sessionToken: string | undefined;
   try {
     await client.query("BEGIN");
     // Consume inside the transaction so a later failure rolls the challenge back.
@@ -271,6 +277,7 @@ async function verifyRegistration(
     if (credentialResult.rowCount === 0) {
       throw new PasskeyVerificationError();
     }
+    sessionToken = (await createSessionGrant(client, challenge.pendingUserId)).sessionToken;
     await client.query("COMMIT");
   } catch (error) {
     discardClient = !(await rollbackQuietly(client));
@@ -283,7 +290,7 @@ async function verifyRegistration(
   return {
     verified: true,
     userId: challenge.pendingUserId,
-    sessionToken: issueSessionToken(challenge.pendingUserId)
+    sessionToken: sessionToken!
   };
 }
 
@@ -343,12 +350,13 @@ async function verifyAuthentication(
        WHERE id = $1`,
       [row.id, verification.authenticationInfo.newCounter]
     );
+    const sessionToken = (await createSessionGrant(client, row.user_id)).sessionToken;
     await client.query("COMMIT");
 
     return {
       verified: true,
       userId: row.user_id,
-      sessionToken: issueSessionToken(row.user_id)
+      sessionToken
     };
   } catch (error) {
     discardClient = !(await rollbackQuietly(client));

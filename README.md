@@ -5,7 +5,7 @@ Address Atlas is a local-first, read-only crypto portfolio tracker for macOS. Pa
 The repo is organized as a small monorepo:
 
 - `native/AddressAtlasMac` is the macOS app — the product users run. It uses a random vault key stored in macOS Keychain, writes only encrypted vault documents to local SQLite, runs RPC/API requests from the Mac app, and syncs only opaque encrypted vault snapshots to the server.
-- The Next.js project at the repo root, together with `server/sync`, is the **encrypted sync-only server** — the backend the Mac app talks to for passkey auth and cross-device vault sync. It exposes only `/auth/native`, `/auth/passkey/*`, `/config/native`, `/vault/latest`, and `/healthz`, stores opaque encrypted snapshots, and never sees plaintext. `server/sync` packages it with Docker, Caddy TLS, and Postgres.
+- The Next.js project at the repo root, together with `server/sync`, is the **encrypted sync-only server** — the backend the Mac app talks to for passkey auth and cross-device vault sync. It exposes only the native auth/config, vault, health, session-revocation, and account-deletion surface; stores opaque encrypted snapshots; and never sees plaintext. `server/sync` packages it with Docker, Caddy TLS, and Postgres.
 
 ## Why this exists
 
@@ -67,7 +67,16 @@ open "dist/Address Atlas.app"
 Set `ADDRESS_ATLAS_CODESIGN_IDENTITY` before running `./build-mac-app.sh` when a Developer ID Application identity is available for distribution signing.
 The script derives `CFBundleVersion` from the full Git commit count. Shallow CI/release checkouts must supply a unique `ADDRESS_ATLAS_BUILD_NUMBER`; the script fails closed instead of reusing an ambiguous build number.
 
-Public macOS distribution uses a signed, notarized DMG. A public release is blocked until an Apple Developer ID Application certificate is available:
+Public macOS distribution uses a signed, notarized, create-once GitHub Release.
+The release workflow accepts only a version tag whose commit is already on
+`main`, imports signing material into an ephemeral Keychain, verifies Apple's
+notarization/stapling result, and publishes a DMG with checksums and a provenance
+manifest. GitHub release immutability must be enabled, and the protected
+`release` environment must contain the Apple and Administration-read secrets
+listed in `docs/RELEASE_CHECKLIST.md`.
+
+For an operator-driven local notarization, use a Keychain profile without
+placing credentials in arguments:
 
 ```bash
 cd native/AddressAtlasMac
@@ -77,14 +86,19 @@ ADDRESS_ATLAS_NOTARY_PROFILE="address-atlas-notary" \
 ./notarize-mac-app.sh
 ```
 
+CI uses the script's alternative App Store Connect key-file contract. Run
+`bash Tests/notarize-mac-app-tests.sh` after changing release tooling.
+
 The app stores its local vault in `~/Library/Application Support/AddressAtlas/vault.sqlite`. The SQLite table stores encrypted envelope JSON only; wallet addresses, exchange credentials, scan history, token lists, and preferences are encrypted before persistence.
 
 Settings includes a recovery kit flow. Export creates a `.atlas-recovery` file plus a high-entropy recovery code shown once. The file and code are both required to unwrap the Mac vault key; neither is uploaded to the sync server. If the Keychain key is missing, recovery is available directly from the locked screen and the app does not create an unrelated replacement key.
 
-The encrypted sync server uses these environment variables:
+The encrypted sync server uses a schema-owner connection only during the
+one-shot bootstrap and a separate DML-only connection while serving requests:
 
 ```bash
-SYNC_DATABASE_URL="postgres://..."
+SYNC_SCHEMA_DATABASE_URL="postgres://address_atlas:owner-password@..."
+SYNC_DATABASE_URL="postgres://address_atlas_runtime:runtime-password@..."
 SYNC_SESSION_SECRET="long-random-secret"
 PASSKEY_RP_ID="example.com"
 PASSKEY_RP_NAME="Address Atlas"
@@ -97,7 +111,10 @@ For local sync development, start the bundled Postgres service first:
 npm run sync:db:up
 ```
 
-For a production VPS, copy `.env.production.example` to `.env.production`, fill the production domain and secrets, and then start the sync-only stack. Generate the Postgres password with `openssl rand -hex 32` so it is URL-safe, and use that exact value in both `POSTGRES_PASSWORD` and the password component of `SYNC_DATABASE_URL`:
+For a production VPS, copy `.env.production.example` to `.env.production`, fill
+the production domain and secrets, configure the age backup recipient/identity,
+and then start the sync-only stack. Generate independent owner and runtime
+PostgreSQL passwords with `openssl rand -hex 32`:
 
 ```bash
 cp server/sync/.env.production.example server/sync/.env.production
@@ -107,11 +124,23 @@ curl https://your-domain.example/healthz
 
 Always deploy through `npm run sync:prod:up`. Its preflight reconnects the authoritative PostgreSQL and Caddy volumes across historical Compose project names and refuses ambiguous selections; invoking the production Compose file directly bypasses that safeguard.
 
+The same gate requires a fresh encrypted and decrypt-verified database backup,
+builds an image tagged with the exact clean Git SHA, bootstraps schema through
+the owner-only job, verifies the DML-only runtime role, and then replaces the
+web service. Scheduled backup, restore drill, monitoring, rollback, and incident
+procedures live in [docs/OPERATIONS.md](docs/OPERATIONS.md). Its separately
+gated fresh-cluster path restores only signed schema-v4 artifacts, resumes
+across power loss, and does not declare success until the current web release
+passes public smoke and persists its native-config receipt.
+
 `server/sync/compose.prod.yml` runs Caddy, the Next sync/auth server, and Postgres. `ADDRESS_ATLAS_SYNC_ONLY=true` limits the public VPS to `/auth/native`, `/auth/passkey/*`, `/config/native`, `/vault/latest`, and `/healthz`.
 
 Startup readiness validates the session secret, Postgres URL and timeouts, passkey RP/origin, capacity limits, and explicit native endpoint configuration. Missing required values or malformed explicit overrides keep `/healthz` at 503 instead of silently using production fallbacks.
 
-Sync endpoints are intentionally narrow: `POST /auth/passkey/options`, `POST /auth/passkey/verify`, `GET /vault/latest`, and `PUT /vault/latest`. The server stores passkey public keys plus encrypted vault snapshot metadata; it does not store decryptable keys or plaintext portfolio data.
+Sync endpoints are intentionally narrow: passkey options/verification,
+encrypted vault GET/PUT, bearer-session revocation, and confirmed account
+deletion. The server stores passkey public keys plus encrypted vault snapshot
+metadata; it does not store decryptable keys or plaintext portfolio data.
 
 The Mac app opens `/auth/native` in a system web authentication session for passkey account creation/sign-in, then receives only a short-lived sync session token through the `address-atlas://sync-auth` callback URL.
 

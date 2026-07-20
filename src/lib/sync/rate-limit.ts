@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 type Bucket = { count: number; resetAt: number };
 
 const buckets = new Map<string, Bucket>();
+const activeConcurrency = new Map<string, number>();
 // Bound the map so a flood of distinct keys can't grow it without limit.
 const MAX_TRACKED_KEYS = 50_000;
 
@@ -14,6 +15,11 @@ export interface RateLimitRule {
   key: string;
   limit: number;
   windowMs: number;
+}
+
+export interface ConcurrencyLimitRule {
+  key: string;
+  limit: number;
 }
 
 /**
@@ -52,6 +58,46 @@ export function rateLimitMany(rules: RateLimitRule[]): boolean {
     }
   }
   return true;
+}
+
+/**
+ * Atomically reserves every requested active-operation slot. The returned
+ * release function is idempotent so callers can safely invoke it from a
+ * `finally` block. This complements request-rate limits: a bounded number of
+ * slow, individually allowed bodies can remain buffered at one time.
+ */
+export function acquireConcurrencyMany(
+  rules: ConcurrencyLimitRule[]
+): (() => void) | null {
+  const normalized = deduplicateConcurrencyRules(rules);
+  if (normalized.length === 0) return () => undefined;
+
+  let newKeys = 0;
+  for (const rule of normalized) {
+    if (!Number.isSafeInteger(rule.limit) || rule.limit < 1) {
+      throw new Error("Invalid concurrency-limit rule.");
+    }
+    const current = activeConcurrency.get(rule.key);
+    if (current === undefined) newKeys += 1;
+    else if (current >= rule.limit) return null;
+  }
+  if (activeConcurrency.size + newKeys > MAX_TRACKED_KEYS) return null;
+
+  for (const rule of normalized) {
+    activeConcurrency.set(rule.key, (activeConcurrency.get(rule.key) ?? 0) + 1);
+  }
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    for (const rule of normalized) {
+      const current = activeConcurrency.get(rule.key);
+      if (current === undefined) continue;
+      if (current <= 1) activeConcurrency.delete(rule.key);
+      else activeConcurrency.set(rule.key, current - 1);
+    }
+  };
 }
 
 function sweepExpired(now: number) {
@@ -96,6 +142,20 @@ function deduplicateRules(rules: RateLimitRule[]) {
   return [...byKey.values()];
 }
 
+function deduplicateConcurrencyRules(rules: ConcurrencyLimitRule[]) {
+  const byKey = new Map<string, ConcurrencyLimitRule>();
+  for (const rule of rules) {
+    const key = boundedKey(rule.key);
+    const existing = byKey.get(key);
+    byKey.set(key, {
+      key,
+      limit: existing ? Math.min(existing.limit, rule.limit) : rule.limit
+    });
+  }
+  return [...byKey.values()];
+}
+
 export function resetRateLimitsForTests() {
   buckets.clear();
+  activeConcurrency.clear();
 }

@@ -1,46 +1,90 @@
+import { performance } from "node:perf_hooks";
 import { NextResponse } from "next/server";
 import { validateSyncRuntimeConfig } from "@/lib/sync/config";
+import {
+  diagnosticHeaders,
+  generatedDiagnostics,
+  recordSecurityEvent,
+  requestDiagnostics
+} from "@/lib/sync/diagnostics";
 import { getNativeEndpointConfig } from "@/lib/sync/native-config";
 import { checkSyncSchemaReadiness, ensureSyncSchema } from "@/lib/sync/postgres";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-let databaseReadinessInFlight: Promise<void> | null = null;
+let readinessInFlight: Promise<void> | null = null;
+let readinessCache: { ready: boolean; expiresAt: number } | null = null;
+const READY_TTL_MS = 10_000;
+const NOT_READY_TTL_MS = 1_000;
 
-export async function GET() {
+export async function GET(request?: Request) {
+  const diagnostics = request
+    ? requestDiagnostics(request, "/healthz")
+    : generatedDiagnostics("/healthz");
   try {
-    validateSyncRuntimeConfig();
-    getNativeEndpointConfig();
-    await ensureSyncSchema();
-    await checkDatabaseReadiness();
+    await checkReadiness(diagnostics);
     return NextResponse.json(
       { ok: true, service: "address-atlas-sync" },
-      { headers: { "cache-control": "no-store" } }
+      { headers: diagnosticHeaders(diagnostics, { "cache-control": "no-store" }) }
     );
   } catch {
     return NextResponse.json(
       { ok: false, service: "address-atlas-sync" },
-      { status: 503, headers: { "cache-control": "no-store" } }
+      {
+        status: 503,
+        headers: diagnosticHeaders(diagnostics, { "cache-control": "no-store" })
+      }
     );
   }
 }
 
-async function checkDatabaseReadiness() {
-  if (databaseReadinessInFlight) {
-    await databaseReadinessInFlight;
+async function checkReadiness(diagnostics: ReturnType<typeof requestDiagnostics>) {
+  const cached = readinessCache;
+  if (cached && performance.now() < cached.expiresAt) {
+    if (cached.ready) return;
+    throw new Error("Readiness is temporarily cached as unavailable.");
+  }
+  if (readinessInFlight) {
+    await readinessInFlight;
     return;
   }
 
-  const attempt = checkSyncSchemaReadiness();
-  databaseReadinessInFlight = attempt;
+  const attempt = (async () => {
+    try {
+      validateSyncRuntimeConfig();
+      getNativeEndpointConfig();
+      await ensureSyncSchema();
+      await checkSyncSchemaReadiness();
+      readinessCache = {
+        ready: true,
+        expiresAt: performance.now() + READY_TTL_MS
+      };
+    } catch (error) {
+      readinessCache = {
+        ready: false,
+        expiresAt: performance.now() + NOT_READY_TTL_MS
+      };
+      // Log once per real readiness attempt. Concurrent waiters and requests
+      // served from the negative cache must not amplify an outage into one
+      // error record per probe.
+      recordSecurityEvent("health.not_ready", diagnostics, {
+        status: 503,
+        reason: "runtime_or_database_not_ready",
+        severity: "error"
+      });
+      throw error;
+    }
+  })();
+  readinessInFlight = attempt;
   try {
     await attempt;
   } finally {
-    if (databaseReadinessInFlight === attempt) databaseReadinessInFlight = null;
+    if (readinessInFlight === attempt) readinessInFlight = null;
   }
 }
 
 export function resetHealthReadinessForTests() {
-  databaseReadinessInFlight = null;
+  readinessInFlight = null;
+  readinessCache = null;
 }

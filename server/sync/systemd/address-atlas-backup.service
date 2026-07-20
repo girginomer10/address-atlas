@@ -1,0 +1,23 @@
+[Unit]
+Description=Address Atlas encrypted PostgreSQL backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/address-atlas
+Environment=ADDRESS_ATLAS_PROD_ENV_FILE=/etc/address-atlas/sync.env
+Environment=ADDRESS_ATLAS_DEPLOY_SOURCE_ROOT=/var/lib/address-atlas/deploy-sources
+ExecStart=/usr/bin/bash server/sync/manage-prod.sh backup
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# The checkout stays read-only. Fresh origin/main authorization only needs Git
+# metadata writes, while immutable source export is confined to its private
+# cache and backup artifacts remain confined to the backup directory.
+ReadWritePaths=/opt/address-atlas/.git /var/backups/address-atlas /var/lib/address-atlas/deploy-sources /var/run/docker.sock
+TimeoutStartSec=30min

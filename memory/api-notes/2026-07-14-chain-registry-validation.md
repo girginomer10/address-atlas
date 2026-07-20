@@ -3,7 +3,7 @@ title: Chain registry entries require lifecycle and on-chain validation
 date: 2026-07-14
 status: active
 tags: [api, chains, rpc, tokens, native-config]
-related_files: [native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/ChainRegistry.swift, native/AddressAtlasMac/Tests/AddressAtlasCoreTests/ScannerHardeningTests.swift, src/lib/sync/native-config.ts, src/lib/sync/native-config.test.ts]
+related_files: [native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/ChainRegistry.swift, native/AddressAtlasMac/Tests/AddressAtlasCoreTests/ScannerAddressValidationTests.swift, native/AddressAtlasMac/Tests/AddressAtlasCoreTests/ScannerWorkflowTests.swift, src/lib/sync/native-config.ts, src/lib/sync/native-config.test.ts]
 ---
 
 ## Contract

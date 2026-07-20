@@ -1,0 +1,11 @@
+[Unit]
+Description=Prove an Address Atlas backup can be restored every week
+
+[Timer]
+OnCalendar=Sun *-*-* 03:15:00 UTC
+RandomizedDelaySec=30min
+Persistent=true
+Unit=address-atlas-restore-drill.service
+
+[Install]
+WantedBy=timers.target

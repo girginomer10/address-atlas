@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clientKey, rateLimitMany, resetRateLimitsForTests } from "./rate-limit";
+import {
+  acquireConcurrencyMany,
+  clientKey,
+  rateLimitMany,
+  resetRateLimitsForTests
+} from "./rate-limit";
 
 function rateLimitOne(key: string, limit: number, windowMs: number) {
   return rateLimitMany([{ key, limit, windowMs }]);
@@ -46,5 +51,36 @@ describe("bounded rate limiter", () => {
       headers: { "x-forwarded-for": "x".repeat(10_000) }
     });
     expect(clientKey(request)).toMatch(/^sha256:[a-f0-9]{64}$/);
+  });
+
+  it("reserves concurrency limits atomically and releases them idempotently", () => {
+    const first = acquireConcurrencyMany([
+      { key: "global", limit: 2 },
+      { key: "account", limit: 1 }
+    ]);
+    expect(first).toBeTypeOf("function");
+
+    expect(acquireConcurrencyMany([
+      { key: "global", limit: 2 },
+      { key: "account", limit: 1 }
+    ])).toBeNull();
+
+    const other = acquireConcurrencyMany([
+      { key: "global", limit: 2 },
+      { key: "other-account", limit: 1 }
+    ]);
+    expect(other).toBeTypeOf("function");
+    expect(acquireConcurrencyMany([{ key: "global", limit: 2 }])).toBeNull();
+
+    first!();
+    first!();
+    const replacement = acquireConcurrencyMany([
+      { key: "global", limit: 2 },
+      { key: "account", limit: 1 }
+    ]);
+    expect(replacement).toBeTypeOf("function");
+
+    other!();
+    replacement!();
   });
 });

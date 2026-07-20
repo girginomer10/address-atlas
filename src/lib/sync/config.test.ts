@@ -3,6 +3,9 @@ import {
   getSyncDatabaseConfig,
   getSyncLimitConfig,
   getSyncPasskeyConfig,
+  getSyncRegistrationConfig,
+  getSyncSchemaDatabaseConfig,
+  getSyncSchemaMode,
   validateSyncRuntimeConfig
 } from "./config";
 
@@ -77,6 +80,52 @@ describe("sync runtime configuration", () => {
     vi.stubEnv("SYNC_MAX_ACCOUNTS", "100000");
     vi.stubEnv("SYNC_VAULT_DAILY_BYTE_LIMIT", "");
     expect(() => getSyncLimitConfig()).toThrow(/SYNC_VAULT_DAILY_BYTE_LIMIT/);
+  });
+
+  it("defaults production registration closed and validates explicit admission controls", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    expect(getSyncRegistrationConfig()).toEqual({ enabled: false, hourlyLimit: 100 });
+
+    vi.stubEnv("SYNC_REGISTRATION_ENABLED", "true");
+    vi.stubEnv("SYNC_REGISTRATION_HOURLY_LIMIT", "25");
+    expect(getSyncRegistrationConfig()).toEqual({ enabled: true, hourlyLimit: 25 });
+
+    vi.stubEnv("SYNC_REGISTRATION_ENABLED", "yes");
+    expect(() => getSyncRegistrationConfig()).toThrow(/true or false/i);
+  });
+
+  it("separates validate-only runtime from the production schema-owner URL", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("SYNC_DATABASE_URL", "postgres://runtime:runtime-secret-value@postgres:5432/address_atlas_sync");
+    expect(getSyncSchemaMode()).toBe("validate");
+    expect(() => getSyncSchemaDatabaseConfig()).toThrow(/SYNC_SCHEMA_DATABASE_URL.*required/i);
+
+    vi.stubEnv(
+      "SYNC_SCHEMA_DATABASE_URL",
+      "postgres://schema_owner:schema-owner-secret-value@postgres:5432/address_atlas_sync"
+    );
+    expect(getSyncSchemaDatabaseConfig().connectionString).toContain("schema_owner");
+
+    vi.stubEnv("SYNC_SCHEMA_DATABASE_URL", "");
+    expect(() => getSyncSchemaDatabaseConfig()).toThrow(/must not be blank/i);
+    vi.stubEnv(
+      "SYNC_SCHEMA_DATABASE_URL",
+      "postgres://schema_owner:schema-owner-secret-value@postgres:5432/address_atlas_sync"
+    );
+
+    vi.stubEnv("SYNC_SCHEMA_MODE", "bootstrap");
+    expect(getSyncSchemaMode()).toBe("bootstrap");
+    vi.stubEnv("SYNC_SCHEMA_MODE", "auto");
+    expect(() => getSyncSchemaMode()).toThrow(/validate or bootstrap/i);
+  });
+
+  it("parses a durable global daily ingress budget independently from storage", () => {
+    vi.stubEnv("SYNC_GLOBAL_VAULT_DAILY_INGRESS_BYTE_LIMIT", "9000000");
+    vi.stubEnv("SYNC_GLOBAL_VAULT_STORAGE_LIMIT", "12000000");
+    expect(getSyncLimitConfig()).toMatchObject({
+      globalDailyVaultIngressByteLimit: 9_000_000,
+      globalVaultStorageLimit: 12_000_000
+    });
   });
 
   it("rejects malformed database URLs and timeout values", () => {

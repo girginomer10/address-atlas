@@ -16,7 +16,12 @@ The old Prisma/SQLite web portfolio and ccxt runtime no longer exist. Do not rei
 - `Sources/AddressAtlasCore/Models.swift`: durable vault schema and migration-compatible decoding.
 - `Crypto/`: AES-256-GCM, purpose-separated HKDF keys, Keychain storage, exchange-credential envelopes, and recovery kits.
 - `Storage/EncryptedSQLiteVaultStore.swift`: one encrypted `VaultDocument` envelope in local SQLite.
-- `Sync/`: authenticated sync envelopes and public endpoint configuration. Snapshot account, version, and schema metadata are cryptographically bound to the ciphertext.
+- `Storage/VaultPersistenceCoordinator.swift`: actor-isolated projection,
+  encryption, persistence, and revision-aware dirty-state computation; UI code
+  must not move this work back onto `MainActor`.
+- `Sync/`: authenticated sync envelopes, public endpoint configuration, and the
+  durable per-origin endpoint-config high-water store. Snapshot account,
+  version, and schema metadata are cryptographically bound to the ciphertext.
 - `Scanners/`: public-chain scanners, CoinGecko pricing, and native Binance, Coinbase Advanced Trade, and Kraken read-only clients.
 - `Sources/AddressAtlasMac/AppState.swift`: UI state transitions, validation, scan orchestration, conflict-safe sync, and bounded snapshot retention.
 - `Sources/AddressAtlasMac/AddressAtlasApp.swift`: SwiftUI presentation and recovery/unlock flows.
@@ -49,6 +54,12 @@ The local Postgres port is bound to loopback only. `SYNC_SESSION_SECRET` must be
 - `GET /livez` is the edge liveness probe: it returns `{"ok":true,"service":"address-atlas-sync"}` without touching the database or configuration. Caddy's active health check targets it in production so a Postgres blip cannot take every route down at the proxy.
 - `GET /healthz` is the deep readiness probe: database connectivity, required schema, and full configuration. The production container healthcheck and external monitoring use it.
 - In production, `src/instrumentation.ts` validates configuration at boot and fails fast on a bad `SYNC_SESSION_SECRET`, `PASSKEY_*`, or database configuration, so a misconfigured container exits at start instead of serving requests.
+- Production request handling uses a DML-only database role. Schema bootstrap
+  is an explicit owner-only one-shot entrypoint; request code must never regain
+  DDL or schema-owner credentials.
+
+The deploy, backup, restore, monitoring, and incident contract is documented in
+[OPERATIONS.md](OPERATIONS.md).
 
 ## Verification
 
@@ -60,7 +71,9 @@ npm run typecheck
 npm run build
 npm audit
 npm run native:test
+(cd native/AddressAtlasMac && swift test --sanitize=thread)
 bash native/AddressAtlasMac/Tests/build-mac-app-version-tests.sh
+bash native/AddressAtlasMac/Tests/notarize-mac-app-tests.sh
 ./native/AddressAtlasMac/build-mac-app.sh
 ./scripts/release-doctor.sh --strict
 ```
@@ -81,6 +94,13 @@ The Postgres integration suite additionally requires `TEST_SYNC_DATABASE_URL`. L
 - Download must never overwrite local changes implicitly. A destructive replacement requires an explicit user decision.
 - Upload must compare against the last authenticated remote checksum/version and fail closed on conflicts.
 - Changing the sync server or account clears the old bearer token and remote-base metadata.
+- Endpoint configuration accepts neither rollback nor same-version
+  equivocation across process relaunches. Preserve the durable per-origin
+  version+digest high-water record and its cross-process atomicity.
+- A remotely enforced minimum app version blocks passkey ceremonies, network
+  scans, upload, and download before provider/auth traffic. Local viewing,
+  export, and recovery remain available, and the UI must expose the hard-pinned
+  GitHub release page.
 - Snapshot version, account ID, schema version, nonce, and ciphertext are authenticated together. Relabeling an old ciphertext with a higher version must fail.
 - Scan history is bounded so the encrypted envelope cannot grow forever.
 
@@ -92,6 +112,13 @@ The Postgres integration suite additionally requires `TEST_SYNC_DATABASE_URL`. L
 - Non-USD fiat balances use CoinGecko's BTC-relative exchange rates to derive USD value. A missing or failed rate must leave the balance unpriced with a visible warning.
 - Chain-specific address validation is authoritative. Case-sensitive base58 identifiers must not be lowercased for identity or deduplication.
 - Coinbase Advanced Trade uses CDP ES256 JWT authentication. Legacy `CB-ACCESS-SIGN` HMAC must not be used with `/api/v3/brokerage` routes.
+- Binance credentials must pass the signed, pinned API-restrictions check before
+  they are persisted or scanned; any trading, withdrawal, transfer, margin,
+  futures, or unknown capability fails closed. Providers without an
+  authoritative scope endpoint must remain visibly `SCOPE UNVERIFIED`.
+- XRPL raw 160-bit currency code plus issuer is the durable asset identity.
+  Decoded printable text is presentation only and may never collapse distinct
+  issued currencies into the same row ID.
 
 ## Distribution
 
@@ -103,4 +130,15 @@ For public notarization, first save credentials in Keychain without placing the 
 xcrun notarytool store-credentials address-atlas-notary
 ```
 
-Then set `ADDRESS_ATLAS_CODESIGN_IDENTITY` and `ADDRESS_ATLAS_NOTARY_PROFILE=address-atlas-notary`. Public distribution is blocked until a Developer ID Application identity and a valid notary profile are available.
+Then set `ADDRESS_ATLAS_CODESIGN_IDENTITY` and
+`ADDRESS_ATLAS_NOTARY_PROFILE=address-atlas-notary`. In isolated CI, the same
+script accepts `ADDRESS_ATLAS_NOTARY_KEY_PATH`,
+`ADDRESS_ATLAS_NOTARY_KEY_ID`, and `ADDRESS_ATLAS_NOTARY_ISSUER_ID` together;
+it refuses mixed or partial credential modes. Public distribution is blocked
+until signing, an explicit Apple `Accepted` result, stapling, Gatekeeper, and
+DMG verification all succeed.
+
+The create-once release workflow is `.github/workflows/release.yml`. It requires
+an existing `v<currentAppVersion>` tag on `main`, a protected `release`
+environment, GitHub release immutability, and the secrets documented in
+`docs/RELEASE_CHECKLIST.md`.
