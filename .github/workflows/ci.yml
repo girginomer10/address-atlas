@@ -854,7 +854,7 @@ jobs:
             state="$receipt_dir/native-config-deployment.json"
             curl --fail --silent --show-error \
               --dump-header "$headers" --output "$body" \
-              http://127.0.0.1:3000/config/native
+              "http://127.0.0.1:3000/config/native?deployment_probe=${CI_NATIVE_REVISION}"
             served_record="$(node server/sync/native-config-deploy-state.mjs \
               fingerprint < "$body")"
             [[ "$served_record" \

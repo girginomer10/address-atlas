@@ -67,4 +67,10 @@ describe("CI recovery workflow contract", () => {
     expect(syntaxCheck.stderr).toBe("");
     expect(syntaxCheck.status).toBe(0);
   });
+
+  it("requests an uncached revision-bound native-config receipt", () => {
+    expect(recoveryStep).toContain(
+      '"http://127.0.0.1:3000/config/native?deployment_probe=${CI_NATIVE_REVISION}"'
+    );
+  });
 });
