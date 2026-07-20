@@ -1805,9 +1805,13 @@ async function assertStorageBootstrapSurfaceSafe(
          AND contype IN ('p', 'u', 'f', 'c', 'x')
      )
      SELECT
-       (SELECT count(*) FROM matching_constraints) = CASE WHEN $2::boolean THEN 4 ELSE 3 END
-       AND (SELECT count(DISTINCT contract_key) FROM matching_constraints) = CASE WHEN $2::boolean THEN 4 ELSE 3 END
-       AND (SELECT count(*) FROM relevant_constraints) = CASE WHEN $2::boolean THEN 4 ELSE 3 END
+       -- A MISSING contract constraint is tolerated here: the bootstrap repair
+       -- SQL re-adds every sync_storage_usage constraint (pkey, singleton,
+       -- storage, version checks) and final readiness still enforces the full
+       -- contract. What must not exist before bootstrap DDL touches this table
+       -- is anything unexpected: a constraint outside the known-safe shapes
+       -- (e.g. a same-name but weaker check), any trigger, or a stray index.
+       (SELECT count(*) FROM relevant_constraints) = (SELECT count(*) FROM matching_constraints)
        AND NOT EXISTS (
          SELECT 1 FROM pg_catalog.pg_trigger WHERE tgrelid = $1::oid
        )

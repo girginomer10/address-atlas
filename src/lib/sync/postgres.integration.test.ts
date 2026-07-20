@@ -86,10 +86,20 @@ maybeDescribe("encrypted sync Postgres storage", () => {
       "preferred-currency"
     ];
 
+    const byteSize = JSON.stringify(snapshot).length;
     await pool.query(
       `INSERT INTO vault_snapshots (user_id, version, envelope, byte_size, checksum)
        VALUES ($1, $2, $3::jsonb, $4, $5)`,
-      [userId, 1, JSON.stringify(snapshot), JSON.stringify(snapshot).length, checksum]
+      [userId, 1, JSON.stringify(snapshot), byteSize, checksum]
+    );
+    // This bypasses saveVaultSnapshot, so mirror its global-counter charge:
+    // the strict delete trigger fails closed if the cascade decrement at
+    // cleanup would push the counter below zero.
+    await pool.query(
+      `UPDATE sync_storage_usage
+       SET total_snapshot_bytes = total_snapshot_bytes + $1, updated_at = now()
+       WHERE singleton = true`,
+      [byteSize]
     );
 
     const result = await pool.query(
