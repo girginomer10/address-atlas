@@ -26,6 +26,7 @@ services:
       dockerfile: server/sync/Dockerfile
     restart: unless-stopped
     environment:
+      ADDRESS_ATLAS_DOMAIN: "${ADDRESS_ATLAS_DOMAIN:?ADDRESS_ATLAS_DOMAIN is required}"
       ADDRESS_ATLAS_SYNC_ONLY: "true"
       NODE_ENV: "production"
       SYNC_DATABASE_URL: "${SYNC_DATABASE_URL:?SYNC_DATABASE_URL is required}"
@@ -34,14 +35,18 @@ services:
       SYNC_VAULT_DAILY_WRITE_LIMIT: "${SYNC_VAULT_DAILY_WRITE_LIMIT:-100}"
       SYNC_VAULT_DAILY_BYTE_LIMIT: "${SYNC_VAULT_DAILY_BYTE_LIMIT:-64000000}"
       SYNC_GLOBAL_VAULT_STORAGE_LIMIT: "${SYNC_GLOBAL_VAULT_STORAGE_LIMIT:-10000000000}"
+      SYNC_DB_POOL_SIZE: "${SYNC_DB_POOL_SIZE:-10}"
       SYNC_DB_CONNECT_TIMEOUT_MS: "${SYNC_DB_CONNECT_TIMEOUT_MS:-5000}"
+      SYNC_DB_IDLE_TIMEOUT_MS: "${SYNC_DB_IDLE_TIMEOUT_MS:-30000}"
       SYNC_DB_STATEMENT_TIMEOUT_MS: "${SYNC_DB_STATEMENT_TIMEOUT_MS:-10000}"
       SYNC_DB_QUERY_TIMEOUT_MS: "${SYNC_DB_QUERY_TIMEOUT_MS:-12000}"
       PASSKEY_RP_ID: "${PASSKEY_RP_ID:?PASSKEY_RP_ID is required}"
       PASSKEY_RP_NAME: "${PASSKEY_RP_NAME:?PASSKEY_RP_NAME is required}"
-      PASSKEY_ORIGIN: "${PASSKEY_ORIGIN:?PASSKEY_ORIGIN is required}"
-      NATIVE_ENDPOINT_CONFIG_VERSION: "${NATIVE_ENDPOINT_CONFIG_VERSION:-3}"
-      NATIVE_ENDPOINT_CONFIG_UPDATED_AT: "${NATIVE_ENDPOINT_CONFIG_UPDATED_AT:-2026-07-12T00:00:00.000Z}"
+      # Derive the WebAuthn origin from the same host Caddy publishes. The app
+      # also validates this invariant before reporting healthy.
+      PASSKEY_ORIGIN: "https://${ADDRESS_ATLAS_DOMAIN:?ADDRESS_ATLAS_DOMAIN is required}"
+      NATIVE_ENDPOINT_CONFIG_VERSION: "${NATIVE_ENDPOINT_CONFIG_VERSION:-5}"
+      NATIVE_ENDPOINT_CONFIG_UPDATED_AT: "${NATIVE_ENDPOINT_CONFIG_UPDATED_AT:-2026-07-14T00:00:00.000Z}"
       NATIVE_ENDPOINT_CONFIG_MESSAGE: "${NATIVE_ENDPOINT_CONFIG_MESSAGE:-}"
       NATIVE_ENDPOINT_MIN_APP_VERSION: "${NATIVE_ENDPOINT_MIN_APP_VERSION:-0.2.0}"
       NATIVE_ENDPOINT_CONFIG_JSON: "${NATIVE_ENDPOINT_CONFIG_JSON:-}"
@@ -76,5 +81,11 @@ services:
 
 volumes:
   address-atlas-prod-postgres:
+    # An explicit global name prevents future Compose project-name changes from
+    # silently attaching a fresh database. manage-prod.sh safely discovers and
+    # reuses either historical project-scoped name during upgrades.
+    name: "${ADDRESS_ATLAS_POSTGRES_VOLUME:-address-atlas-prod-postgres}"
   caddy-data:
+    name: "${ADDRESS_ATLAS_CADDY_DATA_VOLUME:-address-atlas-caddy-data}"
   caddy-config:
+    name: "${ADDRESS_ATLAS_CADDY_CONFIG_VOLUME:-address-atlas-caddy-config}"

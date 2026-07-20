@@ -44,7 +44,12 @@ vi.mock("./tokens", () => ({
   issueChallengeToken: mocks.issueChallengeToken
 }));
 
-import { createPasskeyOptions, parsePasskeyOptionsInput, verifyPasskey } from "./passkeys";
+import {
+  createPasskeyOptions,
+  parsePasskeyOptionsInput,
+  resetPasskeyMaintenanceForTests,
+  verifyPasskey
+} from "./passkeys";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const CHALLENGE = "c".repeat(43);
@@ -52,6 +57,7 @@ const CHALLENGE = "c".repeat(43);
 describe("passkey account safety", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetPasskeyMaintenanceForTests();
     mocks.ensureSyncSchema.mockResolvedValue(undefined);
     mocks.poolQuery.mockResolvedValue({ rowCount: 0, rows: [] });
     mocks.connect.mockResolvedValue({ query: mocks.clientQuery, release: mocks.release });
@@ -259,5 +265,53 @@ describe("passkey account safety", () => {
     expect(mocks.clientQuery).toHaveBeenCalledWith("ROLLBACK");
     expect(mocks.clientQuery.mock.calls.some(([sql]) => String(sql).includes("UPDATE passkey_credentials"))).toBe(false);
     expect(mocks.issueSessionToken).not.toHaveBeenCalled();
+  });
+
+  it("keeps best-effort challenge pruning single-flight and rate limited", async () => {
+    mocks.readChallengeToken.mockReturnValue({
+      mode: "authenticate",
+      challenge: CHALLENGE,
+      expiresAt: Date.now() + 60_000
+    });
+    mocks.verifyAuthenticationResponse.mockResolvedValue({
+      verified: true,
+      authenticationInfo: { newCounter: 9 }
+    });
+    mocks.clientQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM passkey_credentials")) {
+        return {
+          rowCount: 1,
+          rows: [{
+            id: "credential-1",
+            user_id: USER_ID,
+            public_key_base64url: "AQIDBA",
+            counter: "8"
+          }]
+        };
+      }
+      if (sql.includes("consumed_challenges")) return { rowCount: 1, rows: [] };
+      return { rowCount: 1, rows: [] };
+    });
+
+    let finishPrune: (() => void) | undefined;
+    mocks.poolQuery.mockReturnValue(new Promise<void>((resolve) => {
+      finishPrune = resolve;
+    }));
+    const input = {
+      mode: "authenticate" as const,
+      challengeToken: "token",
+      response: { id: "credential-1" }
+    };
+
+    await expect(Promise.all([verifyPasskey(input), verifyPasskey(input)])).resolves.toHaveLength(2);
+    expect(mocks.poolQuery).toHaveBeenCalledTimes(1);
+    expect(mocks.poolQuery).toHaveBeenCalledWith(
+      "DELETE FROM consumed_challenges WHERE consumed_at < now() - interval '15 minutes'"
+    );
+
+    finishPrune?.();
+    await Promise.resolve();
+    await expect(verifyPasskey(input)).resolves.toMatchObject({ verified: true });
+    expect(mocks.poolQuery).toHaveBeenCalledTimes(1);
   });
 });

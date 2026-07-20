@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
   validateSyncRuntimeConfig: vi.fn(),
   getNativeEndpointConfig: vi.fn(),
   ensureSyncSchema: vi.fn(),
-  query: vi.fn()
+  checkSyncSchemaReadiness: vi.fn()
 }));
 
 vi.mock("@/lib/sync/config", () => ({
@@ -17,7 +17,7 @@ vi.mock("@/lib/sync/native-config", () => ({
 
 vi.mock("@/lib/sync/postgres", () => ({
   ensureSyncSchema: mocks.ensureSyncSchema,
-  getSyncPool: () => ({ query: mocks.query })
+  checkSyncSchemaReadiness: mocks.checkSyncSchemaReadiness
 }));
 
 import { GET, resetHealthReadinessForTests } from "./route";
@@ -29,28 +29,45 @@ describe("sync readiness", () => {
     mocks.validateSyncRuntimeConfig.mockReturnValue({});
     mocks.getNativeEndpointConfig.mockReturnValue({});
     mocks.ensureSyncSchema.mockResolvedValue(undefined);
-    mocks.query.mockResolvedValue({ rows: [{ ready: 1 }] });
+    mocks.checkSyncSchemaReadiness.mockResolvedValue(undefined);
   });
 
   it("reports ready only after schema and database checks succeed", async () => {
     const response = await GET();
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true, service: "address-atlas-sync" });
-    expect(mocks.query).toHaveBeenCalledWith("SELECT 1 AS ready");
+    expect(mocks.checkSyncSchemaReadiness).toHaveBeenCalledOnce();
     expect(mocks.validateSyncRuntimeConfig).toHaveBeenCalledOnce();
     expect(mocks.getNativeEndpointConfig).toHaveBeenCalledOnce();
     expect(response.headers.get("cache-control")).toBe("no-store");
   });
 
-  it("briefly coalesces database probes without caching the HTTP response", async () => {
-    const first = await GET();
-    const second = await GET();
+  it("coalesces concurrent schema probes without caching later readiness results", async () => {
+    let resolveProbe: (() => void) | undefined;
+    mocks.checkSyncSchemaReadiness.mockImplementation(() => new Promise<void>((resolve) => {
+      resolveProbe = resolve;
+    }));
+    const firstPromise = GET();
+    const secondPromise = GET();
+    await vi.waitFor(() => expect(mocks.checkSyncSchemaReadiness).toHaveBeenCalledOnce());
+    resolveProbe!();
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
 
     expect(first.status).toBe(200);
     expect(second.status).toBe(200);
-    expect(mocks.query).toHaveBeenCalledOnce();
+    expect(mocks.checkSyncSchemaReadiness).toHaveBeenCalledOnce();
     expect(first.headers.get("cache-control")).toBe("no-store");
     expect(second.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("detects schema drift on the next sequential health check", async () => {
+    const first = await GET();
+    mocks.checkSyncSchemaReadiness.mockRejectedValueOnce(new Error("vault_snapshots is missing"));
+    const second = await GET();
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(503);
+    expect(mocks.checkSyncSchemaReadiness).toHaveBeenCalledTimes(2);
   });
 
   it("returns a generic 503 without leaking database details", async () => {

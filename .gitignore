@@ -19,6 +19,12 @@ build
 !server/sync/.env.production.example
 .DS_Store
 *.pem
+*.key
+*.p12
+*.pfx
+.netrc
+.npmrc
+.yarnrc*
 
 # logs
 npm-debug.log*
@@ -28,5 +34,11 @@ pnpm-debug.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local Python tooling caches
+__pycache__/
+*.py[cod]
+/.codex-memory/
+/repo-memory.sqlite3*
 
 /src/generated/prisma

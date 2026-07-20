@@ -139,6 +139,36 @@ describe("vault latest route", () => {
     );
   });
 
+  it("returns the stored snapshot with the exact response field mapping", async () => {
+    const { envelope } = snapshot();
+    mocks.dbQuery.mockResolvedValue({
+      rows: [{
+        version: 7,
+        envelope,
+        byte_size: 4_321,
+        checksum: "c".repeat(64),
+        updated_at: new Date("2026-07-13T08:30:00.123Z")
+      }]
+    });
+
+    const response = await GET(new NextRequest("http://localhost/vault/latest", {
+      headers: { authorization: "Bearer token" }
+    }));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({
+      version: 7,
+      envelope,
+      byteSize: 4_321,
+      checksum: "c".repeat(64),
+      updatedAt: "2026-07-13T08:30:00.123Z"
+    });
+    expect(mocks.dbQuery).toHaveBeenCalledWith(expect.stringContaining("LEFT JOIN vault_snapshots"), [
+      "11111111-1111-4111-8111-111111111111"
+    ]);
+  });
+
   it("returns 404 when the authenticated account exists without a snapshot", async () => {
     mocks.dbQuery.mockResolvedValue({
       rows: [{ version: null, envelope: null, byte_size: null, checksum: null, updated_at: null }]

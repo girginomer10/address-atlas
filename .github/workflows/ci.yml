@@ -40,6 +40,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # RELEASE_CHECKLIST requires zero known production vulnerabilities.
+      - run: npm audit --omit=dev
       - run: npm test
       - run: npm run typecheck
       - run: npm run build
@@ -50,6 +52,14 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # build-mac-app.sh derives a monotonic CFBundleVersion from the full
+          # commit count when a release run number is not supplied. A shallow
+          # checkout must fail closed rather than silently reusing "1".
+          fetch-depth: 0
+      - name: Validate macOS bundle version derivation
+        run: bash Tests/build-mac-app-version-tests.sh
+        working-directory: native/AddressAtlasMac
       - run: swift test
         working-directory: native/AddressAtlasMac
 
@@ -65,11 +75,10 @@ jobs:
       SYNC_SESSION_SECRET: ci-only-public-value-for-config-validation-2026 # Not a credential.
       PASSKEY_RP_ID: sync.addressatlas.test
       PASSKEY_RP_NAME: Address Atlas CI
-      PASSKEY_ORIGIN: https://sync.addressatlas.test
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Validate Compose configuration
-        run: docker compose -f server/sync/compose.prod.yml config --quiet
+      - name: Validate Compose configuration and volume preflight
+        run: bash server/sync/manage-prod.sh config
       - name: Validate Caddy configuration
         run: >-
           docker run --rm

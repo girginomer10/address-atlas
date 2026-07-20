@@ -84,9 +84,16 @@ export async function saveVaultSnapshot(
     if (row && row.version >= snapshot.version) {
       // Persist the request-byte charge while leaving both the logical write
       // counter and stored snapshot untouched. The conflict is raised only
-      // after that quota transaction commits.
-      await chargeDailyQuota(client, userId, chargedBytes, 0);
-      await client.query("COMMIT");
+      // after that quota transaction settles. The 409 outranks the 429: a
+      // stale writer must be told to download the newer snapshot, so if the
+      // charge itself fails (for example the daily quota is already
+      // exhausted) it is rolled back and the conflict is still raised.
+      try {
+        await chargeDailyQuota(client, userId, chargedBytes, 0);
+        await client.query("COMMIT");
+      } catch {
+        discardClient = !(await rollbackQuietly(client));
+      }
       transactionOpen = false;
       throw new VaultConflictError();
     }
@@ -107,9 +114,14 @@ export async function saveVaultSnapshot(
     if (stored.rowCount === 0) {
       // The SQL version gate is a final defense against writers that do not
       // follow this process's per-account lock. Charge bytes, but not a logical
-      // write, for that committed conflict as well.
-      await chargeDailyQuota(client, userId, chargedBytes, 0);
-      await client.query("COMMIT");
+      // write, for that conflict as well — and, as above, a failed charge is
+      // rolled back without masking the conflict.
+      try {
+        await chargeDailyQuota(client, userId, chargedBytes, 0);
+        await client.query("COMMIT");
+      } catch {
+        discardClient = !(await rollbackQuietly(client));
+      }
       transactionOpen = false;
       throw new VaultConflictError();
     }

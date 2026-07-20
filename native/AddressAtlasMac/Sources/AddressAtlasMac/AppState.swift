@@ -27,8 +27,15 @@ final class AppState: ObservableObject {
   }
   @Published var scanning = false
   @Published var syncing = false
-  @Published var endpointConfig = NativeEndpointConfig.bundled
+  @Published var endpointConfig = NativeEndpointConfig.bundled {
+    didSet {
+      operatorMessage = AppState.normalizedOperatorMessage(endpointConfig.message)
+    }
+  }
   @Published var endpointConfigStatus = "Bundled endpoints"
+  /// Operator broadcast carried by the currently applied endpoint config.
+  /// Nil whenever the server supplied no message or only whitespace.
+  @Published private(set) var operatorMessage: String?
 
   private let crypto = VaultCrypto()
   private let keyStore = KeychainVaultKeyStore()
@@ -36,13 +43,21 @@ final class AppState: ObservableObject {
   private let syncSnapshotByteLimit: Int
   private let recoveryKit = RecoveryKitCodec()
   private let endpointConfigClient: any EndpointConfigFetching
-  private let passkeyAuthenticator = PasskeyWebAuthenticator()
+  private let krakenDeviceIdentifier: @Sendable () throws -> String
+  /// Test seam for the network boundary only. Nil keeps each production
+  /// client's own BoundedURLSessionHTTPClient defaults.
+  private let httpClient: (any HTTPClient)?
+  private let passkeyAuthenticator: any PasskeyAuthenticating
   private lazy var vaultKeyManager = VaultKeyManager(store: keyStore, crypto: crypto)
   private var vaultKey: Data?
   private var store: EncryptedSQLiteVaultStore?
   private var scanTask: Task<Void, Never>?
   private var endpointConfigRefreshGeneration = 0
   private var endpointConfigRefreshRequest: EndpointConfigRefreshRequest?
+  /// The origin that supplied the currently accepted remote configuration.
+  /// Versions are monotonic only within one authority; changing servers resets
+  /// this state to the bundled baseline.
+  private var acceptedEndpointConfigServerURL: URL?
 
   private struct EndpointConfigRefreshRequest {
     var generation: Int
@@ -60,8 +75,18 @@ final class AppState: ObservableObject {
   /// compiled release version for the server compatibility check.
   static let currentAppVersion = "0.2.0"
 
-  init(endpointConfigClient: any EndpointConfigFetching = NativeEndpointConfigClient()) {
+  init(
+    endpointConfigClient: any EndpointConfigFetching = NativeEndpointConfigClient(),
+    httpClient: (any HTTPClient)? = nil,
+    passkeyAuthenticator: (any PasskeyAuthenticating)? = nil,
+    krakenDeviceIdentifier: @escaping @Sendable () throws -> String = {
+      try KrakenDeviceIdentity.currentIdentifier()
+    }
+  ) {
     self.endpointConfigClient = endpointConfigClient
+    self.httpClient = httpClient
+    self.passkeyAuthenticator = passkeyAuthenticator ?? PasskeyWebAuthenticator()
+    self.krakenDeviceIdentifier = krakenDeviceIdentifier
     syncSnapshotByteLimit = VaultSyncCodec.maximumSnapshotByteCount
   }
 
@@ -70,13 +95,23 @@ final class AppState: ObservableObject {
   init(
     testStore: EncryptedSQLiteVaultStore,
     document: VaultDocument,
+    testVaultKey: Data? = nil,
     syncSnapshotByteLimit: Int = VaultSyncCodec.maximumSnapshotByteCount,
-    endpointConfigClient: any EndpointConfigFetching = NativeEndpointConfigClient()
+    endpointConfigClient: any EndpointConfigFetching = NativeEndpointConfigClient(),
+    httpClient: (any HTTPClient)? = nil,
+    passkeyAuthenticator: (any PasskeyAuthenticating)? = nil,
+    krakenDeviceIdentifier: @escaping @Sendable () throws -> String = {
+      try KrakenDeviceIdentity.currentIdentifier()
+    }
   ) {
     precondition((1...VaultSyncCodec.maximumSnapshotByteCount).contains(syncSnapshotByteLimit))
     self.endpointConfigClient = endpointConfigClient
+    self.httpClient = httpClient
+    self.passkeyAuthenticator = passkeyAuthenticator ?? PasskeyWebAuthenticator()
+    self.krakenDeviceIdentifier = krakenDeviceIdentifier
     self.syncSnapshotByteLimit = syncSnapshotByteLimit
     self.store = testStore
+    self.vaultKey = testVaultKey
     self.document = document
     self.isUnlocked = true
   }
@@ -95,7 +130,7 @@ final class AppState: ObservableObject {
   }
 
   var visibleLatestTotalUsd: Double {
-    visibleLatestHoldings.reduce(0) { $0 + $1.valueUsd }
+    AppState.validatedPortfolioTotal(visibleLatestHoldings) ?? 0
   }
 
   var hasScanSources: Bool {
@@ -116,6 +151,13 @@ final class AppState: ObservableObject {
   var appSupportDirectory: URL {
     let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
     return root.appending(path: "AddressAtlas")
+  }
+
+  /// Page-level notices and errors should not follow the user into an unrelated
+  /// section after navigation.
+  func clearTransientMessagesForNavigation() {
+    notice = ""
+    error = ""
   }
 
   var appVersion: String {
@@ -173,6 +215,33 @@ final class AppState: ObservableObject {
     guard amount.isFinite, amount > 0, valueUsd.isFinite, valueUsd >= 0 else { return nil }
     let price = valueUsd / amount
     return price.isFinite ? price : nil
+  }
+
+  static func validatedPortfolioTotal(_ holdings: [TrackedAsset]) -> Double? {
+    FiniteValueMath.sumNonnegative(holdings.map(\.valueUsd))
+  }
+
+  private func acceptedEndpointStatus(_ detail: String) -> String {
+    isAppVersionSupported ? detail : "Update required (\(detail))"
+  }
+
+  private static let maximumOperatorMessageScalarCount = 320
+
+  /// Server-supplied broadcast text is untrusted UI input: replace control
+  /// characters, collapse whitespace runs, and bound the rendered length.
+  /// Returns nil when no displayable text remains.
+  static func normalizedOperatorMessage(_ raw: String?) -> String? {
+    guard let raw else { return nil }
+    let withoutControls = String(raw.unicodeScalars.map { scalar -> Character in
+      CharacterSet.controlCharacters.contains(scalar) ? " " : Character(String(scalar))
+    })
+    let collapsed = withoutControls
+      .split(whereSeparator: { $0.isWhitespace })
+      .joined(separator: " ")
+    guard !collapsed.isEmpty else { return nil }
+    let scalars = collapsed.unicodeScalars
+    guard scalars.count > maximumOperatorMessageScalarCount else { return collapsed }
+    return String(String.UnicodeScalarView(scalars.prefix(maximumOperatorMessageScalarCount))) + "…"
   }
 
   static func applyingWalletLabels(
@@ -548,6 +617,18 @@ final class AppState: ObservableObject {
         error = "That \(provider.label) API key is already saved."
         return false
       }
+      let krakenDeviceIdentifier: String?
+      if provider == .kraken {
+        guard let normalizedIdentifier = KrakenDeviceIdentity.normalizedIdentifier(
+          try self.krakenDeviceIdentifier()
+        ) else {
+          error = "Kraken's protected device identity is invalid. No credentials were saved."
+          return false
+        }
+        krakenDeviceIdentifier = normalizedIdentifier
+      } else {
+        krakenDeviceIdentifier = nil
+      }
       let encrypted = try credentialVault.seal(
         normalizedCredentials,
         vaultKey: vaultKey,
@@ -559,7 +640,8 @@ final class AppState: ObservableObject {
             id: connectionId,
             provider: provider,
             label: normalizedLabel.isEmpty ? provider.label : normalizedLabel,
-            encryptedCredentials: encrypted
+            encryptedCredentials: encrypted,
+            krakenDeviceIdentifier: krakenDeviceIdentifier
           )
         )
       }
@@ -591,6 +673,7 @@ final class AppState: ObservableObject {
     if serverChanged {
       endpointConfig = .bundled
       endpointConfigStatus = "Bundled endpoints"
+      acceptedEndpointConfigServerURL = nil
     }
     return true
   }
@@ -603,10 +686,21 @@ final class AppState: ObservableObject {
       endpointConfigRefreshRequest = nil
       endpointConfig = .bundled
       endpointConfigStatus = "Bundled endpoints"
+      acceptedEndpointConfigServerURL = nil
       if !silent {
         notice = "Using bundled endpoints."
       }
       return false
+    }
+
+    if let acceptedServer = acceptedEndpointConfigServerURL,
+       acceptedServer != serverURL {
+      // This can also happen when a restored/test document changes the server
+      // without going through saveSyncSettings. Never carry one authority's
+      // endpoint policy into another authority's refresh.
+      endpointConfig = .bundled
+      endpointConfigStatus = "Bundled endpoints"
+      acceptedEndpointConfigServerURL = nil
     }
 
     let request: EndpointConfigRefreshRequest
@@ -635,7 +729,28 @@ final class AppState: ObservableObject {
       guard request.generation == endpointConfigRefreshGeneration,
             AppState.validatedSyncURL(document.syncState.serverURL) == serverURL
       else { return false }
+      if acceptedEndpointConfigServerURL == serverURL {
+        guard config.configVersion >= endpointConfig.configVersion else {
+          endpointConfigStatus = acceptedEndpointStatus(
+            "Remote v\(endpointConfig.configVersion) (stale v\(config.configVersion) rejected)"
+          )
+          if !silent {
+            self.error = "The sync server returned an older endpoint configuration. The previously verified configuration was kept."
+          }
+          return false
+        }
+        guard config.configVersion != endpointConfig.configVersion || config == endpointConfig else {
+          endpointConfigStatus = acceptedEndpointStatus(
+            "Remote v\(endpointConfig.configVersion) (conflicting refresh rejected)"
+          )
+          if !silent {
+            self.error = "The sync server changed endpoint configuration without advancing its version. The previously verified configuration was kept."
+          }
+          return false
+        }
+      }
       endpointConfig = config
+      acceptedEndpointConfigServerURL = serverURL
       if !isAppVersionSupported {
         endpointConfigStatus = "Update required"
         if !silent {
@@ -652,8 +767,15 @@ final class AppState: ObservableObject {
       guard request.generation == endpointConfigRefreshGeneration,
             AppState.validatedSyncURL(document.syncState.serverURL) == serverURL
       else { return false }
-      endpointConfig = .bundled
-      endpointConfigStatus = "Bundled endpoints (remote unavailable)"
+      if acceptedEndpointConfigServerURL == serverURL {
+        endpointConfigStatus = acceptedEndpointStatus(
+          "Remote v\(endpointConfig.configVersion) (refresh unavailable)"
+        )
+      } else {
+        endpointConfig = .bundled
+        endpointConfigStatus = "Bundled endpoints (remote unavailable)"
+        acceptedEndpointConfigServerURL = nil
+      }
       if !silent {
         self.error = error.localizedDescription
       }
@@ -717,14 +839,22 @@ final class AppState: ObservableObject {
     do {
       let session = try await passkeyAuthenticator.authenticate(serverURL: url, mode: mode)
       let previousDocument = document
-      document.syncState.connect(
+      let previousServerURL = document.syncState.serverURL
+      guard document.syncState.connect(
         accountId: session.userId,
         serverURL: session.serverURL,
         sessionToken: session.sessionToken
-      )
+      ) else {
+        throw URLError(.badServerResponse)
+      }
       guard save() else {
         document = previousDocument
         return
+      }
+      if previousServerURL != document.syncState.serverURL {
+        endpointConfig = .bundled
+        endpointConfigStatus = "Bundled endpoints"
+        acceptedEndpointConfigServerURL = nil
       }
       let removedScanRunCount = lastSaveRemovedScanRunCount
       await refreshEndpointConfig(silent: true)
@@ -749,7 +879,7 @@ final class AppState: ObservableObject {
       error = "Sign in with passkey before syncing."
       return
     }
-    guard let accountId = document.syncState.accountId, !accountId.isEmpty else {
+    guard let accountId = document.syncState.accountId.flatMap(SyncAccountIdentifier.normalized) else {
       error = "Sync account identity is missing. Sign in with passkey again."
       return
     }
@@ -771,7 +901,7 @@ final class AppState: ObservableObject {
       guard isAppVersionSupported else {
         throw SyncClientError.requestFailed(426, "This app version is no longer supported. Update Address Atlas to keep syncing.")
       }
-      let client = ZeroKnowledgeSyncClient(baseURL: serverURL)
+      let client = ZeroKnowledgeSyncClient(baseURL: serverURL, http: httpClient)
       await client.setBearerToken(document.syncState.sessionToken)
       var uploadDocument = document
       if let remote = try await client.latestVault() {
@@ -844,7 +974,7 @@ final class AppState: ObservableObject {
       error = "Sign in with passkey before syncing."
       return
     }
-    guard let accountId = document.syncState.accountId, !accountId.isEmpty else {
+    guard let accountId = document.syncState.accountId.flatMap(SyncAccountIdentifier.normalized) else {
       error = "Sync account identity is missing. Sign in with passkey again."
       return
     }
@@ -871,7 +1001,7 @@ final class AppState: ObservableObject {
         error = "Local changes have not been uploaded. Upload them first, or explicitly discard them before downloading."
         return
       }
-      let client = ZeroKnowledgeSyncClient(baseURL: serverURL)
+      let client = ZeroKnowledgeSyncClient(baseURL: serverURL, http: httpClient)
       await client.setBearerToken(document.syncState.sessionToken)
       guard let snapshot = try await client.latestVault() else {
         notice = "No remote vault snapshot yet."
@@ -1074,14 +1204,24 @@ final class AppState: ObservableObject {
       await refreshEndpointConfig(silent: true)
       try Task.checkCancellation()
       let input = document.wallets.map(\.address).joined(separator: "\n")
-      let scanner = NativeScanner(endpointConfig: endpointConfig)
+      let scanner = NativeScanner(
+        http: JSONHTTPClient(http: httpClient),
+        endpointConfig: endpointConfig
+      )
       var scan = try await scanner.scan(addresses: input, customTokens: document.customTokens)
       try Task.checkCancellation()
       scan.holdings = AppState.applyingWalletLabels(to: scan.holdings, wallets: document.wallets)
-      let exchangeClient = NativeExchangeBalanceClient(endpointConfig: endpointConfig)
+      let exchangeClient = NativeExchangeBalanceClient(
+        http: httpClient,
+        endpointConfig: endpointConfig
+      )
       let exchangeScan = try await NativeExchangeScanner(
         client: exchangeClient,
-        priceProvider: CoinGeckoPriceClient(baseURL: endpointConfig.priceBaseURL)
+        priceProvider: CoinGeckoPriceClient(
+          baseURL: endpointConfig.priceBaseURL,
+          http: JSONHTTPClient(http: httpClient)
+        ),
+        krakenDeviceIdentifier: krakenDeviceIdentifier
       ).scanThrowing(
         connections: document.exchangeConnections,
         vaultKey: vaultKey
@@ -1105,6 +1245,9 @@ final class AppState: ObservableObject {
       scan.holdings.append(contentsOf: exchangeScan.holdings)
       scan.holdings.append(contentsOf: manualAssets)
       scan.warnings.append(contentsOf: exchangeScan.warnings)
+      for index in scan.holdings.indices {
+        scan.holdings[index].change24h = FiniteValueMath.finiteOptional(scan.holdings[index].change24h)
+      }
       let holdingCountBeforeValidation = scan.holdings.count
       scan.holdings = scan.holdings.filter {
         $0.amount.isFinite && $0.amount >= 0 && $0.priceUsd.isFinite && $0.priceUsd >= 0 && $0.valueUsd.isFinite && $0.valueUsd >= 0
@@ -1113,7 +1256,11 @@ final class AppState: ObservableObject {
       if invalidHoldingCount > 0 {
         scan.warnings.append("Ignored \(invalidHoldingCount) invalid holding value\(invalidHoldingCount == 1 ? "" : "s").")
       }
-      scan.totalUsd = scan.holdings.reduce(0) { $0 + $1.valueUsd }
+      guard let totalUsd = AppState.validatedPortfolioTotal(scan.holdings) else {
+        throw PortfolioValueError.totalExceedsSupportedRange
+      }
+      scan.totalUsd = totalUsd
+      scan.warnings = ScanWarningPolicy.bounded(scan.warnings)
       try Task.checkCancellation()
       if mutateDocument({ document in
         document.exchangeConnections = exchangeScan.connections

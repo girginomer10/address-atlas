@@ -44,6 +44,12 @@ swift run AddressAtlasMac
 
 The local Postgres port is bound to loopback only. `SYNC_SESSION_SECRET` must be at least 32 random bytes; published example/placeholder values are rejected.
 
+## Service Health And Boot Validation
+
+- `GET /livez` is the edge liveness probe: it returns `{"ok":true,"service":"address-atlas-sync"}` without touching the database or configuration. Caddy's active health check targets it in production so a Postgres blip cannot take every route down at the proxy.
+- `GET /healthz` is the deep readiness probe: database connectivity, required schema, and full configuration. The production container healthcheck and external monitoring use it.
+- In production, `src/instrumentation.ts` validates configuration at boot and fails fast on a bad `SYNC_SESSION_SECRET`, `PASSKEY_*`, or database configuration, so a misconfigured container exits at start instead of serving requests.
+
 ## Verification
 
 Run the complete local gate before handoff:
@@ -54,6 +60,7 @@ npm run typecheck
 npm run build
 npm audit
 npm run native:test
+bash native/AddressAtlasMac/Tests/build-mac-app-version-tests.sh
 ./native/AddressAtlasMac/build-mac-app.sh
 ./scripts/release-doctor.sh --strict
 ```
@@ -88,7 +95,7 @@ The Postgres integration suite additionally requires `TEST_SYNC_DATABASE_URL`. L
 
 ## Distribution
 
-`build-mac-app.sh` creates a universal `arm64` + `x86_64` app by default and signs it with hardened runtime. Set `ADDRESS_ATLAS_ARCHS=arm64` only for an explicitly local Apple-Silicon build.
+`build-mac-app.sh` creates a universal `arm64` + `x86_64` app by default and signs it with hardened runtime. Set `ADDRESS_ATLAS_ARCHS=arm64` only for an explicitly local Apple-Silicon build. Its default `CFBundleVersion` is the full Git commit count; supply a unique `ADDRESS_ATLAS_BUILD_NUMBER` in shallow CI or release checkouts.
 
 For public notarization, first save credentials in Keychain without placing the password in process arguments:
 

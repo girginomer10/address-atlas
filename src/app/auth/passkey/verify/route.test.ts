@@ -70,4 +70,62 @@ describe("passkey verification error boundary", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(mocks.verifyPasskey).not.toHaveBeenCalled();
   });
+
+  it("meters malformed and shape-invalid JSON requests", async () => {
+    const malformed = await POST(new NextRequest("https://sync.example/auth/passkey/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not-json"
+    }));
+    const shapeInvalid = await POST(new NextRequest("https://sync.example/auth/passkey/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode: "authenticate" })
+    }));
+
+    expect(malformed.status).toBe(400);
+    expect(shapeInvalid.status).toBe(400);
+    expect(mocks.rateLimitMany).toHaveBeenCalledTimes(2);
+    expect(mocks.rateLimitMany).toHaveBeenNthCalledWith(1, [
+      { key: "auth-body:global", limit: 2_400, windowMs: 60_000 },
+      { key: "auth-body:client:client", limit: 120, windowMs: 60_000 }
+    ]);
+    expect(mocks.rateLimitMany).toHaveBeenNthCalledWith(2, [
+      { key: "auth-body:global", limit: 2_400, windowMs: 60_000 },
+      { key: "auth-body:client:client", limit: 120, windowMs: 60_000 }
+    ]);
+    expect(mocks.verifyPasskey).not.toHaveBeenCalled();
+  });
+
+  it("rejects before reading even malformed JSON when the public quota is exhausted", async () => {
+    mocks.rateLimitMany.mockReturnValue(false);
+    const response = await POST(new NextRequest("https://sync.example/auth/passkey/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not-json"
+    }));
+
+    expect(response.status).toBe(429);
+    expect(mocks.rateLimitMany).toHaveBeenCalledOnce();
+  });
+
+  it("applies the stricter registration quota after the public quota", async () => {
+    const response = await POST(new NextRequest("https://sync.example/auth/passkey/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode: "register", challengeToken: "token", response: { id: "credential" } })
+    }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.rateLimitMany).toHaveBeenNthCalledWith(1, [
+      { key: "auth-body:global", limit: 2_400, windowMs: 60_000 },
+      { key: "auth-body:client:client", limit: 120, windowMs: 60_000 }
+    ]);
+    expect(mocks.rateLimitMany).toHaveBeenNthCalledWith(2, [
+      { key: "auth-verify:global", limit: 600, windowMs: 60_000 },
+      { key: "auth-verify:client:client", limit: 30, windowMs: 60_000 },
+      { key: "auth-register-verify:global", limit: 100, windowMs: 3_600_000 },
+      { key: "auth-register-verify:client:client", limit: 5, windowMs: 3_600_000 }
+    ]);
+  });
 });

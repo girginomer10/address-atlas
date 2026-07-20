@@ -15,9 +15,16 @@ const NO_STORE_HEADERS = { "cache-control": "no-store" };
 
 export async function POST(request: NextRequest) {
   try {
+    const client = clientKey(request);
+    if (!rateLimitMany([
+      { key: "auth-body:global", limit: 2_400, windowMs: 60_000 },
+      { key: `auth-body:client:${client}`, limit: 120, windowMs: 60_000 }
+    ])) {
+      return rateLimitedResponse();
+    }
+
     const { value } = await readLimitedJSON(request, 128_000);
     const input = parsePasskeyVerifyInput(value);
-    const client = clientKey(request);
     const rules = [
       { key: "auth-verify:global", limit: 600, windowMs: 60_000 },
       { key: `auth-verify:client:${client}`, limit: 30, windowMs: 60_000 }
@@ -29,10 +36,7 @@ export async function POST(request: NextRequest) {
       );
     }
     if (!rateLimitMany(rules)) {
-      return NextResponse.json(
-        { error: "Too many requests." },
-        { status: 429, headers: NO_STORE_HEADERS }
-      );
+      return rateLimitedResponse();
     }
     return NextResponse.json(await verifyPasskey(input), { headers: NO_STORE_HEADERS });
   } catch (error) {
@@ -48,4 +52,11 @@ export async function POST(request: NextRequest) {
       }
     );
   }
+}
+
+function rateLimitedResponse() {
+  return NextResponse.json(
+    { error: "Too many requests." },
+    { status: 429, headers: NO_STORE_HEADERS }
+  );
 }

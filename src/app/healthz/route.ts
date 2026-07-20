@@ -1,13 +1,11 @@
 import { NextResponse } from "next/server";
 import { validateSyncRuntimeConfig } from "@/lib/sync/config";
 import { getNativeEndpointConfig } from "@/lib/sync/native-config";
-import { ensureSyncSchema, getSyncPool } from "@/lib/sync/postgres";
+import { checkSyncSchemaReadiness, ensureSyncSchema } from "@/lib/sync/postgres";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const DATABASE_READINESS_CACHE_MS = 1_000;
-let databaseReadyUntil = 0;
 let databaseReadinessInFlight: Promise<void> | null = null;
 
 export async function GET() {
@@ -29,15 +27,12 @@ export async function GET() {
 }
 
 async function checkDatabaseReadiness() {
-  if (Date.now() < databaseReadyUntil) return;
   if (databaseReadinessInFlight) {
     await databaseReadinessInFlight;
     return;
   }
 
-  const attempt = getSyncPool().query("SELECT 1 AS ready").then(() => {
-    databaseReadyUntil = Date.now() + DATABASE_READINESS_CACHE_MS;
-  });
+  const attempt = checkSyncSchemaReadiness();
   databaseReadinessInFlight = attempt;
   try {
     await attempt;
@@ -47,6 +42,5 @@ async function checkDatabaseReadiness() {
 }
 
 export function resetHealthReadinessForTests() {
-  databaseReadyUntil = 0;
   databaseReadinessInFlight = null;
 }

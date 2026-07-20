@@ -23,7 +23,7 @@ This repo is a cleaner follow-up to earlier hackathon experiments:
 - Common ERC-20 stablecoins, wrapped assets, and blue-chip/ecosystem tokens on supported EVM chains.
 - TRON native TRX plus tracked TRC20 tokens.
 - XRP Ledger native XRP plus positive issued-currency trustline balances.
-- Cosmos liquid, delegated, and reward balances for Cosmos Hub, Osmosis, Celestia, Stargaze, and Stride.
+- Cosmos liquid, delegated, and reward balances for Cosmos Hub, Osmosis, Celestia, and Stride. Legacy Stargaze records remain readable but are retained without scanning because that network is retired.
 - Read-only exchange balances through Binance, Coinbase Advanced Trade (CDP ES256 JWT), and Kraken via native Swift REST clients.
 - A local encrypted SQLite vault for watched wallets, holdings, exchange connections, and preferences.
 - AES-256-GCM encryption for the vault, using a Keychain-backed vault subkey.
@@ -65,6 +65,7 @@ open "dist/Address Atlas.app"
 ```
 
 Set `ADDRESS_ATLAS_CODESIGN_IDENTITY` before running `./build-mac-app.sh` when a Developer ID Application identity is available for distribution signing.
+The script derives `CFBundleVersion` from the full Git commit count. Shallow CI/release checkouts must supply a unique `ADDRESS_ATLAS_BUILD_NUMBER`; the script fails closed instead of reusing an ambiguous build number.
 
 Public macOS distribution uses a signed, notarized DMG. A public release is blocked until an Apple Developer ID Application certificate is available:
 
@@ -103,6 +104,8 @@ cp server/sync/.env.production.example server/sync/.env.production
 npm run sync:prod:up
 curl https://your-domain.example/healthz
 ```
+
+Always deploy through `npm run sync:prod:up`. Its preflight reconnects the authoritative PostgreSQL and Caddy volumes across historical Compose project names and refuses ambiguous selections; invoking the production Compose file directly bypasses that safeguard.
 
 `server/sync/compose.prod.yml` runs Caddy, the Next sync/auth server, and Postgres. `ADDRESS_ATLAS_SYNC_ONLY=true` limits the public VPS to `/auth/native`, `/auth/passkey/*`, `/config/native`, `/vault/latest`, and `/healthz`.
 

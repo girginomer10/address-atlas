@@ -2,8 +2,6 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { base64urlDecode, base64urlEncode } from "./base64url";
 import { getSyncSessionSecret } from "./config";
 
-export { SyncConfigurationError as TokenConfigurationError, validateSessionSecret } from "./config";
-
 export interface ChallengeToken {
   mode: "register" | "authenticate";
   challenge: string;
@@ -101,8 +99,11 @@ export function issueSessionToken(userId: string) {
   if (!UUID_RE.test(userId)) throw new Error("Invalid session user id.");
   // Deliberately short-lived and stateless: the single-instance sync service
   // has no long-lived refresh tokens or server-side login sessions. Account
-  // deletion removes all vault data, and rotating SYNC_SESSION_SECRET remains
-  // the emergency mechanism for invalidating every outstanding bearer.
+  // deletion is an out-of-band administrative operation (no production route
+  // performs it); when an operator deletes a user row, the FK cascade plus the
+  // snapshot usage trigger keep vault data and counters correct. Rotating
+  // SYNC_SESSION_SECRET remains the emergency mechanism for invalidating
+  // every outstanding bearer.
   return signToken<SessionToken>("session", {
     userId,
     expiresAt: Date.now() + 1000 * 60 * 60 * 12

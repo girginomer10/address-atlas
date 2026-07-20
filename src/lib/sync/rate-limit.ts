@@ -17,16 +17,10 @@ export interface RateLimitRule {
 }
 
 /**
- * Returns true if the call is allowed, false if the key has exceeded `limit`
- * within the current `windowMs`.
- */
-export function rateLimit(key: string, limit: number, windowMs: number): boolean {
-  return rateLimitMany([{ key, limit, windowMs }]);
-}
-
-/**
  * Applies all limits atomically: a rejected request does not consume any of the
  * other buckets. New keys fail closed when the bounded map is saturated.
+ * Returns true if the call is allowed, false if any key has exceeded its
+ * `limit` within the current `windowMs`.
  */
 export function rateLimitMany(rules: RateLimitRule[]): boolean {
   const now = Date.now();
@@ -68,13 +62,12 @@ function sweepExpired(now: number) {
 
 /**
  * Best-effort client identity from the production proxy boundary. Caddy is the
- * only published peer and sanitizes X-Forwarded-For before forwarding it.
+ * only published peer and explicitly sets X-Forwarded-For to the client IP
+ * (header_up in the Caddyfile), so client-supplied values never reach here.
  */
 export function clientKey(request: Request): string {
   const forwarded = request.headers.get("x-forwarded-for");
   if (forwarded) return boundedKey(forwarded.split(",")[0]!.trim());
-  const realIp = request.headers.get("x-real-ip");
-  if (realIp) return boundedKey(realIp.trim());
   return "unknown";
 }
 

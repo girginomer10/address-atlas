@@ -8,10 +8,42 @@ APP_DIR="$DIST_DIR/$APP_NAME.app"
 APP_VERSION_SOURCE="$ROOT/Sources/AddressAtlasMac/AppState.swift"
 APP_VERSION="$(sed -nE 's/^[[:space:]]*static let currentAppVersion = "([0-9]+(\.[0-9]+){1,3})"$/\1/p' "$APP_VERSION_SOURCE")"
 
+resolve_build_version() {
+  local candidate="${ADDRESS_ATLAS_BUILD_NUMBER:-}"
+  if [[ -z "$candidate" ]]; then
+    if [[ "$(git -C "$ROOT" rev-parse --is-shallow-repository 2>/dev/null || true)" == "true" ]]; then
+      echo "A shallow clone cannot derive a unique CFBundleVersion. Set ADDRESS_ATLAS_BUILD_NUMBER from the CI/release run number." >&2
+      return 1
+    fi
+    candidate="$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || true)"
+  fi
+  # Apple's release CFBundleVersion grammar is one to three integer fields:
+  # four digits in the first field and up to two in each remaining field.
+  if [[ ! "$candidate" =~ ^[1-9][0-9]{0,3}(\.[0-9]{1,2}){0,2}$ ]]; then
+    echo "Invalid CFBundleVersion '$candidate'. Set ADDRESS_ATLAS_BUILD_NUMBER to a positive value such as 42 or 42.1.3." >&2
+    return 1
+  fi
+  printf '%s\n' "$candidate"
+}
+
+BUILD_VERSION="$(resolve_build_version)"
+
 if [[ -z "$APP_VERSION" || "$APP_VERSION" == *$'\n'* ]]; then
   echo "Could not read one valid currentAppVersion from $APP_VERSION_SOURCE" >&2
   exit 1
 fi
+
+case "${1:-}" in
+  --print-build-version)
+    printf '%s\n' "$BUILD_VERSION"
+    exit 0
+    ;;
+  "") ;;
+  *)
+    echo "Usage: $0 [--print-build-version]" >&2
+    exit 1
+    ;;
+esac
 
 cd "$ROOT"
 
@@ -88,7 +120,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     </dict>
   </array>
   <key>CFBundleVersion</key>
-  <string>2</string>
+  <string>$BUILD_VERSION</string>
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
   <key>NSHighResolutionCapable</key>

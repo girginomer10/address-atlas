@@ -27,6 +27,7 @@ open "dist/Address Atlas.app"
 
 The app bundle registers the `address-atlas://sync-auth` callback URL used by the encrypted sync passkey flow.
 It is built as a universal `arm64` + `x86_64` binary with hardened runtime and ad-hoc signed for local testing by default. Set `ADDRESS_ATLAS_CODESIGN_IDENTITY` to a Developer ID Application identity when building a distribution candidate. Set `ADDRESS_ATLAS_ARCHS=arm64` only for an explicitly local single-architecture build.
+`CFBundleVersion` defaults to the full Git commit count. A shallow checkout must set a unique `ADDRESS_ATLAS_BUILD_NUMBER`; run `bash Tests/build-mac-app-version-tests.sh` before packaging.
 
 The app stores its encrypted local vault at:
 
@@ -37,3 +38,5 @@ The app stores its encrypted local vault at:
 SQLite stores encrypted envelope JSON only. The vault key is random, 256-bit, and stored in macOS Keychain with this-device-only accessibility. If that key is missing while a vault exists, the app stops at the locked screen and offers recovery-file import instead of creating an unrelated key.
 
 The native app performs wallet RPC, price, token, and exchange balance requests directly from macOS. Wallet scans include native BTC/SOL/EVM/TRX/XRP/Cosmos balances, registered ERC-20/SPL/TRC20 tokens, XRP issued-currency trustlines, and Cosmos delegation/reward balances. If an optional token, price, staking, reward, trustline, or pagination subrequest fails, the scan keeps successful balances and presents a visible warning. Exchange credentials are sealed with a dedicated vault subkey before being saved, then decrypted only in memory when a local scan runs. Exchange origins and credential-bearing paths are pinned in the app and cannot be redirected by sync-server configuration.
+
+TLS certificate pinning is deliberately not used: the app talks only to third-party services (chain RPCs, price API, exchanges, sync server) that rotate certificates on their own schedule, so pins would turn routine rotations into outages. The transport boundary is instead the system trust store plus HTTPS-only host/scheme/port allowlisting, sessions that refuse to follow redirects, bounded response sizes, and request timeouts (see `Sources/AddressAtlasCore/Scanners/HTTPClient.swift`).

@@ -95,7 +95,15 @@ final class RecoveryKitTests: XCTestCase {
 
 final class NativeEndpointConfigTests: XCTestCase {
   func testBundledEndpointConfigCoversExpandedEvmChains() {
-    XCTAssertEqual(NativeEndpointConfig.bundled.configVersion, 3)
+    XCTAssertEqual(NativeEndpointConfig.bundled.configVersion, 5)
+    XCTAssertEqual(
+      NativeEndpointConfig.bundled.chains["ethereum"]?.rpcURL?.absoluteString,
+      "https://ethereum-rpc.publicnode.com"
+    )
+    XCTAssertEqual(
+      NativeEndpointConfig.bundled.chains["polygon"]?.rpcURL?.absoluteString,
+      "https://polygon.drpc.org"
+    )
     XCTAssertEqual(
       NativeEndpointConfig.bundled.chains["scroll"]?.rpcURL?.absoluteString,
       "https://rpc.scroll.io"
@@ -104,14 +112,15 @@ final class NativeEndpointConfigTests: XCTestCase {
       NativeEndpointConfig.bundled.chains["zksync-era"]?.rpcURL?.absoluteString,
       "https://mainnet.era.zksync.io"
     )
+    XCTAssertNil(NativeEndpointConfig.bundled.chains["stargaze"])
   }
 
   func testEndpointConfigOverridesChainsButKeepsExchangeEndpointsFixed() throws {
     let config = NativeEndpointConfig(
-      configVersion: 3,
+      configVersion: 5,
       priceBaseURL: URL(string: "https://prices.example/simple/price")!,
       chains: [
-        "ethereum": ChainEndpointOverride(rpcURL: URL(string: "https://eth.llamarpc.com/rotated-rpc"))
+        "ethereum": ChainEndpointOverride(rpcURL: URL(string: "https://ethereum-rpc.publicnode.com/rotated-rpc"))
       ],
       exchanges: [
         ExchangeProvider.binance.rawValue: ExchangeEndpointOverride(
@@ -123,8 +132,8 @@ final class NativeEndpointConfigTests: XCTestCase {
 
     let chain = config.applying(to: ChainRegistry.evmChains.first { $0.id == "ethereum" }!)
 
-    XCTAssertEqual(config.configVersion, 3)
-    XCTAssertEqual(chain.rpcUrl?.absoluteString, "https://eth.llamarpc.com/rotated-rpc")
+    XCTAssertEqual(config.configVersion, 5)
+    XCTAssertEqual(chain.rpcUrl?.absoluteString, "https://ethereum-rpc.publicnode.com/rotated-rpc")
     XCTAssertEqual(config.exchangeBaseURL(for: .binance)?.absoluteString, "https://api.binance.com")
     XCTAssertEqual(config.exchangeAccountPath(for: .binance), "/api/v3/account")
     XCTAssertEqual(config.exchangeBaseURL(for: .coinbase)?.absoluteString, "https://api.coinbase.com")
@@ -132,7 +141,7 @@ final class NativeEndpointConfigTests: XCTestCase {
 
   func testEndpointConfigClientFetchesNativeConfig() async throws {
     let expected = NativeEndpointConfig(
-      configVersion: 4,
+      configVersion: 5,
       updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
       priceBaseURL: URL(string: "https://api.coingecko.com/api/v3/simple/price")!,
       chains: ["solana": ChainEndpointOverride(rpcURL: URL(string: "https://api.mainnet-beta.solana.com/rotated"))],
@@ -147,6 +156,146 @@ final class NativeEndpointConfigTests: XCTestCase {
     let config = try await client.fetch(from: URL(string: "https://sync.example")!)
 
     XCTAssertEqual(config, expected)
+  }
+
+  func testEndpointConfigClientDecodesServerShapedNativeConfigJSON() async throws {
+    // Bundled configVersion is cross-pinned to the server's
+    // BUNDLED_NATIVE_ENDPOINT_CONFIG_VERSION (src/lib/sync/native-config.ts:31).
+    // Deploy ordering rule: the server value must be raised FIRST, because the
+    // native client rejects any payload version below its own bundled version.
+    XCTAssertEqual(NativeEndpointConfig.bundled.configVersion, 5)
+
+    // Literal JSON mirroring the wire shape of getNativeEndpointConfig() in
+    // src/lib/sync/native-config.ts (served by GET /config/native). Note the
+    // server-side casing `priceBaseUrl` and the JS toISOString() timestamp
+    // with fractional seconds.
+    let json = """
+    {
+      "schemaVersion": 1,
+      "configVersion": 5,
+      "updatedAt": "2026-07-14T00:00:00.000Z",
+      "refreshAfterSeconds": 21600,
+      "minSupportedAppVersion": "0.2.0",
+      "message": "Planned maintenance this weekend.",
+      "priceBaseUrl": "https://api.coingecko.com/api/v3/simple/price",
+      "chains": {
+        "bitcoin": { "restUrl": "https://blockstream.info/api" },
+        "solana": { "rpcUrl": "https://api.mainnet-beta.solana.com" },
+        "tron": { "restUrl": "https://api.trongrid.io" },
+        "xrp": { "rpcUrl": "https://s1.ripple.com:51234/" },
+        "ethereum": { "rpcUrl": "https://ethereum-rpc.publicnode.com" },
+        "base": { "rpcUrl": "https://mainnet.base.org" },
+        "arbitrum": { "rpcUrl": "https://arb1.arbitrum.io/rpc" },
+        "optimism": { "rpcUrl": "https://mainnet.optimism.io" },
+        "polygon": { "rpcUrl": "https://polygon.drpc.org" },
+        "bsc": { "rpcUrl": "https://bsc-dataseed.binance.org" },
+        "avalanche": { "rpcUrl": "https://api.avax.network/ext/bc/C/rpc" },
+        "gnosis": { "rpcUrl": "https://rpc.gnosischain.com" },
+        "linea": { "rpcUrl": "https://rpc.linea.build" },
+        "mantle": { "rpcUrl": "https://rpc.mantle.xyz" },
+        "scroll": { "rpcUrl": "https://rpc.scroll.io" },
+        "zksync-era": { "rpcUrl": "https://mainnet.era.zksync.io" },
+        "cosmoshub": { "restUrl": "https://cosmos-api.polkachu.com" },
+        "osmosis": { "restUrl": "https://lcd.osmosis.zone" },
+        "celestia": { "restUrl": "https://celestia-api.polkachu.com" },
+        "stride": { "restUrl": "https://stride-api.polkachu.com" }
+      },
+      "exchanges": {}
+    }
+    """
+    let http = StubHTTPClient { request in
+      XCTAssertEqual(request.url?.path, "/config/native")
+      return (Data(json.utf8), httpResponse(for: request))
+    }
+    let client = NativeEndpointConfigClient(http: http)
+
+    let config = try await client.fetch(from: URL(string: "https://sync.example")!)
+
+    XCTAssertEqual(config.schemaVersion, 1)
+    XCTAssertEqual(config.configVersion, 5)
+    let fractionalFormatter = ISO8601DateFormatter()
+    fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    XCTAssertEqual(
+      config.updatedAt,
+      try XCTUnwrap(fractionalFormatter.date(from: "2026-07-14T00:00:00.000Z"))
+    )
+    XCTAssertEqual(config.refreshAfterSeconds, 21_600)
+    XCTAssertEqual(config.minSupportedAppVersion, "0.2.0")
+    XCTAssertEqual(config.message, "Planned maintenance this weekend.")
+    XCTAssertEqual(
+      config.priceBaseURL.absoluteString,
+      "https://api.coingecko.com/api/v3/simple/price"
+    )
+    XCTAssertEqual(config.chains.count, 20)
+    XCTAssertEqual(config.chains["bitcoin"]?.restURL?.absoluteString, "https://blockstream.info/api")
+    XCTAssertEqual(config.chains["solana"]?.rpcURL?.absoluteString, "https://api.mainnet-beta.solana.com")
+    XCTAssertEqual(config.chains["tron"]?.restURL?.absoluteString, "https://api.trongrid.io")
+    XCTAssertEqual(config.chains["xrp"]?.rpcURL?.absoluteString, "https://s1.ripple.com:51234/")
+    XCTAssertEqual(config.chains["ethereum"]?.rpcURL?.absoluteString, "https://ethereum-rpc.publicnode.com")
+    XCTAssertEqual(config.chains["base"]?.rpcURL?.absoluteString, "https://mainnet.base.org")
+    XCTAssertEqual(config.chains["arbitrum"]?.rpcURL?.absoluteString, "https://arb1.arbitrum.io/rpc")
+    XCTAssertEqual(config.chains["optimism"]?.rpcURL?.absoluteString, "https://mainnet.optimism.io")
+    XCTAssertEqual(config.chains["polygon"]?.rpcURL?.absoluteString, "https://polygon.drpc.org")
+    XCTAssertEqual(config.chains["bsc"]?.rpcURL?.absoluteString, "https://bsc-dataseed.binance.org")
+    XCTAssertEqual(config.chains["avalanche"]?.rpcURL?.absoluteString, "https://api.avax.network/ext/bc/C/rpc")
+    XCTAssertEqual(config.chains["gnosis"]?.rpcURL?.absoluteString, "https://rpc.gnosischain.com")
+    XCTAssertEqual(config.chains["linea"]?.rpcURL?.absoluteString, "https://rpc.linea.build")
+    XCTAssertEqual(config.chains["mantle"]?.rpcURL?.absoluteString, "https://rpc.mantle.xyz")
+    XCTAssertEqual(config.chains["scroll"]?.rpcURL?.absoluteString, "https://rpc.scroll.io")
+    XCTAssertEqual(config.chains["zksync-era"]?.rpcURL?.absoluteString, "https://mainnet.era.zksync.io")
+    XCTAssertEqual(config.chains["cosmoshub"]?.restURL?.absoluteString, "https://cosmos-api.polkachu.com")
+    XCTAssertEqual(config.chains["osmosis"]?.restURL?.absoluteString, "https://lcd.osmosis.zone")
+    XCTAssertEqual(config.chains["celestia"]?.restURL?.absoluteString, "https://celestia-api.polkachu.com")
+    XCTAssertEqual(config.chains["stride"]?.restURL?.absoluteString, "https://stride-api.polkachu.com")
+    XCTAssertTrue(config.exchanges.isEmpty)
+  }
+
+  func testEndpointConfigClientRejectsAStaleOrOutOfRangePayloadVersion() async throws {
+    for version in [4, 2_000_000_001] {
+      let response = NativeEndpointConfig(
+        configVersion: version,
+        priceBaseURL: NativeEndpointConfig.bundled.priceBaseURL,
+        exchanges: [:]
+      )
+      let http = StubHTTPClient { request in
+        (try JSONEncoder.addressAtlas.encode(response), httpResponse(for: request))
+      }
+      let client = NativeEndpointConfigClient(http: http)
+
+      do {
+        _ = try await client.fetch(from: URL(string: "https://sync.example")!)
+        XCTFail("Expected config version \(version) to be rejected.")
+      } catch let error as NativeEndpointConfigError {
+        XCTAssertEqual(error, .invalidConfigVersion)
+      }
+    }
+  }
+
+  func testEndpointConfigClientRejectsIPLiteralAndNonOriginServersBeforeRequest() async throws {
+    let rejectingHTTP = StubHTTPClient { _ in
+      XCTFail("Passkey-incompatible or malformed servers must be rejected before any HTTP request.")
+      throw URLError(.badURL)
+    }
+    let rejectingClient = NativeEndpointConfigClient(http: rejectingHTTP)
+    for raw in [
+      "https://sync.example:0",
+      "https://sync.example:65536",
+      "http://127.0.0.1:8787",
+      "http://[::1]:8787",
+      "https://127.0.0.1:8787",
+      "https://[2001:db8::1]:8787",
+      "http://[::1]:99999",
+      "https://sync.example/prefix",
+      "https://sync.example?tenant=other",
+      "https://sync.example#fragment"
+    ] {
+      do {
+        _ = try await rejectingClient.fetch(from: URL(string: raw)!)
+        XCTFail("Expected incompatible server to be rejected: \(raw)")
+      } catch let error as NativeEndpointConfigError {
+        XCTAssertEqual(error, .invalidEndpoint("serverUrl"))
+      }
+    }
   }
 
   func testEndpointConfigRejectsUnsafeRefreshIntervals() {
@@ -184,6 +333,7 @@ final class NativeEndpointConfigTests: XCTestCase {
 
   func testEndpointConfigClientRejectsUnsafeURLsAndPaths() async throws {
     let invalid = NativeEndpointConfig(
+      configVersion: 5,
       priceBaseURL: URL(string: "file:///tmp/prices")!,
       exchanges: [
         ExchangeProvider.binance.rawValue: ExchangeEndpointOverride(
@@ -207,6 +357,7 @@ final class NativeEndpointConfigTests: XCTestCase {
 
   func testEndpointConfigClientRejectsRemoteExchangeOverrides() async throws {
     let invalid = NativeEndpointConfig(
+      configVersion: 5,
       exchanges: [
         ExchangeProvider.binance.rawValue: ExchangeEndpointOverride(
           baseURL: URL(string: "https://api.binance.com")!,
@@ -707,6 +858,13 @@ final class NativeScannerTokenTests: XCTestCase {
       "0x5A7d6b2F92C77FAD6CCaBd7EE0624E64907Eaf3E"
     )
     XCTAssertEqual(ChainRegistry.commonSplTokens["solana"]?.first { $0.symbol == "PYTH" }?.decimals, 6)
+    for chainID in ["arbitrum", "polygon"] {
+      let usdt0 = ChainRegistry.commonErc20Tokens[chainID]?.first { $0.symbol == "USDT0" }
+      XCTAssertEqual(usdt0?.name, "USDT0")
+      XCTAssertEqual(usdt0?.decimals, 6)
+      XCTAssertEqual(usdt0?.coinGeckoId, "usdt0")
+      XCTAssertFalse(ChainRegistry.commonErc20Tokens[chainID]?.contains { $0.symbol == "USDT" } == true)
+    }
     XCTAssertEqual(ExchangeBalanceNormalizer.coinGeckoIds["ZK"], "zksync")
     XCTAssertEqual(ExchangeBalanceNormalizer.coinGeckoIds["SCR"], "scroll")
   }
@@ -727,10 +885,13 @@ final class NativeScannerTokenTests: XCTestCase {
     )
     XCTAssertEqual(
       solana.first(where: { $0.symbol == "BONK" })?.address,
-      "DezXAZ8z7PnrnRJjz3JpPZsM1pPB263KGg1W53WZyQb"
+      "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"
+    )
+    XCTAssertEqual(
+      solana.first(where: { $0.symbol == "WIF" })?.address,
+      "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm"
     )
     XCTAssertTrue(solana.contains { $0.symbol == "JitoSOL" })
-    XCTAssertTrue(solana.contains { $0.symbol == "WIF" })
   }
 
   func testSolanaTokenAccountParserReadsJsonParsedBalances() throws {
@@ -1068,6 +1229,8 @@ final class NativeExchangeClientTests: XCTestCase {
   }
 
   func testExchangeBalanceNormalizerUsesLiveStablecoinPricesAndExactUSD() async throws {
+    // Every non-USD stablecoin must have a CoinGecko identity so the live
+    // price can win; the $1.00 fallback below is only for missing prices.
     XCTAssertTrue(
       ExchangeBalanceNormalizer.usdStableSymbols.subtracting(["USD"]).allSatisfy {
         ExchangeBalanceNormalizer.coinGeckoIds[$0] != nil
@@ -1112,20 +1275,33 @@ final class NativeExchangeClientTests: XCTestCase {
     XCTAssertTrue(result.warnings.isEmpty)
   }
 
-  func testExchangeBalanceNormalizerLeavesMissingStablecoinPricesVisiblyUnpriced() async throws {
+  func testExchangeBalanceNormalizerFallsBackToOneDollarOnlyForMissingStablecoinPrices() async throws {
+    // A live CoinGecko price always wins; the exact $1.00 fallback applies
+    // only when the response omits a USD stablecoin. Non-stablecoins with a
+    // missing price remain visibly unpriced at $0.
     let result = try await ExchangeBalanceNormalizer.normalizeWithWarnings(
-      balance: ExchangeBalance(total: ["USDC": 42, "USD": 5]),
+      balance: ExchangeBalance(total: ["USDC": 42, "USDT": 10, "USD": 5, "BTC": 1]),
       id: UUID(),
       provider: .binance,
       label: "Binance main",
-      priceProvider: StaticPriceProvider(values: [:])
+      priceProvider: StaticPriceProvider(values: ["tether": PricePoint(usd: 0.98)])
     )
 
-    XCTAssertEqual(result.holdings.first(where: { $0.symbol == "USDC" })?.priceUsd, 0)
-    XCTAssertEqual(result.holdings.first(where: { $0.symbol == "USDC" })?.valueUsd, 0)
+    XCTAssertEqual(result.holdings.first(where: { $0.symbol == "USDC" })?.priceUsd, 1)
+    XCTAssertEqual(result.holdings.first(where: { $0.symbol == "USDC" })?.valueUsd, 42)
+    XCTAssertEqual(
+      try XCTUnwrap(result.holdings.first(where: { $0.symbol == "USDT" })?.valueUsd),
+      9.8,
+      accuracy: 0.000_001
+    )
     XCTAssertEqual(result.holdings.first(where: { $0.symbol == "USD" })?.valueUsd, 5)
+    XCTAssertEqual(result.holdings.first(where: { $0.symbol == "BTC" })?.priceUsd, 0)
+    XCTAssertEqual(result.holdings.first(where: { $0.symbol == "BTC" })?.valueUsd, 0)
     XCTAssertTrue(result.warnings.contains(where: {
-      $0.contains("USDC") && $0.contains("shown unpriced")
+      $0.contains("USDC") && $0.contains("$1.00") && !$0.contains("BTC")
+    }))
+    XCTAssertTrue(result.warnings.contains(where: {
+      $0.contains("BTC") && $0.contains("shown unpriced") && !$0.contains("USDC")
     }))
   }
 
@@ -1160,7 +1336,7 @@ final class NativeExchangeClientTests: XCTestCase {
       priceProvider: StaticPriceProvider(values: ["usd-coin": PricePoint(usd: 1)])
     )
 
-    let result = await scanner.scan(connections: [connection], vaultKey: vaultKey)
+    let result = try await scanner.scanThrowing(connections: [connection], vaultKey: vaultKey)
 
     XCTAssertEqual(result.holdings.first?.symbol, "USDC")
     XCTAssertEqual(result.holdings.first?.valueUsd, 10)
@@ -1286,6 +1462,68 @@ final class SyncClientTests: XCTestCase {
     )
   }
 
+  func testSyncClientDecodesServerShapedVaultLatestResponse() async throws {
+    // Literal JSON mirroring the GET /vault/latest response built in
+    // src/app/vault/latest/route.ts:66-75: `envelope` is the raw jsonb object
+    // stored at upload time and `updatedAt` is a Postgres Date rendered with
+    // JS toISOString(), which always includes fractional seconds. This fixture
+    // is deliberately NOT produced by re-encoding the Swift model, so a codec
+    // drift between the server wire shape and RemoteVaultSnapshot fails here.
+    let json = """
+    {
+      "version": 7,
+      "envelope": {
+        "schemaVersion": 2,
+        "cryptoVersion": 2,
+        "keyId": "sync-v2",
+        "nonce": "AAAAAAAAAAAAAAAA",
+        "ciphertext": "AAAA",
+        "checksum": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "createdAt": "2026-07-12T09:15:04Z"
+      },
+      "byteSize": 4096,
+      "checksum": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+      "updatedAt": "2026-07-13T08:30:15.123Z"
+    }
+    """
+    let http = StubHTTPClient { request in
+      XCTAssertEqual(request.url?.path, "/vault/latest")
+      return (Data(json.utf8), httpResponse(for: request))
+    }
+    let client = ZeroKnowledgeSyncClient(baseURL: URL(string: "https://sync.example")!, http: http)
+
+    let response = try await client.latestVault()
+    let decoded = try XCTUnwrap(response)
+
+    XCTAssertEqual(decoded.version, 7)
+    XCTAssertEqual(decoded.byteSize, 4096)
+    XCTAssertEqual(
+      decoded.checksum,
+      "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+    )
+    let fractionalFormatter = ISO8601DateFormatter()
+    fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    XCTAssertEqual(
+      decoded.updatedAt,
+      try XCTUnwrap(fractionalFormatter.date(from: "2026-07-13T08:30:15.123Z"))
+    )
+    XCTAssertEqual(decoded.envelope.schemaVersion, 2)
+    XCTAssertEqual(decoded.envelope.cryptoVersion, 2)
+    XCTAssertEqual(decoded.envelope.keyId, "sync-v2")
+    XCTAssertEqual(decoded.envelope.nonce, "AAAAAAAAAAAAAAAA")
+    XCTAssertEqual(decoded.envelope.ciphertext, "AAAA")
+    XCTAssertEqual(
+      decoded.envelope.checksum,
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    )
+    let wholeSecondsFormatter = ISO8601DateFormatter()
+    wholeSecondsFormatter.formatOptions = [.withInternetDateTime]
+    XCTAssertEqual(
+      decoded.envelope.createdAt,
+      try XCTUnwrap(wholeSecondsFormatter.date(from: "2026-07-12T09:15:04Z"))
+    )
+  }
+
   func testSyncClientSurfacesExpiredSession() async throws {
     let http = StubHTTPClient { request in
       XCTAssertEqual(request.value(forHTTPHeaderField: "authorization"), "Bearer expired")
@@ -1302,6 +1540,35 @@ final class SyncClientTests: XCTestCase {
       XCTFail("Expected expired session to throw.")
     } catch SyncClientError.authenticationRequired(let message) {
       XCTAssertEqual(message, "Token expired.")
+    }
+  }
+
+  func testSyncClientDropsHeaderUnsafeOrOversizedBearerTokens() async throws {
+    for token in [
+      "unsafe\r\nheader",
+      String(repeating: "a", count: SyncSessionToken.maximumUTF8ByteCount + 1)
+    ] {
+      let http = StubHTTPClient { request in
+        XCTAssertNil(request.value(forHTTPHeaderField: "authorization"))
+        return (
+          Data("{\"error\":\"Authentication required.\"}".utf8),
+          httpResponse(for: request, statusCode: 401)
+        )
+      }
+      let client = ZeroKnowledgeSyncClient(
+        baseURL: URL(string: "https://sync.example")!,
+        http: http
+      )
+      await client.setBearerToken(token)
+
+      do {
+        _ = try await client.latestVault()
+        XCTFail("Expected authentication failure.")
+      } catch SyncClientError.authenticationRequired {
+        // Expected; the request assertion above proves the invalid token was not sent.
+      } catch {
+        XCTFail("Expected authenticationRequired, got \(error).")
+      }
     }
   }
 
@@ -1333,6 +1600,49 @@ final class SyncClientTests: XCTestCase {
     } catch SyncClientError.requestFailed(let statusCode, let message) {
       XCTAssertEqual(statusCode, 409)
       XCTAssertTrue(message.contains("Remote vault snapshot is newer"))
+    }
+  }
+
+  func testSyncClientSanitizesAndBoundsUntrustedServerErrors() async throws {
+    let rawSecret = String(repeating: "s", count: 80)
+    let json = try JSONSerialization.data(withJSONObject: [
+      "error": "authorization: Bearer \(rawSecret)\napi_key=\(rawSecret) \(String(repeating: "x", count: 2_000))"
+    ])
+    let http = StubHTTPClient { request in
+      (json, httpResponse(for: request, statusCode: 500))
+    }
+    let client = ZeroKnowledgeSyncClient(baseURL: URL(string: "https://sync.example")!, http: http)
+
+    do {
+      _ = try await client.latestVault()
+      XCTFail("Expected server error.")
+    } catch SyncClientError.requestFailed(let statusCode, let message) {
+      XCTAssertEqual(statusCode, 500)
+      XCTAssertFalse(message.contains(rawSecret))
+      XCTAssertFalse(message.contains("\n"))
+      XCTAssertTrue(message.contains("[redacted]"))
+      XCTAssertLessThanOrEqual(
+        message.unicodeScalars.count,
+        ProviderErrorSanitizer.maximumScalarCount + 1
+      )
+    }
+  }
+
+  func testSyncClientDoesNotDecodeOversizedErrorBodies() async throws {
+    let oversized = Data(
+      "{\"error\":\"\(String(repeating: "x", count: 20_000))\"}".utf8
+    )
+    let http = StubHTTPClient { request in
+      (oversized, httpResponse(for: request, statusCode: 503))
+    }
+    let client = ZeroKnowledgeSyncClient(baseURL: URL(string: "https://sync.example")!, http: http)
+
+    do {
+      _ = try await client.latestVault()
+      XCTFail("Expected server error.")
+    } catch SyncClientError.requestFailed(let statusCode, let message) {
+      XCTAssertEqual(statusCode, 503)
+      XCTAssertEqual(message, HTTPURLResponse.localizedString(forStatusCode: 503))
     }
   }
 }

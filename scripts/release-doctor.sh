@@ -3,9 +3,14 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STRICT=0
-if [[ "${1:-}" == "--strict" ]]; then
-  STRICT=1
-fi
+case "$#:${1:-}" in
+  0:) ;;
+  1:--strict) STRICT=1 ;;
+  *)
+    echo "Usage: $0 [--strict]" >&2
+    exit 64
+    ;;
+esac
 
 failures=0
 warnings=0
@@ -53,9 +58,9 @@ fi
 if [[ -f server/sync/.env.production ]]; then
   pass "server/sync/.env.production exists"
   if has_command docker; then
-    docker compose --env-file server/sync/.env.production -f server/sync/compose.prod.yml config >/dev/null \
-      && pass "Production compose config parses" \
-      || fail "Production compose config does not parse"
+    bash server/sync/manage-prod.sh config >/dev/null \
+      && pass "Production compose config and volume preflight pass" \
+      || fail "Production compose config or volume preflight failed"
   fi
 else
   warn "server/sync/.env.production missing; copy server/sync/.env.production.example before VPS deploy"
@@ -70,10 +75,22 @@ for name in ADDRESS_ATLAS_CODESIGN_IDENTITY ADDRESS_ATLAS_NOTARY_PROFILE; do
 done
 
 if [[ -n "${ADDRESS_ATLAS_CODESIGN_IDENTITY:-}" ]]; then
-  if grep -Fq "$ADDRESS_ATLAS_CODESIGN_IDENTITY" <<< "$codesigning_identities"; then
-    pass "Selected signing identity exists in Keychain"
+  selected_identity_found=0
+  selected_identity_is_developer_id=0
+  while IFS= read -r identity; do
+    if [[ "$identity" == "$ADDRESS_ATLAS_CODESIGN_IDENTITY" ]]; then
+      selected_identity_found=1
+      [[ "$identity" == "Developer ID Application: "* ]] \
+        && selected_identity_is_developer_id=1
+    fi
+  done < <(sed -nE 's/^[[:space:]]*[0-9]+\) [[:xdigit:]]+ "(.*)"$/\1/p' <<< "$codesigning_identities")
+
+  if [[ "$selected_identity_found" -eq 0 ]]; then
+    fail "Selected signing identity was not found exactly in Keychain"
+  elif [[ "$selected_identity_is_developer_id" -ne 1 ]]; then
+    fail "Selected signing identity is not a Developer ID Application identity"
   else
-    fail "Selected signing identity was not found in Keychain"
+    pass "Selected Developer ID Application identity exists in Keychain"
   fi
 fi
 

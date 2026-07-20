@@ -42,6 +42,10 @@ export interface PasskeyVerifyInput {
 
 const MAX_ACCOUNT_NAME_LENGTH = 80;
 const MAX_CHALLENGE_TOKEN_LENGTH = 4_096;
+const CONSUMED_CHALLENGE_PRUNE_INTERVAL_MS = 60_000;
+
+let consumedChallengePruneInFlight: Promise<void> | null = null;
+let lastConsumedChallengePruneStartedAt = 0;
 
 export function parsePasskeyOptionsInput(body: unknown): PasskeyOptionsInput {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
@@ -136,6 +140,12 @@ export async function createPasskeyOptions(body: unknown) {
       publicKey
     };
   }
+
+  // parsePasskeyOptionsInput only admits the two modes above, so this is
+  // unreachable today. It keeps the function exhaustive: without it a future
+  // third mode would return undefined and the route would serialize a 200
+  // null body instead of the 400 this input error maps to.
+  throw new PasskeyInputError("mode must be register or authenticate.");
 }
 
 export async function verifyPasskey(body: unknown) {
@@ -147,7 +157,7 @@ export async function verifyPasskey(body: unknown) {
     throw new PasskeyVerificationError();
   }
   await ensureSyncSchema();
-  void pruneConsumedChallenges();
+  scheduleConsumedChallengePrune();
 
   // The challenge is consumed AFTER the WebAuthn assertion is verified (inside
   // verifyRegistration/verifyAuthentication), so a malformed or forged response
@@ -163,8 +173,28 @@ export async function verifyPasskey(body: unknown) {
   return verifyAuthentication(challenge, input.response as AuthenticationResponseJSON, config);
 }
 
-// Challenge tokens live 5 minutes; rows older than that are dead weight. Best
-// effort — never block or fail a verification on cleanup.
+// Challenge tokens live 5 minutes; rows older than that are dead weight. Keep
+// cleanup best-effort and off the authentication critical path, but never start
+// an unbounded number of pool waiters when PostgreSQL is slow or unavailable.
+function scheduleConsumedChallengePrune() {
+  const now = Date.now();
+  if (
+    consumedChallengePruneInFlight
+    || now - lastConsumedChallengePruneStartedAt < CONSUMED_CHALLENGE_PRUNE_INTERVAL_MS
+  ) {
+    return;
+  }
+
+  lastConsumedChallengePruneStartedAt = now;
+  const attempt = pruneConsumedChallenges();
+  consumedChallengePruneInFlight = attempt;
+  void attempt.finally(() => {
+    if (consumedChallengePruneInFlight === attempt) {
+      consumedChallengePruneInFlight = null;
+    }
+  });
+}
+
 async function pruneConsumedChallenges() {
   try {
     await getSyncPool().query(
@@ -173,6 +203,11 @@ async function pruneConsumedChallenges() {
   } catch {
     // Ignore: pruning is opportunistic.
   }
+}
+
+export function resetPasskeyMaintenanceForTests() {
+  consumedChallengePruneInFlight = null;
+  lastConsumedChallengePruneStartedAt = 0;
 }
 
 async function verifyRegistration(

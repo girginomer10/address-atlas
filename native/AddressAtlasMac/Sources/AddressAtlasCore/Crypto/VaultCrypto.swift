@@ -278,13 +278,16 @@ extension JSONDecoder {
     // fractional seconds emitted by JavaScript's `Date.toISOString()`. Keep
     // accepting the second-precision dates produced by our encoder while also
     // accepting the server's RFC 3339 timestamps.
-    let fractionalFormatter = ISO8601DateFormatter()
-    fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    let wholeSecondsFormatter = ISO8601DateFormatter()
-    wholeSecondsFormatter.formatOptions = [.withInternetDateTime]
     decoder.dateDecodingStrategy = .custom { decoder in
       let container = try decoder.singleValueContainer()
       let value = try container.decode(String.self)
+      // JSONDecoder's custom strategy is @Sendable under Swift 6. Build these
+      // non-Sendable Foundation formatters inside the invocation instead of
+      // capturing shared instances in the closure.
+      let fractionalFormatter = ISO8601DateFormatter()
+      fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+      let wholeSecondsFormatter = ISO8601DateFormatter()
+      wholeSecondsFormatter.formatOptions = [.withInternetDateTime]
       if let date = fractionalFormatter.date(from: value) ?? wholeSecondsFormatter.date(from: value) {
         return date
       }

@@ -4,6 +4,20 @@ import XCTest
 
 @MainActor
 final class AppStateBehaviorTests: XCTestCase {
+  func testNavigationClearsTheSourcePagesTransientNoticeOrError() {
+    let state = AppState()
+
+    state.notice = "Saved on the source page."
+    state.clearTransientMessagesForNavigation()
+    XCTAssertEqual(state.notice, "")
+    XCTAssertEqual(state.error, "")
+
+    state.error = "Invalid input on the source page."
+    state.clearTransientMessagesForNavigation()
+    XCTAssertEqual(state.notice, "")
+    XCTAssertEqual(state.error, "")
+  }
+
   func testSuccessfulSaveRefreshesInMemoryTimestampToPersistedValue() throws {
     let tempDir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -51,7 +65,7 @@ final class AppStateBehaviorTests: XCTestCase {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let codec = VaultSyncCodec()
-    let accountId = "prune-account"
+    let accountId = "11111111-1111-4111-8111-111111111111"
     let old = scan(generatedAt: 100, warningLength: 240)
     let middle = scan(generatedAt: 200, warningLength: 240)
     let new = scan(generatedAt: 300, warningLength: 240)
@@ -132,7 +146,7 @@ final class AppStateBehaviorTests: XCTestCase {
       testStore: fixture.store,
       document: VaultDocument(
         syncState: SyncState(
-          accountId: "exhausted-version-account",
+          accountId: "44444444-4444-4444-8444-444444444444",
           latestRemoteVersion: 2_000_000_000
         )
       )
@@ -156,7 +170,7 @@ final class AppStateBehaviorTests: XCTestCase {
     let document = VaultDocument(
       scanRuns: [run],
       syncState: SyncState(
-        accountId: "expired-account",
+        accountId: "55555555-5555-4555-8555-555555555555",
         serverURL: "https://sync.example",
         sessionToken: "expired-token"
       )
@@ -200,7 +214,7 @@ final class AppStateBehaviorTests: XCTestCase {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let codec = VaultSyncCodec()
-    let accountId = "reject-account"
+    let accountId = "22222222-2222-4222-8222-222222222222"
     var baseline = VaultDocument(
       scanRuns: [scan(generatedAt: 100, warningLength: 20)],
       syncState: SyncState(accountId: accountId, latestRemoteVersion: 1)
@@ -255,7 +269,7 @@ final class AppStateBehaviorTests: XCTestCase {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let codec = VaultSyncCodec()
-    let accountId = "headroom-account"
+    let accountId = "33333333-3333-4333-8333-333333333333"
     let old = scan(generatedAt: 100, warningLength: 1_000)
     let new = scan(generatedAt: 200, warningLength: 20)
     let initial = VaultDocument(
@@ -323,6 +337,21 @@ final class AppStateBehaviorTests: XCTestCase {
     XCTAssertNil(AppState.derivedManualPrice(amount: 0, valueUsd: 10))
     XCTAssertNil(AppState.derivedManualPrice(amount: .leastNonzeroMagnitude, valueUsd: .greatestFiniteMagnitude))
     XCTAssertEqual(AppState.derivedManualPrice(amount: 2, valueUsd: 10), 5)
+  }
+
+  func testPortfolioTotalRejectsTwoFiniteValuesWhoseAdditionOverflows() {
+    let holdings = [
+      asset(id: "huge-a", priceUsd: 1, valueUsd: 1e308),
+      asset(id: "huge-b", priceUsd: 1, valueUsd: 1e308)
+    ]
+    let state = AppState()
+    state.document.scanRuns = [
+      ScanRunRecord(totalUsd: 0, inputCount: 1, holdings: holdings)
+    ]
+
+    XCTAssertNil(AppState.validatedPortfolioTotal(holdings))
+    XCTAssertEqual(state.visibleLatestTotalUsd, 0)
+    XCTAssertTrue(state.visibleLatestTotalUsd.isFinite)
   }
 
   func testCompatibilityPolicyUsesBoundedVersionsAndFailsClosed() {
@@ -406,6 +435,30 @@ final class AppStateBehaviorTests: XCTestCase {
         vaultKey: vaultKey
       )
     )
+  }
+
+  func testSavingKrakenCredentialsRejectsAnInvalidDeviceIdentity() throws {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let state = AppState(
+      testStore: fixture.store,
+      document: VaultDocument(),
+      testVaultKey: fixture.vaultKey,
+      krakenDeviceIdentifier: { "not-a-device-uuid" }
+    )
+
+    XCTAssertFalse(
+      state.saveExchangeConnection(
+        provider: .kraken,
+        label: "Kraken",
+        credentials: ExchangeCredentials(
+          apiKey: "api-key",
+          secret: Data("secret".utf8).base64EncodedString()
+        )
+      )
+    )
+    XCTAssertTrue(state.document.exchangeConnections.isEmpty)
+    XCTAssertTrue(state.error.contains("device identity is invalid"))
   }
 
   func testCustomTokenRejectsInvalidMixedCaseEIP55ChecksumBeforeCanonicalizing() {
@@ -535,6 +588,47 @@ final class AppStateBehaviorTests: XCTestCase {
 
 @MainActor
 final class EndpointConfigRefreshTests: XCTestCase {
+  func testAcceptedConfigMessagePublishesOperatorMessageAndAbsenceClearsIt() async {
+    let client = ControllableEndpointConfigClient()
+    let state = AppState(endpointConfigClient: client)
+    state.document.syncState.serverURL = "https://sync.example"
+    XCTAssertNil(state.operatorMessage)
+
+    let withMessage = Task { await state.refreshEndpointConfig(silent: true) }
+    await client.waitUntilRequested("https://sync.example")
+    await client.resolve(
+      "https://sync.example",
+      with: NativeEndpointConfig(
+        configVersion: 8,
+        refreshAfterSeconds: 300,
+        message: "  Scheduled\u{0000} maintenance\n tonight.  "
+      )
+    )
+    let withMessageResult = await withMessage.value
+    XCTAssertTrue(withMessageResult)
+    XCTAssertEqual(state.operatorMessage, "Scheduled maintenance tonight.")
+
+    let withoutMessage = Task { await state.refreshEndpointConfig(silent: true) }
+    await client.waitUntilRequested("https://sync.example")
+    await client.resolve(
+      "https://sync.example",
+      with: NativeEndpointConfig(configVersion: 9, refreshAfterSeconds: 300)
+    )
+    let withoutMessageResult = await withoutMessage.value
+    XCTAssertTrue(withoutMessageResult)
+    XCTAssertNil(state.operatorMessage)
+
+    let whitespaceOnly = Task { await state.refreshEndpointConfig(silent: true) }
+    await client.waitUntilRequested("https://sync.example")
+    await client.resolve(
+      "https://sync.example",
+      with: NativeEndpointConfig(configVersion: 10, refreshAfterSeconds: 300, message: " \n\t ")
+    )
+    let whitespaceOnlyResult = await whitespaceOnly.value
+    XCTAssertTrue(whitespaceOnlyResult)
+    XCTAssertNil(state.operatorMessage)
+  }
+
   func testConcurrentRefreshesForSameServerShareOneRequest() async {
     let client = CountingEndpointConfigClient(
       config: NativeEndpointConfig(configVersion: 24, refreshAfterSeconds: 300)
@@ -594,6 +688,139 @@ final class EndpointConfigRefreshTests: XCTestCase {
     XCTAssertFalse(firstResult)
     XCTAssertEqual(state.endpointConfig.configVersion, 22)
   }
+
+  func testSameServerRejectsRollbackAndPreservesAcceptedConfigOnFailure() async {
+    let client = ControllableEndpointConfigClient()
+    let state = AppState(endpointConfigClient: client)
+    state.document.syncState.serverURL = "https://sync.example"
+
+    let first = Task { await state.refreshEndpointConfig(silent: true) }
+    await client.waitUntilRequested("https://sync.example")
+    let accepted = NativeEndpointConfig(
+      configVersion: 7,
+      refreshAfterSeconds: 300,
+      message: "accepted"
+    )
+    await client.resolve("https://sync.example", with: accepted)
+    let firstResult = await first.value
+    XCTAssertTrue(firstResult)
+
+    let rollback = Task { await state.refreshEndpointConfig(silent: true) }
+    await client.waitUntilRequested("https://sync.example")
+    await client.resolve(
+      "https://sync.example",
+      with: NativeEndpointConfig(configVersion: 6, refreshAfterSeconds: 300, message: "stale")
+    )
+    let rollbackResult = await rollback.value
+    XCTAssertFalse(rollbackResult)
+    XCTAssertEqual(state.endpointConfig, accepted)
+    XCTAssertTrue(state.endpointConfigStatus.contains("stale v6 rejected"))
+
+    let unavailable = Task { await state.refreshEndpointConfig(silent: true) }
+    await client.waitUntilRequested("https://sync.example")
+    await client.reject("https://sync.example", with: URLError(.cannotConnectToHost))
+    let unavailableResult = await unavailable.value
+    XCTAssertFalse(unavailableResult)
+    XCTAssertEqual(state.endpointConfig, accepted)
+    XCTAssertEqual(state.endpointConfigStatus, "Remote v7 (refresh unavailable)")
+  }
+
+  func testUnsupportedAcceptedConfigKeepsUpdateRequiredAcrossRollbackEquivocationAndFailure() async {
+    let client = ControllableEndpointConfigClient()
+    let state = AppState(endpointConfigClient: client)
+    state.document.syncState.serverURL = "https://sync.example"
+    let unsupported = NativeEndpointConfig(
+      configVersion: 7,
+      refreshAfterSeconds: 300,
+      minSupportedAppVersion: "999.0",
+      message: "unsupported"
+    )
+
+    let initial = Task { await state.refreshEndpointConfig(silent: true) }
+    await client.waitUntilRequested("https://sync.example")
+    await client.resolve("https://sync.example", with: unsupported)
+    let initialResult = await initial.value
+    XCTAssertTrue(initialResult)
+    XCTAssertFalse(state.isAppVersionSupported)
+    XCTAssertEqual(state.endpointConfigStatus, "Update required")
+
+    let rollback = Task { await state.refreshEndpointConfig(silent: true) }
+    await client.waitUntilRequested("https://sync.example")
+    await client.resolve(
+      "https://sync.example",
+      with: NativeEndpointConfig(configVersion: 6, refreshAfterSeconds: 300)
+    )
+    let rollbackResult = await rollback.value
+    XCTAssertFalse(rollbackResult)
+    XCTAssertEqual(state.endpointConfig, unsupported)
+    XCTAssertTrue(state.endpointConfigStatus.contains("Update required"))
+    XCTAssertTrue(state.endpointConfigStatus.contains("stale v6 rejected"))
+
+    let equivocation = Task { await state.refreshEndpointConfig(silent: true) }
+    await client.waitUntilRequested("https://sync.example")
+    await client.resolve(
+      "https://sync.example",
+      with: NativeEndpointConfig(
+        configVersion: 7,
+        refreshAfterSeconds: 300,
+        minSupportedAppVersion: "999.0",
+        message: "changed without version"
+      )
+    )
+    let equivocationResult = await equivocation.value
+    XCTAssertFalse(equivocationResult)
+    XCTAssertEqual(state.endpointConfig, unsupported)
+    XCTAssertTrue(state.endpointConfigStatus.contains("Update required"))
+    XCTAssertTrue(state.endpointConfigStatus.contains("conflicting refresh rejected"))
+
+    let unavailable = Task { await state.refreshEndpointConfig(silent: true) }
+    await client.waitUntilRequested("https://sync.example")
+    await client.reject("https://sync.example", with: URLError(.cannotConnectToHost))
+    let unavailableResult = await unavailable.value
+    XCTAssertFalse(unavailableResult)
+    XCTAssertEqual(state.endpointConfig, unsupported)
+    XCTAssertTrue(state.endpointConfigStatus.contains("Update required"))
+    XCTAssertTrue(state.endpointConfigStatus.contains("refresh unavailable"))
+  }
+
+  func testServerSwitchResetsVersionMonotonicityButRejectsSameVersionEquivocation() async {
+    let client = ControllableEndpointConfigClient()
+    let state = AppState(endpointConfigClient: client)
+    state.document.syncState.serverURL = "https://first.example"
+
+    let first = Task { await state.refreshEndpointConfig(silent: true) }
+    await client.waitUntilRequested("https://first.example")
+    await client.resolve(
+      "https://first.example",
+      with: NativeEndpointConfig(configVersion: 9, refreshAfterSeconds: 300, message: "first")
+    )
+    let firstResult = await first.value
+    XCTAssertTrue(firstResult)
+
+    state.document.syncState.serverURL = "https://second.example"
+    let second = Task { await state.refreshEndpointConfig(silent: true) }
+    await client.waitUntilRequested("https://second.example")
+    let secondAccepted = NativeEndpointConfig(
+      configVersion: 6,
+      refreshAfterSeconds: 300,
+      message: "second"
+    )
+    await client.resolve("https://second.example", with: secondAccepted)
+    let secondResult = await second.value
+    XCTAssertTrue(secondResult)
+    XCTAssertEqual(state.endpointConfig, secondAccepted)
+
+    let equivocation = Task { await state.refreshEndpointConfig(silent: true) }
+    await client.waitUntilRequested("https://second.example")
+    await client.resolve(
+      "https://second.example",
+      with: NativeEndpointConfig(configVersion: 6, refreshAfterSeconds: 300, message: "changed")
+    )
+    let equivocationResult = await equivocation.value
+    XCTAssertFalse(equivocationResult)
+    XCTAssertEqual(state.endpointConfig, secondAccepted)
+    XCTAssertTrue(state.endpointConfigStatus.contains("conflicting refresh rejected"))
+  }
 }
 
 private actor CountingEndpointConfigClient: EndpointConfigFetching {
@@ -609,6 +836,388 @@ private actor CountingEndpointConfigClient: EndpointConfigFetching {
     try await Task.sleep(for: .milliseconds(20))
     return config
   }
+}
+
+/// Exercises the real AppState orchestration glue (encrypt/decode/persist/merge)
+/// with stubs installed only at the HTTP transport boundary.
+@MainActor
+final class AppStateNetworkBoundaryTests: XCTestCase {
+  func testUploadEncryptedVaultSealsEncryptsAndPUTsWithBearerAuthorization() async throws {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let accountId = "66666666-6666-4666-8666-666666666666"
+    let wallet = WalletRecord(
+      label: "Treasury",
+      address: "0x0000000000000000000000000000000000000001",
+      chainKind: .evm
+    )
+    var document = VaultDocument(wallets: [wallet])
+    XCTAssertTrue(document.syncState.connect(
+      accountId: accountId,
+      serverURL: "https://sync.example",
+      sessionToken: "upload-session-token"
+    ))
+    let persisted = try fixture.store.saveReturningPersistedDocument(document)
+    let http = RecordingHTTPStub { request in
+      guard request.url?.path == "/vault/latest" else {
+        throw URLError(.unsupportedURL)
+      }
+      if request.httpMethod == "PUT" {
+        return stubJSONResponse(request, #"{"ok":true}"#)
+      }
+      return stubJSONResponse(request, #"{"error":"vault not found"}"#, statusCode: 404)
+    }
+    let state = AppState(
+      testStore: fixture.store,
+      document: persisted,
+      testVaultKey: fixture.vaultKey,
+      endpointConfigClient: FixedEndpointConfigClient(
+        config: NativeEndpointConfig(configVersion: 9, refreshAfterSeconds: 300)
+      ),
+      httpClient: http
+    )
+
+    await state.uploadEncryptedVault()
+
+    XCTAssertEqual(state.error, "")
+    XCTAssertEqual(state.notice, "Encrypted vault uploaded.")
+    XCTAssertEqual(http.requests.map(\.httpMethod), ["GET", "PUT"])
+    let put = try XCTUnwrap(http.requests.last)
+    XCTAssertEqual(put.url?.path, "/vault/latest")
+    XCTAssertEqual(put.value(forHTTPHeaderField: "authorization"), "Bearer upload-session-token")
+    XCTAssertEqual(put.value(forHTTPHeaderField: "content-type"), "application/json")
+    let snapshot = try JSONDecoder.addressAtlas.decode(
+      RemoteVaultSnapshot.self,
+      from: XCTUnwrap(put.httpBody)
+    )
+    XCTAssertEqual(snapshot.version, 1)
+    XCTAssertEqual(snapshot.envelope.schemaVersion, VaultDocument.currentSchemaVersion)
+    XCTAssertEqual(snapshot.envelope.cryptoVersion, 2)
+    XCTAssertEqual(snapshot.envelope.keyId, "sync-v2")
+    let opened = try VaultSyncCodec().open(
+      snapshot: snapshot,
+      vaultKey: fixture.vaultKey,
+      expectedAccountId: accountId
+    )
+    XCTAssertFalse(opened.requiresV2Upgrade)
+    XCTAssertEqual(opened.document.wallets.map(\.id), [wallet.id])
+    XCTAssertEqual(state.document.syncState.latestRemoteVersion, 1)
+    XCTAssertEqual(state.document.syncState.lastChecksum, snapshot.checksum)
+    XCTAssertFalse(state.hasUnsyncedLocalChanges)
+    let verifier = try EncryptedSQLiteVaultStore(
+      path: fixture.database,
+      vaultKey: fixture.vaultKey
+    )
+    XCTAssertEqual(try verifier.load().syncState.latestRemoteVersion, 1)
+  }
+
+  func testUploadEncryptedVaultStopsOnRemoteVersionConflictBeforePUT() async throws {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let accountId = "88888888-8888-4888-8888-888888888888"
+    let remoteSnapshot = try VaultSyncCodec().seal(
+      document: VaultDocument(
+        wallets: [
+          WalletRecord(
+            label: "Other Mac",
+            address: "0x0000000000000000000000000000000000000002",
+            chainKind: .evm
+          )
+        ]
+      ),
+      vaultKey: fixture.vaultKey,
+      version: 2,
+      accountId: accountId
+    )
+    let remoteJSON = try JSONEncoder.addressAtlas.encode(remoteSnapshot)
+    let staleLocalChecksum = String(repeating: "a", count: 64)
+    let document = VaultDocument(
+      syncState: SyncState(
+        accountId: accountId,
+        serverURL: "https://sync.example",
+        sessionToken: "conflict-session-token",
+        latestRemoteVersion: 1,
+        lastSyncedAt: Date(timeIntervalSince1970: 50),
+        lastChecksum: staleLocalChecksum
+      )
+    )
+    let persisted = try fixture.store.saveReturningPersistedDocument(document)
+    let http = RecordingHTTPStub { request in
+      guard request.url?.path == "/vault/latest", request.httpMethod == "GET" else {
+        throw URLError(.unsupportedURL)
+      }
+      return (remoteJSON, stubHTTPResponse(request))
+    }
+    let state = AppState(
+      testStore: fixture.store,
+      document: persisted,
+      testVaultKey: fixture.vaultKey,
+      endpointConfigClient: FixedEndpointConfigClient(
+        config: NativeEndpointConfig(configVersion: 9, refreshAfterSeconds: 300)
+      ),
+      httpClient: http
+    )
+
+    await state.uploadEncryptedVault()
+
+    XCTAssertTrue(state.error.contains("Remote vault snapshot is newer"))
+    XCTAssertEqual(http.requests.map(\.httpMethod), ["GET"])
+    XCTAssertEqual(state.document.syncState.latestRemoteVersion, 1)
+    XCTAssertEqual(state.document.syncState.lastChecksum, staleLocalChecksum)
+  }
+
+  func testDownloadEncryptedVaultDecodesDecryptsPersistsAndMarksSynced() async throws {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let accountId = "99999999-9999-4999-8999-999999999999"
+    let remoteWallet = WalletRecord(
+      label: "Synced Treasury",
+      address: "0x0000000000000000000000000000000000000003",
+      chainKind: .evm
+    )
+    let snapshot = try VaultSyncCodec().seal(
+      document: VaultDocument(wallets: [remoteWallet]),
+      vaultKey: fixture.vaultKey,
+      version: 3,
+      accountId: accountId
+    )
+    let snapshotJSON = try JSONEncoder.addressAtlas.encode(snapshot)
+    var document = VaultDocument()
+    XCTAssertTrue(document.syncState.connect(
+      accountId: accountId,
+      serverURL: "https://sync.example",
+      sessionToken: "download-session-token"
+    ))
+    let persisted = try fixture.store.saveReturningPersistedDocument(document)
+    let http = RecordingHTTPStub { request in
+      guard request.url?.path == "/vault/latest", request.httpMethod == "GET" else {
+        throw URLError(.unsupportedURL)
+      }
+      return (snapshotJSON, stubHTTPResponse(request))
+    }
+    let state = AppState(
+      testStore: fixture.store,
+      document: persisted,
+      testVaultKey: fixture.vaultKey,
+      endpointConfigClient: FixedEndpointConfigClient(
+        config: NativeEndpointConfig(configVersion: 9, refreshAfterSeconds: 300)
+      ),
+      httpClient: http
+    )
+
+    await state.downloadEncryptedVault()
+
+    XCTAssertEqual(state.error, "")
+    XCTAssertEqual(state.notice, "Encrypted vault downloaded.")
+    XCTAssertEqual(http.requests.map(\.httpMethod), ["GET"])
+    XCTAssertEqual(
+      http.requests.first?.value(forHTTPHeaderField: "authorization"),
+      "Bearer download-session-token"
+    )
+    XCTAssertEqual(state.document.wallets.map(\.id), [remoteWallet.id])
+    XCTAssertEqual(state.document.wallets.first?.label, "Synced Treasury")
+    XCTAssertEqual(state.document.syncState.accountId, accountId)
+    XCTAssertEqual(state.document.syncState.sessionToken, "download-session-token")
+    XCTAssertEqual(state.document.syncState.latestRemoteVersion, 3)
+    XCTAssertEqual(state.document.syncState.lastChecksum, snapshot.checksum)
+    XCTAssertFalse(state.hasUnsyncedLocalChanges)
+    let verifier = try EncryptedSQLiteVaultStore(
+      path: fixture.database,
+      vaultKey: fixture.vaultKey
+    )
+    let reloaded = try verifier.load()
+    XCTAssertEqual(reloaded.wallets.map(\.id), [remoteWallet.id])
+    XCTAssertEqual(reloaded.syncState.latestRemoteVersion, 3)
+  }
+
+  func testScanSavedWalletsMergesStubbedChainAndExchangeResultsIntoState() async throws {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let bitcoinAddress = "1BoatSLRHtKNngkdXEeobR76b53LETtpyT"
+    let connectionId = UUID()
+    let envelope = try ExchangeCredentialVault().seal(
+      ExchangeCredentials(apiKey: "binance-key", secret: "binance-secret", passphrase: nil),
+      vaultKey: fixture.vaultKey,
+      connectionId: connectionId
+    )
+    let document = VaultDocument(
+      wallets: [WalletRecord(label: "Cold Storage", address: bitcoinAddress, chainKind: .bitcoin)],
+      exchangeConnections: [
+        ExchangeConnectionRecord(
+          id: connectionId,
+          provider: .binance,
+          label: "Binance",
+          encryptedCredentials: envelope
+        )
+      ]
+    )
+    let http = RecordingHTTPStub { request in
+      switch request.url?.host {
+      case "blockstream.info":
+        return stubJSONResponse(
+          request,
+          #"{"chain_stats":{"funded_txo_sum":100000000,"spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0}}"#
+        )
+      case "api.coingecko.com":
+        return stubJSONResponse(request, #"{"bitcoin":{"usd":100000},"usd-coin":{"usd":1}}"#)
+      case "api.binance.com" where request.url?.path == "/api/v3/account":
+        return stubJSONResponse(
+          request,
+          #"{"balances":[{"asset":"USDC","free":"5","locked":"0"}]}"#
+        )
+      default:
+        throw URLError(.unsupportedURL)
+      }
+    }
+    let state = AppState(
+      testStore: fixture.store,
+      document: document,
+      testVaultKey: fixture.vaultKey,
+      httpClient: http
+    )
+
+    await state.scanSavedWallets()
+
+    XCTAssertEqual(state.error, "")
+    XCTAssertTrue(state.notice.hasPrefix("Snapshot saved"))
+    let run = try XCTUnwrap(state.document.scanRuns.first)
+    let bitcoin = try XCTUnwrap(run.holdings.first(where: { $0.symbol == "BTC" }))
+    XCTAssertEqual(bitcoin.amount, 1)
+    XCTAssertEqual(bitcoin.valueUsd, 100_000, accuracy: 0.000_001)
+    XCTAssertEqual(bitcoin.walletLabel, "Cold Storage")
+    let usdc = try XCTUnwrap(run.holdings.first(where: { $0.symbol == "USDC" }))
+    XCTAssertEqual(usdc.amount, 5, accuracy: 0.000_001)
+    XCTAssertEqual(usdc.valueUsd, 5, accuracy: 0.000_001)
+    XCTAssertEqual(run.totalUsd, 100_005, accuracy: 0.001)
+    XCTAssertEqual(state.document.exchangeConnections.first?.status, .ok)
+    let verifier = try EncryptedSQLiteVaultStore(
+      path: fixture.database,
+      vaultKey: fixture.vaultKey
+    )
+    XCTAssertEqual(try verifier.load().scanRuns.map(\.id), [run.id])
+  }
+
+  func testPasskeyAuthenticationInstallsSessionAndPublishesOperatorMessage() async throws {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let accountId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    let authenticator = StubPasskeyAuthenticator(
+      session: PasskeyWebSession(
+        userId: accountId,
+        sessionToken: "passkey-session-token",
+        serverURL: "https://sync.example"
+      )
+    )
+    let state = AppState(
+      testStore: fixture.store,
+      document: VaultDocument(),
+      testVaultKey: fixture.vaultKey,
+      endpointConfigClient: FixedEndpointConfigClient(
+        config: NativeEndpointConfig(
+          configVersion: 9,
+          refreshAfterSeconds: 300,
+          message: "Welcome to the sync beta."
+        )
+      ),
+      passkeyAuthenticator: authenticator
+    )
+
+    await state.createPasskeyAccount(serverURL: "https://sync.example")
+
+    XCTAssertEqual(state.error, "")
+    XCTAssertTrue(state.notice.hasPrefix("Passkey account connected."))
+    XCTAssertEqual(state.document.syncState.accountId, accountId)
+    XCTAssertEqual(state.document.syncState.sessionToken, "passkey-session-token")
+    XCTAssertEqual(state.operatorMessage, "Welcome to the sync beta.")
+    let verifier = try EncryptedSQLiteVaultStore(
+      path: fixture.database,
+      vaultKey: fixture.vaultKey
+    )
+    XCTAssertEqual(try verifier.load().syncState.accountId, accountId)
+  }
+
+  private func makeTemporaryStore() throws -> (
+    directory: URL,
+    database: URL,
+    vaultKey: Data,
+    store: EncryptedSQLiteVaultStore
+  ) {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let database = directory.appending(path: "vault.sqlite")
+    let vaultKey = try VaultCrypto().generateVaultKey()
+    let store = try EncryptedSQLiteVaultStore(path: database, vaultKey: vaultKey)
+    _ = try store.load()
+    return (directory, database, vaultKey, store)
+  }
+}
+
+private struct FixedEndpointConfigClient: EndpointConfigFetching {
+  var config: NativeEndpointConfig
+
+  func fetch(from serverURL: URL) async throws -> NativeEndpointConfig {
+    config
+  }
+}
+
+@MainActor
+private final class StubPasskeyAuthenticator: PasskeyAuthenticating {
+  private let session: PasskeyWebSession
+
+  init(session: PasskeyWebSession) {
+    self.session = session
+  }
+
+  func authenticate(serverURL: URL, mode: PasskeyWebMode) async throws -> PasskeyWebSession {
+    session
+  }
+}
+
+private final class RecordingHTTPStub: HTTPClient, @unchecked Sendable {
+  private let lock = NSLock()
+  private var recorded: [URLRequest] = []
+  private let handler: @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
+
+  init(handler: @escaping @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)) {
+    self.handler = handler
+  }
+
+  var requests: [URLRequest] {
+    lock.lock()
+    defer { lock.unlock() }
+    return recorded
+  }
+
+  func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    record(request)
+    return try await handler(request)
+  }
+
+  private func record(_ request: URLRequest) {
+    lock.lock()
+    defer { lock.unlock() }
+    recorded.append(request)
+  }
+}
+
+private func stubJSONResponse(
+  _ request: URLRequest,
+  _ json: String,
+  statusCode: Int = 200
+) -> (Data, HTTPURLResponse) {
+  (Data(json.utf8), stubHTTPResponse(request, statusCode: statusCode))
+}
+
+private func stubHTTPResponse(
+  _ request: URLRequest,
+  statusCode: Int = 200
+) -> HTTPURLResponse {
+  HTTPURLResponse(
+    url: request.url ?? URL(string: "https://example.com")!,
+    statusCode: statusCode,
+    httpVersion: "HTTP/1.1",
+    headerFields: ["content-type": "application/json"]
+  )!
 }
 
 private actor ControllableEndpointConfigClient: EndpointConfigFetching {
@@ -633,5 +1242,9 @@ private actor ControllableEndpointConfigClient: EndpointConfigFetching {
 
   func resolve(_ origin: String, with config: NativeEndpointConfig) {
     requests.removeValue(forKey: origin)?.resume(returning: config)
+  }
+
+  func reject(_ origin: String, with error: Error) {
+    requests.removeValue(forKey: origin)?.resume(throwing: error)
   }
 }

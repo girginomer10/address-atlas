@@ -23,6 +23,91 @@ type VerifyResponse = {
   error?: string;
 };
 
+export interface PasskeyCeremonyInput {
+  mode: Mode;
+  callback: string;
+  state: string;
+  accountName: string;
+  canReturn: boolean;
+}
+
+// Injectable seams for the browser-only pieces of the ceremony so the flow is
+// testable in a plain node environment. Production uses the defaults below.
+export interface PasskeyCeremonyDeps {
+  fetchImpl: (input: string, init?: RequestInit) => Promise<Response>;
+  startRegistrationImpl: (options: {
+    optionsJSON: PublicKeyCredentialCreationOptionsJSON;
+  }) => Promise<unknown>;
+  startAuthenticationImpl: (options: {
+    optionsJSON: PublicKeyCredentialRequestOptionsJSON;
+  }) => Promise<unknown>;
+  locationOrigin: string;
+  navigate: (url: string) => void;
+}
+
+function browserPasskeyCeremonyDeps(): PasskeyCeremonyDeps {
+  return {
+    fetchImpl: (input, init) => fetch(input, init),
+    startRegistrationImpl: startRegistration,
+    startAuthenticationImpl: startAuthentication,
+    locationOrigin: window.location.origin,
+    navigate: (url) => window.location.assign(url)
+  };
+}
+
+export async function runPasskeyCeremony(
+  { mode, callback, state, accountName, canReturn }: PasskeyCeremonyInput,
+  deps: PasskeyCeremonyDeps = browserPasskeyCeremonyDeps()
+): Promise<void> {
+  if (!canReturn) {
+    throw new Error("Native return URL is missing.");
+  }
+  const optionsResponse = await deps.fetchImpl("/auth/passkey/options", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      mode,
+      accountName: accountName.trim() || undefined
+    })
+  });
+  const options = (await optionsResponse.json()) as OptionsResponse;
+  if (!optionsResponse.ok || options.error) {
+    throw new Error(options.error || "Passkey options failed.");
+  }
+
+  const response =
+    mode === "register"
+      ? await deps.startRegistrationImpl({
+          optionsJSON: options.publicKey as PublicKeyCredentialCreationOptionsJSON
+        })
+      : await deps.startAuthenticationImpl({
+          optionsJSON: options.publicKey as PublicKeyCredentialRequestOptionsJSON
+        });
+
+  const verifyResponse = await deps.fetchImpl("/auth/passkey/verify", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      mode,
+      challengeToken: options.challengeToken,
+      response
+    })
+  });
+  const verified = (await verifyResponse.json()) as VerifyResponse;
+  if (!verifyResponse.ok || !verified.verified || !verified.sessionToken || !verified.userId) {
+    throw new Error(verified.error || "Passkey verification failed.");
+  }
+
+  const returnURL = new URL(callback);
+  returnURL.searchParams.set("sessionToken", verified.sessionToken);
+  returnURL.searchParams.set("userId", verified.userId);
+  returnURL.searchParams.set("serverURL", deps.locationOrigin);
+  // Echo the native-supplied state so the app can bind this callback to the
+  // request it started (CSRF / replay protection).
+  returnURL.searchParams.set("state", state);
+  deps.navigate(returnURL.toString());
+}
+
 export function NativePasskeyBridge({
   callback,
   state,
@@ -40,6 +125,12 @@ export function NativePasskeyBridge({
       const url = new URL(callback);
       return url.protocol === "address-atlas:"
         && url.hostname === "sync-auth"
+        && !url.username
+        && !url.password
+        && !url.port
+        && !url.pathname
+        && !url.search
+        && !url.hash
         && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(state);
     } catch {
       return false;
@@ -54,53 +145,7 @@ export function NativePasskeyBridge({
     setBusy(mode);
     setMessage("");
     try {
-      if (!canReturn) {
-        throw new Error("Native return URL is missing.");
-      }
-      const optionsResponse = await fetch("/auth/passkey/options", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          mode,
-          accountName: accountName.trim() || undefined
-        })
-      });
-      const options = (await optionsResponse.json()) as OptionsResponse;
-      if (!optionsResponse.ok || options.error) {
-        throw new Error(options.error || "Passkey options failed.");
-      }
-
-      const response =
-        mode === "register"
-          ? await startRegistration({
-              optionsJSON: options.publicKey as PublicKeyCredentialCreationOptionsJSON
-            })
-          : await startAuthentication({
-              optionsJSON: options.publicKey as PublicKeyCredentialRequestOptionsJSON
-            });
-
-      const verifyResponse = await fetch("/auth/passkey/verify", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          mode,
-          challengeToken: options.challengeToken,
-          response
-        })
-      });
-      const verified = (await verifyResponse.json()) as VerifyResponse;
-      if (!verifyResponse.ok || !verified.verified || !verified.sessionToken || !verified.userId) {
-        throw new Error(verified.error || "Passkey verification failed.");
-      }
-
-      const returnURL = new URL(callback);
-      returnURL.searchParams.set("sessionToken", verified.sessionToken);
-      returnURL.searchParams.set("userId", verified.userId);
-      returnURL.searchParams.set("serverURL", window.location.origin);
-      // Echo the native-supplied state so the app can bind this callback to the
-      // request it started (CSRF / replay protection).
-      returnURL.searchParams.set("state", state);
-      window.location.assign(returnURL.toString());
+      await runPasskeyCeremony({ mode, callback, state, accountName, canReturn });
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Passkey flow failed.");
     } finally {

@@ -75,13 +75,18 @@ public struct CoinGeckoPriceClient: PriceProviding {
       let batch = Array(ids[start..<min(start + 100, ids.count)])
       do {
         let response: [String: PricePoint] = try await withWorkflowTimeout(seconds: 20) {
-          var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
+          guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+            throw PriceClientError.requestFailed("The CoinGecko price endpoint is invalid.")
+          }
           components.queryItems = [
             URLQueryItem(name: "ids", value: batch.joined(separator: ",")),
             URLQueryItem(name: "vs_currencies", value: "usd"),
             URLQueryItem(name: "include_24hr_change", value: "true")
           ]
-          return try await http.get(components.url!, as: [String: PricePoint].self)
+          guard let url = components.url else {
+            throw PriceClientError.requestFailed("The CoinGecko price endpoint is invalid.")
+          }
+          return try await http.get(url, as: [String: PricePoint].self)
         }
         for (id, point) in response {
           guard let point = Self.sanitized(point) else { continue }

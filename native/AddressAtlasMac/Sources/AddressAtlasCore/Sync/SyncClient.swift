@@ -297,11 +297,10 @@ public struct VaultSyncCodec: Sendable {
   }
 
   private func validatedAccountId(_ accountId: String) throws -> String {
-    let trimmed = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty, trimmed.count <= 200 else {
+    guard let normalized = SyncAccountIdentifier.normalized(accountId) else {
       throw VaultSyncCodecError.invalidAccount
     }
-    return trimmed
+    return normalized
   }
 
   private func validateVersion(_ version: Int) throws {
@@ -414,71 +413,6 @@ private struct VaultSyncContent: Encodable {
   }
 }
 
-public struct PasskeyOptionsResponse: Codable, Sendable {
-  public var mode: String
-  public var challengeToken: String
-  public var publicKey: [String: AnyCodable]
-
-  public init(mode: String, challengeToken: String, publicKey: [String: AnyCodable]) {
-    self.mode = mode
-    self.challengeToken = challengeToken
-    self.publicKey = publicKey
-  }
-}
-
-public struct AnyCodable: Codable, Equatable, Sendable {
-  public var value: SendableValue
-
-  public init(_ value: SendableValue) {
-    self.value = value
-  }
-
-  public init(from decoder: Decoder) throws {
-    let container = try decoder.singleValueContainer()
-    if container.decodeNil() {
-      value = .null
-    } else if let bool = try? container.decode(Bool.self) {
-      value = .bool(bool)
-    } else if let number = try? container.decode(Double.self) {
-      value = .number(number)
-    } else if let string = try? container.decode(String.self) {
-      value = .string(string)
-    } else if let array = try? container.decode([AnyCodable].self) {
-      value = .array(array.map(\.value))
-    } else {
-      let object = try container.decode([String: AnyCodable].self)
-      value = .object(object.mapValues(\.value))
-    }
-  }
-
-  public func encode(to encoder: Encoder) throws {
-    var container = encoder.singleValueContainer()
-    switch value {
-    case .null:
-      try container.encodeNil()
-    case .bool(let bool):
-      try container.encode(bool)
-    case .number(let number):
-      try container.encode(number)
-    case .string(let string):
-      try container.encode(string)
-    case .array(let values):
-      try container.encode(values.map(AnyCodable.init))
-    case .object(let values):
-      try container.encode(values.mapValues(AnyCodable.init))
-    }
-  }
-}
-
-public enum SendableValue: Equatable, Sendable {
-  case null
-  case bool(Bool)
-  case number(Double)
-  case string(String)
-  case array([SendableValue])
-  case object([String: SendableValue])
-}
-
 public enum SyncClientError: Error, Equatable, LocalizedError {
   case authenticationRequired(String)
   case requestFailed(Int, String)
@@ -501,11 +435,20 @@ public actor ZeroKnowledgeSyncClient {
 
   public init(baseURL: URL, http: HTTPClient? = nil) {
     self.baseURL = baseURL
-    self.http = http ?? BoundedURLSessionHTTPClient(maxResponseBytes: Self.maximumWireSnapshotByteCount)
+    self.http = http ?? BoundedURLSessionHTTPClient(
+      maxResponseBytes: Self.maximumWireSnapshotByteCount,
+      resourceTimeout: 30
+    )
   }
 
   public func setBearerToken(_ token: String?) {
-    bearerToken = token
+    guard let token else {
+      bearerToken = nil
+      return
+    }
+    // Keep the public client safe even for callers that bypass SyncState's
+    // decode/connect validation. Invalid values must never reach an HTTP header.
+    bearerToken = SyncSessionToken.isValid(token) ? token : nil
   }
 
   public func latestVault() async throws -> RemoteVaultSnapshot? {
@@ -550,8 +493,13 @@ public actor ZeroKnowledgeSyncClient {
   }
 
   private static func error(statusCode: Int, data: Data) -> SyncClientError {
-    let message = (try? JSONDecoder.addressAtlas.decode(ServerError.self, from: data).error)
-      ?? HTTPURLResponse.localizedString(forStatusCode: statusCode)
+    let fallback = HTTPURLResponse.localizedString(forStatusCode: statusCode)
+    // Error bodies share the large snapshot response ceiling, but user-facing
+    // text must not inherit that size or expose control characters and secrets.
+    // Bound decode work first, then reuse the scanner's centralized sanitizer.
+    let cappedData = Data(data.prefix(16_384))
+    let decoded = try? JSONDecoder.addressAtlas.decode(ServerError.self, from: cappedData).error
+    let message = decoded.map { ProviderErrorSanitizer.sanitize($0, fallback: fallback) } ?? fallback
     if statusCode == 401 {
       return .authenticationRequired(message)
     }

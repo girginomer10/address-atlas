@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readLimitedJSON } from "./request";
 
 describe("limited JSON request reader", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("returns parsed JSON and the actual UTF-8 byte length", async () => {
     const body = JSON.stringify({ label: "İstanbul" });
     const result = await readLimitedJSON(new Request("https://sync.example", {
@@ -30,5 +34,61 @@ describe("limited JSON request reader", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ data: "x".repeat(200) })
     }), 50)).rejects.toMatchObject({ status: 413 });
+  });
+
+  it("cancels a slow-drip stream at an absolute body deadline", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("{"));
+      },
+      cancel() {
+        cancelled = true;
+      }
+    });
+    const request = new Request("https://sync.example", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+      duplex: "half"
+    } as RequestInit);
+
+    await expect(readLimitedJSON(request, 1_000, 25)).rejects.toMatchObject({
+      status: 408,
+      message: "Request body took too long."
+    });
+    expect(cancelled).toBe(true);
+  });
+
+  it("keeps the deadline bounded when the wall clock jumps backwards", async () => {
+    const dateNow = vi.spyOn(Date, "now")
+      .mockReturnValueOnce(1_000)
+      .mockReturnValue(-1_000_000_000);
+    let scheduledDelay = Number.POSITIVE_INFINITY;
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      callback: (...args: never[]) => void,
+      delay?: number
+    ) => {
+      scheduledDelay = Number(delay);
+      queueMicrotask(() => (callback as () => void)());
+      return 1 as unknown as ReturnType<typeof setTimeout>;
+    }) as unknown as typeof setTimeout);
+
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("{"));
+      }
+    });
+    const request = new Request("https://sync.example", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+      duplex: "half"
+    } as RequestInit);
+
+    await expect(readLimitedJSON(request, 1_000, 25)).rejects.toMatchObject({ status: 408 });
+    expect(dateNow).not.toHaveBeenCalled();
+    expect(scheduledDelay).toBeGreaterThan(0);
+    expect(scheduledDelay).toBeLessThanOrEqual(25);
   });
 });

@@ -45,4 +45,36 @@ describe("native passkey mode binding", () => {
     expect(html).toContain("disabled");
     expect(html).toContain("Open this page from Address Atlas Mac.");
   });
+
+  it.each([
+    "address-atlas://user@sync-auth",
+    "address-atlas://sync-auth:443",
+    "address-atlas://sync-auth/extra",
+    "address-atlas://sync-auth?unexpected=value",
+    "address-atlas://sync-auth#fragment"
+  ])("rejects callback components the native parser cannot accept: %s", (callback) => {
+    const html = renderToStaticMarkup(createElement(NativePasskeyBridge, {
+      callback,
+      state: STATE,
+      mode: "authenticate"
+    }));
+
+    expect(html).toContain("disabled");
+    expect(html).toContain("Open this page from Address Atlas Mac.");
+  });
+
+  it("rejects duplicated security parameters instead of coercing an array", async () => {
+    const page = await NativeAuthPage({
+      searchParams: Promise.resolve({
+        mode: ["authenticate", "register"],
+        callback: [CALLBACK, "address-atlas://attacker"],
+        state: [STATE, STATE]
+      })
+    });
+    const bridge = page.props.children;
+
+    expect(bridge.props.mode).toBeNull();
+    expect(bridge.props.callback).toBe("");
+    expect(bridge.props.state).toBe("");
+  });
 });

@@ -14,8 +14,15 @@ enum PasskeyWebMode: String, Sendable {
   case authenticate
 }
 
+/// Injection seam for AppState behavior tests. Production always uses the real
+/// ASWebAuthenticationSession ceremony implemented by PasskeyWebAuthenticator.
 @MainActor
-final class PasskeyWebAuthenticator: NSObject, ASWebAuthenticationPresentationContextProviding {
+protocol PasskeyAuthenticating {
+  func authenticate(serverURL: URL, mode: PasskeyWebMode) async throws -> PasskeyWebSession
+}
+
+@MainActor
+final class PasskeyWebAuthenticator: NSObject, PasskeyAuthenticating, ASWebAuthenticationPresentationContextProviding {
   private var session: ASWebAuthenticationSession?
 
   func authenticate(serverURL: URL, mode: PasskeyWebMode) async throws -> PasskeyWebSession {
@@ -74,21 +81,32 @@ final class PasskeyWebAuthenticator: NSObject, ASWebAuthenticationPresentationCo
     expectedState: String,
     expectedServerURL: URL
   ) throws -> PasskeyWebSession {
-    // Validate the full callback authority (scheme + host), not just the scheme.
-    guard callbackURL.scheme == "address-atlas", callbackURL.host == "sync-auth" else {
+    // Accept exactly the callback registered with ASWebAuthenticationSession.
+    // Userinfo, ports, paths, and fragments are not part of that callback and
+    // accepting them would make authority validation needlessly ambiguous.
+    guard callbackURL.scheme == "address-atlas",
+          callbackURL.host == "sync-auth",
+          callbackURL.user == nil,
+          callbackURL.password == nil,
+          callbackURL.port == nil,
+          callbackURL.path.isEmpty,
+          callbackURL.fragment == nil
+    else {
       throw URLError(.badURL)
     }
     let items = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)?.queryItems ?? []
     func value(_ name: String) -> String? {
-      items.first(where: { $0.name == name })?.value
+      let matches = items.filter { $0.name == name }
+      return matches.count == 1 ? matches[0].value : nil
     }
     // Bind the callback to the request we started (CSRF / replay protection).
     guard let returnedState = value("state"), returnedState == expectedState else {
       throw URLError(.badServerResponse)
     }
     guard
-      let token = value("sessionToken"), !token.isEmpty,
-      let userId = value("userId"), !userId.isEmpty,
+      let token = value("sessionToken"), SyncSessionToken.isValid(token),
+      let rawUserId = value("userId"),
+      let userId = SyncAccountIdentifier.normalized(rawUserId),
       let serverURL = value("serverURL"), !serverURL.isEmpty
     else {
       throw URLError(.badServerResponse)

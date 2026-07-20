@@ -53,8 +53,12 @@ public struct NativeScanner: Sendable {
       warnings.append("USD pricing was skipped because the overall scan deadline was already exhausted.")
     } else {
       do {
-        prices = try await withWorkflowTimeout(seconds: min(25, remainingBeforePricing)) {
+        let fetchedPrices = try await withWorkflowTimeout(seconds: min(25, remainingBeforePricing)) {
           try await priceProvider.prices(for: requestedPriceIds)
+        }
+        prices = fetchedPrices.reduce(into: [:]) { valid, entry in
+          guard let point = CoinGeckoPriceClient.sanitized(entry.value) else { return }
+          valid[entry.key] = point
         }
       } catch {
         try throwIfCancellation(error)
@@ -69,7 +73,13 @@ public struct NativeScanner: Sendable {
     for address in addresses {
       let chains = AddressDetection.detectChains(for: address)
       if chains.isEmpty {
-        warnings.append("Unsupported address skipped: \(Self.displayAddress(address)).")
+        if let network = AddressDetection.retiredCosmosNetworkName(for: address) {
+          warnings.append(
+            "\(network) is retired and no longer supported; the saved address was kept but not scanned: \(Self.displayAddress(address))."
+          )
+        } else {
+          warnings.append("Unsupported address skipped: \(Self.displayAddress(address)).")
+        }
         continue
       }
       for detectedChain in chains {
@@ -86,7 +96,8 @@ public struct NativeScanner: Sendable {
       outcomes = []
     } else if remainingWorkflowTime <= 0 {
       outcomes = []
-      warnings.append("The overall scan reached its \(Int(workflowDeadline))-second deadline before chain checks began; all chain checks were skipped.")
+      let deadline = WorkflowTimeoutError(seconds: workflowDeadline).displaySeconds
+      warnings.append("The overall scan reached its \(deadline)-second deadline before chain checks began; all chain checks were skipped.")
     } else {
       do {
         outcomes = try await withWorkflowTimeout(seconds: remainingWorkflowTime) {
@@ -117,8 +128,9 @@ public struct NativeScanner: Sendable {
       } catch is WorkflowTimeoutError {
         outcomes = await collector.snapshot()
         let skipped = max(0, chainJobs.count - outcomes.count)
+        let deadline = WorkflowTimeoutError(seconds: workflowDeadline).displaySeconds
         warnings.append(
-          "The overall scan reached its \(Int(workflowDeadline))-second deadline; \(skipped) unfinished chain checks were skipped and completed results were kept."
+          "The overall scan reached its \(deadline)-second deadline; \(skipped) unfinished chain checks were skipped and completed results were kept."
         )
       } catch {
         try throwIfCancellation(error)
@@ -137,11 +149,26 @@ public struct NativeScanner: Sendable {
       warnings.append("No USD price was available for \(Self.formattedSymbols(unpricedSymbols)); balances are still included.")
     }
 
+    let valuationOverflowSymbols = assets.compactMap { asset -> String? in
+      guard asset.amount > 0, asset.priceUsd > 0,
+            FiniteValueMath.multiplyingNonnegative(asset.amount, asset.priceUsd) == nil
+      else { return nil }
+      return asset.symbol
+    }
+    if !valuationOverflowSymbols.isEmpty {
+      warnings.append(
+        "USD valuation exceeded the supported numeric range for \(Self.formattedSymbols(valuationOverflowSymbols)); those balances are shown without a USD value."
+      )
+    }
+    guard let totalUsd = FiniteValueMath.sumNonnegative(assets.map(\.valueUsd)) else {
+      throw PortfolioValueError.totalExceedsSupportedRange
+    }
+
     return ScanRunRecord(
-      totalUsd: assets.reduce(0) { $0 + $1.valueUsd },
+      totalUsd: totalUsd,
       inputCount: addresses.count,
       holdings: assets,
-      warnings: warnings
+      warnings: ScanWarningPolicy.bounded(warnings)
     )
   }
 
@@ -204,11 +231,11 @@ public struct NativeScanner: Sendable {
     guard let rest = chain.restUrl else { return [] }
     let url = rest.appending(path: "address/\(address)")
     let response = try await http.get(url, as: Response.self)
-    let reportedValues = [
+    let reportedValues: [Double] = [
       response.chainStats.fundedTxoSum,
       response.chainStats.spentTxoSum,
-      response.mempoolStats?.fundedTxoSum ?? 0,
-      response.mempoolStats?.spentTxoSum ?? 0
+      response.mempoolStats?.fundedTxoSum ?? 0.0,
+      response.mempoolStats?.spentTxoSum ?? 0.0
     ]
     guard reportedValues.allSatisfy({ $0.isFinite && $0 >= 0 }) else {
       throw Self.messageError(domain: "Bitcoin", message: "Bitcoin balance lookup returned invalid statistics.")
@@ -751,6 +778,7 @@ public struct NativeScanner: Sendable {
     guard amount.isFinite, amount > 0 else { return [] }
     let price = prices[chain.coinGeckoId] ?? PricePoint(usd: 0)
     let unitPrice = price.usd.isFinite && price.usd >= 0 ? price.usd : 0
+    let valueUsd = FiniteValueMath.multiplyingNonnegative(amount, unitPrice)
     return [
       TrackedAsset(
         id: "\(address)-\(chain.id)-\(chain.symbol)-\(source.rawValue)",
@@ -762,8 +790,8 @@ public struct NativeScanner: Sendable {
         name: name ?? chain.name,
         amount: amount,
         priceUsd: unitPrice,
-        valueUsd: amount * unitPrice,
-        change24h: price.usd24hChange,
+        valueUsd: valueUsd ?? 0,
+        change24h: FiniteValueMath.finiteOptional(price.usd24hChange),
         explorerUrl: chain.explorerURL(for: address).absoluteString,
         source: source
       )
@@ -782,6 +810,7 @@ public struct NativeScanner: Sendable {
     let price = token.coinGeckoId.flatMap { prices[$0] }
     let rawPrice = price?.usd ?? token.priceUsd ?? 0
     let priceUsd = rawPrice.isFinite && rawPrice >= 0 ? rawPrice : 0
+    let valueUsd = FiniteValueMath.multiplyingNonnegative(amount, priceUsd)
     return TrackedAsset(
       id: "\(address)-\(chain.id)-\(token.symbol)-\(token.address)",
       address: address,
@@ -792,8 +821,8 @@ public struct NativeScanner: Sendable {
       name: token.name,
       amount: amount,
       priceUsd: priceUsd,
-      valueUsd: amount * priceUsd,
-      change24h: price?.usd24hChange,
+      valueUsd: valueUsd ?? 0,
+      change24h: FiniteValueMath.finiteOptional(price?.usd24hChange),
       explorerUrl: chain.explorerURL(for: address).absoluteString,
       source: source
     )
@@ -864,8 +893,10 @@ public struct NativeScanner: Sendable {
     }
     var totals: [String: Double] = [:]
     var warnedMints = Set<String>()
+    var overflowedMints = Set<String>()
     for account in parsedAccounts {
       guard let token = registryByMint[account.mint] else { continue }
+      guard !overflowedMints.contains(account.mint) else { continue }
       guard (0...36).contains(account.decimals), account.rawAmount.isFinite, account.rawAmount >= 0 else {
         if warnedMints.insert(account.mint).inserted {
           warnings.append("\(token.symbol) returned invalid on-chain amount metadata and was skipped.")
@@ -879,7 +910,21 @@ public struct NativeScanner: Sendable {
         warnedMints.insert(account.mint)
         warnings.append("\(token.symbol) on-chain decimals (\(account.decimals)) differ from the registry (\(token.decimals)); using on-chain decimals.")
       }
-      totals[account.mint, default: 0] += account.rawAmount / pow(10, Double(account.decimals))
+      let scaledAmount = account.rawAmount / pow(10, Double(account.decimals))
+      guard scaledAmount.isFinite,
+            let nextTotal = FiniteValueMath.addingNonnegative(totals[account.mint, default: 0], scaledAmount)
+      else {
+        totals.removeValue(forKey: account.mint)
+        overflowedMints.insert(account.mint)
+        continue
+      }
+      totals[account.mint] = nextTotal
+    }
+    if !overflowedMints.isEmpty {
+      let symbols = overflowedMints.compactMap { registryByMint[$0]?.symbol }
+      warnings.append(
+        "SPL balances exceeded the supported numeric range for \(Self.formattedSymbols(symbols)); those tokens were skipped."
+      )
     }
     let balances: [(token: TokenConfig, amount: Double)] = totals.compactMap { mint, amount in
       guard let token = registryByMint[mint] else { return nil }
@@ -1064,6 +1109,12 @@ public struct NativeScanner: Sendable {
     for token in enabledTokens {
       let label = customTokenLabel(token)
       let chainId = token.chainId.trimmingCharacters(in: .whitespacesAndNewlines)
+      if let network = ChainRegistry.retiredChainNames[chainId] {
+        warnings.append(
+          "Custom token \(label) references retired \(network); the saved record was kept but not scanned."
+        )
+        continue
+      }
       guard [.evm, .solana, .tron].contains(token.chainKind) else {
         warnings.append("Custom token \(label) uses an unsupported chain family and was skipped.")
         continue

@@ -9,11 +9,19 @@ const NO_STORE_HEADERS = { "cache-control": "no-store" };
 
 export async function POST(request: NextRequest) {
   try {
-    // Parse and structurally validate first: malformed/cross-origin simple
-    // requests must not be able to consume a shared NAT's authentication quota.
+    const client = clientKey(request);
+    if (!rateLimitMany([
+      { key: "auth-body:global", limit: 2_400, windowMs: 60_000 },
+      { key: `auth-body:client:${client}`, limit: 120, windowMs: 60_000 }
+    ])) {
+      return rateLimitedResponse();
+    }
+
+    // Apply the public quota before touching the body. Invalid content types,
+    // malformed JSON, oversized streams, and shape-invalid inputs must not get
+    // an unmetered parsing path.
     const { value } = await readLimitedJSON(request, 4_096);
     const input = parsePasskeyOptionsInput(value);
-    const client = clientKey(request);
     const rules = [
       { key: "auth-options:global", limit: 600, windowMs: 60_000 },
       { key: `auth-options:client:${client}`, limit: 30, windowMs: 60_000 }
@@ -25,10 +33,7 @@ export async function POST(request: NextRequest) {
       );
     }
     if (!rateLimitMany(rules)) {
-      return NextResponse.json(
-        { error: "Too many requests." },
-        { status: 429, headers: NO_STORE_HEADERS }
-      );
+      return rateLimitedResponse();
     }
     return NextResponse.json(await createPasskeyOptions(input), { headers: NO_STORE_HEADERS });
   } catch (error) {
@@ -41,4 +46,11 @@ export async function POST(request: NextRequest) {
       }
     );
   }
+}
+
+function rateLimitedResponse() {
+  return NextResponse.json(
+    { error: "Too many requests." },
+    { status: 429, headers: NO_STORE_HEADERS }
+  );
 }

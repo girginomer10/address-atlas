@@ -3,6 +3,7 @@ import Foundation
 public struct NativeEndpointConfig: Codable, Equatable, Sendable {
   public static let minimumRefreshAfterSeconds = 300
   public static let maximumRefreshAfterSeconds = 86_400
+  public static let maximumConfigVersion = 2_000_000_000
   public static let maximumAppVersionComponent = 2_000_000_000
   private static let minimumAppVersionComponents = 2
   private static let maximumAppVersionComponents = 4
@@ -53,17 +54,17 @@ public struct NativeEndpointConfig: Codable, Equatable, Sendable {
   }
 
   public static let bundled = NativeEndpointConfig(
-    configVersion: 3,
+    configVersion: 5,
     chains: [
       "bitcoin": ChainEndpointOverride(restURL: URL(string: "https://blockstream.info/api")),
       "solana": ChainEndpointOverride(rpcURL: URL(string: "https://api.mainnet-beta.solana.com")),
       "tron": ChainEndpointOverride(restURL: URL(string: "https://api.trongrid.io")),
       "xrp": ChainEndpointOverride(rpcURL: URL(string: "https://s1.ripple.com:51234/")),
-      "ethereum": ChainEndpointOverride(rpcURL: URL(string: "https://eth.llamarpc.com")),
+      "ethereum": ChainEndpointOverride(rpcURL: URL(string: "https://ethereum-rpc.publicnode.com")),
       "base": ChainEndpointOverride(rpcURL: URL(string: "https://mainnet.base.org")),
       "arbitrum": ChainEndpointOverride(rpcURL: URL(string: "https://arb1.arbitrum.io/rpc")),
       "optimism": ChainEndpointOverride(rpcURL: URL(string: "https://mainnet.optimism.io")),
-      "polygon": ChainEndpointOverride(rpcURL: URL(string: "https://polygon-rpc.com")),
+      "polygon": ChainEndpointOverride(rpcURL: URL(string: "https://polygon.drpc.org")),
       "bsc": ChainEndpointOverride(rpcURL: URL(string: "https://bsc-dataseed.binance.org")),
       "avalanche": ChainEndpointOverride(rpcURL: URL(string: "https://api.avax.network/ext/bc/C/rpc")),
       "gnosis": ChainEndpointOverride(rpcURL: URL(string: "https://rpc.gnosischain.com")),
@@ -74,14 +75,11 @@ public struct NativeEndpointConfig: Codable, Equatable, Sendable {
       "cosmoshub": ChainEndpointOverride(restURL: URL(string: "https://cosmos-api.polkachu.com")),
       "osmosis": ChainEndpointOverride(restURL: URL(string: "https://lcd.osmosis.zone")),
       "celestia": ChainEndpointOverride(restURL: URL(string: "https://celestia-api.polkachu.com")),
-      "stargaze": ChainEndpointOverride(restURL: URL(string: "https://rest.stargaze-apis.com")),
       "stride": ChainEndpointOverride(restURL: URL(string: "https://stride-api.polkachu.com"))
-    ],
-    exchanges: [
-      ExchangeProvider.binance.rawValue: ExchangeEndpointOverride(baseURL: URL(string: "https://api.binance.com")!, accountPath: "/api/v3/account"),
-      ExchangeProvider.coinbase.rawValue: ExchangeEndpointOverride(baseURL: URL(string: "https://api.coinbase.com")!, accountPath: "/api/v3/brokerage/accounts"),
-      ExchangeProvider.kraken.rawValue: ExchangeEndpointOverride(baseURL: URL(string: "https://api.kraken.com")!, accountPath: "/0/private/Balance")
     ]
+    // `exchanges` is deliberately left empty: exchange endpoints are hardcoded
+    // in `exchangeBaseURL(for:)`/`exchangeAccountPath(for:)` and `validated()`
+    // rejects any config document that tries to supply overrides.
   )
 
   public func applying(to chain: ChainConfig) -> ChainConfig {
@@ -93,6 +91,10 @@ public struct NativeEndpointConfig: Codable, Equatable, Sendable {
     return updated
   }
 
+  /// Exchange origins are deliberately hardcoded. Exchange requests carry live
+  /// API credentials and signatures, so their host is a local trust boundary:
+  /// `self.exchanges` is intentionally ignored here, and `validated()` rejects
+  /// any config document that tries to supply exchange overrides.
   public func exchangeBaseURL(for provider: ExchangeProvider) -> URL? {
     switch provider {
     case .binance: URL(string: "https://api.binance.com")
@@ -101,6 +103,9 @@ public struct NativeEndpointConfig: Codable, Equatable, Sendable {
     }
   }
 
+  /// Credential-bearing exchange paths are deliberately hardcoded for the same
+  /// reason as `exchangeBaseURL(for:)`: `self.exchanges` is intentionally
+  /// ignored and can never redirect a signed request.
   public func exchangeAccountPath(for provider: ExchangeProvider) -> String? {
     switch provider {
     case .binance: "/api/v3/account"
@@ -210,22 +215,6 @@ public struct NativeEndpointConfig: Codable, Equatable, Sendable {
     return path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
   }
 
-  private static func validateHTTPURL(_ url: URL?, field: String) throws {
-    guard let url else { return }
-    let scheme = url.scheme?.lowercased()
-    guard let host = url.host?.lowercased(), !host.isEmpty,
-          url.user == nil, url.password == nil, url.fragment == nil
-    else {
-      throw NativeEndpointConfigError.invalidEndpoint(field)
-    }
-    if scheme == "https" { return }
-    // Permit plaintext http only for a local node; remote endpoints must be https.
-    if scheme == "http",
-       host == "localhost" || host == "127.0.0.1" || host == "::1" {
-      return
-    }
-    throw NativeEndpointConfigError.invalidEndpoint(field)
-  }
 }
 
 public struct ChainEndpointOverride: Codable, Equatable, Sendable {
@@ -263,6 +252,7 @@ public struct ExchangeEndpointOverride: Codable, Equatable, Sendable {
 
 public enum NativeEndpointConfigError: Error, Equatable, LocalizedError {
   case invalidSchema
+  case invalidConfigVersion
   case invalidRefreshInterval
   case invalidMinimumAppVersion
   case invalidEndpoint(String)
@@ -272,6 +262,8 @@ public enum NativeEndpointConfigError: Error, Equatable, LocalizedError {
     switch self {
     case .invalidSchema:
       return "Endpoint config is not supported by this app version."
+    case .invalidConfigVersion:
+      return "Endpoint config is older than this app's bundled configuration or has an invalid version."
     case .invalidRefreshInterval:
       return "Endpoint config contains an invalid refresh interval."
     case .invalidMinimumAppVersion:
@@ -288,12 +280,15 @@ public struct NativeEndpointConfigClient: Sendable {
   private let http: HTTPClient
 
   public init(http: HTTPClient? = nil) {
-    self.http = http ?? BoundedURLSessionHTTPClient(maxResponseBytes: 1_000_000)
+    self.http = http ?? BoundedURLSessionHTTPClient(
+      maxResponseBytes: 1_000_000,
+      resourceTimeout: 20
+    )
   }
 
   public func fetch(from serverURL: URL) async throws -> NativeEndpointConfig {
-    try NativeEndpointConfig.validateServerURL(serverURL)
-    var request = URLRequest(url: serverURL.appending(path: "config/native"))
+    let serverOrigin = try NativeEndpointConfig.validatedServerOrigin(serverURL)
+    var request = URLRequest(url: serverOrigin.appending(path: "config/native"))
     request.timeoutInterval = 20
     request.setValue("application/json", forHTTPHeaderField: "accept")
     let (data, response) = try await http.data(for: request)
@@ -307,12 +302,23 @@ public struct NativeEndpointConfigClient: Sendable {
     guard config.schemaVersion == 1 else {
       throw NativeEndpointConfigError.invalidSchema
     }
+    // Never let an older server overwrite corrected bundled endpoints with a
+    // stale payload. Higher versions remain forward-compatible within schema 1,
+    // while the server's shared integer ceiling prevents overflow surprises.
+    guard (NativeEndpointConfig.bundled.configVersion...NativeEndpointConfig.maximumConfigVersion)
+      .contains(config.configVersion)
+    else {
+      throw NativeEndpointConfigError.invalidConfigVersion
+    }
     return try config.validated()
   }
 }
 
 extension NativeEndpointConfig {
-  fileprivate static func validateServerURL(_ url: URL) throws {
-    try validateHTTPURL(url, field: "serverUrl")
+  fileprivate static func validatedServerOrigin(_ url: URL) throws -> URL {
+    guard let origin = SyncServerURL.validatedOrigin(url.absoluteString) else {
+      throw NativeEndpointConfigError.invalidEndpoint("serverUrl")
+    }
+    return origin
   }
 }

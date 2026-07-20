@@ -166,6 +166,8 @@ struct UnlockView: View {
 }
 
 struct MainView: View {
+  @EnvironmentObject private var state: AppState
+
   enum Section: String, CaseIterable, Identifiable {
     case portfolio = "Portfolio"
     case wallets = "Wallets"
@@ -203,7 +205,9 @@ struct MainView: View {
 
   var body: some View {
     HStack(spacing: 0) {
-      Sidebar(selection: $selected)
+      Sidebar(selection: $selected, onNavigate: {
+        state.clearTransientMessagesForNavigation()
+      })
       Rectangle().fill(AtlasTheme.rule).frame(width: 1)
       Group {
         switch selected {
@@ -227,6 +231,7 @@ struct MainView: View {
 
 struct Sidebar: View {
   @Binding var selection: MainView.Section
+  var onNavigate: () -> Void
 
   var body: some View {
     VStack(alignment: .leading, spacing: 26) {
@@ -239,6 +244,12 @@ struct Sidebar: View {
       VStack(spacing: 2) {
         ForEach(MainView.Section.allCases) { item in
           Button {
+            guard selection != item else { return }
+            // Clear the source page's transient status before SwiftUI installs
+            // the destination. An `onChange` on the parent runs after the
+            // selection mutation and can erase a message emitted by the new
+            // destination during that same update cycle.
+            onNavigate()
             selection = item
           } label: {
             HStack(spacing: 12) {
@@ -877,9 +888,16 @@ struct ExchangesView: View {
             }
             .buttonStyle(AtlasPrimaryButtonStyle())
           }
-          Text(provider == .coinbase
-            ? "Coinbase uses a CDP API key name and ES256 private key. Escaped \\n line breaks are accepted."
-            : "Use a balance/read-only key with trading and withdrawals disabled.")
+          Text({
+            switch provider {
+            case .coinbase:
+              return "Coinbase uses a CDP API key name and ES256 private key. Escaped \\n line breaks are accepted."
+            case .kraken:
+              return "Kraken requires a different read-only API key for every Mac. A key saved here is device-bound and will not run from another synced device."
+            case .binance:
+              return "Use a balance/read-only key with trading and withdrawals disabled."
+            }
+          }())
             .font(.system(size: 12))
             .foregroundStyle(AtlasTheme.ink3)
         }
@@ -932,15 +950,29 @@ struct ExchangeRow: View {
   @State private var confirmingRemoval = false
   var connection: ExchangeConnectionRecord
 
+  private var hasInvalidKrakenBinding: Bool {
+    connection.provider == .kraken
+      && connection.krakenDeviceIdentifier.flatMap(KrakenDeviceIdentity.normalizedIdentifier) == nil
+  }
+
   var body: some View {
     HStack(spacing: 14) {
       VStack(alignment: .leading, spacing: 4) {
         Text(connection.label)
           .font(.system(size: 16, weight: .semibold))
-        Text(connection.lastError?.isEmpty == false ? connection.lastError ?? "" : connection.provider.label)
+        Text(connection.lastError?.isEmpty == false
+          ? connection.lastError ?? ""
+          : hasInvalidKrakenBinding
+            ? "Legacy Kraken key: remove it and add a new per-device read-only key before scanning."
+            : connection.provider.label)
           .font(.system(size: 12))
-          .foregroundStyle(connection.lastError?.isEmpty == false ? AtlasTheme.loss : AtlasTheme.ink3)
-          .lineLimit(1)
+          .foregroundStyle(
+            connection.lastError?.isEmpty == false
+              || hasInvalidKrakenBinding
+              ? AtlasTheme.loss
+              : AtlasTheme.ink3
+          )
+          .lineLimit(2)
       }
       Spacer()
       Badge(connection.status.rawValue.uppercased(), color: connection.status == .failed ? AtlasTheme.loss : AtlasTheme.gain)
@@ -1705,6 +1737,14 @@ struct StatusLine: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
+      if let operatorMessage = state.operatorMessage {
+        HStack(spacing: 8) {
+          Image(systemName: "info.circle")
+          Text(operatorMessage)
+        }
+        .foregroundStyle(AtlasTheme.accent)
+        .accessibilityLabel("Sync server message: \(operatorMessage)")
+      }
       if !state.notice.isEmpty {
         HStack(spacing: 8) {
           Image(systemName: "checkmark.circle")

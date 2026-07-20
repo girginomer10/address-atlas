@@ -27,7 +27,7 @@ public enum ScanStatus: String, Codable, Sendable {
   case failed
 }
 
-public enum ExchangeProvider: String, Codable, CaseIterable, Sendable {
+public enum ExchangeProvider: String, Codable, CaseIterable, Hashable, Sendable {
   case binance
   case coinbase
   case kraken
@@ -196,6 +196,10 @@ public struct ExchangeConnectionRecord: Codable, Identifiable, Hashable, Sendabl
   public var provider: ExchangeProvider
   public var label: String
   public var encryptedCredentials: EncryptedVaultEnvelope
+  /// Kraken rejects any nonce that is not greater than the last nonce seen for
+  /// an API key. Binding each Kraken connection to one local installation keeps
+  /// a synced credential from being used concurrently by unsynchronised Macs.
+  public var krakenDeviceIdentifier: String?
   public var status: ScanStatus
   public var lastTestedAt: Date?
   public var lastSyncAt: Date?
@@ -208,6 +212,7 @@ public struct ExchangeConnectionRecord: Codable, Identifiable, Hashable, Sendabl
     provider: ExchangeProvider,
     label: String,
     encryptedCredentials: EncryptedVaultEnvelope,
+    krakenDeviceIdentifier: String? = nil,
     status: ScanStatus = .empty,
     lastTestedAt: Date? = nil,
     lastSyncAt: Date? = nil,
@@ -219,12 +224,111 @@ public struct ExchangeConnectionRecord: Codable, Identifiable, Hashable, Sendabl
     self.provider = provider
     self.label = label
     self.encryptedCredentials = encryptedCredentials
+    self.krakenDeviceIdentifier = krakenDeviceIdentifier
     self.status = status
     self.lastTestedAt = lastTestedAt
     self.lastSyncAt = lastSyncAt
     self.lastError = lastError
     self.createdAt = createdAt
     self.updatedAt = updatedAt
+  }
+}
+
+/// The backend issues UUID account IDs and embeds the same UUID in its signed
+/// session token. Keep callback parsing and persistence on one canonical rule
+/// so malformed callback data can never become durable sync state.
+public enum SyncAccountIdentifier {
+  public static let maximumUTF8ByteCount = 36
+
+  public static func normalized(_ candidate: String) -> String? {
+    let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+    let bytes = Array(trimmed.utf8)
+    guard bytes.count == maximumUTF8ByteCount else { return nil }
+
+    let hyphenIndexes: Set<Int> = [8, 13, 18, 23]
+    for (index, byte) in bytes.enumerated() {
+      if hyphenIndexes.contains(index) {
+        guard byte == 45 else { return nil }
+      } else {
+        guard (48...57).contains(byte) || (65...70).contains(byte) || (97...102).contains(byte) else {
+          return nil
+        }
+      }
+    }
+
+    // Match the server's UUID invariant: RFC variant plus versions 1 through 8.
+    guard "12345678".utf8.contains(bytes[14]), "89abAB".utf8.contains(bytes[19]) else {
+      return nil
+    }
+    return trimmed.lowercased()
+  }
+}
+
+/// Session tokens are opaque to the Mac, but they are later placed verbatim in
+/// an HTTP Authorization header. Bound their size to the server contract and
+/// accept only visible token characters so a compromised or malformed callback
+/// cannot persist control characters or an unbounded header value.
+public enum SyncSessionToken {
+  public static let maximumUTF8ByteCount = 4_096
+
+  public static func isValid(_ candidate: String) -> Bool {
+    let bytes = candidate.utf8
+    guard !bytes.isEmpty, bytes.count <= maximumUTF8ByteCount else { return false }
+    return bytes.allSatisfy { byte in
+      (48...57).contains(byte)
+        || (65...90).contains(byte)
+        || (97...122).contains(byte)
+        || byte == 45  // -
+        || byte == 46  // .
+        || byte == 43  // +
+        || byte == 47  // /
+        || byte == 61  // =
+        || byte == 95  // _
+        || byte == 126 // ~
+    }
+  }
+}
+
+/// Checked arithmetic for values that can cross provider, portfolio, and
+/// persistence boundaries. Swift floating-point operations intentionally
+/// produce infinities instead of trapping, but JSONEncoder rejects those
+/// values. Every scan therefore has to reject an unrepresentable result before
+/// it can become part of a durable vault snapshot.
+public enum FiniteValueMath {
+  public static func addingNonnegative(_ lhs: Double, _ rhs: Double) -> Double? {
+    guard lhs.isFinite, lhs >= 0, rhs.isFinite, rhs >= 0 else { return nil }
+    let result = lhs + rhs
+    return result.isFinite ? result : nil
+  }
+
+  public static func multiplyingNonnegative(_ lhs: Double, _ rhs: Double) -> Double? {
+    guard lhs.isFinite, lhs >= 0, rhs.isFinite, rhs >= 0 else { return nil }
+    let result = lhs * rhs
+    return result.isFinite ? result : nil
+  }
+
+  public static func sumNonnegative<S: Sequence>(_ values: S) -> Double? where S.Element == Double {
+    var total = 0.0
+    for value in values {
+      guard let next = addingNonnegative(total, value) else { return nil }
+      total = next
+    }
+    return total
+  }
+
+  public static func finiteOptional(_ value: Double?) -> Double? {
+    value.flatMap { $0.isFinite ? $0 : nil }
+  }
+}
+
+public enum PortfolioValueError: Error, Equatable, LocalizedError, Sendable {
+  case totalExceedsSupportedRange
+
+  public var errorDescription: String? {
+    switch self {
+    case .totalExceedsSupportedRange:
+      return "The portfolio total exceeds the supported numeric range. No snapshot was saved."
+    }
   }
 }
 
@@ -354,13 +458,25 @@ public struct SyncState: Codable, Equatable, Sendable {
   /// fields and content-baseline tracking.
   public init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    accountId = try container.decodeIfPresent(String.self, forKey: .accountId)
+    let storedAccountId = try container.decodeIfPresent(String.self, forKey: .accountId)
+    accountId = storedAccountId.flatMap(SyncAccountIdentifier.normalized)
     serverURL = try container.decodeIfPresent(String.self, forKey: .serverURL) ?? ""
     sessionToken = try container.decodeIfPresent(String.self, forKey: .sessionToken) ?? ""
     latestRemoteVersion = max(0, try container.decodeIfPresent(Int.self, forKey: .latestRemoteVersion) ?? 0)
     lastSyncedAt = try container.decodeIfPresent(Date.self, forKey: .lastSyncedAt)
     lastChecksum = try container.decodeIfPresent(String.self, forKey: .lastChecksum)
     lastSyncedContentChecksum = try container.decodeIfPresent(String.self, forKey: .lastSyncedContentChecksum)
+    if accountId == nil {
+      // Missing and malformed persisted identities cannot safely authorize
+      // requests or identify a remote baseline. Force a fresh passkey sign-in
+      // instead of carrying bearer or version metadata forward.
+      sessionToken = ""
+      clearRemoteTracking()
+    } else if !sessionToken.isEmpty, !SyncSessionToken.isValid(sessionToken) {
+      // Preserve the authenticated remote baseline, but force a fresh sign-in
+      // before any Authorization header is constructed.
+      sessionToken = ""
+    }
   }
 
   /// Switch the sync authority without ever forwarding the previous server's
@@ -376,7 +492,11 @@ public struct SyncState: Codable, Equatable, Sendable {
 
   /// Install credentials returned by passkey authentication. A different
   /// account or server starts with a clean remote baseline.
-  public mutating func connect(accountId: String, serverURL: String, sessionToken: String) {
+  @discardableResult
+  public mutating func connect(accountId: String, serverURL: String, sessionToken: String) -> Bool {
+    guard let accountId = SyncAccountIdentifier.normalized(accountId),
+          SyncSessionToken.isValid(sessionToken)
+    else { return false }
     let nextServer = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
     if self.accountId != accountId || self.serverURL != nextServer {
       clearRemoteTracking()
@@ -384,6 +504,7 @@ public struct SyncState: Codable, Equatable, Sendable {
     self.accountId = accountId
     self.serverURL = nextServer
     self.sessionToken = sessionToken
+    return true
   }
 
   public mutating func clearRemoteTracking() {

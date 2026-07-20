@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clientKey, rateLimit, rateLimitMany, resetRateLimitsForTests } from "./rate-limit";
+import { clientKey, rateLimitMany, resetRateLimitsForTests } from "./rate-limit";
+
+function rateLimitOne(key: string, limit: number, windowMs: number) {
+  return rateLimitMany([{ key, limit, windowMs }]);
+}
 
 describe("bounded rate limiter", () => {
   beforeEach(() => {
@@ -14,27 +18,27 @@ describe("bounded rate limiter", () => {
   });
 
   it("enforces limits and resets expired windows", () => {
-    expect(rateLimit("client", 2, 1_000)).toBe(true);
-    expect(rateLimit("client", 2, 1_000)).toBe(true);
-    expect(rateLimit("client", 2, 1_000)).toBe(false);
+    expect(rateLimitOne("client", 2, 1_000)).toBe(true);
+    expect(rateLimitOne("client", 2, 1_000)).toBe(true);
+    expect(rateLimitOne("client", 2, 1_000)).toBe(false);
     vi.advanceTimersByTime(1_001);
-    expect(rateLimit("client", 2, 1_000)).toBe(true);
+    expect(rateLimitOne("client", 2, 1_000)).toBe(true);
   });
 
   it("does not consume other buckets when a multi-rule request is rejected", () => {
-    expect(rateLimit("full", 1, 60_000)).toBe(true);
+    expect(rateLimitOne("full", 1, 60_000)).toBe(true);
     expect(rateLimitMany([
       { key: "full", limit: 1, windowMs: 60_000 },
       { key: "untouched", limit: 1, windowMs: 60_000 }
     ])).toBe(false);
-    expect(rateLimit("untouched", 1, 60_000)).toBe(true);
+    expect(rateLimitOne("untouched", 1, 60_000)).toBe(true);
   });
 
   it("fails closed instead of growing beyond the tracked-key ceiling", () => {
     for (let index = 0; index < 50_000; index += 1) {
-      expect(rateLimit(`key-${index}`, 1, 60_000)).toBe(true);
+      expect(rateLimitOne(`key-${index}`, 1, 60_000)).toBe(true);
     }
-    expect(rateLimit("overflow", 1, 60_000)).toBe(false);
+    expect(rateLimitOne("overflow", 1, 60_000)).toBe(false);
   });
 
   it("bounds attacker-controlled forwarded identifiers", () => {

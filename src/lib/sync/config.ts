@@ -33,6 +33,7 @@ export interface SyncLimitConfig {
 const PLACEHOLDER_RE = /(replace[-_ ]?with|change[-_ ]?me|example|your[-_ ]?secret|password)/i;
 const RP_ID_RE = /^(?:localhost|(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)$/;
 const RESERVED_PRODUCTION_RP_SUFFIXES = ["example.com", "example.net", "example.org"];
+const LOCAL_PASSKEY_HOST = "localhost";
 
 export function validateSessionSecret(value: string | undefined) {
   const configured = value?.trim();
@@ -82,7 +83,11 @@ export function getSyncPasskeyConfig(): SyncPasskeyConfig {
   } catch {
     throw new SyncConfigurationError("PASSKEY_ORIGIN must be an absolute origin URL.");
   }
-  const isLocalHTTP = origin.protocol === "http:" && rpID === "localhost" && origin.hostname === "localhost";
+  // WebAuthn's insecure-origin development exception is exact localhost. IP
+  // loopback literals are intentionally excluded because they are invalid RP IDs.
+  const isLocalHTTP = origin.protocol === "http:"
+    && rpID === LOCAL_PASSKEY_HOST
+    && origin.hostname === LOCAL_PASSKEY_HOST;
   if (
     (origin.protocol !== "https:" && !isLocalHTTP)
     || origin.origin !== expectedOrigin
@@ -92,10 +97,23 @@ export function getSyncPasskeyConfig(): SyncPasskeyConfig {
     || origin.search
     || origin.hash
   ) {
-    throw new SyncConfigurationError("PASSKEY_ORIGIN must be an HTTPS origin (or HTTP localhost) without credentials, path, query, or fragment.");
+    throw new SyncConfigurationError("PASSKEY_ORIGIN must be an HTTPS origin (or exact HTTP localhost) without credentials, path, query, or fragment.");
   }
   if (origin.hostname !== rpID && !origin.hostname.endsWith(`.${rpID}`)) {
     throw new SyncConfigurationError("PASSKEY_ORIGIN must use PASSKEY_RP_ID or one of its subdomains.");
+  }
+  if (isProduction()) {
+    const publicDomain = requiredInProduction("ADDRESS_ATLAS_DOMAIN", "localhost");
+    if (!RP_ID_RE.test(publicDomain) || publicDomain !== publicDomain.toLowerCase() || publicDomain === "localhost") {
+      throw new SyncConfigurationError(
+        "ADDRESS_ATLAS_DOMAIN must be a lowercase production hostname without a scheme, port, or path."
+      );
+    }
+    if (expectedOrigin !== `https://${publicDomain}`) {
+      throw new SyncConfigurationError(
+        "PASSKEY_ORIGIN must exactly equal https://ADDRESS_ATLAS_DOMAIN in production."
+      );
+    }
   }
 
   return { rpID, rpName, expectedOrigin };

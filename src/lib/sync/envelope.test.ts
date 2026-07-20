@@ -38,6 +38,18 @@ function snapshot(schemaVersion: 1 | 2 = 2, version = 7): RemoteVaultSnapshot {
   };
 }
 
+function snapshotAt(createdAt: string): RemoteVaultSnapshot {
+  const value = snapshot(2);
+  const envelope = { ...value.envelope, createdAt };
+  const canonical = canonicalEnvelopeBytes(envelope);
+  return {
+    ...value,
+    envelope,
+    byteSize: canonical.byteLength,
+    checksum: computeSnapshotChecksum(value.version, envelope, canonical)
+  };
+}
+
 describe("encrypted sync envelope validation", () => {
   it.each([1, 2] as const)("accepts a canonical sync-v%s encrypted snapshot", (schemaVersion) => {
     const value = snapshot(schemaVersion);
@@ -97,5 +109,30 @@ describe("encrypted sync envelope validation", () => {
       envelope: { ...value.envelope, createdAt: undefined }
     };
     expect(() => assertRemoteVaultSnapshot(missingCreatedAt)).toThrow(/createdAt/i);
+    expect(() => assertRemoteVaultSnapshot({
+      ...value,
+      envelope: { ...value.envelope, createdAt: "2026-02-30T12:00:00Z" }
+    })).toThrow(/createdAt/i);
+    expect(() => assertRemoteVaultSnapshot({
+      ...value,
+      envelope: { ...value.envelope, createdAt: "2026-07-12T12:00:00.000Z" }
+    })).toThrow(/whole-second/i);
+  });
+
+  it("matches Swift's canonical whole-second UTC timestamp edge contract", () => {
+    // ISO8601DateFormatter and JSONEncoder.addressAtlas preserve year 0000 at
+    // whole-second precision, so this unusual but canonical value is safe.
+    expect(() => assertRemoteVaultSnapshot(snapshotAt("0000-01-01T00:00:00Z"))).not.toThrow();
+
+    // Swift normalizes 24:00 to the next day, rejects leap seconds, and its
+    // canonical encoder emits no fractional seconds. Accepting any of these
+    // spellings would make decode/re-encode change the checksum preimage.
+    for (const createdAt of [
+      "2026-01-01T24:00:00Z",
+      "2026-12-31T23:59:60Z",
+      "2026-01-01T00:00:00.1234Z"
+    ]) {
+      expect(() => assertRemoteVaultSnapshot(snapshotAt(createdAt))).toThrow(/createdAt|whole-second/i);
+    }
   });
 });

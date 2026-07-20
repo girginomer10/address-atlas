@@ -117,11 +117,11 @@ public enum ChainRegistry {
   )
 
   public static let evmChains: [ChainConfig] = [
-    ChainConfig(id: "ethereum", name: "Ethereum", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, rpcUrl: URL(string: "https://eth.llamarpc.com"), explorerUrl: URL(string: "https://etherscan.io/address/")!),
+    ChainConfig(id: "ethereum", name: "Ethereum", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, rpcUrl: URL(string: "https://ethereum-rpc.publicnode.com"), explorerUrl: URL(string: "https://etherscan.io/address/")!),
     ChainConfig(id: "base", name: "Base", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, rpcUrl: URL(string: "https://mainnet.base.org"), explorerUrl: URL(string: "https://basescan.org/address/")!),
     ChainConfig(id: "arbitrum", name: "Arbitrum One", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, rpcUrl: URL(string: "https://arb1.arbitrum.io/rpc"), explorerUrl: URL(string: "https://arbiscan.io/address/")!),
     ChainConfig(id: "optimism", name: "Optimism", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, rpcUrl: URL(string: "https://mainnet.optimism.io"), explorerUrl: URL(string: "https://optimistic.etherscan.io/address/")!),
-    ChainConfig(id: "polygon", name: "Polygon PoS", family: .evm, symbol: "POL", coinGeckoId: "polygon-ecosystem-token", decimals: 18, rpcUrl: URL(string: "https://polygon-rpc.com"), explorerUrl: URL(string: "https://polygonscan.com/address/")!),
+    ChainConfig(id: "polygon", name: "Polygon PoS", family: .evm, symbol: "POL", coinGeckoId: "polygon-ecosystem-token", decimals: 18, rpcUrl: URL(string: "https://polygon.drpc.org"), explorerUrl: URL(string: "https://polygonscan.com/address/")!),
     ChainConfig(id: "bsc", name: "BNB Chain", family: .evm, symbol: "BNB", coinGeckoId: "binancecoin", decimals: 18, rpcUrl: URL(string: "https://bsc-dataseed.binance.org"), explorerUrl: URL(string: "https://bscscan.com/address/")!),
     ChainConfig(id: "avalanche", name: "Avalanche C-Chain", family: .evm, symbol: "AVAX", coinGeckoId: "avalanche-2", decimals: 18, rpcUrl: URL(string: "https://api.avax.network/ext/bc/C/rpc"), explorerUrl: URL(string: "https://snowtrace.io/address/")!),
     ChainConfig(id: "gnosis", name: "Gnosis Chain", family: .evm, symbol: "XDAI", coinGeckoId: "xdai", decimals: 18, rpcUrl: URL(string: "https://rpc.gnosischain.com"), explorerUrl: URL(string: "https://gnosisscan.io/address/")!),
@@ -135,9 +135,15 @@ public enum ChainRegistry {
     ChainConfig(id: "cosmoshub", name: "Cosmos Hub", family: .cosmos, symbol: "ATOM", coinGeckoId: "cosmos", decimals: 6, restUrl: URL(string: "https://cosmos-api.polkachu.com"), explorerUrl: URL(string: "https://www.mintscan.io/cosmos/address/")!, nativeDenom: "uatom", addressPrefix: "cosmos"),
     ChainConfig(id: "osmosis", name: "Osmosis", family: .cosmos, symbol: "OSMO", coinGeckoId: "osmosis", decimals: 6, restUrl: URL(string: "https://lcd.osmosis.zone"), explorerUrl: URL(string: "https://www.mintscan.io/osmosis/address/")!, nativeDenom: "uosmo", addressPrefix: "osmo"),
     ChainConfig(id: "celestia", name: "Celestia", family: .cosmos, symbol: "TIA", coinGeckoId: "celestia", decimals: 6, restUrl: URL(string: "https://celestia-api.polkachu.com"), explorerUrl: URL(string: "https://www.mintscan.io/celestia/address/")!, nativeDenom: "utia", addressPrefix: "celestia"),
-    ChainConfig(id: "stargaze", name: "Stargaze", family: .cosmos, symbol: "STARS", coinGeckoId: "stargaze", decimals: 6, restUrl: URL(string: "https://rest.stargaze-apis.com"), explorerUrl: URL(string: "https://www.mintscan.io/stargaze/address/")!, nativeDenom: "ustars", addressPrefix: "stars"),
     ChainConfig(id: "stride", name: "Stride", family: .cosmos, symbol: "STRD", coinGeckoId: "stride", decimals: 6, restUrl: URL(string: "https://stride-api.polkachu.com"), explorerUrl: URL(string: "https://www.mintscan.io/stride/address/")!, nativeDenom: "ustrd", addressPrefix: "stride")
   ]
+
+  /// Retired networks are deliberately excluded from `allChains` so new
+  /// records cannot select or scan them. Their identifiers/prefixes remain
+  /// recognizable solely to preserve and explain records written by older app
+  /// versions instead of silently deleting or corrupting the vault.
+  public static let retiredChainNames: [String: String] = ["stargaze": "Stargaze"]
+  public static let retiredCosmosAddressPrefixes: [String: String] = ["stars": "Stargaze"]
 
   public static let commonErc20Tokens: [String: [TokenConfig]] = [
     "ethereum": [
@@ -166,7 +172,7 @@ public enum ChainRegistry {
     ],
     "arbitrum": [
       TokenConfig(symbol: "USDC", name: "USD Coin", address: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", decimals: 6, coinGeckoId: "usd-coin"),
-      TokenConfig(symbol: "USDT", name: "Tether", address: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9", decimals: 6, coinGeckoId: "tether"),
+      TokenConfig(symbol: "USDT0", name: "USDT0", address: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9", decimals: 6, coinGeckoId: "usdt0"),
       TokenConfig(symbol: "USDC.e", name: "Bridged USDC", address: "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8", decimals: 6, coinGeckoId: "usd-coin"),
       TokenConfig(symbol: "WETH", name: "Wrapped Ether", address: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1", decimals: 18, coinGeckoId: "weth"),
       TokenConfig(symbol: "WBTC", name: "Wrapped Bitcoin", address: "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f", decimals: 8, coinGeckoId: "wrapped-bitcoin"),
@@ -176,7 +182,7 @@ public enum ChainRegistry {
     ],
     "optimism": [
       TokenConfig(symbol: "USDC", name: "USD Coin", address: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", decimals: 6, coinGeckoId: "usd-coin"),
-      TokenConfig(symbol: "USDT", name: "Tether", address: "0x94b008aD8e3F875fCcb024E2A1dC0C9573EcC1d9", decimals: 6, coinGeckoId: "tether"),
+      TokenConfig(symbol: "USDT", name: "Tether", address: "0x94b008aA00579c1307B0EF2c499aD98a8ce58e58", decimals: 6, coinGeckoId: "tether"),
       TokenConfig(symbol: "WETH", name: "Wrapped Ether", address: "0x4200000000000000000000000000000000000006", decimals: 18, coinGeckoId: "weth"),
       TokenConfig(symbol: "WBTC", name: "Wrapped Bitcoin", address: "0x68f180fcCe6836688e9084f035309E29Bf0A2095", decimals: 8, coinGeckoId: "wrapped-bitcoin"),
       TokenConfig(symbol: "DAI", name: "Dai", address: "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1", decimals: 18, coinGeckoId: "dai"),
@@ -185,7 +191,7 @@ public enum ChainRegistry {
     ],
     "polygon": [
       TokenConfig(symbol: "USDC.e", name: "Bridged USDC", address: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", decimals: 6, coinGeckoId: "usd-coin"),
-      TokenConfig(symbol: "USDT", name: "Tether", address: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F", decimals: 6, coinGeckoId: "tether"),
+      TokenConfig(symbol: "USDT0", name: "USDT0", address: "0xc2132D05D31c914a87C6611C10748AEb04B58e8F", decimals: 6, coinGeckoId: "usdt0"),
       TokenConfig(symbol: "WETH", name: "Wrapped Ether", address: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619", decimals: 18, coinGeckoId: "weth"),
       TokenConfig(symbol: "WBTC", name: "Wrapped Bitcoin", address: "0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6", decimals: 8, coinGeckoId: "wrapped-bitcoin"),
       TokenConfig(symbol: "DAI", name: "Dai", address: "0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063", decimals: 18, coinGeckoId: "dai"),
@@ -271,14 +277,14 @@ public enum ChainRegistry {
       TokenConfig(
         symbol: "BONK",
         name: "Bonk",
-        address: "DezXAZ8z7PnrnRJjz3JpPZsM1pPB263KGg1W53WZyQb",
+        address: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
         decimals: 5,
         coinGeckoId: "bonk"
       ),
       TokenConfig(
         symbol: "WIF",
         name: "dogwifhat",
-        address: "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLau9bQn8HnK8",
+        address: "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm",
         decimals: 6,
         coinGeckoId: "dogwifcoin"
       ),

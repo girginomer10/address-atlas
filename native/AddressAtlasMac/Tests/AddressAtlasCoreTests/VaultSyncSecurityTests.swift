@@ -3,11 +3,140 @@ import Foundation
 import XCTest
 @testable import AddressAtlasCore
 
+private let syncAccountA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+private let syncAccountB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+private let syncAccountC = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+
 final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
+  func testDecodingSyncStateNormalizesValidUUIDAndClearsMalformedCredentialState() throws {
+    let valid = SyncState(
+      accountId: syncAccountA.uppercased(),
+      serverURL: "https://sync.example",
+      sessionToken: "valid-token",
+      latestRemoteVersion: 7,
+      lastSyncedAt: Date(timeIntervalSince1970: 100),
+      lastChecksum: "snapshot",
+      lastSyncedContentChecksum: "content"
+    )
+    let decodedValid = try JSONDecoder.addressAtlas.decode(
+      SyncState.self,
+      from: JSONEncoder.addressAtlas.encode(valid)
+    )
+    XCTAssertEqual(decodedValid.accountId, syncAccountA)
+    XCTAssertEqual(decodedValid.sessionToken, "valid-token")
+    XCTAssertEqual(decodedValid.latestRemoteVersion, 7)
+
+    let malformed = SyncState(
+      accountId: "not-a-server-uuid",
+      serverURL: "https://sync.example",
+      sessionToken: "must-not-survive",
+      latestRemoteVersion: 9,
+      lastSyncedAt: Date(timeIntervalSince1970: 100),
+      lastChecksum: "snapshot",
+      lastSyncedContentChecksum: "content"
+    )
+    let decodedMalformed = try JSONDecoder.addressAtlas.decode(
+      SyncState.self,
+      from: JSONEncoder.addressAtlas.encode(malformed)
+    )
+    XCTAssertNil(decodedMalformed.accountId)
+    XCTAssertEqual(decodedMalformed.serverURL, "https://sync.example")
+    XCTAssertEqual(decodedMalformed.sessionToken, "")
+    XCTAssertEqual(decodedMalformed.latestRemoteVersion, 0)
+    XCTAssertNil(decodedMalformed.lastSyncedAt)
+    XCTAssertNil(decodedMalformed.lastChecksum)
+    XCTAssertNil(decodedMalformed.lastSyncedContentChecksum)
+
+    let missingAccountJSON = #"""
+    {
+      "serverURL": "https://sync.example",
+      "sessionToken": "orphaned-token",
+      "latestRemoteVersion": 5,
+      "lastChecksum": "orphaned-baseline"
+    }
+    """#
+    let decodedMissing = try JSONDecoder.addressAtlas.decode(
+      SyncState.self,
+      from: Data(missingAccountJSON.utf8)
+    )
+    XCTAssertNil(decodedMissing.accountId)
+    XCTAssertEqual(decodedMissing.sessionToken, "")
+    XCTAssertEqual(decodedMissing.latestRemoteVersion, 0)
+    XCTAssertNil(decodedMissing.lastChecksum)
+  }
+
+  func testSyncStateRejectsHeaderUnsafeOrOversizedSessionTokensWithoutLosingBaseline() throws {
+    for token in [
+      "unsafe\r\nheader",
+      "contains a space",
+      String(repeating: "a", count: SyncSessionToken.maximumUTF8ByteCount + 1)
+    ] {
+      let state = SyncState(
+        accountId: syncAccountA,
+        serverURL: "https://sync.example",
+        sessionToken: token,
+        latestRemoteVersion: 7,
+        lastChecksum: String(repeating: "a", count: 64),
+        lastSyncedContentChecksum: String(repeating: "b", count: 64)
+      )
+      let decoded = try JSONDecoder.addressAtlas.decode(
+        SyncState.self,
+        from: JSONEncoder.addressAtlas.encode(state)
+      )
+
+      XCTAssertEqual(decoded.accountId, syncAccountA)
+      XCTAssertEqual(decoded.sessionToken, "")
+      XCTAssertEqual(decoded.latestRemoteVersion, 7)
+      XCTAssertEqual(decoded.lastChecksum, String(repeating: "a", count: 64))
+      XCTAssertEqual(decoded.lastSyncedContentChecksum, String(repeating: "b", count: 64))
+    }
+
+    var state = SyncState()
+    XCTAssertFalse(state.connect(
+      accountId: syncAccountA,
+      serverURL: "https://sync.example",
+      sessionToken: "bad\nvalue"
+    ))
+    XCTAssertNil(state.accountId)
+  }
+
+  func testCodecUsesTheCanonicalServerUUIDAccountRule() throws {
+    let codec = VaultSyncCodec()
+    let vaultKey = try VaultCrypto().generateVaultKey()
+    let uppercaseAndPadded = "  \(syncAccountA.uppercased())  "
+
+    XCTAssertTrue(codec.isValidAccountId(uppercaseAndPadded))
+    for invalid in [
+      "account-a",
+      "00000000-0000-0000-0000-000000000000",
+      "aaaaaaaa-aaaa-9aaa-8aaa-aaaaaaaaaaaa",
+      "aaaaaaaa-aaaa-4aaa-7aaa-aaaaaaaaaaaa",
+      String(repeating: "a", count: 200)
+    ] {
+      XCTAssertFalse(codec.isValidAccountId(invalid), invalid)
+      XCTAssertThrowsError(try codec.encodedSnapshotByteCount(document: VaultDocument(), accountId: invalid)) {
+        XCTAssertEqual($0 as? VaultSyncCodecError, .invalidAccount)
+      }
+    }
+
+    let snapshot = try codec.seal(
+      document: VaultDocument(),
+      vaultKey: vaultKey,
+      version: 1,
+      accountId: uppercaseAndPadded
+    )
+    let opened = try codec.open(
+      snapshot: snapshot,
+      vaultKey: vaultKey,
+      expectedAccountId: syncAccountA
+    )
+    XCTAssertEqual(opened.document.syncState.accountId, syncAccountA)
+  }
+
   func testEncodedSnapshotByteCountExactlyMatchesSealedEnvelope() throws {
     let codec = VaultSyncCodec()
     let vaultKey = try VaultCrypto().generateVaultKey()
-    let accountId = "size-account"
+    let accountId = syncAccountA
 
     for warningLength in [0, 1, 2, 3, 31, 512] {
       let document = VaultDocument(
@@ -51,7 +180,7 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
   func testPostSyncProjectionReservesExactMarkSyncedMetadataHeadroom() throws {
     let codec = VaultSyncCodec()
     let vaultKey = try VaultCrypto().generateVaultKey()
-    let accountId = "post-sync-account"
+    let accountId = syncAccountB
     var document = VaultDocument(syncState: SyncState(accountId: accountId))
     let beforeMark = try codec.encodedSnapshotByteCount(
       document: document,
@@ -98,7 +227,7 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
     )
     let actual = try codec.encodedSnapshotByteCount(
       document: document,
-      accountId: "oversized-account"
+      accountId: syncAccountC
     )
     XCTAssertGreaterThan(actual, VaultSyncCodec.maximumSnapshotByteCount)
 
@@ -107,7 +236,7 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
         document: document,
         vaultKey: vaultKey,
         version: 1,
-        accountId: "oversized-account"
+        accountId: syncAccountC
       )
     ) { error in
       XCTAssertEqual(
@@ -128,7 +257,7 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
       document: VaultDocument(),
       vaultKey: vaultKey,
       version: 1,
-      accountId: "account-a"
+      accountId: syncAccountA
     )
 
     var oversizedVersion = snapshot
@@ -171,7 +300,7 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
     let crypto = VaultCrypto()
     let vaultKey = try crypto.generateVaultKey()
     let codec = VaultSyncCodec(crypto: crypto)
-    let accountId = "account-123"
+    let accountId = syncAccountA
     let snapshot = try codec.seal(
       document: VaultDocument(syncState: SyncState(accountId: accountId)),
       vaultKey: vaultKey,
@@ -199,11 +328,11 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
       document: VaultDocument(),
       vaultKey: vaultKey,
       version: 1,
-      accountId: "account-a"
+      accountId: syncAccountA
     )
 
     XCTAssertThrowsError(
-      try codec.open(snapshot: snapshot, vaultKey: vaultKey, expectedAccountId: "account-b")
+      try codec.open(snapshot: snapshot, vaultKey: vaultKey, expectedAccountId: syncAccountB)
     ) { error in
       XCTAssertEqual(error as? VaultCryptoError, .authenticationFailed)
     }
@@ -212,7 +341,7 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
   func testLegacyV1SnapshotOpensOnlyWithConsistentEncryptedVersionAndSignalsUpgrade() throws {
     let crypto = VaultCrypto()
     let vaultKey = try crypto.generateVaultKey()
-    let accountId = "legacy-account"
+    let accountId = syncAccountC
     let document = VaultDocument(
       schemaVersion: 1,
       wallets: [WalletRecord(label: "Legacy", address: "0x123", chainKind: .evm)],
@@ -247,8 +376,8 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
   func testContentBaselineDetectsLocalEditsAndIgnoresSessionRefresh() throws {
     let codec = VaultSyncCodec()
     let vaultKey = try VaultCrypto().generateVaultKey()
-    var document = VaultDocument(syncState: SyncState(accountId: "account", sessionToken: "first"))
-    let snapshot = try codec.seal(document: document, vaultKey: vaultKey, version: 1, accountId: "account")
+    var document = VaultDocument(syncState: SyncState(accountId: syncAccountA, sessionToken: "first"))
+    let snapshot = try codec.seal(document: document, vaultKey: vaultKey, version: 1, accountId: syncAccountA)
     try codec.markSynced(document: &document, snapshot: snapshot)
 
     XCTAssertFalse(try codec.hasLocalChanges(in: document))
@@ -260,7 +389,7 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
 
   func testChangingServerOrAccountClearsTokenAndRemoteBaseline() {
     var state = SyncState(
-      accountId: "account-a",
+      accountId: syncAccountA,
       serverURL: "https://sync-a.example",
       sessionToken: "token-a",
       latestRemoteVersion: 9,
@@ -277,8 +406,8 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
     XCTAssertNil(state.lastChecksum)
     XCTAssertNil(state.lastSyncedContentChecksum)
 
-    state.connect(accountId: "account-b", serverURL: state.serverURL, sessionToken: "token-b")
-    XCTAssertEqual(state.accountId, "account-b")
+    XCTAssertTrue(state.connect(accountId: syncAccountB, serverURL: state.serverURL, sessionToken: "token-b"))
+    XCTAssertEqual(state.accountId, syncAccountB)
     XCTAssertEqual(state.sessionToken, "token-b")
     XCTAssertEqual(state.latestRemoteVersion, 0)
   }
@@ -348,9 +477,11 @@ final class VaultSyncMigrationAndExportTests: XCTestCase {
     let document = try JSONDecoder.addressAtlas.decode(VaultDocument.self, from: Data(json.utf8))
 
     XCTAssertEqual(document.schemaVersion, VaultDocument.currentSchemaVersion)
-    XCTAssertEqual(document.syncState.accountId, "legacy-user")
+    XCTAssertNil(document.syncState.accountId)
     XCTAssertEqual(document.syncState.serverURL, "")
     XCTAssertEqual(document.syncState.sessionToken, "")
+    XCTAssertEqual(document.syncState.latestRemoteVersion, 0)
+    XCTAssertNil(document.syncState.lastChecksum)
     XCTAssertNil(document.syncState.lastSyncedContentChecksum)
   }
 
@@ -565,6 +696,18 @@ final class VaultSyncEndpointAndEnvelopeTests: XCTestCase {
       SyncServerURL.validatedOrigin("http://localhost:80/")?.absoluteString,
       "http://localhost"
     )
+    XCTAssertEqual(
+      SyncServerURL.validatedOrigin("http://localhost:8787/")?.absoluteString,
+      "http://localhost:8787"
+    )
+    XCTAssertEqual(
+      SyncServerURL.validatedOrigin("https://sync.example.com:8443/")?.absoluteString,
+      "https://sync.example.com:8443"
+    )
+    XCTAssertEqual(
+      SyncServerURL.validatedOrigin("https://localhost:8443/")?.absoluteString,
+      "https://localhost:8443"
+    )
     for invalid in [
       "https:",
       "https:///vault",
@@ -572,7 +715,24 @@ final class VaultSyncEndpointAndEnvelopeTests: XCTestCase {
       "https://sync.example.com/path",
       "https://sync.example.com?query=1",
       "https://sync.example.com#fragment",
-      "http://sync.example.com"
+      "http://sync.example.com",
+      "https://sync.example.com:0",
+      "https://sync.example.com:65536",
+      "http://127.0.0.1",
+      "http://127.0.0.1:8787",
+      "http://[::1]",
+      "http://[::1]:8787",
+      "http://[::1]:99999",
+      "https://127.0.0.1",
+      "https://127.1:8443",
+      "https://0x7f000001:8443",
+      "https://[::1]",
+      "https://[2001:db8::1]:8443",
+      "https://intranet",
+      "https://sync.example.com.",
+      "https://bad_label.example.com",
+      "https://-sync.example.com",
+      "https://sync-.example.com"
     ] {
       XCTAssertNil(SyncServerURL.validatedOrigin(invalid), invalid)
     }
@@ -600,7 +760,7 @@ final class VaultSyncEndpointAndEnvelopeTests: XCTestCase {
       try NativeEndpointConfig(
         priceBaseURL: URL(string: "https://api.coingecko.com/api/v3/simple/price")!,
         chains: [
-          "ethereum": ChainEndpointOverride(rpcURL: URL(string: "https://eth.llamarpc.com/alternate-path"))
+          "ethereum": ChainEndpointOverride(rpcURL: URL(string: "https://ethereum-rpc.publicnode.com/alternate-path"))
         ]
       ).validated()
     )

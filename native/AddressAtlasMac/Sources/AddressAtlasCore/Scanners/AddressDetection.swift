@@ -35,6 +35,7 @@ public enum AddressDetection {
         || ChainRegistry.cosmosChains.contains { chain in
           chain.addressPrefix.map { isCosmos(value, prefix: $0) } ?? false
         }
+        || retiredCosmosNetworkName(for: value) != nil
       let key = isEvm(value) || isValidBech32 ? value.lowercased() : value
       guard seen.insert(key).inserted else { continue }
       guard addresses.count < limit else {
@@ -87,7 +88,7 @@ public enum AddressDetection {
     case .cosmos:
       valid = ChainRegistry.cosmosChains.contains { chain in
         chain.addressPrefix.map { isCosmos(value, prefix: $0) } ?? false
-      }
+      } || retiredCosmosNetworkName(for: value) != nil
     case .evm: valid = isEvm(value)
     case .solana: valid = isSolana(value)
     case .tron: valid = isTron(value)
@@ -99,6 +100,18 @@ public enum AddressDetection {
       return value.lowercased()
     }
     return value
+  }
+
+  /// Recognizes a retired Cosmos address only for persisted-record compatibility.
+  /// A retired address is never returned by `detectChains`, so it cannot be
+  /// newly added or sent to a dead provider for scanning.
+  public static func retiredCosmosNetworkName(for address: String) -> String? {
+    let value = address.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !value.isEmpty, value.utf8.count <= 90 else { return nil }
+    for (prefix, name) in ChainRegistry.retiredCosmosAddressPrefixes {
+      if isCosmos(value, prefix: prefix) { return name }
+    }
+    return nil
   }
 
   public static func defaultWalletLabel(_ address: String) -> String {

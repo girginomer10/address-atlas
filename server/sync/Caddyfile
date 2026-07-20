@@ -1,5 +1,13 @@
 {
   email {$ACME_EMAIL}
+  servers {
+    timeouts {
+      # Bound slow uploads before they can hold a proxy and application stream
+      # indefinitely. The app independently enforces the same wall-clock limit.
+      read_body 60s
+      read_header 10s
+    }
+  }
 }
 
 {$ADDRESS_ATLAS_DOMAIN} {
@@ -20,12 +28,15 @@
     -Server
   }
 
-  # Caddy is the public trust boundary. Its reverse proxy ignores client-sent
-  # X-Forwarded-* values by default and supplies the direct peer IP instead.
-  # Do not enable trusted_proxies unless a real upstream proxy is introduced
-  # and its CIDRs are explicitly constrained.
+  # Caddy is the public trust boundary. X-Forwarded-For is explicitly set to
+  # the direct client IP below, replacing any client-sent value; the app's
+  # rate limiter keys on this header. Do not enable trusted_proxies unless a
+  # real upstream proxy is introduced and its CIDRs are explicitly constrained.
   reverse_proxy web:3000 {
-    health_uri /healthz
+    header_up X-Forwarded-For {client_ip}
+    # Probe the DB-free /livez so a Postgres blip cannot make Caddy 502 every
+    # route; deep DB health remains the container healthcheck's job.
+    health_uri /livez
     health_interval 15s
     health_timeout 5s
     fail_duration 30s

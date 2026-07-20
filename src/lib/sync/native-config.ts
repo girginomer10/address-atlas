@@ -28,10 +28,12 @@ export class NativeConfigError extends Error {
   }
 }
 
+const BUNDLED_NATIVE_ENDPOINT_CONFIG_VERSION = 5;
+
 export const DEFAULT_NATIVE_ENDPOINT_CONFIG: NativeEndpointConfig = {
   schemaVersion: 1,
-  configVersion: 3,
-  updatedAt: "2026-07-12T00:00:00.000Z",
+  configVersion: BUNDLED_NATIVE_ENDPOINT_CONFIG_VERSION,
+  updatedAt: "2026-07-14T00:00:00.000Z",
   refreshAfterSeconds: 21_600,
   minSupportedAppVersion: "0.2.0",
   priceBaseUrl: "https://api.coingecko.com/api/v3/simple/price",
@@ -40,11 +42,11 @@ export const DEFAULT_NATIVE_ENDPOINT_CONFIG: NativeEndpointConfig = {
     solana: { rpcUrl: "https://api.mainnet-beta.solana.com" },
     tron: { restUrl: "https://api.trongrid.io" },
     xrp: { rpcUrl: "https://s1.ripple.com:51234/" },
-    ethereum: { rpcUrl: "https://eth.llamarpc.com" },
+    ethereum: { rpcUrl: "https://ethereum-rpc.publicnode.com" },
     base: { rpcUrl: "https://mainnet.base.org" },
     arbitrum: { rpcUrl: "https://arb1.arbitrum.io/rpc" },
     optimism: { rpcUrl: "https://mainnet.optimism.io" },
-    polygon: { rpcUrl: "https://polygon-rpc.com" },
+    polygon: { rpcUrl: "https://polygon.drpc.org" },
     bsc: { rpcUrl: "https://bsc-dataseed.binance.org" },
     avalanche: { rpcUrl: "https://api.avax.network/ext/bc/C/rpc" },
     gnosis: { rpcUrl: "https://rpc.gnosischain.com" },
@@ -55,7 +57,6 @@ export const DEFAULT_NATIVE_ENDPOINT_CONFIG: NativeEndpointConfig = {
     cosmoshub: { restUrl: "https://cosmos-api.polkachu.com" },
     osmosis: { restUrl: "https://lcd.osmosis.zone" },
     celestia: { restUrl: "https://celestia-api.polkachu.com" },
-    stargaze: { restUrl: "https://rest.stargaze-apis.com" },
     stride: { restUrl: "https://stride-api.polkachu.com" }
   },
   // Exchange endpoints are credential-bearing security boundaries and are
@@ -86,7 +87,12 @@ export function getNativeEndpointConfig(): NativeEndpointConfig {
   const config = mergeNativeConfig(DEFAULT_NATIVE_ENDPOINT_CONFIG, envOverride);
   return sanitizeNativeConfig({
     ...config,
-    configVersion: integerFromEnv("NATIVE_ENDPOINT_CONFIG_VERSION", config.configVersion, 1, 2_000_000_000),
+    configVersion: integerFromEnv(
+      "NATIVE_ENDPOINT_CONFIG_VERSION",
+      config.configVersion,
+      BUNDLED_NATIVE_ENDPOINT_CONFIG_VERSION,
+      2_000_000_000
+    ),
     updatedAt: isoDateFromEnv("NATIVE_ENDPOINT_CONFIG_UPDATED_AT", config.updatedAt),
     message: process.env.NATIVE_ENDPOINT_CONFIG_MESSAGE || config.message,
     minSupportedAppVersion: semverFromEnv("NATIVE_ENDPOINT_MIN_APP_VERSION", config.minSupportedAppVersion)
@@ -116,7 +122,10 @@ function validateNativeConfigOverride(value: Partial<NativeEndpointConfig>) {
   if (value.schemaVersion !== undefined && value.schemaVersion !== 1) {
     throw new NativeConfigError("Native endpoint schemaVersion must be 1.");
   }
-  if (value.configVersion !== undefined && !isBoundedInteger(value.configVersion, 1, 2_000_000_000)) {
+  if (
+    value.configVersion !== undefined
+    && !isBoundedInteger(value.configVersion, BUNDLED_NATIVE_ENDPOINT_CONFIG_VERSION, 2_000_000_000)
+  ) {
     throw new NativeConfigError("Native endpoint configVersion is invalid.");
   }
   if (value.updatedAt !== undefined && !isISODate(value.updatedAt)) {
@@ -197,7 +206,12 @@ function mergeKnownRecord<T>(base: Record<string, T>, override?: Record<string, 
 function sanitizeNativeConfig(config: NativeEndpointConfig): NativeEndpointConfig {
   return {
     schemaVersion: 1,
-    configVersion: boundedInteger(config.configVersion, DEFAULT_NATIVE_ENDPOINT_CONFIG.configVersion, 1, 2_000_000_000),
+    configVersion: boundedInteger(
+      config.configVersion,
+      DEFAULT_NATIVE_ENDPOINT_CONFIG.configVersion,
+      BUNDLED_NATIVE_ENDPOINT_CONFIG_VERSION,
+      2_000_000_000
+    ),
     updatedAt: isoDateOrFallback(config.updatedAt, DEFAULT_NATIVE_ENDPOINT_CONFIG.updatedAt),
     refreshAfterSeconds: boundedInteger(config.refreshAfterSeconds, 21_600, 300, 86_400),
     message: typeof config.message === "string" ? config.message.trim().slice(0, 500) || undefined : undefined,
@@ -312,9 +326,18 @@ function isoDateOrFallback(value: unknown, fallback: string) {
 }
 
 function isISODate(value: unknown): value is string {
-  return typeof value === "string"
-    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(value)
-    && Number.isFinite(Date.parse(value));
+  if (typeof value !== "string") return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?Z$/.exec(value);
+  if (!match) return false;
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return false;
+  const [, year, month, day, hour, minute, second] = match;
+  return parsed.getUTCFullYear() === Number(year)
+    && parsed.getUTCMonth() + 1 === Number(month)
+    && parsed.getUTCDate() === Number(day)
+    && parsed.getUTCHours() === Number(hour)
+    && parsed.getUTCMinutes() === Number(minute)
+    && parsed.getUTCSeconds() === Number(second);
 }
 
 // Keep this grammar and component ceiling in sync with

@@ -52,6 +52,8 @@ export function assertRemoteVaultSnapshot(input: unknown): asserts input is Remo
   if (expectedSnapshotChecksum !== snapshot.checksum) {
     throw new Error("Snapshot checksum does not match the encrypted envelope.");
   }
+  // updatedAt is validated for shape but intentionally never persisted: the
+  // server stores its own now() on write and is authoritative on read.
   if (snapshot.updatedAt !== undefined && !isISODate(snapshot.updatedAt)) {
     throw new Error("Invalid snapshot updatedAt.");
   }
@@ -76,8 +78,8 @@ function assertEnvelope(envelope: unknown): asserts envelope is EncryptedVaultEn
   if (typeof value.checksum !== "string" || !HEX_RE.test(value.checksum)) {
     throw new Error("Invalid envelope checksum.");
   }
-  if (typeof value.createdAt !== "string" || !isISODate(value.createdAt)) {
-    throw new Error("Envelope createdAt is required and must be an ISO-8601 UTC timestamp.");
+  if (typeof value.createdAt !== "string" || !isCanonicalEnvelopeDate(value.createdAt)) {
+    throw new Error("Envelope createdAt is required and must be a whole-second ISO-8601 UTC timestamp.");
   }
   let nonce: Buffer;
   let ciphertext: Buffer;
@@ -138,11 +140,27 @@ export function computeSnapshotChecksum(
 }
 
 function isISODate(value: unknown): value is string {
+  if (typeof value !== "string" || value.length < 20 || value.length > 40) return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?Z$/.exec(value);
+  if (!match) return false;
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return false;
+  const [, year, month, day, hour, minute, second] = match;
+  return parsed.getUTCFullYear() === Number(year)
+    && parsed.getUTCMonth() + 1 === Number(month)
+    && parsed.getUTCDate() === Number(day)
+    && parsed.getUTCHours() === Number(hour)
+    && parsed.getUTCMinutes() === Number(minute)
+    && parsed.getUTCSeconds() === Number(second);
+}
+
+function isCanonicalEnvelopeDate(value: unknown): value is string {
+  // Swift's JSONEncoder.addressAtlas emits whole-second ISO-8601 dates. Accepting
+  // a different textual representation would change the envelope when the Mac
+  // decodes and re-encodes it, making the stored outer checksum unusable.
   return typeof value === "string"
-    && value.length >= 20
-    && value.length <= 40
-    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(value)
-    && Number.isFinite(Date.parse(value));
+    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value)
+    && isISODate(value);
 }
 
 const ALLOWED_SNAPSHOT_KEYS = new Set(["version", "envelope", "byteSize", "checksum", "updatedAt"]);
