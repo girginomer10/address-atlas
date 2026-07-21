@@ -477,6 +477,13 @@ exit 70
     expect(detectVolume()).toBe("address-atlas-prod-postgres");
   });
 
+  it("isolates emergency service-control state inside each private fixture", () => {
+    expect(baseEnvironment().ADDRESS_ATLAS_CONTROL_ROOT).toBe(
+      join(temporaryDirectory, "service-control")
+    );
+    expect(statSync(temporaryDirectory).mode & 0o077).toBe(0);
+  });
+
   it("binds active and rollback-compatible schema heads into deploy artifacts", () => {
     const manageSource = readFileSync(manageScript, "utf8");
     const dockerfileSource = readFileSync(dockerfile, "utf8");
@@ -1817,6 +1824,7 @@ exec "${process.execPath}" "$@"
         temporaryDirectory,
         "install-deployment.json"
       ),
+      ADDRESS_ATLAS_CONTROL_ROOT: join(temporaryDirectory, "service-control"),
       ADDRESS_ATLAS_DEPLOY_SOURCE_ROOT: join(temporaryDirectory, "deploy-sources"),
       SYNC_SCHEMA_DATABASE_URL: "postgresql://address_atlas:owner_test_6Vr2Kx8Qm4Np7Ts9Lc3Hw5Jf1Zd0By8Ua@postgres:5432/address_atlas_sync",
       SYNC_REGISTRATION_ENABLED: "false",
