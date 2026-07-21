@@ -28,6 +28,12 @@ related_files: [native/AddressAtlasMac/Sources/AddressAtlasCore/Sync/PendingVaul
   transaction before each pending migration, validate the resulting surface
   before commit, and validate again before reconciliation. Drift is diagnostic;
   it must remain byte-for-byte and catalog-for-catalog untouched on rejection.
+- Integration fixtures must respect that exactness too. If a role-boundary test
+  creates adversarial objects in `public`, prove their grants are revoked and
+  bootstrap rejects the expanded surface, then remove those fixture objects
+  before testing a no-op bootstrap. Production-mode migrations against allowed
+  `atlas_drill_*` or `atlas_restore_*` databases must set the explicit
+  restore-migration flag; never weaken the fixed production database rule.
 - Public auth capacity starts before reading request bytes. Bound global and
   per-client concurrent body readers, impose a body deadline, release the permit
   before WebAuthn/database work, and never expose raw framework/server errors to

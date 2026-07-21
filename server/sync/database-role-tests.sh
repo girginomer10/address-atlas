@@ -266,10 +266,15 @@ public_schema_owner() {
 
 bootstrap_schema() {
   local target_database="${1:-$database_name}"
+  local restore_migration=0
+  if [[ "$target_database" != "$database_name" ]]; then
+    restore_migration=1
+  fi
   (
     cd "$repo_root"
     NODE_ENV=production \
       SYNC_SCHEMA_MODE=bootstrap \
+      ADDRESS_ATLAS_RESTORE_MIGRATION="$restore_migration" \
       SYNC_SCHEMA_DATABASE_URL="postgresql://address_atlas:${owner_password}@127.0.0.1:${test_port}/${target_database}" \
       npm run --silent sync:schema:bootstrap
   )
@@ -707,6 +712,21 @@ enable_secret_capture_pressure all owner_psql
 provision_roles bootstrap "$admin_password_a" "$admin_password_a" "$runtime_password_a"
 assert_secret_collectors_are_safe fresh_bootstrap admin_psql "$admin_password_a"
 disable_secret_capture_pressure admin_psql "$admin_password_a"
+# The provisioning path must still revoke unsafe grants from arbitrary
+# owner-created objects. Keep those objects long enough to prove the runtime
+# denials, then prove that schema bootstrap treats their presence as drift
+# instead of silently accepting an expanded application schema.
+assert_runtime_denials "$runtime_password_a"
+if bootstrap_schema >/dev/null 2>&1; then
+  echo 'Schema bootstrap unexpectedly accepted extra owner-only public objects.' >&2
+  exit 1
+fi
+owner_psql <<'SQL'
+DROP FUNCTION role_test_function();
+DROP SEQUENCE role_test_sequence;
+DROP DOMAIN role_test_domain;
+DROP TYPE role_test_enum;
+SQL
 # The renamed bootstrap superuser is no longer the schema credential. Prove
 # that the newly created, non-superuser owner retained the historical password
 # and can execute the next deployment's no-op schema bootstrap.
