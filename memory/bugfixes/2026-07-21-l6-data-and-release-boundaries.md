@@ -147,7 +147,7 @@ related_files: [native/AddressAtlasMac/Sources/AddressAtlasCore/Sync/PendingVaul
 
 ## Verification baseline
 
-- Web unit and contract suite: 444 passed, 50 environment or live tests
+- Web unit and contract suite: 447 passed, 50 environment or live tests
   skipped; operations passed 58/58. Focused PostgreSQL 16.14 migration/vault
   and readiness suites passed 27/27 and 6/6.
 - Native suite: 385 tests, 2 opt-in live tests skipped; strict concurrency and

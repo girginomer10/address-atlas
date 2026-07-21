@@ -218,7 +218,7 @@ services:
     volumes:
       - address-atlas-prod-postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U address_atlas -d address_atlas_sync"]
+      test: ["CMD-SHELL", "grep -qx postgres /proc/1/comm && pg_isready -h 127.0.0.1 -U address_atlas -d address_atlas_sync"]
       interval: 10s
       timeout: 5s
       retries: 10

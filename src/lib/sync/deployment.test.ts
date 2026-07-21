@@ -24,6 +24,7 @@ import {
 const repoRoot = resolve(import.meta.dirname, "../../..");
 const manageScript = join(repoRoot, "server/sync/manage-prod.sh");
 const composeFile = join(repoRoot, "server/sync/compose.prod.yml");
+const developmentComposeFile = join(repoRoot, "compose.sync.yml");
 const dockerfile = join(repoRoot, "server/sync/Dockerfile");
 const nativeConfigStateTool = join(repoRoot, "server/sync/native-config-deploy-state.mjs");
 const nativeConfigJson = '{"schemaVersion":1,"configVersion":5,"updatedAt":"2026-07-20T00:00:00.000Z","refreshAfterSeconds":21600,"minSupportedAppVersion":"0.2.0","priceBaseUrl":"https://api.coingecko.com/api/v3/simple/price","chains":{"bitcoin":{"restUrl":"https://blockstream.info/api"}},"exchanges":{}}';
@@ -456,6 +457,14 @@ exit 70
       );
       expect(manageSource.match(managePattern)?.[1])
         .toBe(SYNC_MIGRATION_CHAIN_CHECKSUMS[version - 1]);
+    }
+  });
+
+  it("waits for final PostgreSQL PID 1 and TCP in every Compose healthcheck", () => {
+    const expected =
+      "grep -qx postgres /proc/1/comm && pg_isready -h 127.0.0.1 -U address_atlas -d address_atlas_sync";
+    for (const path of [composeFile, developmentComposeFile]) {
+      expect(readFileSync(path, "utf8")).toContain(expected);
     }
   });
 

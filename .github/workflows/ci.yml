@@ -58,7 +58,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U address_atlas -d address_atlas_sync"
+          --health-cmd "grep -qx postgres /proc/1/comm && pg_isready -h 127.0.0.1 -U address_atlas -d address_atlas_sync"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -442,9 +442,12 @@ jobs:
             "$postgres_image" >/dev/null
           target_ready=false
           for attempt in $(seq 1 45); do
-            if docker exec "$TARGET_POSTGRES_CONTAINER" \
-                pg_isready --username address_atlas \
-                  --dbname address_atlas_sync >/dev/null 2>&1; then
+            if docker exec "$TARGET_POSTGRES_CONTAINER" sh -ceu '
+                read -r pid_one_command < /proc/1/comm
+                [ "$pid_one_command" = postgres ]
+                exec pg_isready --host 127.0.0.1 --username address_atlas \
+                  --dbname address_atlas_sync
+              ' >/dev/null 2>&1; then
               target_ready=true
               break
             fi

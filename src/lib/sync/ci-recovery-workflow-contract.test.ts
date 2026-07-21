@@ -46,6 +46,32 @@ describe("CI recovery workflow contract", () => {
     expect(targetClassification).toBeGreaterThan(targetBinding);
   });
 
+  it("waits for the final PostgreSQL PID 1 instead of the transient init server", () => {
+    const pidOneRead = recoveryStep.indexOf(
+      "read -r pid_one_command < /proc/1/comm"
+    );
+    const finalPostgresCheck = recoveryStep.indexOf(
+      '[ "$pid_one_command" = postgres ]'
+    );
+    const readinessProbe = recoveryStep.indexOf(
+      "exec pg_isready --host 127.0.0.1 --username address_atlas"
+    );
+    const targetBinding = recoveryStep.indexOf(
+      'export ADDRESS_ATLAS_POSTGRES_CONTAINER="$TARGET_POSTGRES_CONTAINER"'
+    );
+
+    expect(pidOneRead).toBeGreaterThanOrEqual(0);
+    expect(finalPostgresCheck).toBeGreaterThan(pidOneRead);
+    expect(readinessProbe).toBeGreaterThan(finalPostgresCheck);
+    expect(targetBinding).toBeGreaterThan(readinessProbe);
+  });
+
+  it("makes the CI service healthcheck wait for final PID 1 and TCP", () => {
+    expect(workflow).toContain(
+      '--health-cmd "grep -qx postgres /proc/1/comm && pg_isready -h 127.0.0.1 -U address_atlas -d address_atlas_sync"'
+    );
+  });
+
   it("keeps the embedded recovery shell syntactically valid after YAML dedent", () => {
     const runMarker = "\n        run: |\n";
     const runBlockStart = recoveryStep.indexOf(runMarker);
