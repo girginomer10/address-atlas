@@ -2,6 +2,10 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  validatePasskeyCredentialId,
+  validatePasskeyPublicKey
+} from "./stored-passkey-credential";
 
 const repoRoot = resolve(import.meta.dirname, "../../..");
 const workflow = readFileSync(join(repoRoot, ".github/workflows/ci.yml"), "utf8").replace(
@@ -20,8 +24,30 @@ expect(recoveryStepStart).toBeGreaterThanOrEqual(0);
 expect(recoveryStepEnd).toBeGreaterThan(recoveryStepStart);
 
 const recoveryStep = workflow.slice(recoveryStepStart, recoveryStepEnd);
+const backupStepStart = workflow.indexOf(
+  "- name: Prove encrypted backup, drill, and atomic production restore"
+);
+const backupStepEnd = workflow.indexOf(
+  "- name: Prove destructive fresh-volume PostgreSQL bootstrap recovery",
+  backupStepStart
+);
+
+expect(backupStepStart).toBeGreaterThanOrEqual(0);
+expect(backupStepEnd).toBeGreaterThan(backupStepStart);
+
+const backupStep = workflow.slice(backupStepStart, backupStepEnd);
 
 describe("CI recovery workflow contract", () => {
+  it("seeds a credential that restore readiness can cryptographically import", () => {
+    const credentialSeed = backupStep.match(
+      /INSERT INTO public\.passkey_credentials \([\s\S]*?\) VALUES \(\s*'([^']+)',\s*'[^']+',\s*'([^']+)'/
+    );
+
+    expect(credentialSeed).not.toBeNull();
+    expect(() => validatePasskeyCredentialId(credentialSeed?.[1])).not.toThrow();
+    expect(() => validatePasskeyPublicKey(credentialSeed?.[2])).not.toThrow();
+  });
+
   it("binds verification to the source and recovery to the fresh target", () => {
     const sourceBinding = recoveryStep.indexOf(
       'export ADDRESS_ATLAS_POSTGRES_CONTAINER="$SOURCE_POSTGRES_CONTAINER"'
