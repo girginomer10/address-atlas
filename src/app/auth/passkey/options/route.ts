@@ -6,7 +6,7 @@ import {
   requestDiagnostics
 } from "@/lib/sync/diagnostics";
 import { clientKey, rateLimitMany } from "@/lib/sync/rate-limit";
-import { RegistrationAdmissionQuotaError, RegistrationDisabledError } from "@/lib/sync/registration";
+import { RegistrationDisabledError } from "@/lib/sync/registration";
 import { readLimitedJSON, RequestBodyError } from "@/lib/sync/request";
 import {
   acquirePasskeyBodyConcurrency,
@@ -78,43 +78,37 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     const expected = error instanceof RequestBodyError || error instanceof PasskeyInputError;
     const disabled = error instanceof RegistrationDisabledError;
-    const capacity = error instanceof RegistrationAdmissionQuotaError;
     const status = error instanceof RequestBodyError
       ? error.status
       : disabled
         ? 403
-        : capacity
-          ? 429
-          : expected
-            ? 400
-            : 500;
+        : expected
+          ? 400
+          : 500;
     recordSecurityEvent(
-      disabled ? "auth.registration_denied" : capacity ? "auth.rate_limited" : "auth.authentication_failed",
+      disabled ? "auth.registration_denied" : "auth.authentication_failed",
       diagnostics,
       {
         status,
         reason: disabled
           ? "registration_disabled"
-          : capacity
-            ? "registration_durable_rate_limit"
-            : expected
-              ? "invalid_request"
-              : "internal_error",
+          : expected
+            ? "invalid_request"
+            : "internal_error",
         ...(mode ? { mode } : {}),
         severity: status >= 500 ? "error" : "warn"
       }
     );
     return NextResponse.json(
       {
-        error: expected || disabled || capacity
+        error: expected || disabled
           ? (error as Error).message
           : "Passkey options failed."
       },
       {
         status,
         headers: diagnosticHeaders(diagnostics, {
-          ...NO_STORE_HEADERS,
-          ...(capacity ? { "retry-after": "3600" } : {})
+          ...NO_STORE_HEADERS
         })
       }
     );

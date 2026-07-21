@@ -4,6 +4,7 @@ import Foundation
 @MainActor
 extension AppState {
   func startScan() {
+    guard acceptsNewOperations else { return }
     guard !syncing else {
       error = "Wait for the active sync operation before scanning."
       return
@@ -40,6 +41,7 @@ extension AppState {
   }
 
   func scanSavedWallets() async {
+    guard acceptsNewOperations else { return }
     guard let vaultKey else {
       error = "Vault must be unlocked before scanning."
       return
@@ -73,7 +75,9 @@ extension AppState {
     defer { scanning = false }
     do {
       if AppState.validatedSyncURL(document.syncState.serverURL) != nil {
-        guard await refreshEndpointConfig(silent: true) else {
+        let refreshed = await refreshEndpointConfig(silent: true)
+        try Task.checkCancellation()
+        guard refreshed else {
           throw UserFacingAppError(
             message:
               "The sync server's compatibility policy could not be verified. Scanning was not started."

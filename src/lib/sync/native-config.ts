@@ -1,3 +1,5 @@
+import { OperationalError } from "./diagnostics";
+
 export interface NativeChainEndpointConfig {
   rpcUrl?: string;
   restUrl?: string;
@@ -21,9 +23,9 @@ export interface NativeEndpointConfig {
   exchanges: Record<string, NativeExchangeEndpointConfig>;
 }
 
-export class NativeConfigError extends Error {
+export class NativeConfigError extends OperationalError {
   constructor(message: string) {
-    super(message);
+    super("native_config_invalid", message);
     this.name = "NativeConfigError";
   }
 }

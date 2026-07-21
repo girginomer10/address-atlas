@@ -28,12 +28,16 @@ describe("limited JSON request reader", () => {
     }), 1_000)).rejects.toMatchObject({ status });
   });
 
-  it("stops reading once the streaming size ceiling is exceeded", async () => {
+  it("stops reading once the streaming size ceiling is exceeded and reports every received byte", async () => {
+    const body = JSON.stringify({ data: "x".repeat(200) });
     await expect(readLimitedJSON(new Request("https://sync.example", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ data: "x".repeat(200) })
-    }), 50)).rejects.toMatchObject({ status: 413, byteLength: 50 });
+      body
+    }), 50)).rejects.toMatchObject({
+      status: 413,
+      byteLength: Buffer.byteLength(body)
+    });
   });
 
   it("reports chargeable bytes even when Content-Length is malformed", async () => {
@@ -44,6 +48,18 @@ describe("limited JSON request reader", () => {
       body
     }), 1_000)).rejects.toMatchObject({
       status: 400,
+      byteLength: Buffer.byteLength(body)
+    });
+  });
+
+  it("reads an oversized declaration and reports only bytes actually received", async () => {
+    const body = "{\"ok\":true}";
+    await expect(readLimitedBody(new Request("https://sync.example", {
+      method: "POST",
+      headers: { "content-length": "9000000" },
+      body
+    }), 1_000)).rejects.toMatchObject({
+      status: 413,
       byteLength: Buffer.byteLength(body)
     });
   });

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { base64urlDecode } from "./base64url";
+import { OperationalError } from "./diagnostics";
 
 export interface EncryptedVaultEnvelope {
   schemaVersion: number;
@@ -19,6 +20,21 @@ export interface RemoteVaultSnapshot {
   updatedAt?: string;
 }
 
+export interface StoredVaultSnapshotFields {
+  version: unknown;
+  envelope: unknown;
+  byteSize: unknown;
+  checksum: unknown;
+  updatedAt: unknown;
+}
+
+export class StoredVaultSnapshotIntegrityError extends OperationalError {
+  constructor() {
+    super("vault_snapshot_invalid", "Stored vault snapshot failed integrity validation.");
+    this.name = "StoredVaultSnapshotIntegrityError";
+  }
+}
+
 const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
 const HEX_RE = /^[a-f0-9]{64}$/;
 
@@ -29,12 +45,12 @@ export const MAX_ENVELOPE_BYTES = 8_000_000;
 export const MAX_SNAPSHOT_REQUEST_BYTES = MAX_ENVELOPE_BYTES + 100_000;
 // Postgres `version` column is a 32-bit signed integer; stay clear of its max so
 // an oversized version is a clean 400 rather than a raw "integer out of range".
-const MAX_VERSION = 2_000_000_000;
+export const MAX_SNAPSHOT_VERSION = 2_000_000_000;
 
 export function assertRemoteVaultSnapshot(input: unknown): asserts input is RemoteVaultSnapshot {
   if (!input || typeof input !== "object") throw new Error("Snapshot body is required.");
   const snapshot = input as Partial<RemoteVaultSnapshot>;
-  if (!Number.isInteger(snapshot.version) || (snapshot.version as number) < 1 || (snapshot.version as number) > MAX_VERSION) {
+  if (!Number.isInteger(snapshot.version) || (snapshot.version as number) < 1 || (snapshot.version as number) > MAX_SNAPSHOT_VERSION) {
     throw new Error("Snapshot version is out of range.");
   }
   if (!Number.isInteger(snapshot.byteSize) || (snapshot.byteSize as number) < 1 || (snapshot.byteSize as number) > MAX_ENVELOPE_BYTES) {
@@ -56,6 +72,33 @@ export function assertRemoteVaultSnapshot(input: unknown): asserts input is Remo
   // server stores its own now() on write and is authoritative on read.
   if (snapshot.updatedAt !== undefined && !isISODate(snapshot.updatedAt)) {
     throw new Error("Invalid snapshot updatedAt.");
+  }
+}
+
+/**
+ * Revalidate the server-verifiable contract of a row loaded from Postgres.
+ * This detects restore corruption and out-of-band writes without decrypting or
+ * exposing any customer data.
+ */
+export function validateStoredVaultSnapshot(
+  fields: StoredVaultSnapshotFields
+): RemoteVaultSnapshot & { updatedAt: string } {
+  const snapshot = {
+    version: fields.version,
+    envelope: fields.envelope,
+    byteSize: fields.byteSize,
+    checksum: fields.checksum
+  };
+  try {
+    assertRemoteVaultSnapshot(snapshot);
+    assertNoPlaintextLeak(snapshot);
+    assertEnvelopeChecksum(snapshot.envelope);
+    if (!(fields.updatedAt instanceof Date) || !Number.isFinite(fields.updatedAt.getTime())) {
+      throw new Error("Stored vault timestamp is invalid.");
+    }
+    return { ...snapshot, updatedAt: fields.updatedAt.toISOString() };
+  } catch {
+    throw new StoredVaultSnapshotIntegrityError();
   }
 }
 
@@ -125,6 +168,10 @@ export function computeSnapshotChecksum(
   canonical = canonicalEnvelopeBytes(envelope)
 ) {
   if (envelope.schemaVersion === 1) {
+    // Legacy sync-v1 did not bind the server-controlled top-level version. The
+    // Mac client therefore verifies the encrypted document's prior remote
+    // version during its one-time v2 migration. Keep this readable for backward
+    // compatibility; only sync-v2 provides a server-verifiable version binding.
     return createHash("sha256").update(canonical).digest("hex");
   }
   const versionBytes = Buffer.alloc(8);

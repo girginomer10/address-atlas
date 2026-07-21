@@ -7,8 +7,10 @@ import {
   assertRemoteVaultSnapshot,
   canonicalEnvelopeBytes,
   computeSnapshotChecksum,
+  StoredVaultSnapshotIntegrityError,
   type EncryptedVaultEnvelope,
-  type RemoteVaultSnapshot
+  type RemoteVaultSnapshot,
+  validateStoredVaultSnapshot
 } from "./envelope";
 
 function snapshot(schemaVersion: 1 | 2 = 2, version = 7): RemoteVaultSnapshot {
@@ -56,6 +58,58 @@ describe("encrypted sync envelope validation", () => {
     expect(() => assertRemoteVaultSnapshot(value)).not.toThrow();
     expect(() => assertEnvelopeChecksum(value.envelope)).not.toThrow();
     expect(() => assertNoPlaintextLeak(value)).not.toThrow();
+  });
+
+  it.each([1, 2] as const)("revalidates a stored sync-v%s snapshot", (schemaVersion) => {
+    const value = snapshot(schemaVersion);
+    expect(validateStoredVaultSnapshot({
+      ...value,
+      updatedAt: new Date("2026-07-12T12:00:00.123Z")
+    })).toEqual({
+      ...value,
+      updatedAt: "2026-07-12T12:00:00.123Z"
+    });
+  });
+
+  it.each([
+    ["stored byte size", (value: RemoteVaultSnapshot) => ({ ...value, byteSize: value.byteSize + 1 })],
+    ["outer checksum", (value: RemoteVaultSnapshot) => ({ ...value, checksum: "0".repeat(64) })],
+    ["inner checksum", (value: RemoteVaultSnapshot) => ({
+      ...value,
+      envelope: { ...value.envelope, checksum: "0".repeat(64) }
+    })]
+  ])("rejects a corrupt %s with a privacy-safe typed error", (_label, corrupt) => {
+    expect(() => validateStoredVaultSnapshot({
+      ...corrupt(snapshot(2)),
+      updatedAt: new Date("2026-07-12T12:00:00Z")
+    }))
+      .toThrow(StoredVaultSnapshotIntegrityError);
+  });
+
+  it.each([Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "rejects a non-finite stored timestamp (%s)",
+    (timestamp) => {
+      expect(() => validateStoredVaultSnapshot({
+        ...snapshot(2),
+        updatedAt: timestamp
+      })).toThrow(StoredVaultSnapshotIntegrityError);
+    }
+  );
+
+  it("documents the legacy v1 version-binding boundary while v2 fails closed", () => {
+    const legacy = snapshot(1, 7);
+    expect(() => validateStoredVaultSnapshot({
+      ...legacy,
+      version: 8,
+      updatedAt: new Date("2026-07-12T12:00:00Z")
+    })).not.toThrow();
+
+    const current = snapshot(2, 7);
+    expect(() => validateStoredVaultSnapshot({
+      ...current,
+      version: 8,
+      updatedAt: new Date("2026-07-12T12:00:00Z")
+    })).toThrow(StoredVaultSnapshotIntegrityError);
   });
 
   it("binds sync-v2 top-level version and byte size into its checksum", () => {

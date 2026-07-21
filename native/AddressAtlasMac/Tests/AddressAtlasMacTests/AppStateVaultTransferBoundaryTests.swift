@@ -45,6 +45,7 @@ extension AppStateNetworkBoundaryTests {
       ),
       httpClient: http
     )
+    XCTAssertTrue(state.setWalletLabelDraft(id: wallet.id, label: "Primary Treasury"))
 
     await state.uploadEncryptedVault(expectedServerURL: expectedServerURL)
 
@@ -70,6 +71,8 @@ extension AppStateNetworkBoundaryTests {
     )
     XCTAssertFalse(opened.requiresV2Upgrade)
     XCTAssertEqual(opened.document.wallets.map(\.id), [wallet.id])
+    XCTAssertEqual(opened.document.wallets.first?.label, "Primary Treasury")
+    XCTAssertTrue(state.walletLabelDrafts.isEmpty)
     XCTAssertEqual(state.document.syncState.latestRemoteVersion, 1)
     XCTAssertEqual(state.document.syncState.lastChecksum, snapshot.checksum)
     XCTAssertFalse(state.hasUnsyncedLocalChanges)
@@ -77,7 +80,9 @@ extension AppStateNetworkBoundaryTests {
       path: fixture.database,
       vaultKey: fixture.vaultKey
     )
-    XCTAssertEqual(try verifier.load().syncState.latestRemoteVersion, 1)
+    let reloaded = try verifier.load()
+    XCTAssertEqual(reloaded.syncState.latestRemoteVersion, 1)
+    XCTAssertEqual(reloaded.wallets.first?.label, "Primary Treasury")
   }
 
   func testUploadRejectsMismatchedExpectedServerBeforeHTTP() async throws {
@@ -394,6 +399,118 @@ extension AppStateNetworkBoundaryTests {
     let reloaded = try verifier.load()
     XCTAssertEqual(reloaded.wallets.map(\.id), [remoteWallet.id])
     XCTAssertEqual(reloaded.syncState.latestRemoteVersion, 3)
+  }
+
+  func testExplicitDiscardClearsWalletLabelDraftBeforeDownloadedVaultCanReplaceIt() async throws {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let accountId = "98989898-9898-4989-8989-989898989898"
+    let walletID = UUID()
+    let localWallet = WalletRecord(
+      id: walletID,
+      label: "Local Treasury",
+      address: "0x0000000000000000000000000000000000000098",
+      chainKind: .evm
+    )
+    let remoteWallet = WalletRecord(
+      id: walletID,
+      label: "Remote Treasury",
+      address: localWallet.address,
+      chainKind: .evm
+    )
+    let snapshot = try VaultSyncCodec().seal(
+      document: VaultDocument(wallets: [remoteWallet]),
+      vaultKey: fixture.vaultKey,
+      version: 3,
+      accountId: accountId
+    )
+    let snapshotJSON = try JSONEncoder.addressAtlas.encode(snapshot)
+    var document = VaultDocument(wallets: [localWallet])
+    XCTAssertTrue(
+      document.syncState.connect(
+        accountId: accountId,
+        serverURL: "https://sync.example",
+        sessionToken: "discard-session-token"
+      ))
+    let persisted = try fixture.store.saveReturningPersistedDocument(document)
+    let expectedServerURL = try XCTUnwrap(
+      AppState.validatedSyncURL(persisted.syncState.serverURL)
+    )
+    let http = RecordingHTTPStub { request in
+      guard request.url?.path == "/vault/latest", request.httpMethod == "GET" else {
+        throw URLError(.unsupportedURL)
+      }
+      return (snapshotJSON, stubHTTPResponse(request))
+    }
+    let state = AppState(
+      testStore: fixture.store,
+      document: persisted,
+      testVaultKey: fixture.vaultKey,
+      endpointConfigClient: FixedEndpointConfigClient(
+        config: NativeEndpointConfig(configVersion: 9, refreshAfterSeconds: 300)
+      ),
+      httpClient: http
+    )
+    XCTAssertTrue(state.setWalletLabelDraft(id: walletID, label: "Uncommitted Treasury"))
+
+    await state.downloadEncryptedVault(
+      discardingLocalChanges: true,
+      expectedServerURL: expectedServerURL
+    )
+
+    XCTAssertEqual(state.error, "")
+    XCTAssertTrue(state.walletLabelDrafts.isEmpty)
+    XCTAssertEqual(state.document.wallets.first?.label, "Remote Treasury")
+    XCTAssertTrue(state.beginTerminationRequest())
+    let terminationPrepared = await state.prepareForTermination()
+    XCTAssertTrue(terminationPrepared)
+    XCTAssertEqual(state.document.wallets.first?.label, "Remote Treasury")
+  }
+
+  func testFailedDiscardDownloadRestoresWalletLabelDraftWhenNothingRemoteWasAdopted() async throws {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let wallet = WalletRecord(
+      label: "Local Treasury",
+      address: "0x0000000000000000000000000000000000000097",
+      chainKind: .evm
+    )
+    var document = VaultDocument(wallets: [wallet])
+    XCTAssertTrue(
+      document.syncState.connect(
+        accountId: "97979797-9797-4979-8979-979797979797",
+        serverURL: "https://sync.example",
+        sessionToken: "failed-discard-session-token"
+      ))
+    let persisted = try fixture.store.saveReturningPersistedDocument(document)
+    let expectedServerURL = try XCTUnwrap(
+      AppState.validatedSyncURL(persisted.syncState.serverURL)
+    )
+    let http = RecordingHTTPStub { _ in
+      throw URLError(.cannotConnectToHost)
+    }
+    let state = AppState(
+      testStore: fixture.store,
+      document: persisted,
+      testVaultKey: fixture.vaultKey,
+      endpointConfigClient: FixedEndpointConfigClient(
+        config: NativeEndpointConfig(configVersion: 9, refreshAfterSeconds: 300)
+      ),
+      httpClient: http
+    )
+    XCTAssertTrue(state.setWalletLabelDraft(id: wallet.id, label: "Visible Draft"))
+
+    await state.downloadEncryptedVault(
+      discardingLocalChanges: true,
+      expectedServerURL: expectedServerURL
+    )
+
+    XCTAssertEqual(state.walletLabelDrafts[wallet.id], "Visible Draft")
+    XCTAssertEqual(state.document.wallets.first?.label, "Local Treasury")
+    XCTAssertNil(state.pendingVaultUpload)
+    XCTAssertNil(state.pendingSyncPersistence)
+    XCTAssertFalse(state.syncPersistencePending)
+    XCTAssertFalse(state.error.isEmpty)
   }
 
   func testLegacyUpgradeRevisionChangeAfterJournalStagingCancelsBeforePut() async throws {

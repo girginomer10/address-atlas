@@ -4,6 +4,8 @@ import { validateSyncRuntimeConfig } from "@/lib/sync/config";
 import {
   diagnosticHeaders,
   generatedDiagnostics,
+  operationalErrorCode,
+  type OperationalErrorCode,
   recordSecurityEvent,
   requestDiagnostics
 } from "@/lib/sync/diagnostics";
@@ -51,10 +53,14 @@ async function checkReadiness(diagnostics: ReturnType<typeof requestDiagnostics>
   }
 
   const attempt = (async () => {
+    let failureCode: OperationalErrorCode = "configuration_invalid";
     try {
       validateSyncRuntimeConfig();
+      failureCode = "native_config_invalid";
       getNativeEndpointConfig();
+      failureCode = "migration_failed";
       await ensureSyncSchema();
+      failureCode = "schema_contract_invalid";
       await checkSyncSchemaReadiness();
       readinessCache = {
         ready: true,
@@ -71,6 +77,7 @@ async function checkReadiness(diagnostics: ReturnType<typeof requestDiagnostics>
       recordSecurityEvent("health.not_ready", diagnostics, {
         status: 503,
         reason: "runtime_or_database_not_ready",
+        errorCode: operationalErrorCode(error, failureCode),
         severity: "error"
       });
       throw error;

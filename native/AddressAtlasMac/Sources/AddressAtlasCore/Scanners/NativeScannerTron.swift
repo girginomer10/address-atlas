@@ -10,7 +10,24 @@ extension NativeScanner {
     guard let rest = chain.restUrl else { return NativeScanResult() }
     let url = rest.appending(path: "v1/accounts/\(address)")
     let response = try await http.get(url, as: TronAccountResponse.self)
-    let account = response.data?.first
+    guard response.success == true else {
+      throw Self.messageError(
+        domain: "TRON", message: "TRON account lookup did not report success.")
+    }
+    let accounts = response.data ?? []
+    guard accounts.count <= 1 else {
+      throw Self.messageError(
+        domain: "TRON", message: "TRON account lookup returned multiple account records.")
+    }
+    let account = accounts.first
+    if let account {
+      guard let expectedAddress = AddressDetection.tronHexAddress(address),
+        account.address?.lowercased() == expectedAddress
+      else {
+        throw Self.messageError(
+          domain: "TRON", message: "TRON account lookup returned a different account.")
+      }
+    }
     let rawNativeBalance = account?.balance ?? 0
     var warnings: [String] = []
     var assets: [TrackedAsset] = []

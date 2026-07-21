@@ -15,23 +15,17 @@ struct PortfolioView: View {
       statTitle: "Latest snapshot",
       statValue: latestSnapshotLabel
     ) {
-      HStack(alignment: .top, spacing: 28) {
-        VStack(alignment: .leading, spacing: 18) {
-          TotalBlock(
-            total: state.visibleLatestTotalUsd,
-            generatedAt: state.latestScan?.generatedAt,
-            assetCount: state.visibleLatestHoldings.count
-          )
-          MetricStrip(items: [
-            ("Wallets", "\(state.document.wallets.count)"),
-            ("Visible assets", "\(state.visibleLatestHoldings.count)"),
-            ("Tokens", "\(state.document.customTokens.filter(\.enabled).count)"),
-          ])
+      ViewThatFits(in: .horizontal) {
+        HStack(alignment: .top, spacing: 28) {
+          portfolioSummary
+          QuickActionsPanel()
+            .frame(width: 290)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-
-        QuickActionsPanel()
-          .frame(width: 290)
+        VStack(alignment: .leading, spacing: 22) {
+          portfolioSummary
+          QuickActionsPanel()
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
       }
 
       if let warnings = state.latestScan?.warnings, !warnings.isEmpty {
@@ -46,6 +40,22 @@ struct PortfolioView: View {
 
   private var latestSnapshotLabel: String {
     state.latestScan?.generatedAt.formatted(date: .abbreviated, time: .shortened) ?? "None"
+  }
+
+  private var portfolioSummary: some View {
+    VStack(alignment: .leading, spacing: 18) {
+      TotalBlock(
+        total: state.visibleLatestTotalUsd,
+        generatedAt: state.latestScan?.generatedAt,
+        assetCount: state.visibleLatestHoldings.count
+      )
+      MetricStrip(items: [
+        ("Wallets", "\(state.document.wallets.count)"),
+        ("Visible assets", "\(state.visibleLatestHoldings.count)"),
+        ("Tokens", "\(state.document.customTokens.filter(\.enabled).count)"),
+      ])
+    }
+    .frame(minWidth: 300, maxWidth: .infinity, alignment: .leading)
   }
 }
 
@@ -68,7 +78,7 @@ struct WalletsView: View {
       Surface {
         VStack(alignment: .leading, spacing: 14) {
           SectionHeader(title: "Add public address", meta: "No seed phrases")
-          HStack(spacing: 10) {
+          AdaptiveStack {
             TextField("Public wallet address", text: $address)
               .textFieldStyle(AtlasTextFieldStyle())
             Button {
@@ -112,32 +122,23 @@ struct WalletsView: View {
 struct WalletRow: View {
   @EnvironmentObject private var state: AppState
   @State private var confirmingRemoval = false
-  @State private var labelDraft: String
   @FocusState private var labelIsFocused: Bool
   var wallet: WalletRecord
 
-  init(wallet: WalletRecord) {
-    self.wallet = wallet
-    _labelDraft = State(initialValue: wallet.label)
-  }
-
   var body: some View {
     HStack(spacing: 16) {
-      TextField("Label", text: $labelDraft)
+      TextField("Label", text: labelDraftBinding)
         .textFieldStyle(.plain)
-        .font(.system(size: 16, weight: .semibold))
+        .font(.body.weight(.semibold))
         .frame(width: 180)
         .focused($labelIsFocused)
         .onSubmit(commitLabel)
         .onChange(of: labelIsFocused) { _, isFocused in
           if !isFocused { commitLabel() }
         }
-        .onChange(of: wallet.label) { _, label in
-          if !labelIsFocused { labelDraft = label }
-        }
 
       Text(wallet.address)
-        .font(.system(size: 12, design: .monospaced))
+        .font(.caption.monospaced())
         .foregroundStyle(AtlasTheme.ink2)
         .lineLimit(1)
         .truncationMode(.middle)
@@ -152,12 +153,13 @@ struct WalletRow: View {
         Image(systemName: "trash")
       }
       .buttonStyle(IconButtonStyle())
-      .accessibilityLabel("Remove wallet \(wallet.label)")
+      .accessibilityLabel("Remove wallet \(AtlasAccessibility.walletIdentity(wallet))")
     }
     .padding(.horizontal, 18)
-    .frame(height: 62)
+    .padding(.vertical, 10)
+    .frame(minHeight: 62)
     .confirmationDialog(
-      "Remove \(wallet.label)?",
+      "Remove \(AtlasAccessibility.walletIdentity(wallet))?",
       isPresented: $confirmingRemoval,
       titleVisibility: .visible
     ) {
@@ -173,19 +175,14 @@ struct WalletRow: View {
   }
 
   private func commitLabel() {
-    Task { await commitLabelAndWait() }
+    Task { await state.commitWalletLabelDraft(id: wallet.id) }
   }
 
-  private func commitLabelAndWait() async {
-    let persistedLabel =
-      state.document.wallets.first(where: { $0.id == wallet.id })?.label ?? wallet.label
-    guard labelDraft != persistedLabel else { return }
-    guard await state.updateWalletLabel(id: wallet.id, label: labelDraft) else {
-      labelDraft = persistedLabel
-      return
-    }
-    labelDraft =
-      state.document.wallets.first(where: { $0.id == wallet.id })?.label ?? persistedLabel
+  private var labelDraftBinding: Binding<String> {
+    Binding(
+      get: { state.walletLabelDraft(for: wallet) },
+      set: { _ = state.setWalletLabelDraft(id: wallet.id, label: $0) }
+    )
   }
 }
 
@@ -257,7 +254,7 @@ struct TokenAllowlistView: View {
       Surface {
         VStack(alignment: .leading, spacing: 14) {
           SectionHeader(title: "Add token", meta: chainKind.rawValue.uppercased())
-          HStack(spacing: 10) {
+          AdaptiveStack {
             Picker("Family", selection: $chainKind) {
               Text("EVM").tag(ChainFamily.evm)
               Text("Solana").tag(ChainFamily.solana)
@@ -276,7 +273,7 @@ struct TokenAllowlistView: View {
             TextField(chainKind == .evm ? "0x token contract" : "Solana mint", text: $address)
               .textFieldStyle(AtlasTextFieldStyle())
           }
-          HStack(spacing: 10) {
+          AdaptiveStack {
             TextField("Symbol", text: $symbol)
               .textFieldStyle(AtlasTextFieldStyle())
               .frame(width: 110)
@@ -354,12 +351,12 @@ struct TokenRow: View {
       VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: 8) {
           Text(token.symbol)
-            .font(.system(size: 16, weight: .semibold))
+            .font(.body.weight(.semibold))
           Text(token.name)
             .foregroundStyle(AtlasTheme.ink2)
         }
         Text("\(token.chainId) - \(token.address)")
-          .font(.system(size: 12, design: .monospaced))
+          .font(.caption.monospaced())
           .foregroundStyle(AtlasTheme.ink3)
           .lineLimit(1)
           .truncationMode(.middle)
@@ -379,19 +376,22 @@ struct TokenRow: View {
           })
       )
       .labelsHidden()
-      .accessibilityLabel("Enable \(token.symbol)")
+      .accessibilityLabel(
+        "\(token.enabled ? "Disable" : "Enable") token \(AtlasAccessibility.tokenIdentity(token))"
+      )
       Button(role: .destructive) {
         confirmingRemoval = true
       } label: {
         Image(systemName: "trash")
       }
       .buttonStyle(IconButtonStyle())
-      .accessibilityLabel("Remove token \(token.symbol)")
+      .accessibilityLabel("Remove token \(AtlasAccessibility.tokenIdentity(token))")
     }
     .padding(.horizontal, 18)
-    .frame(height: 64)
+    .padding(.vertical, 10)
+    .frame(minHeight: 64)
     .confirmationDialog(
-      "Remove \(token.symbol)?",
+      "Remove \(AtlasAccessibility.tokenIdentity(token))?",
       isPresented: $confirmingRemoval,
       titleVisibility: .visible
     ) {
@@ -427,7 +427,7 @@ struct SnapshotsView: View {
       Surface {
         VStack(alignment: .leading, spacing: 14) {
           SectionHeader(title: "Add manual holding", meta: "Merged into next snapshot")
-          HStack(spacing: 10) {
+          AdaptiveStack {
             TextField("Symbol", text: $symbol)
               .textFieldStyle(AtlasTextFieldStyle())
               .frame(width: 110)
@@ -453,9 +453,15 @@ struct SnapshotsView: View {
       }
       .disabled(state.vaultEditsDisabled)
 
-      HStack(alignment: .top, spacing: 24) {
-        SnapshotList()
-        ManualHoldingList()
+      ViewThatFits(in: .horizontal) {
+        HStack(alignment: .top, spacing: 24) {
+          SnapshotList()
+          ManualHoldingList()
+        }
+        VStack(alignment: .leading, spacing: 24) {
+          SnapshotList()
+          ManualHoldingList()
+        }
       }
     }
   }
@@ -485,13 +491,13 @@ struct SnapshotList: View {
               HStack(spacing: 14) {
                 VStack(alignment: .leading, spacing: 3) {
                   Text(run.generatedAt.formatted(date: .abbreviated, time: .shortened))
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.body.weight(.semibold))
                   Text("\(run.holdings.count) assets")
                     .foregroundStyle(AtlasTheme.ink3)
                 }
                 Spacer()
                 Text(money(run.totalUsd))
-                  .font(.system(size: 14, design: .monospaced))
+                  .font(.body.monospaced())
                 Button(role: .destructive) {
                   pendingRemoval = run.id
                 } label: {
@@ -499,11 +505,12 @@ struct SnapshotList: View {
                 }
                 .buttonStyle(IconButtonStyle())
                 .accessibilityLabel(
-                  "Remove snapshot from \(run.generatedAt.formatted(date: .abbreviated, time: .shortened))"
+                  "Remove snapshot \(AtlasAccessibility.snapshotIdentity(run))"
                 )
               }
               .padding(.horizontal, 18)
-              .frame(height: 58)
+              .padding(.vertical, 9)
+              .frame(minHeight: 58)
               if run.id != sortedRuns.last?.id {
                 Divider().overlay(AtlasTheme.ruleSoft)
               }
@@ -512,9 +519,9 @@ struct SnapshotList: View {
         }
       }
     }
-    .frame(maxWidth: .infinity, alignment: .topLeading)
+    .frame(minWidth: 300, maxWidth: .infinity, alignment: .topLeading)
     .confirmationDialog(
-      "Remove this snapshot?",
+      "Remove \(pendingRemovalIdentity)?",
       isPresented: Binding(
         get: { pendingRemoval != nil },
         set: { if !$0 { pendingRemoval = nil } }
@@ -530,6 +537,13 @@ struct SnapshotList: View {
       Button("Cancel", role: .cancel) { pendingRemoval = nil }
     }
     .disabled(state.vaultEditsDisabled)
+  }
+
+  private var pendingRemovalIdentity: String {
+    guard let pendingRemoval,
+      let run = sortedRuns.first(where: { $0.id == pendingRemoval })
+    else { return "this snapshot" }
+    return AtlasAccessibility.snapshotIdentity(run)
   }
 }
 
@@ -554,7 +568,7 @@ struct ManualHoldingList: View {
               HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
                   Text("\(holding.symbol) - \(holding.label)")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.body.weight(.semibold))
                   Text("\(holding.amount.formatted()) - \(money(holding.valueUsd))")
                     .foregroundStyle(AtlasTheme.ink3)
                 }
@@ -570,17 +584,22 @@ struct ManualHoldingList: View {
                     })
                 )
                 .labelsHidden()
-                .accessibilityLabel("Enable \(holding.symbol)")
+                .accessibilityLabel(
+                  "\(holding.enabled ? "Disable" : "Enable") manual holding \(AtlasAccessibility.manualHoldingIdentity(holding))"
+                )
                 Button(role: .destructive) {
                   pendingRemoval = holding.id
                 } label: {
                   Image(systemName: "trash")
                 }
                 .buttonStyle(IconButtonStyle())
-                .accessibilityLabel("Remove manual holding \(holding.symbol)")
+                .accessibilityLabel(
+                  "Remove manual holding \(AtlasAccessibility.manualHoldingIdentity(holding))"
+                )
               }
               .padding(.horizontal, 18)
-              .frame(height: 58)
+              .padding(.vertical, 9)
+              .frame(minHeight: 58)
               if holding.id != state.document.manualHoldings.last?.id {
                 Divider().overlay(AtlasTheme.ruleSoft)
               }
@@ -589,9 +608,9 @@ struct ManualHoldingList: View {
         }
       }
     }
-    .frame(maxWidth: .infinity, alignment: .topLeading)
+    .frame(minWidth: 300, maxWidth: .infinity, alignment: .topLeading)
     .confirmationDialog(
-      "Remove this manual holding?",
+      "Remove \(pendingRemovalIdentity)?",
       isPresented: Binding(
         get: { pendingRemoval != nil },
         set: { if !$0 { pendingRemoval = nil } }
@@ -607,5 +626,12 @@ struct ManualHoldingList: View {
       Button("Cancel", role: .cancel) { pendingRemoval = nil }
     }
     .disabled(state.vaultEditsDisabled)
+  }
+
+  private var pendingRemovalIdentity: String {
+    guard let pendingRemoval,
+      let holding = state.document.manualHoldings.first(where: { $0.id == pendingRemoval })
+    else { return "this manual holding" }
+    return AtlasAccessibility.manualHoldingIdentity(holding)
   }
 }

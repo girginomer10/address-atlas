@@ -11,7 +11,10 @@ import {
   requestDiagnostics
 } from "@/lib/sync/diagnostics";
 import { clientKey, rateLimitMany } from "@/lib/sync/rate-limit";
-import { RegistrationDisabledError } from "@/lib/sync/registration";
+import {
+  RegistrationAdmissionQuotaError,
+  RegistrationDisabledError
+} from "@/lib/sync/registration";
 import { readLimitedJSON, RequestBodyError } from "@/lib/sync/request";
 import { TokenValidationError } from "@/lib/sync/tokens";
 import {
@@ -84,31 +87,56 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(result, { headers: diagnosticHeaders(diagnostics, NO_STORE_HEADERS) });
   } catch (error) {
     const disabled = error instanceof RegistrationDisabledError;
+    const capacity = error instanceof RegistrationAdmissionQuotaError;
     const expected = error instanceof RequestBodyError
       || error instanceof PasskeyInputError
       || error instanceof PasskeyVerificationError
       || error instanceof TokenValidationError
-      || disabled;
-    const status = error instanceof RequestBodyError ? error.status : disabled ? 403 : expected ? 400 : 500;
+      || disabled
+      || capacity;
+    const status = error instanceof RequestBodyError
+      ? error.status
+      : disabled
+        ? 403
+        : capacity
+          ? 429
+          : expected
+            ? 400
+            : 500;
     recordSecurityEvent(
-      disabled ? "auth.registration_denied" : mode === "register" ? "auth.registration_failed" : "auth.authentication_failed",
+      disabled
+        ? "auth.registration_denied"
+        : capacity
+          ? "auth.rate_limited"
+          : mode === "register"
+            ? "auth.registration_failed"
+            : "auth.authentication_failed",
       diagnostics,
       {
         status,
-        reason: disabled ? "registration_disabled" : expected ? "verification_rejected" : "internal_error",
+        reason: disabled
+          ? "registration_disabled"
+          : capacity
+            ? "registration_durable_rate_limit"
+            : expected
+              ? "verification_rejected"
+              : "internal_error",
         ...(mode ? { mode } : {}),
         severity: status >= 500 ? "error" : "warn"
       }
     );
     return NextResponse.json(
       {
-        error: error instanceof RequestBodyError || disabled
+        error: error instanceof RequestBodyError || disabled || capacity
           ? error.message
           : "Passkey verification failed."
       },
       {
         status,
-        headers: diagnosticHeaders(diagnostics, NO_STORE_HEADERS)
+        headers: diagnosticHeaders(diagnostics, {
+          ...NO_STORE_HEADERS,
+          ...(capacity ? { "retry-after": "3600" } : {})
+        })
       }
     );
   }

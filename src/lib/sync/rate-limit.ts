@@ -17,6 +17,10 @@ export interface RateLimitRule {
   windowMs: number;
 }
 
+export interface WeightedRateLimitRule extends RateLimitRule {
+  weight: number;
+}
+
 export interface ConcurrencyLimitRule {
   key: string;
   limit: number;
@@ -55,6 +59,64 @@ export function rateLimitMany(rules: RateLimitRule[]): boolean {
       buckets.set(rule.key, { count: 1, resetAt: now + rule.windowMs });
     } else {
       bucket.count += 1;
+    }
+  }
+  return true;
+}
+
+/**
+ * Charges an exact, positive integer amount against every supplied fixed-window
+ * budget. The check and charge are atomic across the full rule set: if any
+ * budget cannot accept the weight, none of the buckets are changed.
+ *
+ * Weighted and count-based limits intentionally share the same bounded bucket
+ * map. Callers should therefore use distinct key namespaces for distinct
+ * budgets, just as they do with `rateLimitMany`.
+ */
+export function rateLimitWeightedMany(rules: WeightedRateLimitRule[]): boolean {
+  const now = Date.now();
+  if (!Number.isSafeInteger(now) || now < 0) {
+    throw new Error("Rate-limit clock is outside the safe integer range.");
+  }
+
+  // Validate every input before deduplication so an invalid duplicate cannot
+  // be hidden by a valid rule for the same key.
+  for (const rule of rules) validateWeightedRule(rule, now);
+
+  const normalized = deduplicateWeightedRules(rules);
+  if (normalized.length === 0) return true;
+
+  if (buckets.size >= MAX_TRACKED_KEYS) sweepExpired(now);
+  let newKeys = 0;
+  for (const rule of normalized) {
+    const bucket = buckets.get(rule.key);
+    if (!bucket || now >= bucket.resetAt) {
+      if (rule.weight > rule.limit) return false;
+      if (!bucket) newKeys += 1;
+      continue;
+    }
+
+    // Subtraction avoids overflowing while checking count + weight. Both
+    // operands are positive safe integers and a successful charge is bounded
+    // by the safe-integer limit.
+    if (bucket.count > rule.limit || rule.weight > rule.limit - bucket.count) {
+      return false;
+    }
+  }
+
+  if (buckets.size + newKeys > MAX_TRACKED_KEYS) return false;
+
+  for (const rule of normalized) {
+    const bucket = buckets.get(rule.key);
+    if (!bucket || now >= bucket.resetAt) {
+      buckets.set(rule.key, {
+        count: rule.weight,
+        resetAt: now + rule.windowMs
+      });
+    } else {
+      // The preflight above proves this sum is a safe integer no larger than
+      // the rule's safe-integer limit.
+      bucket.count += rule.weight;
     }
   }
   return true;
@@ -137,6 +199,42 @@ function deduplicateRules(rules: RateLimitRule[]) {
       key,
       limit: Math.min(existing.limit, rule.limit),
       windowMs: Math.max(existing.windowMs, rule.windowMs)
+    });
+  }
+  return [...byKey.values()];
+}
+
+function validateWeightedRule(rule: WeightedRateLimitRule, now: number) {
+  if (
+    typeof rule.key !== "string" ||
+    !Number.isSafeInteger(rule.limit) ||
+    rule.limit < 1 ||
+    !Number.isSafeInteger(rule.windowMs) ||
+    rule.windowMs < 1 ||
+    !Number.isSafeInteger(rule.weight) ||
+    rule.weight < 1 ||
+    rule.windowMs > Number.MAX_SAFE_INTEGER - now
+  ) {
+    throw new Error("Invalid weighted rate-limit rule.");
+  }
+}
+
+function deduplicateWeightedRules(rules: WeightedRateLimitRule[]) {
+  const byKey = new Map<string, WeightedRateLimitRule>();
+  for (const rule of rules) {
+    const key = boundedKey(rule.key);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, { ...rule, key });
+      continue;
+    }
+    // Duplicate keys describe the same budget. Charge it once using the most
+    // conservative compatible combination, matching count-limit semantics.
+    byKey.set(key, {
+      key,
+      limit: Math.min(existing.limit, rule.limit),
+      windowMs: Math.max(existing.windowMs, rule.windowMs),
+      weight: Math.max(existing.weight, rule.weight)
     });
   }
   return [...byKey.values()];

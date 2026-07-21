@@ -348,8 +348,12 @@ extension NativeScannerTokenTests {
         )
       }
       if bodyText.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("[") {
-        // Force the batch decoder to fail so the individual safety fallback runs.
-        return (Data("{}".utf8), httpResponse(for: request))
+        return (
+          Data(
+            #"{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Batch requests are not supported"}}"#
+              .utf8),
+          httpResponse(for: request)
+        )
       }
       let payload = try JSONSerialization.jsonObject(with: bodyData) as? [String: Any]
       let params = payload?["params"] as? [Any]
@@ -371,6 +375,78 @@ extension NativeScannerTokenTests {
         body.contains("\"eth_call\"")
           && !body.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("[")
       })
+  }
+
+  func testMalformedSuccessfulEvmBatchDoesNotAmplifyIntoIndividualCalls() async throws {
+    let address = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+    let chain = try XCTUnwrap(ChainRegistry.evmChains.first { $0.id == "ethereum" })
+    let token = TokenConfig(
+      symbol: "ONE",
+      name: "One",
+      address: "0x0000000000000000000000000000000000000001",
+      decimals: 0
+    )
+    let recorder = EvmRequestBodyRecorder()
+    let http = StubHTTPClient { request in
+      let body = String(decoding: request.httpBody ?? Data(), as: UTF8.self)
+      recorder.append(body)
+      XCTAssertTrue(body.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("["))
+      return (Data(#"{"truncated":true}"#.utf8), httpResponse(for: request))
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http), priceProvider: StaticPriceProvider(values: [:]))
+
+    let result = try await scanner.scanErc20Balances(
+      address: address,
+      chain: chain,
+      tokens: [token],
+      prices: [:],
+      blockTag: "0x20"
+    )
+
+    XCTAssertTrue(result.assets.isEmpty)
+    XCTAssertEqual(recorder.snapshot().count, 1)
+    XCTAssertTrue(result.warnings.contains { $0.contains("individual requests were skipped") })
+  }
+
+  func testHttpStatusEvmBatchFailuresDoNotAmplifyIntoIndividualCalls() async throws {
+    let address = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
+    let chain = try XCTUnwrap(ChainRegistry.evmChains.first { $0.id == "ethereum" })
+    let token = TokenConfig(
+      symbol: "ONE",
+      name: "One",
+      address: "0x0000000000000000000000000000000000000001",
+      decimals: 0
+    )
+    for statusCode in [400, 405, 415, 422, 501] {
+      let recorder = EvmRequestBodyRecorder()
+      let http = StubHTTPClient { request in
+        let body = String(decoding: request.httpBody ?? Data(), as: UTF8.self)
+        recorder.append(body)
+        XCTAssertTrue(body.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("["))
+        return (
+          Data(#"{"error":"invalid API policy"}"#.utf8),
+          httpResponse(for: request, statusCode: statusCode)
+        )
+      }
+      let scanner = NativeScanner(
+        http: JSONHTTPClient(http: http), priceProvider: StaticPriceProvider(values: [:]))
+
+      let result = try await scanner.scanErc20Balances(
+        address: address,
+        chain: chain,
+        tokens: [token],
+        prices: [:],
+        blockTag: "0x20"
+      )
+
+      XCTAssertTrue(result.assets.isEmpty, "status \(statusCode)")
+      XCTAssertEqual(recorder.snapshot().count, statusCode == 501 ? 2 : 1)
+      XCTAssertTrue(
+        result.warnings.contains { $0.contains("individual requests were skipped") },
+        "status \(statusCode)"
+      )
+    }
   }
 
   func testEvmBatchDuplicateWarningsUsePluralGrammarForCountTwo() {

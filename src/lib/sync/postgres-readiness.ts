@@ -1,4 +1,5 @@
 import type { PoolClient } from "pg";
+import { OperationalError } from "./diagnostics";
 import {
   LATEST_SYNC_MIGRATION_VERSION,
   STORAGE_RECONCILIATION_VERSION,
@@ -1424,5 +1425,8 @@ function nonnegativeBigInt(value: string | number) {
 }
 
 function schemaError(reason: string) {
-  return new Error(`Address Atlas sync database schema is not ready: ${reason}.`);
+  return new OperationalError(
+    "schema_contract_invalid",
+    `Address Atlas sync database schema is not ready: ${reason}.`
+  );
 }

@@ -172,8 +172,14 @@ body consumes ingress allowance even when its envelope is invalid, stale, or
 same-version; rejected traffic cannot bypass durable byte budgets.
 
 Caddy and the application independently cap request-body reads at 60 seconds;
-Caddy also limits request-header reads to 10 seconds. These are absolute elapsed-time
-deadlines, so do not raise them without reviewing slow-upload abuse exposure.
+Caddy also limits request-header reads to 10 seconds and its cumulative downstream
+response-write window to 120 seconds. These are absolute elapsed-time deadlines, so
+do not raise them without reviewing slow-client abuse exposure.
+
+Authenticated vault downloads keep their active permit until the response drains,
+is cancelled, or the client disconnects (two per account/client, eight globally).
+Exact encoded response bytes are also charged to 60-second account, client, and
+global egress budgets before streaming; cancellation does not refund that work.
 
 `DELETE /account/session` revokes the active bearer session. `DELETE /account`
 also requires passkey authentication within the last five minutes plus

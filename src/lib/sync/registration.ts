@@ -1,3 +1,4 @@
+import type { PoolClient } from "pg";
 import { getSyncRegistrationConfig } from "./config";
 import { ensureSyncSchema, getSyncPool } from "./postgres";
 
@@ -23,11 +24,13 @@ export function assertRegistrationEnabled() {
  * Reserve one globally durable hourly registration admission. The atomic
  * upsert survives process restarts and remains exact across replicas.
  */
-export async function reserveRegistrationAdmission() {
+export async function reserveRegistrationAdmission(
+  database?: Pick<PoolClient, "query">
+) {
   const { enabled, hourlyLimit } = getSyncRegistrationConfig();
   if (!enabled) throw new RegistrationDisabledError();
-  await ensureSyncSchema();
-  const result = await getSyncPool().query(
+  if (!database) await ensureSyncSchema();
+  const result = await (database ?? getSyncPool()).query(
     `WITH pruned AS (
        DELETE FROM registration_usage
        WHERE window_started_at < now() - interval '48 hours'

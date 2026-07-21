@@ -4,6 +4,7 @@ import Foundation
 @MainActor
 extension AppState {
   func uploadEncryptedVault(expectedServerURL: URL) async {
+    guard acceptsNewOperations else { return }
     guard !scanning else {
       error = "Cancel or finish the active scan before syncing."
       return
@@ -47,10 +48,11 @@ extension AppState {
       notice = "A sync operation is already running."
       return
     }
-    let startingRevision = documentRevision
-    let baseDocument = document
     syncing = true
     defer { syncing = false }
+    guard await flushWalletLabelDraftsBeforeRemoteOperation() else { return }
+    let startingRevision = documentRevision
+    let baseDocument = document
     var projectedRemovedScanRunCount = 0
     do {
       guard await refreshEndpointConfig(silent: true) else {
@@ -179,6 +181,7 @@ extension AppState {
   }
 
   func recoverPendingVaultUpload() async {
+    guard acceptsNewOperations else { return }
     guard let pendingUpload = pendingVaultUpload else { return }
     guard let persistence, let vaultKey else {
       syncPersistencePending = true
@@ -347,6 +350,7 @@ extension AppState {
   }
 
   func abandonPendingVaultUpload(expectedServerURL: URL) async {
+    guard acceptsNewOperations else { return }
     guard let pendingUpload = pendingVaultUpload, let persistence, let vaultKey else {
       error = "No interrupted encrypted vault upload is available to stop."
       return
@@ -389,6 +393,7 @@ extension AppState {
     discardingLocalChanges: Bool = false,
     expectedServerURL: URL
   ) async {
+    guard acceptsNewOperations else { return }
     guard !scanning else {
       error = "Cancel or finish the active scan before syncing."
       return
@@ -432,11 +437,29 @@ extension AppState {
       notice = "A sync operation is already running."
       return
     }
+    let discardedWalletLabelDrafts = discardingLocalChanges ? walletLabelDrafts : [:]
+    var discardAcceptedByRemoteStateMachine = false
+    syncing = true
+    defer {
+      if discardingLocalChanges, !discardAcceptedByRemoteStateMachine {
+        for (id, draft) in discardedWalletLabelDrafts where walletLabelDrafts[id] == nil {
+          storeWalletLabelDraft(draft, for: id)
+        }
+      }
+      syncing = false
+    }
+    if discardingLocalChanges {
+      // Stage drafts out of the active UI state while the remote candidate is
+      // evaluated. The defer restores them on an early failure; once remote
+      // adoption is durable or pending, they stay discarded and cannot be
+      // reapplied by a later quit.
+      clearWalletLabelDrafts()
+    } else {
+      guard await flushWalletLabelDraftsBeforeRemoteOperation() else { return }
+    }
     let startingRevision = documentRevision
     let baseDocument = document
     let baseHasUnsyncedLocalChanges = hasUnsyncedLocalChanges
-    syncing = true
-    defer { syncing = false }
     var removedScanRunCount = 0
     do {
       guard await refreshEndpointConfig(silent: true) else {
@@ -530,6 +553,10 @@ extension AppState {
             throw PendingVaultUploadError.localDocumentChanged
           }
           try await persistence.savePendingVaultUpload(pendingUpload, vaultKey: vaultKey)
+          // From this point the explicit discard is represented by a durable,
+          // replayable remote-adoption operation. Do not resurrect UI drafts
+          // even if the network response is lost.
+          discardAcceptedByRemoteStateMachine = true
           guard
             let durablePendingUpload = try await persistence.loadPendingVaultUpload(
               vaultKey: vaultKey
@@ -551,6 +578,7 @@ extension AppState {
             pendingVaultUpload = nil
             pendingVaultUploadHasRemoteConflict = false
             syncPersistencePending = pendingSyncPersistence != nil
+            discardAcceptedByRemoteStateMachine = false
             throw PendingVaultUploadError.localDocumentChanged
           }
           try await client.upload(snapshot: durablePendingUpload.snapshot)
@@ -582,11 +610,13 @@ extension AppState {
               projectedSyncVersion: snapshot.version,
               saveExactly: true
             )
+            discardAcceptedByRemoteStateMachine = true
             throw SyncClientError.requestFailed(
               500,
               "The legacy vault downloaded, but its local persistence is pending before the v2 upgrade can be retried."
             )
           }
+          discardAcceptedByRemoteStateMachine = true
           removedScanRunCount += lastSaveRemovedScanRunCount
           throw error
         }
@@ -604,11 +634,13 @@ extension AppState {
           projectedSyncVersion: snapshot.version,
           saveExactly: true
         )
+        discardAcceptedByRemoteStateMachine = true
         self.error =
           "The remote vault was opened, but its local persistence is pending. Keep the app open and use Retry local save after fixing storage: \(persistenceError)"
           + pruningNoticeSuffix(removedScanRunCount)
         return
       }
+      discardAcceptedByRemoteStateMachine = true
       removedScanRunCount += lastSaveRemovedScanRunCount
       notice = "Encrypted vault downloaded." + pruningNoticeSuffix(removedScanRunCount)
     } catch {
@@ -633,6 +665,7 @@ extension AppState {
   }
 
   func restoreRecoveryKit(from url: URL, recoveryCode: String) async {
+    guard acceptsNewOperations else { return }
     if isUnlocked, !canMutateVault() { return }
     guard !isUnlocking else {
       notice = "A vault unlock or recovery is already running."

@@ -1,6 +1,65 @@
 import AddressAtlasCore
 import Foundation
 
+/// Gives each caller an independently cancellable wait on one shared fetch.
+/// Cancelling a waiter resumes only that waiter; AppState's lease registry
+/// decides when the underlying fetch has no owners left and may be cancelled.
+actor EndpointConfigRefreshWaiterPool {
+  nonisolated let task: Task<NativeEndpointConfig, Error>
+
+  private var result: Result<NativeEndpointConfig, Error>?
+  private var waiters: [UUID: CheckedContinuation<NativeEndpointConfig, Error>] = [:]
+  private var isObservingTask = false
+
+  init(task: Task<NativeEndpointConfig, Error>) {
+    self.task = task
+  }
+
+  func value(for waiterID: UUID) async throws -> NativeEndpointConfig {
+    try Task.checkCancellation()
+    observeTaskIfNeeded()
+    if let result {
+      return try result.get()
+    }
+
+    return try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { continuation in
+        if let result {
+          continuation.resume(with: result)
+        } else {
+          precondition(waiters[waiterID] == nil, "Endpoint refresh waiter registered twice")
+          waiters[waiterID] = continuation
+        }
+      }
+    } onCancel: {
+      Task { await self.cancel(waiterID: waiterID) }
+    }
+  }
+
+  private func observeTaskIfNeeded() {
+    guard !isObservingTask else { return }
+    isObservingTask = true
+    let task = task
+    Task {
+      let result = await task.result
+      complete(with: result)
+    }
+  }
+
+  private func cancel(waiterID: UUID) {
+    waiters.removeValue(forKey: waiterID)?.resume(throwing: CancellationError())
+  }
+
+  private func complete(with result: Result<NativeEndpointConfig, Error>) {
+    self.result = result
+    let continuations = waiters.values
+    waiters.removeAll()
+    for continuation in continuations {
+      continuation.resume(with: result)
+    }
+  }
+}
+
 @MainActor
 extension AppState {
   @discardableResult
@@ -27,6 +86,7 @@ extension AppState {
 
   @discardableResult
   func refreshEndpointConfig(silent: Bool = false) async -> Bool {
+    guard acceptsNewOperations else { return false }
     guard let serverURL = AppState.validatedSyncURL(document.syncState.serverURL) else {
       endpointConfigRefreshGeneration &+= 1
       endpointConfigRefreshRequest?.task.cancel()
@@ -51,36 +111,61 @@ extension AppState {
       acceptedEndpointConfigServerURL = nil
     }
 
+    let waiterID = UUID()
     let request: EndpointConfigRefreshRequest
-    if let inFlight = endpointConfigRefreshRequest, inFlight.serverURL == serverURL {
+    if var inFlight = endpointConfigRefreshRequest, inFlight.serverURL == serverURL {
+      inFlight.waiterIDs.insert(waiterID)
+      endpointConfigRefreshRequest = inFlight
       request = inFlight
     } else {
       endpointConfigRefreshGeneration &+= 1
       endpointConfigRefreshRequest?.task.cancel()
       let generation = endpointConfigRefreshGeneration
       let client = endpointConfigClient
+      let trustStore = endpointConfigTrustStore
+      let task = Task { @MainActor [weak self] in
+        let config = try await client.fetch(from: serverURL)
+        try Task.checkCancellation()
+        guard let self,
+          generation == endpointConfigRefreshGeneration,
+          AppState.validatedSyncURL(document.syncState.serverURL) == serverURL
+        else {
+          throw CancellationError()
+        }
+        // Trust advancement belongs to the shared request, not to an
+        // individual waiter. Generation/server invalidation cancels this task;
+        // the store independently checks cancellation at its write boundary.
+        try await trustStore.validateAndRecord(config, for: serverURL)
+        try Task.checkCancellation()
+        guard generation == endpointConfigRefreshGeneration,
+          AppState.validatedSyncURL(document.syncState.serverURL) == serverURL
+        else {
+          throw CancellationError()
+        }
+        return config
+      }
       request = EndpointConfigRefreshRequest(
         generation: generation,
         serverURL: serverURL,
-        task: Task { try await client.fetch(from: serverURL) }
+        task: task,
+        waiterPool: EndpointConfigRefreshWaiterPool(task: task),
+        waiterIDs: [waiterID]
       )
       endpointConfigRefreshRequest = request
     }
     defer {
-      if endpointConfigRefreshRequest?.generation == request.generation {
-        endpointConfigRefreshRequest = nil
-      }
+      releaseEndpointConfigRefreshWaiter(generation: request.generation, waiterID: waiterID)
     }
 
     do {
-      let config = try await request.task.value
+      let config = try await request.waiterPool.value(for: waiterID)
+      try Task.checkCancellation()
       guard request.generation == endpointConfigRefreshGeneration,
         AppState.validatedSyncURL(document.syncState.serverURL) == serverURL
       else { return false }
-      // Verify and durably advance the per-origin high-water mark before
-      // applying any remote policy. This survives relaunch and fails closed if
-      // the trust record is unreadable, unwritable, stale, or equivocated.
-      try await endpointConfigTrustStore.validateAndRecord(config, for: serverURL)
+      // The shared request has already verified and durably advanced this
+      // origin's high-water mark. Recheck caller ownership immediately before
+      // publishing because this waiter may have been cancelled after commit.
       endpointConfig = config
       acceptedEndpointConfigServerURL = serverURL
       if !isAppVersionSupported {
@@ -96,6 +181,11 @@ extension AppState {
         }
       }
       return true
+    } catch is CancellationError {
+      // Cancellation is an ownership signal, not an endpoint failure. Leave
+      // the last accepted policy/status untouched and let the parent flow
+      // present its operation-specific cancellation message.
+      return false
     } catch {
       guard request.generation == endpointConfigRefreshGeneration,
         AppState.validatedSyncURL(document.syncState.serverURL) == serverURL
@@ -128,13 +218,30 @@ extension AppState {
     }
   }
 
+  private func releaseEndpointConfigRefreshWaiter(generation: Int, waiterID: UUID) {
+    guard var request = endpointConfigRefreshRequest,
+      request.generation == generation,
+      request.waiterIDs.remove(waiterID) != nil
+    else { return }
+
+    guard !request.waiterIDs.isEmpty else {
+      // A completed task ignores cancellation. An unfinished task is stopped
+      // as soon as its final owner leaves, so no detached network work leaks.
+      request.task.cancel()
+      endpointConfigRefreshRequest = nil
+      return
+    }
+    endpointConfigRefreshRequest = request
+  }
+
   /// Keep compatibility policy and credential-free scanner endpoints fresh
   /// even when the user is not actively scanning or syncing. The SwiftUI task
   /// that owns this loop is restarted whenever the configured server changes.
   func runEndpointConfigRefreshLoop() async {
-    guard isUnlocked else { return }
+    guard isUnlocked, acceptsNewOperations else { return }
     while !Task.isCancelled,
       isUnlocked,
+      acceptsNewOperations,
       AppState.validatedSyncURL(document.syncState.serverURL) != nil
     {
       // Scan and sync flows already perform a fail-closed refresh before using

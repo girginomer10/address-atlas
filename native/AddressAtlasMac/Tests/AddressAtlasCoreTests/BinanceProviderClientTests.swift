@@ -73,4 +73,49 @@ final class BinanceProviderClientTests: XCTestCase {
       })
   }
 
+  func testBinanceDeduplicatesIdenticalCanonicalBalanceRows() async throws {
+    let http = ScannerHTTPStub { request in
+      scannerResponse(
+        request,
+        #"{"balances":[{"asset":"BTC","free":"1","locked":"2"},{"asset":"xbt","free":"1","locked":"2"},{"asset":"ETH","free":"3","locked":"0"}]}"#
+      )
+    }
+    let client = NativeExchangeBalanceClient(
+      http: http,
+      now: { Date(timeIntervalSince1970: 1_700_000_000) }
+    )
+
+    let balance = try await client.fetchBalance(
+      provider: .binance,
+      credentials: ExchangeCredentials(apiKey: "key", secret: "secret")
+    )
+
+    XCTAssertEqual(balance.total, ["BTC": 3, "ETH": 3])
+    XCTAssertEqual(balance.free, ["BTC": 1, "ETH": 3])
+    XCTAssertTrue(balance.warnings.contains(where: { $0.contains("one identical") }))
+  }
+
+  func testBinanceRejectsEveryConflictingCanonicalBalanceVersion() async throws {
+    let http = ScannerHTTPStub { request in
+      scannerResponse(
+        request,
+        #"{"balances":[{"asset":"BTC","free":"1","locked":"0"},{"asset":"xbt","free":"2","locked":"0"},{"asset":"ETH","free":"3","locked":"0"}]}"#
+      )
+    }
+    let client = NativeExchangeBalanceClient(
+      http: http,
+      now: { Date(timeIntervalSince1970: 1_700_000_000) }
+    )
+
+    let balance = try await client.fetchBalance(
+      provider: .binance,
+      credentials: ExchangeCredentials(apiKey: "key", secret: "secret")
+    )
+
+    XCTAssertEqual(balance.total, ["ETH": 3])
+    XCTAssertEqual(balance.free, ["ETH": 3])
+    XCTAssertTrue(
+      balance.warnings.contains(where: { $0.contains("conflicting") && $0.contains("BTC") }))
+  }
+
 }

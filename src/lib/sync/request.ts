@@ -53,6 +53,7 @@ export async function readLimitedBody(
 
   const declared = request.headers.get("content-length");
   let invalidDeclaredLength = false;
+  let oversizedDeclaredLength = false;
   if (declared !== null) {
     const length = Number(declared);
     if (!Number.isSafeInteger(length) || length < 0) {
@@ -62,10 +63,10 @@ export async function readLimitedBody(
       invalidDeclaredLength = true;
     }
     if (!invalidDeclaredLength && length > maxBytes) {
-      // Never trust a declared value enough to charge beyond one bounded
-      // request. The account/global durable quota will still consume a full
-      // request allowance before the 413 is returned.
-      throw new RequestBodyError("Request body is too large.", 413, maxBytes);
+      // Content-Length is caller-controlled. Keep reading under the normal
+      // deadline and hard ceiling so durable ingress accounting reflects bytes
+      // actually received instead of an arbitrarily large declaration.
+      oversizedDeclaredLength = true;
     }
   }
 
@@ -84,7 +85,7 @@ export async function readLimitedBody(
         byteLength += value.byteLength;
         if (byteLength > maxBytes) {
           await reader.cancel().catch(() => undefined);
-          throw new RequestBodyError("Request body is too large.", 413, maxBytes);
+          throw new RequestBodyError("Request body is too large.", 413, byteLength);
         }
         chunks.push(value);
       }
@@ -101,6 +102,9 @@ export async function readLimitedBody(
     }
   }
 
+  if (oversizedDeclaredLength) {
+    throw new RequestBodyError("Request body is too large.", 413, byteLength);
+  }
   if (byteLength === 0) throw new RequestBodyError("A JSON request body is required.", 400, 0);
   const result = {
     bytes: Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), byteLength),

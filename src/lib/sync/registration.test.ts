@@ -46,6 +46,23 @@ describe("durable registration admission", () => {
     );
   });
 
+  it("uses a caller transaction without bootstrapping or escaping to the pool", async () => {
+    const transactionQuery = vi.fn().mockResolvedValue({
+      rowCount: 1,
+      rows: [{ admission_count: 1 }]
+    });
+
+    await expect(reserveRegistrationAdmission({ query: transactionQuery } as never))
+      .resolves.toBeUndefined();
+
+    expect(transactionQuery).toHaveBeenCalledWith(
+      expect.stringContaining("INSERT INTO registration_usage"),
+      [100]
+    );
+    expect(mocks.ensureSyncSchema).not.toHaveBeenCalled();
+    expect(mocks.query).not.toHaveBeenCalled();
+  });
+
   it("returns a stable capacity error when the durable window is full", async () => {
     mocks.query.mockResolvedValue({ rowCount: 0, rows: [] });
     await expect(reserveRegistrationAdmission()).rejects.toBeInstanceOf(RegistrationAdmissionQuotaError);

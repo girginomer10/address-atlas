@@ -33,6 +33,7 @@ extension AppState {
     }
     syncing = true
     defer { syncing = false }
+    guard await flushWalletLabelDraftsBeforeRemoteOperation() else { return }
     do {
       let client = ZeroKnowledgeSyncClient(baseURL: serverURL, http: httpClient)
       await client.setBearerToken(document.syncState.sessionToken)
@@ -77,6 +78,7 @@ extension AppState {
     }
     syncing = true
     defer { syncing = false }
+    guard await flushWalletLabelDraftsBeforeRemoteOperation() else { return }
     do {
       let client = ZeroKnowledgeSyncClient(baseURL: serverURL, http: httpClient)
       let existingOperationKey = AccountDeletionIdempotencyKey.normalized(
@@ -192,6 +194,7 @@ extension AppState {
   }
 
   func authenticateWithPasskey(serverURL: String, mode: PasskeyWebMode) async {
+    guard acceptsNewOperations else { return }
     guard !scanning else {
       error = "Cancel or finish the active scan before changing sync accounts."
       return
@@ -230,6 +233,7 @@ extension AppState {
     }
     syncing = true
     defer { syncing = false }
+    guard await flushWalletLabelDraftsBeforeRemoteOperation() else { return }
     let priorEndpointConfig = endpointConfig
     let priorEndpointConfigStatus = endpointConfigStatus
     let priorAcceptedEndpointConfigServerURL = acceptedEndpointConfigServerURL
@@ -285,6 +289,7 @@ extension AppState {
     mode: PasskeyWebMode,
     pendingUpload: PendingVaultUpload
   ) async {
+    guard acceptsNewOperations else { return }
     guard mode == .authenticate else {
       error = "Sign in to the existing sync account to recover the interrupted upload."
       return

@@ -88,6 +88,7 @@ struct XrpTrustLineScan: Sendable {
 struct CosmosBalanceScan: Sendable {
   var balances: [CosmosBalance] = []
   var warnings: [String] = []
+  var height: Int64?
 }
 
 struct CosmosDelegationScan: Sendable {
@@ -103,11 +104,18 @@ public struct ParsedSplAccount: Equatable, Sendable {
 }
 
 public struct SolanaTokenAccountsResponse: Decodable, Sendable {
+  public var jsonrpc: String?
+  public var id: Int?
   public var result: Result?
   public var error: JSONRPCError?
 
   public struct Result: Decodable, Sendable {
+    public var context: Context?
     public var value: [SolanaTokenAccount]
+  }
+
+  public struct Context: Decodable, Sendable {
+    public var slot: UInt64?
   }
 }
 
@@ -258,19 +266,32 @@ public struct CosmosRewardsResponse: Decodable, Sendable {
   public var total: [CosmosBalance]?
 }
 
-public struct CosmosDelegation: Decodable, Sendable {
+public struct CosmosDelegation: Decodable, Equatable, Sendable {
+  public var delegation: DelegationIdentity?
   public var balance: CosmosBalance?
+
+  public struct DelegationIdentity: Decodable, Equatable, Sendable {
+    public var delegatorAddress: String?
+    public var validatorAddress: String?
+
+    enum CodingKeys: String, CodingKey {
+      case delegatorAddress = "delegator_address"
+      case validatorAddress = "validator_address"
+    }
+  }
 }
 
-public struct CosmosBalance: Decodable, Sendable {
+public struct CosmosBalance: Decodable, Equatable, Sendable {
   public var denom: String
   public var amount: String
 }
 
 public struct TronAccountResponse: Decodable, Sendable {
+  public var success: Bool?
   public var data: [Account]?
 
   public struct Account: Decodable, Sendable {
+    public var address: String?
     public var balance: Double?
     public var trc20: [[String: String]]?
   }
@@ -396,6 +417,7 @@ struct JSONRPCRequest: Encodable {
 enum RPCValue: Encodable {
   case string(String)
   case number(Double)
+  case unsignedInteger(UInt64)
   case object([String: RPCValue])
   case array([RPCValue])
 
@@ -405,6 +427,8 @@ enum RPCValue: Encodable {
     case .string(let value):
       try container.encode(value)
     case .number(let value):
+      try container.encode(value)
+    case .unsignedInteger(let value):
       try container.encode(value)
     case .object(let value):
       try container.encode(value)

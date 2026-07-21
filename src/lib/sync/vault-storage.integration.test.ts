@@ -1,12 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { types as pgTypes } from "pg";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { GET as getHealth, resetHealthReadinessForTests } from "@/app/healthz/route";
 import { GET as getLatestVault, PUT as putLatestVault } from "@/app/vault/latest/route";
 import { base64urlEncode } from "./base64url";
 import {
   canonicalEnvelopeBytes,
   computeSnapshotChecksum,
+  StoredVaultSnapshotIntegrityError,
   type EncryptedVaultEnvelope,
   type RemoteVaultSnapshot
 } from "./envelope";
@@ -17,9 +19,12 @@ import {
 } from "./postgres";
 import { resetRateLimitsForTests } from "./rate-limit";
 import { issueSessionToken } from "./tokens";
+import { assertStoredVaultIntegrity } from "./vault-integrity";
 import {
+  assertVaultIngressCapacity,
   chargeVaultIngress,
   saveVaultSnapshot,
+  VaultAccountMissingError,
   VaultConflictError,
   VaultGlobalIngressQuotaError,
   VaultQuotaError
@@ -177,6 +182,77 @@ maybeDescribe("encrypted vault Postgres storage and routes", () => {
     expect(new Date(body.updatedAt).toISOString()).toBe(body.updatedAt);
   });
 
+  it.each([
+    ["non-object", "'[]'::jsonb"],
+    [
+      "oversized",
+      "pg_catalog.jsonb_build_object('blob', pg_catalog.repeat('x', 8100001))"
+    ]
+  ])("rejects a %s stored envelope without returning it to the pg client", async (_case, envelopeSQL) => {
+    const userId = await createUser();
+    const sessionToken = await createSessionToken(userId);
+    await getSyncPool().query(
+      `INSERT INTO vault_snapshots (user_id, version, envelope, byte_size, checksum)
+       VALUES ($1, 1, ${envelopeSQL}, 1, pg_catalog.repeat('a', 64))`,
+      [userId]
+    );
+    await getSyncPool().query(
+      `UPDATE sync_storage_usage
+       SET total_snapshot_bytes = total_snapshot_bytes + 1, updated_at = now()
+       WHERE singleton = true`
+    );
+
+    const originalJSONBParser = pgTypes.getTypeParser(3802, "text");
+    let jsonbDeserializations = 0;
+    pgTypes.setTypeParser(3802, (value) => {
+      jsonbDeserializations += 1;
+      return originalJSONBParser(value);
+    });
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const response = await getLatestVault(vaultRequest(sessionToken));
+
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ error: "Vault snapshot could not be loaded." });
+      expect(jsonbDeserializations).toBe(0);
+      expect(JSON.parse(String(errorLog.mock.calls.at(-1)?.[0]))).toMatchObject({
+        reason: "stored_snapshot_invalid",
+        errorCode: "vault_snapshot_invalid"
+      });
+    } finally {
+      errorLog.mockRestore();
+      pgTypes.setTypeParser(3802, originalJSONBParser);
+    }
+  });
+
+  it("fails a restore scan on a non-object row without deserializing its envelope", async () => {
+    const userId = await createUser();
+    await getSyncPool().query(
+      `INSERT INTO vault_snapshots (user_id, version, envelope, byte_size, checksum)
+       VALUES ($1, 1, '[]'::jsonb, 1, pg_catalog.repeat('a', 64))`,
+      [userId]
+    );
+    await getSyncPool().query(
+      `UPDATE sync_storage_usage
+       SET total_snapshot_bytes = total_snapshot_bytes + 1, updated_at = now()
+       WHERE singleton = true`
+    );
+
+    const originalJSONBParser = pgTypes.getTypeParser(3802, "text");
+    let jsonbDeserializations = 0;
+    pgTypes.setTypeParser(3802, (value) => {
+      jsonbDeserializations += 1;
+      return originalJSONBParser(value);
+    });
+    try {
+      await expect(assertStoredVaultIntegrity(getSyncPool()))
+        .rejects.toBeInstanceOf(StoredVaultSnapshotIntegrityError);
+      expect(jsonbDeserializations).toBe(0);
+    } finally {
+      pgTypes.setTypeParser(3802, originalJSONBParser);
+    }
+  });
+
   it("reports healthy from the real health route against the real database", async () => {
     resetHealthReadinessForTests();
 
@@ -251,7 +327,7 @@ maybeDescribe("encrypted vault Postgres storage and routes", () => {
     expect(Number(usage.rows[0]?.byte_count)).toBe(1_000);
   });
 
-  it("keeps global ingress charged when an exact replay exceeds the account cap", async () => {
+  it("saturates account ingress and commits actual global bytes before rejecting", async () => {
     process.env.SYNC_VAULT_DAILY_BYTE_LIMIT = "8100000";
     process.env.SYNC_GLOBAL_VAULT_DAILY_INGRESS_BYTE_LIMIT = "20000000";
     const userId = await createUser();
@@ -270,8 +346,68 @@ maybeDescribe("encrypted vault Postgres storage and routes", () => {
       "SELECT byte_count FROM vault_global_ingress_usage WHERE usage_date = (now() AT TIME ZONE 'UTC')::date"
     );
     expect(usage.rows[0]).toMatchObject({ write_count: 1 });
-    expect(Number(usage.rows[0]?.byte_count)).toBe(4_100_000);
+    expect(Number(usage.rows[0]?.byte_count)).toBe(8_100_000);
     expect(Number(globalUsage.rows[0]?.byte_count)).toBe(8_200_000);
+    await expect(assertVaultIngressCapacity(userId)).rejects.toBeInstanceOf(VaultQuotaError);
+  });
+
+  it("does not create or charge global ingress for a missing account", async () => {
+    const missingUserId = randomUUID();
+
+    await expect(assertVaultIngressCapacity(missingUserId))
+      .rejects.toBeInstanceOf(VaultAccountMissingError);
+    await expect(chargeVaultIngress(missingUserId, 500))
+      .rejects.toBeInstanceOf(VaultAccountMissingError);
+
+    const globalUsage = await getSyncPool().query(
+      "SELECT byte_count FROM vault_global_ingress_usage WHERE usage_date = (now() AT TIME ZONE 'UTC')::date"
+    );
+    expect(globalUsage.rowCount).toBe(0);
+  });
+
+  it("charges global ingress when deletion wins after durable admission", async () => {
+    const userId = await createUser();
+    const admission = await assertVaultIngressCapacity(userId);
+    await getSyncPool().query("DELETE FROM users WHERE id = $1", [userId]);
+
+    await expect(chargeVaultIngress(userId, 500, admission))
+      .rejects.toBeInstanceOf(VaultAccountMissingError);
+
+    const globalUsage = await getSyncPool().query(
+      "SELECT byte_count FROM vault_global_ingress_usage WHERE usage_date = (now() AT TIME ZONE 'UTC')::date"
+    );
+    expect(Number(globalUsage.rows[0]?.byte_count)).toBe(500);
+  });
+
+  it("accounts for both bodies admitted concurrently before account exhaustion", async () => {
+    process.env.SYNC_VAULT_DAILY_BYTE_LIMIT = "8100000";
+    process.env.SYNC_GLOBAL_VAULT_DAILY_INGRESS_BYTE_LIMIT = "20000000";
+    const userId = await createUser();
+
+    await Promise.all([
+      assertVaultIngressCapacity(userId),
+      assertVaultIngressCapacity(userId)
+    ]);
+    const results = await Promise.allSettled([
+      chargeVaultIngress(userId, 4_500_000),
+      chargeVaultIngress(userId, 4_500_000)
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.find((result) => result.status === "rejected")).toMatchObject({
+      status: "rejected",
+      reason: expect.any(VaultQuotaError)
+    });
+    const accountUsage = await getSyncPool().query(
+      "SELECT byte_count FROM vault_write_usage WHERE user_id = $1",
+      [userId]
+    );
+    const globalUsage = await getSyncPool().query(
+      "SELECT byte_count FROM vault_global_ingress_usage WHERE usage_date = (now() AT TIME ZONE 'UTC')::date"
+    );
+    expect(Number(accountUsage.rows[0]?.byte_count)).toBe(8_100_000);
+    expect(Number(globalUsage.rows[0]?.byte_count)).toBe(9_000_000);
+    await expect(assertVaultIngressCapacity(userId)).rejects.toBeInstanceOf(VaultQuotaError);
   });
 
   it("serializes concurrent same-version CAS so exactly one writer commits", async () => {
@@ -323,7 +459,11 @@ maybeDescribe("encrypted vault Postgres storage and routes", () => {
       `SELECT byte_count FROM vault_global_ingress_usage
        WHERE usage_date = (now() AT TIME ZONE 'UTC')::date`
     );
-    expect(Number(global.rows[0]?.byte_count)).toBe(4_500_000);
+    expect(Number(global.rows[0]?.byte_count)).toBe(9_000_000);
+    await expect(assertVaultIngressCapacity(firstUser))
+      .rejects.toBeInstanceOf(VaultGlobalIngressQuotaError);
+    await expect(assertVaultIngressCapacity(secondUser))
+      .rejects.toBeInstanceOf(VaultGlobalIngressQuotaError);
   });
 });
 

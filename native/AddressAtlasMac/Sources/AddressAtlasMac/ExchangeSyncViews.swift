@@ -26,7 +26,7 @@ struct ExchangesView: View {
       Surface {
         VStack(alignment: .leading, spacing: 14) {
           SectionHeader(title: "Save encrypted credentials", meta: "Balance/read permissions only")
-          HStack(spacing: 10) {
+          AdaptiveStack {
             Picker("Provider", selection: $provider) {
               ForEach(ExchangeProvider.allCases, id: \.self) { provider in
                 Text(provider.label).tag(provider)
@@ -36,7 +36,7 @@ struct ExchangesView: View {
             TextField("Label", text: $label)
               .textFieldStyle(AtlasTextFieldStyle())
           }
-          HStack(spacing: 10) {
+          AdaptiveStack {
             SecureField("API key", text: $apiKey)
               .textFieldStyle(AtlasTextFieldStyle())
             SecureField("Secret", text: $secret)
@@ -76,13 +76,13 @@ struct ExchangesView: View {
               }
             }()
           )
-          .font(.system(size: 12))
+          .font(.callout)
           .foregroundStyle(AtlasTheme.ink3)
         }
       }
       .disabled(state.vaultEditsDisabled)
 
-      HStack(spacing: 12) {
+      AdaptiveStack(horizontalSpacing: 12) {
         Button {
           if state.scanning {
             state.cancelScan()
@@ -101,7 +101,7 @@ struct ExchangesView: View {
           !state.scanning
             && (state.syncing || state.syncPersistencePending || !state.hasScanSources))
         Text("\(state.document.exchangeConnections.count) encrypted connections")
-          .font(.system(size: 12, design: .monospaced))
+          .font(.caption.monospaced())
           .foregroundStyle(AtlasTheme.ink3)
       }
 
@@ -143,7 +143,7 @@ struct ExchangeRow: View {
     HStack(spacing: 14) {
       VStack(alignment: .leading, spacing: 4) {
         Text(connection.label)
-          .font(.system(size: 16, weight: .semibold))
+          .font(.body.weight(.semibold))
         Text(
           connection.lastError?.isEmpty == false
             ? connection.lastError ?? ""
@@ -151,7 +151,7 @@ struct ExchangeRow: View {
               ? "Legacy Kraken key: remove it and add a new per-device read-only key before scanning."
               : connection.provider.label
         )
-        .font(.system(size: 12))
+        .font(.callout)
         .foregroundStyle(
           connection.lastError?.isEmpty == false
             || hasInvalidKrakenBinding
@@ -174,7 +174,7 @@ struct ExchangeRow: View {
         color: connection.status == .failed ? AtlasTheme.loss : AtlasTheme.gain)
       if let lastSync = connection.lastSyncAt {
         Text(lastSync, style: .relative)
-          .font(.system(size: 12, design: .monospaced))
+          .font(.caption.monospaced())
           .foregroundStyle(AtlasTheme.ink3)
       }
       Button(role: .destructive) {
@@ -183,12 +183,15 @@ struct ExchangeRow: View {
         Image(systemName: "trash")
       }
       .buttonStyle(IconButtonStyle())
-      .accessibilityLabel("Remove exchange connection \(connection.label)")
+      .accessibilityLabel(
+        "Remove exchange connection \(AtlasAccessibility.exchangeIdentity(connection))"
+      )
     }
     .padding(.horizontal, 18)
-    .frame(height: 64)
+    .padding(.vertical, 10)
+    .frame(minHeight: 64)
     .confirmationDialog(
-      "Remove \(connection.label)?",
+      "Remove \(AtlasAccessibility.exchangeIdentity(connection))?",
       isPresented: $confirmingRemoval,
       titleVisibility: .visible
     ) {
@@ -267,7 +270,7 @@ struct SyncView: View {
             .font(.callout)
             .foregroundStyle(AtlasTheme.loss)
           }
-          HStack(spacing: 10) {
+          AdaptiveStack {
             Button("Create passkey account") {
               Task {
                 await state.createPasskeyAccount(serverURL: serverURL)
@@ -314,7 +317,7 @@ struct SyncView: View {
               state.syncing || state.scanning || boundActionServerURL == nil
             )
           }
-          HStack(spacing: 10) {
+          AdaptiveStack {
             Button {
               guard let target = boundActionServerURL else { return }
               Task { await state.uploadEncryptedVault(expectedServerURL: target) }
@@ -332,7 +335,7 @@ struct SyncView: View {
             )
             Button("Download encrypted vault") {
               guard let target = boundActionServerURL else { return }
-              if state.hasUnsyncedLocalChanges {
+              if state.hasUnsyncedLocalChanges || state.hasPendingWalletLabelDrafts {
                 pendingDownloadServerURL = target
                 confirmingDiscardDownload = true
               } else {
@@ -389,7 +392,9 @@ struct SyncView: View {
                   : state.pendingVaultUploadHasRemoteConflict
                     ? "upload recovery conflict"
                     : "upload recovery pending"
-                : state.hasUnsyncedLocalChanges ? "not uploaded" : "synced"
+                : state.hasUnsyncedLocalChanges || state.hasPendingWalletLabelDrafts
+                  ? "not uploaded"
+                  : "synced"
             ),
             (
               "Local persistence",
@@ -415,7 +420,7 @@ struct SyncView: View {
           )
           .font(.callout)
           .foregroundStyle(AtlasTheme.ink2)
-          HStack(spacing: 10) {
+          AdaptiveStack {
             Button("Revoke this Mac's session") {
               guard let target = boundActionServerURL else { return }
               pendingRevocationServerURL = target
@@ -516,9 +521,72 @@ struct SyncView: View {
   }
 }
 
+enum ExportPayload: Sendable {
+  case csv([TrackedAsset])
+  case json(VaultDocument)
+
+  var suggestedName: String {
+    switch self {
+    case .csv: "address-atlas-holdings.csv"
+    case .json: "address-atlas-vault.json"
+    }
+  }
+
+  var contentType: UTType {
+    switch self {
+    case .csv: .commaSeparatedText
+    case .json: .json
+    }
+  }
+
+  var displayName: String {
+    switch self {
+    case .csv: "CSV"
+    case .json: "JSON"
+    }
+  }
+}
+
+enum ExportPipeline {
+  static let maximumPreviewByteCount = 256 * 1_024
+
+  nonisolated static func data(for payload: ExportPayload) throws -> Data {
+    switch payload {
+    case .csv(let assets):
+      return Data(AddressAtlasExporter.csv(for: assets).utf8)
+    case .json(let document):
+      return try AddressAtlasExporter.json(for: document)
+    }
+  }
+
+  nonisolated static func preview(
+    for data: Data,
+    maximumByteCount: Int = maximumPreviewByteCount
+  ) -> String {
+    guard maximumByteCount > 0 else {
+      return data.isEmpty ? "" : "Preview omitted. The saved export still includes all records."
+    }
+    guard data.count > maximumByteCount else {
+      return String(decoding: data, as: UTF8.self)
+    }
+    return String(decoding: data.prefix(maximumByteCount), as: UTF8.self)
+      + "\n\n— Preview truncated to \(maximumByteCount.formatted()) bytes. The saved export includes all records."
+  }
+
+  nonisolated static func renderPreview(for payload: ExportPayload) throws -> String {
+    try preview(for: data(for: payload))
+  }
+
+  nonisolated static func write(_ payload: ExportPayload, to url: URL) throws -> String {
+    let exportData = try data(for: payload)
+    try exportData.write(to: url, options: .atomic)
+    return preview(for: exportData)
+  }
+}
+
 struct ExportView: View {
   @EnvironmentObject private var state: AppState
-  @State private var exported = ""
+  @State private var exportedPreview = ""
 
   var body: some View {
     Page(
@@ -528,58 +596,112 @@ struct ExportView: View {
       statTitle: "Latest assets",
       statValue: "\(state.latestScan?.holdings.count ?? 0)"
     ) {
-      HStack(spacing: 10) {
+      AdaptiveStack {
         Button("Generate CSV") {
-          exported = AddressAtlasExporter.csv(for: state.latestScan?.holdings ?? [])
+          guard let payload = csvPayloadIncludingDrafts() else { return }
+          generatePreview(for: payload)
         }
         .buttonStyle(AtlasSecondaryButtonStyle())
         Button("Save CSV") {
-          let csv = AddressAtlasExporter.csv(for: state.latestScan?.holdings ?? [])
-          exported = csv
-          save(
-            text: csv, suggestedName: "address-atlas-holdings.csv", contentType: .commaSeparatedText
-          )
+          guard let payload = csvPayloadIncludingDrafts() else { return }
+          save(payload)
         }
         .buttonStyle(AtlasPrimaryButtonStyle())
         Button("Generate JSON") {
-          if let data = try? AddressAtlasExporter.json(for: state.document) {
-            exported = String(decoding: data, as: UTF8.self)
-          }
+          guard let payload = jsonPayloadIncludingDrafts() else { return }
+          generatePreview(for: payload)
         }
         .buttonStyle(AtlasSecondaryButtonStyle())
         Button("Save JSON") {
-          do {
-            let data = try AddressAtlasExporter.json(for: state.document)
-            let json = String(decoding: data, as: UTF8.self)
-            exported = json
-            save(text: json, suggestedName: "address-atlas-vault.json", contentType: .json)
-          } catch {
-            state.presentUserFacingError(error)
-          }
+          guard let payload = jsonPayloadIncludingDrafts() else { return }
+          save(payload)
         }
         .buttonStyle(AtlasSecondaryButtonStyle())
+        if state.isExportOperationInProgress {
+          ProgressView()
+            .controlSize(.small)
+            .accessibilityLabel("Preparing export")
+        }
       }
+      .disabled(state.isExportOperationInProgress)
       Surface {
-        TextEditor(text: $exported)
-          .font(.system(size: 12, design: .monospaced))
-          .scrollContentBackground(.hidden)
-          .frame(minHeight: 430)
+        ScrollView([.vertical, .horizontal]) {
+          Text(
+            exportedPreview.isEmpty
+              ? "Generate an export to inspect a bounded, read-only preview."
+              : exportedPreview
+          )
+          .font(.caption.monospaced())
+          .textSelection(.enabled)
+          .frame(maxWidth: .infinity, alignment: .topLeading)
+          .accessibilityLabel("Read-only export preview")
+        }
+        .frame(minHeight: 280, maxHeight: 520)
       }
     }
   }
 
-  private func save(text: String, suggestedName: String, contentType: UTType) {
-    let panel = NSSavePanel()
-    panel.nameFieldStringValue = suggestedName
-    panel.allowedContentTypes = [contentType]
-    panel.canCreateDirectories = true
-    if panel.runModal() == .OK, let url = panel.url {
+  private func generatePreview(for payload: ExportPayload) {
+    guard state.beginExportOperation() else { return }
+    state.error = ""
+    Task { @MainActor in
+      defer { state.finishExportOperation() }
       do {
-        try text.write(to: url, atomically: true, encoding: .utf8)
-        state.notice = "Export saved."
-        state.error = ""
+        exportedPreview = try await Task.detached(priority: .userInitiated) {
+          try ExportPipeline.renderPreview(for: payload)
+        }.value
       } catch {
         state.presentUserFacingError(error)
+      }
+    }
+  }
+
+  private func csvPayloadIncludingDrafts() -> ExportPayload? {
+    payloadIncludingDrafts {
+      .csv(try state.holdingsForExportIncludingWalletLabelDrafts())
+    }
+  }
+
+  private func jsonPayloadIncludingDrafts() -> ExportPayload? {
+    payloadIncludingDrafts {
+      .json(try state.documentForExportIncludingWalletLabelDrafts())
+    }
+  }
+
+  private func payloadIncludingDrafts(
+    _ makePayload: () throws -> ExportPayload
+  ) -> ExportPayload? {
+    do {
+      return try makePayload()
+    } catch WalletLabelDraftError.invalidLabel {
+      state.notice = ""
+      state.error = "Wallet labels must be between 1 and 80 characters before exporting."
+      return nil
+    } catch {
+      state.presentUserFacingError(error)
+      return nil
+    }
+  }
+
+  private func save(_ payload: ExportPayload) {
+    let panel = NSSavePanel()
+    panel.nameFieldStringValue = payload.suggestedName
+    panel.allowedContentTypes = [payload.contentType]
+    panel.canCreateDirectories = true
+    if panel.runModal() == .OK, let url = panel.url {
+      guard state.beginExportOperation() else { return }
+      state.error = ""
+      Task { @MainActor in
+        defer { state.finishExportOperation() }
+        do {
+          exportedPreview = try await Task.detached(priority: .userInitiated) {
+            try ExportPipeline.write(payload, to: url)
+          }.value
+          state.notice = "\(payload.displayName) export saved."
+          state.error = ""
+        } catch {
+          state.presentUserFacingError(error)
+        }
       }
     }
   }
@@ -614,7 +736,7 @@ struct SettingsView: View {
           Text(
             "When enabled, Address Atlas refreshes saved sources every 15 minutes while the app is open and unlocked."
           )
-          .font(.system(size: 12))
+          .font(.callout)
           .foregroundStyle(AtlasTheme.ink3)
           Toggle(
             "Hide dust",
@@ -626,7 +748,7 @@ struct SettingsView: View {
                 let value = $0
                 Task { await state.setHideDust(value) }
               }))
-          HStack(spacing: 12) {
+          AdaptiveStack(horizontalSpacing: 12) {
             VStack(alignment: .leading, spacing: 7) {
               AtlasLabel("Dust threshold (USD)")
               TextField(
@@ -647,12 +769,13 @@ struct SettingsView: View {
               AtlasLabel("Display currency")
               HStack {
                 Text("USD")
-                  .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                  .font(.callout.monospaced().weight(.semibold))
                 Spacer()
                 Badge("PRICE SOURCE")
               }
               .padding(.horizontal, 12)
-              .frame(height: 40)
+              .padding(.vertical, 8)
+              .frame(minHeight: 40)
               .overlay(Rectangle().stroke(AtlasTheme.rule, lineWidth: 1))
             }
           }
@@ -666,9 +789,9 @@ struct SettingsView: View {
           Text(
             "Export a recovery file and store the recovery code separately. Both are required to restore the Mac vault key."
           )
-          .font(.system(size: 13))
+          .font(.callout)
           .foregroundStyle(AtlasTheme.ink2)
-          HStack(spacing: 10) {
+          AdaptiveStack {
             Button("Export recovery kit") {
               exportRecoveryKit()
             }
@@ -689,7 +812,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 8) {
               AtlasLabel("Store this code separately")
               Text(recoveryCode)
-                .font(.system(size: 13, design: .monospaced))
+                .font(.callout.monospaced())
                 .textSelection(.enabled)
                 .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)

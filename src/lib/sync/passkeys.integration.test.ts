@@ -103,6 +103,7 @@ maybeDescribe("passkey invariants against real Postgres", () => {
 
   it("issues real registration options whose challenge token binds the WebAuthn challenge", async () => {
     const config = getSyncPasskeyConfig();
+    const admissionBefore = await currentRegistrationAdmissions();
 
     const response = await postPasskeyOptions(optionsRequest({
       mode: "register",
@@ -127,6 +128,7 @@ maybeDescribe("passkey invariants against real Postgres", () => {
     expect(issued.mode).toBe("register");
     expect(issued.challenge).toBe(body.publicKey.challenge);
     expect(base64urlDecode(body.publicKey.user.id).toString("utf8")).toBe(issued.pendingUserId);
+    expect(await currentRegistrationAdmissions()).toBe(admissionBefore);
   });
 
   it("issues real authentication options whose challenge token binds the WebAuthn challenge", async () => {
@@ -150,6 +152,7 @@ maybeDescribe("passkey invariants against real Postgres", () => {
 
   it("registers through the real routes and binds verification to the configured origin and RP ID", async () => {
     const config = getSyncPasskeyConfig();
+    const admissionBefore = await currentRegistrationAdmissions();
     const optionsResponse = await postPasskeyOptions(optionsRequest({ mode: "register" }));
     expect(optionsResponse.status).toBe(200);
     const options = await optionsResponse.json();
@@ -192,6 +195,33 @@ maybeDescribe("passkey invariants against real Postgres", () => {
       [credentialId, issued.pendingUserId]
     );
     expect(credentials.rows[0]?.count).toBe(1);
+    expect(await currentRegistrationAdmissions()).toBe(admissionBefore + 1);
+  });
+
+  it("does not consume durable admission for a failed WebAuthn verification", async () => {
+    const pendingUserId = randomUUID();
+    const challengeValue = challenge("failed-registration");
+    const challengeToken = issueChallengeToken({
+      mode: "register",
+      challenge: challengeValue,
+      pendingUserId,
+      expiresAt: Date.now() + 60_000
+    });
+    mocks.verifyRegistrationResponse.mockResolvedValue({ verified: false });
+    const admissionBefore = await currentRegistrationAdmissions();
+
+    await expect(verifyPasskey({
+      mode: "register",
+      challengeToken,
+      response: { id: `failed-${randomUUID()}` }
+    })).rejects.toThrow(/verification failed/i);
+
+    expect(await currentRegistrationAdmissions()).toBe(admissionBefore);
+    const consumed = await getSyncPool().query(
+      "SELECT challenge FROM consumed_challenges WHERE challenge = $1",
+      [challengeValue]
+    );
+    expect(consumed.rowCount).toBe(0);
   });
 
   it("consumes a registration challenge once and rejects its replay", async () => {
@@ -460,4 +490,12 @@ maybeDescribe("passkey invariants against real Postgres", () => {
 function restoreEnv(name: string, value: string | undefined) {
   if (value === undefined) delete process.env[name];
   else process.env[name] = value;
+}
+
+async function currentRegistrationAdmissions() {
+  const result = await getSyncPool().query<{ admission_count: number }>(
+    `SELECT admission_count FROM registration_usage
+     WHERE window_started_at = date_trunc('hour', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`
+  );
+  return Number(result.rows[0]?.admission_count ?? 0);
 }

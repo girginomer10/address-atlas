@@ -129,10 +129,11 @@ describe("static production deployment contracts", () => {
     expect(styles).toContain("ui-monospace");
   });
 
-  it("bounds slow request headers and bodies at the public proxy", () => {
+  it("bounds slow request headers, bodies, and downstream writes at the public proxy", () => {
     const caddy = readFileSync(caddyFile, "utf8");
     expect(caddy).toMatch(/timeouts\s*\{[^}]*read_body\s+60s/s);
     expect(caddy).toMatch(/timeouts\s*\{[^}]*read_header\s+10s/s);
+    expect(caddy).toMatch(/timeouts\s*\{[^}]*write\s+120s/s);
   });
 
   it("emits structured access logs without exact client or auth query material", () => {

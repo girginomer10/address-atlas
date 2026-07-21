@@ -94,6 +94,16 @@ describe("passkey account safety", () => {
     }
   );
 
+  it("issues registration options without consuming durable admission", async () => {
+    await expect(createPasskeyOptions({ mode: "register" })).resolves.toMatchObject({
+      mode: "register"
+    });
+
+    expect(mocks.ensureSyncSchema).not.toHaveBeenCalled();
+    expect(mocks.poolQuery.mock.calls.some(([sql]) => String(sql).includes("registration_usage")))
+      .toBe(false);
+  });
+
   it("rejects duplicate credential IDs and rolls back without mutating their owner", async () => {
     mocks.readChallengeToken.mockReturnValue({
       mode: "register",
@@ -128,6 +138,14 @@ describe("passkey account safety", () => {
     expect(credentialSQL).not.toContain("transports");
     expect(credentialCall?.[1]).toHaveLength(4);
     expect(JSON.stringify(credentialCall?.[1])).not.toContain("attacker-controlled");
+    const statements = mocks.clientQuery.mock.calls.map(([sql]) => String(sql));
+    const verifiedAccountCap = statements.findIndex((sql) => sql.includes("count(*)"));
+    const admission = statements.findIndex((sql) => sql.includes("INSERT INTO registration_usage"));
+    const userInsert = statements.findIndex((sql) => sql.includes("INSERT INTO users"));
+    const credentialInsert = statements.findIndex((sql) => sql.includes("INSERT INTO passkey_credentials"));
+    expect(admission).toBeGreaterThan(verifiedAccountCap);
+    expect(userInsert).toBeGreaterThan(admission);
+    expect(credentialInsert).toBeGreaterThan(userInsert);
     expect(mocks.clientQuery).toHaveBeenCalledWith("ROLLBACK");
     expect(mocks.createSessionGrant).not.toHaveBeenCalled();
   });

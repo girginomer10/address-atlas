@@ -5,28 +5,50 @@ extension NativeScanner {
     async throws -> NativeScanResult
   {
     guard let rest = chain.restUrl, let denom = chain.nativeDenom else { return NativeScanResult() }
-    let parts: [CosmosScanPart] = [.liquid, .delegations, .rewards]
-    let results = try await boundedConcurrentMap(parts, maxConcurrent: 3) { part in
+    let liquidScan: CosmosBalanceScan
+    do {
+      liquidScan = try await fetchCosmosBalances(rest: rest, address: address)
+    } catch {
+      try throwIfCancellation(error)
+      do {
+        let height = try await fetchCosmosSnapshotHeight(rest: rest, chain: chain)
+        liquidScan = try await fetchCosmosBalances(
+          rest: rest, address: address, expectedHeight: height)
+      } catch {
+        try throwIfCancellation(error)
+        return NativeScanResult(
+          warnings: [
+            "A height-bound Cosmos snapshot could not be established; liquid, staked, and reward balances were skipped."
+          ])
+      }
+    }
+    guard let snapshotHeight = liquidScan.height else {
+      return NativeScanResult(
+        warnings: [
+          "The Cosmos provider omitted its block height; liquid, staked, and reward balances were skipped."
+        ])
+    }
+
+    var initialResult = NativeScanResult(warnings: liquidScan.warnings)
+    let liquidResponse = CosmosBankResponse(balances: liquidScan.balances, pagination: nil)
+    if let amount = Self.parseCosmosLiquid(
+      liquidResponse, denom: denom, decimals: chain.decimals)
+    {
+      initialResult.assets = assetIfPositive(
+        amount: amount, address: address, chain: chain, prices: prices)
+    } else {
+      initialResult.warnings.append(CosmosScanPart.liquid.failureWarning)
+    }
+
+    let parts: [CosmosScanPart] = [.delegations, .rewards]
+    let results = try await boundedConcurrentMap(parts, maxConcurrent: 2) { part in
       do {
         switch part {
         case .liquid:
-          let scan = try await fetchCosmosBalances(rest: rest, address: address)
-          let response = CosmosBankResponse(balances: scan.balances, pagination: nil)
-          guard
-            let amount = Self.parseCosmosLiquid(response, denom: denom, decimals: chain.decimals)
-          else {
-            throw Self.messageError(
-              domain: "Cosmos", message: "Liquid balance contained an invalid amount.")
-          }
-          return NativeScanResult(
-            assets: assetIfPositive(
-              amount: amount,
-              address: address,
-              chain: chain,
-              prices: prices
-            ), warnings: scan.warnings)
+          return NativeScanResult()
         case .delegations:
-          let scan = try await fetchCosmosDelegations(rest: rest, address: address)
+          let scan = try await fetchCosmosDelegations(
+            rest: rest, address: address, expectedHeight: snapshotHeight)
           let response = CosmosDelegationResponse(
             delegationResponses: scan.delegations, pagination: nil)
           guard
@@ -46,12 +68,15 @@ extension NativeScanner {
               source: .staked
             ), warnings: scan.warnings)
         case .rewards:
-          let response = try await http.get(
+          let fetched = try await http.getResponse(
             rest.appending(path: "cosmos/distribution/v1beta1/delegators/\(address)/rewards"),
+            headers: Self.cosmosHeightHeaders(snapshotHeight),
             as: CosmosRewardsResponse.self
           )
+          try Self.validateCosmosHeight(fetched.response, expected: snapshotHeight)
           guard
-            let amount = Self.parseCosmosRewards(response, denom: denom, decimals: chain.decimals)
+            let amount = Self.parseCosmosRewards(
+              fetched.value, denom: denom, decimals: chain.decimals)
           else {
             throw Self.messageError(
               domain: "Cosmos", message: "Rewards contained an invalid amount.")
@@ -73,16 +98,21 @@ extension NativeScanner {
     }
 
     return NativeScanResult(
-      assets: results.flatMap(\.assets),
-      warnings: results.flatMap(\.warnings)
+      assets: initialResult.assets + results.flatMap(\.assets),
+      warnings: initialResult.warnings + results.flatMap(\.warnings)
     )
   }
 
-  func fetchCosmosBalances(rest: URL, address: String) async throws -> CosmosBalanceScan {
+  func fetchCosmosBalances(
+    rest: URL,
+    address: String,
+    expectedHeight: Int64? = nil
+  ) async throws -> CosmosBalanceScan {
     var balances: [CosmosBalance] = []
     var warnings: [String] = []
     var nextKey: String?
     var seenKeys = Set<String>()
+    var snapshotHeight = expectedHeight
 
     for page in 1...maxCosmosPages {
       try Task.checkCancellation()
@@ -94,9 +124,26 @@ extension NativeScanner {
         queryItems: queryItems
       )
       do {
-        let response = try await http.get(url, as: CosmosBankResponse.self)
-        balances.append(contentsOf: response.balances ?? [])
-        guard let candidate = Self.normalizedCosmosNextKey(response.pagination?.nextKey) else {
+        let fetched = try await http.getResponse(
+          url,
+          headers: snapshotHeight.map(Self.cosmosHeightHeaders) ?? [:],
+          as: CosmosBankResponse.self
+        )
+        let returnedHeight = try Self.optionalCosmosHeight(from: fetched.response)
+        if let snapshotHeight {
+          guard returnedHeight == nil || returnedHeight == snapshotHeight else {
+            throw Self.messageError(
+              domain: "Cosmos", message: "Cosmos liquid-balance pages changed block height.")
+          }
+        } else {
+          guard let returnedHeight else {
+            throw Self.messageError(
+              domain: "Cosmos", message: "Cosmos response omitted a valid block height.")
+          }
+          snapshotHeight = returnedHeight
+        }
+        balances.append(contentsOf: fetched.value.balances ?? [])
+        guard let candidate = Self.normalizedCosmosNextKey(fetched.value.pagination?.nextKey) else {
           break
         }
         guard seenKeys.insert(candidate).inserted else {
@@ -121,10 +168,13 @@ extension NativeScanner {
         break
       }
     }
-    return CosmosBalanceScan(balances: balances, warnings: warnings)
+    let deduplicated = Self.deduplicateCosmosBalances(balances)
+    warnings.append(contentsOf: deduplicated.warnings)
+    return CosmosBalanceScan(
+      balances: deduplicated.balances, warnings: warnings, height: snapshotHeight)
   }
 
-  func fetchCosmosDelegations(rest: URL, address: String) async throws
+  func fetchCosmosDelegations(rest: URL, address: String, expectedHeight: Int64) async throws
     -> CosmosDelegationScan
   {
     var delegations: [CosmosDelegation] = []
@@ -142,9 +192,16 @@ extension NativeScanner {
         queryItems: queryItems
       )
       do {
-        let response = try await http.get(url, as: CosmosDelegationResponse.self)
-        delegations.append(contentsOf: response.delegationResponses ?? [])
-        guard let candidate = Self.normalizedCosmosNextKey(response.pagination?.nextKey) else {
+        let fetched = try await http.getResponse(
+          url,
+          headers: Self.cosmosHeightHeaders(expectedHeight),
+          as: CosmosDelegationResponse.self
+        )
+        try Self.validateCosmosHeight(fetched.response, expected: expectedHeight)
+        delegations.append(contentsOf: fetched.value.delegationResponses ?? [])
+        guard
+          let candidate = Self.normalizedCosmosNextKey(fetched.value.pagination?.nextKey)
+        else {
           break
         }
         guard seenKeys.insert(candidate).inserted else {
@@ -168,7 +225,10 @@ extension NativeScanner {
         break
       }
     }
-    return CosmosDelegationScan(delegations: delegations, warnings: warnings)
+    let deduplicated = Self.deduplicateCosmosDelegations(
+      delegations, expectedDelegatorAddress: address)
+    warnings.append(contentsOf: deduplicated.warnings)
+    return CosmosDelegationScan(delegations: deduplicated.delegations, warnings: warnings)
   }
 
   public static func parseCosmosLiquid(_ response: CosmosBankResponse, denom: String, decimals: Int)
@@ -207,10 +267,181 @@ extension NativeScanner {
     return total / pow(10, Double(decimals))
   }
 
+  private func fetchCosmosSnapshotHeight(rest: URL, chain: ChainConfig) async throws -> Int64 {
+    struct LatestBlockResponse: Decodable {
+      var block: Block?
+
+      struct Block: Decodable {
+        var header: Header?
+      }
+
+      struct Header: Decodable {
+        var chainID: String?
+        var height: String?
+
+        enum CodingKeys: String, CodingKey {
+          case chainID = "chain_id"
+          case height
+        }
+      }
+    }
+
+    let response = try await http.get(
+      rest.appending(path: "cosmos/base/tendermint/v1beta1/blocks/latest"),
+      as: LatestBlockResponse.self
+    )
+    guard
+      let header = response.block?.header,
+      let heightText = header.height,
+      let height = Int64(heightText),
+      height > 0,
+      let expectedChainID = Self.cosmosChainID(for: chain.id),
+      header.chainID == expectedChainID
+    else {
+      throw Self.messageError(
+        domain: "Cosmos",
+        message: "Cosmos latest-block lookup returned the wrong network or height.")
+    }
+    return height
+  }
+
   static func scaledNonnegativeAmount(_ rawValue: String, decimals: Int) -> Double? {
     guard let raw = Double(rawValue), raw.isFinite, raw >= 0 else { return nil }
     let amount = raw / pow(10, Double(decimals))
     return amount.isFinite ? amount : nil
+  }
+
+  private static func cosmosHeightHeaders(_ height: Int64) -> [String: String] {
+    ["x-cosmos-block-height": String(height)]
+  }
+
+  private static func optionalCosmosHeight(from response: HTTPURLResponse) throws -> Int64? {
+    guard
+      let rawHeader = response.value(forHTTPHeaderField: "x-cosmos-block-height")
+    else { return nil }
+    let rawHeight = rawHeader.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let height = Int64(rawHeight), height > 0 else {
+      throw Self.messageError(
+        domain: "Cosmos", message: "Cosmos response returned an invalid block height.")
+    }
+    return height
+  }
+
+  private static func validateCosmosHeight(
+    _ response: HTTPURLResponse,
+    expected: Int64
+  ) throws {
+    guard let returned = try optionalCosmosHeight(from: response) else { return }
+    guard returned == expected else {
+      throw Self.messageError(
+        domain: "Cosmos", message: "Cosmos response changed block height.")
+    }
+  }
+
+  private static func cosmosChainID(for chainID: String) -> String? {
+    switch chainID {
+    case "cosmoshub": "cosmoshub-4"
+    case "osmosis": "osmosis-1"
+    case "celestia": "celestia"
+    case "stride": "stride-1"
+    default: nil
+    }
+  }
+
+  private static func deduplicateCosmosBalances(
+    _ balances: [CosmosBalance]
+  ) -> (balances: [CosmosBalance], warnings: [String]) {
+    var balancesByDenom: [String: CosmosBalance] = [:]
+    var conflictingDenoms = Set<String>()
+    var identicalDuplicateCount = 0
+    for balance in balances {
+      let denom = balance.denom
+      guard !conflictingDenoms.contains(denom) else { continue }
+      if let existing = balancesByDenom[denom] {
+        if existing == balance {
+          identicalDuplicateCount += 1
+        } else {
+          balancesByDenom.removeValue(forKey: denom)
+          conflictingDenoms.insert(denom)
+        }
+      } else {
+        balancesByDenom[denom] = balance
+      }
+    }
+    var warnings: [String] = []
+    if identicalDuplicateCount > 0 {
+      warnings.append(
+        identicalDuplicateCount == 1
+          ? "Cosmos repeated one identical liquid-balance record; the duplicate was skipped."
+          : "Cosmos repeated \(identicalDuplicateCount) identical liquid-balance records; the duplicates were skipped."
+      )
+    }
+    if !conflictingDenoms.isEmpty {
+      warnings.append(
+        "Cosmos returned conflicting liquid-balance records for \(conflictingDenoms.count) denomination(s); every conflicting version was skipped."
+      )
+    }
+    return (balancesByDenom.values.sorted { $0.denom < $1.denom }, warnings)
+  }
+
+  private static func deduplicateCosmosDelegations(
+    _ delegations: [CosmosDelegation],
+    expectedDelegatorAddress: String
+  ) -> (delegations: [CosmosDelegation], warnings: [String]) {
+    var delegationsByValidator: [String: CosmosDelegation] = [:]
+    var conflictingValidators = Set<String>()
+    var invalidIdentityCount = 0
+    var identicalDuplicateCount = 0
+    let expectedDelegator = AddressDetection.canonicalAddress(
+      expectedDelegatorAddress, family: .cosmos)
+    for delegation in delegations {
+      guard
+        let expectedDelegator,
+        let rawDelegator = delegation.delegation?.delegatorAddress,
+        AddressDetection.canonicalAddress(rawDelegator, family: .cosmos) == expectedDelegator,
+        let validator = delegation.delegation?.validatorAddress?
+          .trimmingCharacters(in: .whitespacesAndNewlines),
+        !validator.isEmpty,
+        validator.utf8.count <= 128,
+        validator == delegation.delegation?.validatorAddress
+      else {
+        invalidIdentityCount += 1
+        continue
+      }
+      guard !conflictingValidators.contains(validator) else { continue }
+      if let existing = delegationsByValidator[validator] {
+        if existing == delegation {
+          identicalDuplicateCount += 1
+        } else {
+          delegationsByValidator.removeValue(forKey: validator)
+          conflictingValidators.insert(validator)
+        }
+      } else {
+        delegationsByValidator[validator] = delegation
+      }
+    }
+    var warnings: [String] = []
+    if invalidIdentityCount > 0 {
+      warnings.append(
+        "Cosmos skipped \(invalidIdentityCount) delegation record(s) without the requested delegator and a valid validator identity."
+      )
+    }
+    if identicalDuplicateCount > 0 {
+      warnings.append(
+        identicalDuplicateCount == 1
+          ? "Cosmos repeated one identical delegation record; the duplicate was skipped."
+          : "Cosmos repeated \(identicalDuplicateCount) identical delegation records; the duplicates were skipped."
+      )
+    }
+    if !conflictingValidators.isEmpty {
+      warnings.append(
+        "Cosmos returned conflicting delegation records for \(conflictingValidators.count) validator(s); every conflicting version was skipped."
+      )
+    }
+    return (
+      delegationsByValidator.sorted { $0.key < $1.key }.map(\.value),
+      warnings
+    )
   }
 
   static func cosmosURL(rest: URL, path: String, queryItems: [URLQueryItem]) -> URL {

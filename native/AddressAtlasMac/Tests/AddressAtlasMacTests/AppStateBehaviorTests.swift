@@ -19,6 +19,33 @@ final class AppStateBehaviorTests: XCTestCase {
     XCTAssertEqual(state.error, "")
   }
 
+  func testNavigationPreservesPersistentRecoveryGuidanceUntilItsBlockerClears() {
+    let state = AppState()
+    state.syncPersistencePending = true
+    state.notice = "Temporary page notice"
+
+    let localSaveGuidance = state.persistentOperationGuidance
+    state.clearTransientMessagesForNavigation()
+
+    XCTAssertEqual(state.notice, "")
+    XCTAssertEqual(state.error, "")
+    XCTAssertEqual(state.persistentOperationGuidance, localSaveGuidance)
+    XCTAssertTrue(localSaveGuidance?.contains("local save") == true)
+
+    state.pendingVaultUploadHasRemoteConflict = true
+    XCTAssertTrue(state.persistentOperationGuidance?.contains("remote conflict") == true)
+
+    state.pendingVaultUploadHasRemoteConflict = false
+    state.syncPersistencePending = false
+    state.document.syncState.accountDeletionIdempotencyKey = Base64URL.encode(
+      Data(repeating: 0x6B, count: AccountDeletionIdempotencyKey.decodedByteCount)
+    )
+    XCTAssertTrue(state.persistentOperationGuidance?.contains("deletion") == true)
+
+    state.document.syncState.accountDeletionIdempotencyKey = nil
+    XCTAssertNil(state.persistentOperationGuidance)
+  }
+
   func testSyncServerDraftBindingAcceptsCanonicalEquivalenceAndRejectsAnotherOrigin() {
     XCTAssertTrue(
       AppState.syncServerDraftMatchesPersisted(

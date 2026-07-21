@@ -79,6 +79,9 @@ describe("sync readiness", () => {
     expect(second.status).toBe(200);
     expect(third.status).toBe(503);
     expect(mocks.checkSyncSchemaReadiness).toHaveBeenCalledTimes(2);
+    const record = JSON.parse(String(vi.mocked(console.error).mock.calls[0]?.[0]));
+    expect(record.errorCode).toBe("schema_contract_invalid");
+    expect(JSON.stringify(record)).not.toContain("vault_snapshots is missing");
   });
 
   it("caches a failed readiness audit for one second before retrying", async () => {
@@ -98,7 +101,9 @@ describe("sync readiness", () => {
 
   it("caches ensureSyncSchema failures and retries the whole pipeline after expiry", async () => {
     mocks.ensureSyncSchema.mockRejectedValueOnce(
-      new Error("password authentication failed for postgres://secret")
+      Object.assign(new Error("password authentication failed for postgres://secret"), {
+        code: "28P01"
+      })
     );
     const first = await GET();
     mocks.ensureSyncSchema.mockResolvedValue(undefined);
@@ -113,6 +118,38 @@ describe("sync readiness", () => {
     expect(mocks.ensureSyncSchema).toHaveBeenCalledTimes(2);
     expect(mocks.checkSyncSchemaReadiness).toHaveBeenCalledOnce();
     expect(console.error).toHaveBeenCalledOnce();
+    const record = JSON.parse(String(vi.mocked(console.error).mock.calls[0]?.[0]));
+    expect(record.errorCode).toBe("database_connection_failed");
+    expect(JSON.stringify(record)).not.toContain("secret");
+  });
+
+  it.each([
+    "ENOTFOUND",
+    "EAI_AGAIN",
+    "57P02",
+    "57P03"
+  ])("reports %s as a privacy-safe database connection failure", async (code) => {
+    mocks.ensureSyncSchema.mockRejectedValueOnce(
+      Object.assign(new Error("postgres://admin:secret@private-db.internal/address_atlas"), {
+        code
+      })
+    );
+
+    const response = await GET();
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      ok: false,
+      service: "address-atlas-sync"
+    });
+    const serialized = String(vi.mocked(console.error).mock.calls[0]?.[0]);
+    expect(JSON.parse(serialized)).toMatchObject({
+      event: "health.not_ready",
+      errorCode: "database_connection_failed"
+    });
+    expect(serialized).not.toContain(code);
+    expect(serialized).not.toContain("secret");
+    expect(serialized).not.toContain("private-db.internal");
   });
 
   it("coalesces a failed whole-pipeline probe and logs the transition once", async () => {

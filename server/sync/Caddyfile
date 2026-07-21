@@ -6,6 +6,10 @@
 			# indefinitely. The app independently enforces the same wall-clock limit.
 			read_body 60s
 			read_header 10s
+			# Go's server-wide write deadline is cumulative from the request headers.
+			# Leave room for the 60s body and 35s upstream-header ceilings while still
+			# preventing a slow downstream client from holding a response indefinitely.
+			write 120s
 		}
 	}
 }

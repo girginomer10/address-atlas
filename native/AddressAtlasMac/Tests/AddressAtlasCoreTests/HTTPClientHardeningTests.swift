@@ -43,6 +43,86 @@ final class JSONHTTPClientHardeningTests: XCTestCase {
     XCTAssertEqual(requests.snapshot().count, 2)
   }
 
+  func testRetriesOneTransientHTTPFailureThenReturnsSuccess() async throws {
+    let requests = ScannerRequestLog()
+    let http = ScannerHTTPStub { request in
+      let call = requests.append(request)
+      if call == 1 {
+        return scannerResponse(
+          request,
+          #"{"error":"temporarily unavailable"}"#,
+          statusCode: 503,
+          headerFields: ["Retry-After": "0"]
+        )
+      }
+      return scannerResponse(request, #"{"ok":1}"#)
+    }
+    let client = JSONHTTPClient(http: http)
+
+    let result = try await client.get(
+      URL(string: "https://rpc.example/data")!, as: [String: Int].self)
+
+    XCTAssertEqual(result["ok"], 1)
+    XCTAssertEqual(requests.snapshot().count, 2)
+  }
+
+  func testPersistentTransientHTTPFailureStopsAfterOneRetry() async throws {
+    let requests = ScannerRequestLog()
+    let http = ScannerHTTPStub { request in
+      _ = requests.append(request)
+      return scannerResponse(
+        request,
+        #"{"error":"temporarily unavailable"}"#,
+        statusCode: 503,
+        headerFields: ["Retry-After": "0"]
+      )
+    }
+    let client = JSONHTTPClient(http: http)
+
+    do {
+      _ = try await client.get(
+        URL(string: "https://rpc.example/data")!, as: [String: Int].self)
+      XCTFail("Expected the persistent transient failure to surface.")
+    } catch let error as JSONHTTPClientError {
+      XCTAssertEqual(error, .httpStatus(503))
+    }
+    XCTAssertEqual(requests.snapshot().count, 2)
+  }
+
+  func testRetriesOneSelectedTransportFailure() async throws {
+    let requests = ScannerRequestLog()
+    let http = ScannerHTTPStub { request in
+      let call = requests.append(request)
+      if call == 1 { throw URLError(.timedOut) }
+      return scannerResponse(request, #"{"ok":1}"#)
+    }
+    let client = JSONHTTPClient(http: http)
+
+    let result = try await client.get(
+      URL(string: "https://rpc.example/data")!, as: [String: Int].self)
+
+    XCTAssertEqual(result["ok"], 1)
+    XCTAssertEqual(requests.snapshot().count, 2)
+  }
+
+  func testCancellationIsNeverRetried() async throws {
+    let requests = ScannerRequestLog()
+    let http = ScannerHTTPStub { request in
+      _ = requests.append(request)
+      throw CancellationError()
+    }
+    let client = JSONHTTPClient(http: http)
+
+    do {
+      _ = try await client.get(
+        URL(string: "https://rpc.example/data")!, as: [String: Int].self)
+      XCTFail("Expected cancellation to propagate.")
+    } catch is CancellationError {
+      // Expected.
+    }
+    XCTAssertEqual(requests.snapshot().count, 1)
+  }
+
   func testRejectsSuccessfulResponseAboveConfiguredSizeLimit() async throws {
     let http = ScannerHTTPStub { request in
       scannerResponse(request, #"{"payload":"too-large"}"#)

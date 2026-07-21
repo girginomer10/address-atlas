@@ -13,6 +13,19 @@ final class AppState: ObservableObject {
   @Published var document = VaultDocument() {
     didSet {
       documentRevision &+= 1
+      if AppState.validatedSyncURL(oldValue.syncState.serverURL)
+        != AppState.validatedSyncURL(document.syncState.serverURL)
+      {
+        // The authority changed even if this document replacement bypassed
+        // saveSyncSettings (restore/tests do this). Cancel the shared request
+        // before it can advance the previous origin's durable trust record.
+        endpointConfigRefreshGeneration &+= 1
+        endpointConfigRefreshRequest?.task.cancel()
+        endpointConfigRefreshRequest = nil
+        endpointConfig = .bundled
+        endpointConfigStatus = "Bundled endpoints"
+        acceptedEndpointConfigServerURL = nil
+      }
       // Never risk a false-clean UI after a future call site mutates the value
       // directly. A successful actor save replaces this conservative value
       // with the checksum-backed result.
@@ -22,6 +35,9 @@ final class AppState: ObservableObject {
   @Published var isUnlocked = false
   @Published var isUnlocking = false
   @Published private(set) var isPersisting = false
+  @Published private(set) var isTerminationInProgress = false
+  @Published private(set) var isExportOperationInProgress = false
+  @Published private(set) var walletLabelDrafts: [UUID: String] = [:]
   @Published var isValidatingExchangeCredentials = false
   @Published var syncPersistencePending = false
   @Published var pendingVaultUploadHasRemoteConflict = false
@@ -79,6 +95,13 @@ final class AppState: ObservableObject {
   var scanTask: Task<Void, Never>?
   var endpointConfigRefreshGeneration = 0
   var endpointConfigRefreshRequest: EndpointConfigRefreshRequest?
+  /// Termination waits here when an already-started local save owns the
+  /// persistence actor. MainActor isolation makes registration and resumption
+  /// race-free without polling or blocking the application run loop.
+  var persistenceCompletionWaiters: [CheckedContinuation<Bool, Never>] = []
+  /// One-shot deterministic seam for exercising termination while a local save
+  /// is suspended. Production never installs this callback.
+  var persistenceStartedHook: (@MainActor @Sendable () async -> Void)?
   /// Focused test seam for proving revision checks at the journal/PUT boundary.
   /// Production never installs this callback.
   var pendingUploadStagedHook: (@MainActor () -> Void)?
@@ -93,6 +116,8 @@ final class AppState: ObservableObject {
     var generation: Int
     var serverURL: URL
     var task: Task<NativeEndpointConfig, Error>
+    var waiterPool: EndpointConfigRefreshWaiterPool
+    var waiterIDs: Set<UUID>
   }
 
   struct PendingSyncPersistence {
@@ -216,12 +241,43 @@ final class AppState: ObservableObject {
   var vaultEditsDisabled: Bool {
     syncing || scanning || isPersisting || isValidatingExchangeCredentials
       || syncPersistencePending || isUnlocking || hasPendingAccountDeletion
+      || isTerminationInProgress
+  }
+
+  /// AppKit freezes admission synchronously before the asynchronous quit flush.
+  /// Every queued/background operation that can start network or persistence
+  /// work must consult this before claiming its own activity flag.
+  var acceptsNewOperations: Bool {
+    !isTerminationInProgress
   }
 
   var hasPendingAccountDeletion: Bool {
     AccountDeletionIdempotencyKey.normalized(
       document.syncState.accountDeletionIdempotencyKey
     ) != nil
+  }
+
+  /// Recovery obligations are global vault state, not page-level feedback.
+  /// Keep this guidance visible across navigation until the underlying durable
+  /// operation is resolved, even though ordinary notices and errors are reset.
+  var persistentOperationGuidance: String? {
+    if pendingVaultUploadHasRemoteConflict {
+      return
+        "Encrypted upload recovery has a remote conflict. Open Sync to review it before changing the vault."
+    }
+    if pendingVaultUpload != nil {
+      return
+        "An encrypted vault upload still needs recovery. Open Sync and retry upload recovery before changing the vault."
+    }
+    if syncPersistencePending {
+      return
+        "A completed sync still needs a local save. Open Sync and retry the local save before changing the vault."
+    }
+    if hasPendingAccountDeletion {
+      return
+        "Sync account deletion is still pending. Open Sync and retry the saved deletion operation."
+    }
+    return nil
   }
 
   var accountDeletionControlDisabled: Bool {
@@ -328,9 +384,15 @@ final class AppState: ObservableObject {
     _ candidate: VaultDocument,
     projectedSyncVersion: Int?,
     saveExactly: Bool = false,
-    resolvesPendingSyncPersistence: Bool = false
+    resolvesPendingSyncPersistence: Bool = false,
+    allowDuringTermination: Bool = false
   ) async -> Bool {
     lastSaveRemovedScanRunCount = 0
+    guard !isTerminationInProgress || allowDuringTermination else {
+      notice = ""
+      error = "Address Atlas is finishing a local save before quitting."
+      return false
+    }
     guard let persistence else {
       notice = ""
       error = "Unlock the vault before saving."
@@ -342,7 +404,12 @@ final class AppState: ObservableObject {
     }
     let startingRevision = documentRevision
     isPersisting = true
-    defer { isPersisting = false }
+    var persistenceSucceeded = false
+    defer { finishPersistenceOperation(succeeded: persistenceSucceeded) }
+    if let persistenceStartedHook {
+      self.persistenceStartedHook = nil
+      await persistenceStartedHook()
+    }
     do {
       let result: VaultPersistenceResult
       if saveExactly {
@@ -371,6 +438,7 @@ final class AppState: ObservableObject {
       }
       notice = "Saved locally." + pruningNoticeSuffix(result.removedScanRunCount)
       error = ""
+      persistenceSucceeded = true
       return true
     } catch {
       notice = ""
@@ -456,6 +524,10 @@ final class AppState: ObservableObject {
   }
 
   func canMutateVault(allowPendingAccountDeletion: Bool = false) -> Bool {
+    guard !isTerminationInProgress else {
+      error = "Address Atlas is saving changes before quitting."
+      return false
+    }
     guard !syncing else {
       error = "Wait for the active sync operation before editing the vault."
       return false
@@ -488,6 +560,42 @@ final class AppState: ObservableObject {
       return false
     }
     return true
+  }
+
+  func setTerminationInProgress(_ inProgress: Bool) {
+    isTerminationInProgress = inProgress
+  }
+
+  @discardableResult
+  func beginExportOperation() -> Bool {
+    guard !isTerminationInProgress else {
+      error = "Address Atlas is preparing to quit."
+      return false
+    }
+    guard !isExportOperationInProgress else { return false }
+    isExportOperationInProgress = true
+    return true
+  }
+
+  func finishExportOperation() {
+    isExportOperationInProgress = false
+  }
+
+  func storeWalletLabelDraft(_ draft: String?, for id: UUID) {
+    walletLabelDrafts[id] = draft
+  }
+
+  func clearWalletLabelDrafts() {
+    walletLabelDrafts.removeAll()
+  }
+
+  func finishPersistenceOperation(succeeded: Bool) {
+    isPersisting = false
+    let waiters = persistenceCompletionWaiters
+    persistenceCompletionWaiters.removeAll()
+    for waiter in waiters {
+      waiter.resume(returning: succeeded)
+    }
   }
 
 }

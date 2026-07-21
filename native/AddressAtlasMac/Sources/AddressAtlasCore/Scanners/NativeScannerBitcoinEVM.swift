@@ -8,10 +8,45 @@ extension NativeScanner {
     var error: JSONRPCError?
   }
 
+  private enum EvmTokenBatchEnvelope: Decodable {
+    case responses([EvmTokenBatchResponse])
+    case explicitlyUnsupported
+
+    private struct Rejection: Decodable {
+      var jsonrpc: String?
+      var error: JSONRPCError?
+    }
+
+    init(from decoder: Decoder) throws {
+      let container = try decoder.singleValueContainer()
+      if let responses = try? container.decode([EvmTokenBatchResponse].self) {
+        self = .responses(responses)
+        return
+      }
+
+      let rejection = try container.decode(Rejection.self)
+      let normalizedMessage = rejection.error?.message?.lowercased() ?? ""
+      guard rejection.jsonrpc == "2.0",
+        let code = rejection.error?.code,
+        code == -32600
+          || (normalizedMessage.contains("batch")
+            && (normalizedMessage.contains("unsupported")
+              || normalizedMessage.contains("not supported")))
+      else {
+        throw DecodingError.dataCorruptedError(
+          in: container,
+          debugDescription: "The EVM batch response was neither an array nor an explicit rejection."
+        )
+      }
+      self = .explicitlyUnsupported
+    }
+  }
+
   func scanBitcoin(address: String, chain: ChainConfig, prices: [String: PricePoint])
     async throws -> [TrackedAsset]
   {
     struct Response: Decodable {
+      var address: String
       var chainStats: Stats
       var mempoolStats: Stats?
       struct Stats: Decodable {
@@ -23,6 +58,7 @@ extension NativeScanner {
         }
       }
       enum CodingKeys: String, CodingKey {
+        case address
         case chainStats = "chain_stats"
         case mempoolStats = "mempool_stats"
       }
@@ -30,6 +66,13 @@ extension NativeScanner {
     guard let rest = chain.restUrl else { return [] }
     let url = rest.appending(path: "address/\(address)")
     let response = try await http.get(url, as: Response.self)
+    guard
+      let expectedAddress = AddressDetection.canonicalAddress(address, family: .bitcoin),
+      AddressDetection.canonicalAddress(response.address, family: .bitcoin) == expectedAddress
+    else {
+      throw Self.messageError(
+        domain: "Bitcoin", message: "Bitcoin balance lookup returned a different address.")
+    }
     let reportedValues: [Double] = [
       response.chainStats.fundedTxoSum,
       response.chainStats.spentTxoSum,
@@ -112,24 +155,39 @@ extension NativeScanner {
           ]
         )
       }
-      let responses = try await http.post(rpc, body: requests, as: [EvmTokenBatchResponse].self)
-      return buildErc20TokenScan(
-        address: address,
-        chain: chain,
-        tokens: tokens,
-        responses: responses,
-        prices: prices
-      )
+      let envelope = try await http.post(rpc, body: requests, as: EvmTokenBatchEnvelope.self)
+      switch envelope {
+      case .responses(let responses):
+        return buildErc20TokenScan(
+          address: address,
+          chain: chain,
+          tokens: tokens,
+          responses: responses,
+          prices: prices
+        )
+      case .explicitlyUnsupported:
+        return try await scanErc20Individually(
+          address: address, chain: chain, tokens: tokens, prices: prices, blockTag: blockTag)
+      }
     } catch let error as JSONHTTPClientError where error.statusCode == 429 {
       return NativeScanResult(
         warnings: [
           "\(chain.name) token balance batch was rate-limited; individual retries were skipped to avoid amplifying the limit."
         ]
       )
+    } catch let error where JSONHTTPClient.isTransientFailure(error) {
+      return NativeScanResult(
+        warnings: [
+          "\(chain.name) token balance batch remained temporarily unavailable after one retry; individual requests were skipped to avoid amplifying the provider failure."
+        ]
+      )
     } catch {
       try throwIfCancellation(error)
-      return try await scanErc20Individually(
-        address: address, chain: chain, tokens: tokens, prices: prices, blockTag: blockTag)
+      return NativeScanResult(
+        warnings: [
+          "\(chain.name) token balance batch returned an invalid response; individual requests were skipped to avoid amplifying a provider failure."
+        ]
+      )
     }
   }
 

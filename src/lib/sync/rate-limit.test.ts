@@ -3,6 +3,7 @@ import {
   acquireConcurrencyMany,
   clientKey,
   rateLimitMany,
+  rateLimitWeightedMany,
   resetRateLimitsForTests
 } from "./rate-limit";
 
@@ -39,11 +40,132 @@ describe("bounded rate limiter", () => {
     expect(rateLimitOne("untouched", 1, 60_000)).toBe(true);
   });
 
+  it("charges exact integer weights and resets expired windows", () => {
+    expect(rateLimitWeightedMany([
+      { key: "response-bytes", limit: 10, windowMs: 1_000, weight: 6 }
+    ])).toBe(true);
+    expect(rateLimitWeightedMany([
+      { key: "response-bytes", limit: 10, windowMs: 1_000, weight: 4 }
+    ])).toBe(true);
+    expect(rateLimitWeightedMany([
+      { key: "response-bytes", limit: 10, windowMs: 1_000, weight: 1 }
+    ])).toBe(false);
+
+    vi.advanceTimersByTime(1_001);
+    expect(rateLimitWeightedMany([
+      { key: "response-bytes", limit: 10, windowMs: 1_000, weight: 10 }
+    ])).toBe(true);
+  });
+
+  it("rejects weighted rules atomically without consuming other budgets", () => {
+    expect(rateLimitWeightedMany([
+      { key: "full", limit: 10, windowMs: 60_000, weight: 7 }
+    ])).toBe(true);
+
+    expect(rateLimitWeightedMany([
+      { key: "full", limit: 10, windowMs: 60_000, weight: 4 },
+      { key: "untouched", limit: 5, windowMs: 60_000, weight: 5 }
+    ])).toBe(false);
+
+    expect(rateLimitWeightedMany([
+      { key: "untouched", limit: 5, windowMs: 60_000, weight: 5 }
+    ])).toBe(true);
+  });
+
+  it("validates every weighted rule before changing any bucket", () => {
+    const invalidRules = [
+      { key: "invalid", limit: 0, windowMs: 1_000, weight: 1 },
+      { key: "invalid", limit: 1.5, windowMs: 1_000, weight: 1 },
+      { key: "invalid", limit: 1, windowMs: 0, weight: 1 },
+      { key: "invalid", limit: 1, windowMs: 1.5, weight: 1 },
+      { key: "invalid", limit: 1, windowMs: 1_000, weight: 0 },
+      { key: "invalid", limit: 1, windowMs: 1_000, weight: 1.5 },
+      {
+        key: "invalid",
+        limit: Number.MAX_SAFE_INTEGER + 1,
+        windowMs: 1_000,
+        weight: 1
+      },
+      {
+        key: "invalid",
+        limit: 1,
+        windowMs: Number.MAX_SAFE_INTEGER,
+        weight: 1
+      }
+    ];
+
+    for (const invalid of invalidRules) {
+      expect(() => rateLimitWeightedMany([
+        { key: "untouched", limit: 1, windowMs: 60_000, weight: 1 },
+        invalid
+      ])).toThrow("Invalid weighted rate-limit rule.");
+    }
+
+    expect(rateLimitWeightedMany([
+      { key: "untouched", limit: 1, windowMs: 60_000, weight: 1 }
+    ])).toBe(true);
+  });
+
+  it("defends safe-integer boundaries without overflowing counters", () => {
+    expect(rateLimitWeightedMany([{
+      key: "maximum",
+      limit: Number.MAX_SAFE_INTEGER,
+      windowMs: 60_000,
+      weight: Number.MAX_SAFE_INTEGER - 1
+    }])).toBe(true);
+    expect(rateLimitWeightedMany([{
+      key: "maximum",
+      limit: Number.MAX_SAFE_INTEGER,
+      windowMs: 60_000,
+      weight: 1
+    }])).toBe(true);
+    expect(rateLimitWeightedMany([{
+      key: "maximum",
+      limit: Number.MAX_SAFE_INTEGER,
+      windowMs: 60_000,
+      weight: 1
+    }])).toBe(false);
+
+    expect(rateLimitWeightedMany([{
+      key: "oversized-charge",
+      limit: 10,
+      windowMs: 60_000,
+      weight: 11
+    }])).toBe(false);
+    expect(rateLimitWeightedMany([{
+      key: "oversized-charge",
+      limit: 10,
+      windowMs: 60_000,
+      weight: 10
+    }])).toBe(true);
+  });
+
+  it("deduplicates a weighted budget using its strictest rule", () => {
+    expect(rateLimitWeightedMany([
+      { key: "duplicate", limit: 10, windowMs: 1_000, weight: 2 },
+      { key: "duplicate", limit: 8, windowMs: 2_000, weight: 3 }
+    ])).toBe(true);
+    expect(rateLimitWeightedMany([
+      { key: "duplicate", limit: 8, windowMs: 2_000, weight: 5 }
+    ])).toBe(true);
+    expect(rateLimitWeightedMany([
+      { key: "duplicate", limit: 8, windowMs: 2_000, weight: 1 }
+    ])).toBe(false);
+  });
+
   it("fails closed instead of growing beyond the tracked-key ceiling", () => {
     for (let index = 0; index < 50_000; index += 1) {
       expect(rateLimitOne(`key-${index}`, 1, 60_000)).toBe(true);
     }
     expect(rateLimitOne("overflow", 1, 60_000)).toBe(false);
+    expect(rateLimitWeightedMany([
+      { key: "weighted-overflow", limit: 1, windowMs: 60_000, weight: 1 }
+    ])).toBe(false);
+
+    resetRateLimitsForTests();
+    expect(rateLimitWeightedMany([
+      { key: "weighted-after-reset", limit: 1, windowMs: 60_000, weight: 1 }
+    ])).toBe(true);
   });
 
   it("bounds attacker-controlled forwarded identifiers", () => {

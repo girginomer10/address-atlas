@@ -1,6 +1,10 @@
 import AddressAtlasCore
 import Foundation
 
+enum WalletLabelDraftError: Error, Equatable {
+  case invalidLabel(UUID)
+}
+
 extension AppState {
 
   @discardableResult
@@ -43,6 +47,116 @@ extension AppState {
     return trimmed.isEmpty || trimmed.count > 80 ? nil : trimmed
   }
 
+  var hasPendingWalletLabelDrafts: Bool {
+    !walletLabelDrafts.isEmpty
+  }
+
+  static func documentByApplyingWalletLabelDrafts(
+    _ drafts: [UUID: String],
+    to input: VaultDocument,
+    updatedAt: Date = Date()
+  ) throws -> VaultDocument {
+    var output = input
+    for index in output.wallets.indices {
+      let id = output.wallets[index].id
+      guard let draft = drafts[id] else { continue }
+      guard let normalized = normalizedWalletLabel(draft) else {
+        throw WalletLabelDraftError.invalidLabel(id)
+      }
+      guard output.wallets[index].label != normalized else { continue }
+      output.wallets[index].label = normalized
+      output.wallets[index].updatedAt = updatedAt
+    }
+    return output
+  }
+
+  func documentForExportIncludingWalletLabelDrafts() throws -> VaultDocument {
+    try Self.documentByApplyingWalletLabelDrafts(walletLabelDrafts, to: document)
+  }
+
+  func holdingsForExportIncludingWalletLabelDrafts() throws -> [TrackedAsset] {
+    let exportDocument = try documentForExportIncludingWalletLabelDrafts()
+    return Self.applyingWalletLabels(
+      to: latestScan?.holdings ?? [],
+      wallets: exportDocument.wallets
+    )
+  }
+
+  /// Makes every visible wallet-label edit durable before a remote operation
+  /// captures the document. Callers own the operation flag while this awaits,
+  /// so UI edits are frozen; the snapshot comparison still fails closed if an
+  /// internal/test hook produces a newer draft during persistence.
+  @discardableResult
+  func flushWalletLabelDraftsBeforeRemoteOperation() async -> Bool {
+    guard !walletLabelDrafts.isEmpty else { return true }
+    let drafts = walletLabelDrafts
+    let candidate: VaultDocument
+    do {
+      candidate = try Self.documentByApplyingWalletLabelDrafts(drafts, to: document)
+    } catch WalletLabelDraftError.invalidLabel {
+      self.error = "Wallet labels must be between 1 and 80 characters."
+      return false
+    } catch {
+      self.error = "Wallet-label changes could not be validated before syncing."
+      return false
+    }
+
+    if candidate != document {
+      guard await save(candidate, projectedSyncVersion: nil) else { return false }
+    }
+    for (id, draft) in drafts where walletLabelDrafts[id] == draft {
+      storeWalletLabelDraft(nil, for: id)
+    }
+    guard walletLabelDrafts.isEmpty else {
+      error = "A wallet label changed while the vault was being saved. Review it and try again."
+      return false
+    }
+    return true
+  }
+
+  func walletLabelDraft(for wallet: WalletRecord) -> String {
+    walletLabelDrafts[wallet.id]
+      ?? document.wallets.first(where: { $0.id == wallet.id })?.label
+      ?? wallet.label
+  }
+
+  @discardableResult
+  func setWalletLabelDraft(id: UUID, label: String) -> Bool {
+    guard !isTerminationInProgress else { return false }
+    guard let persisted = document.wallets.first(where: { $0.id == id })?.label else {
+      storeWalletLabelDraft(nil, for: id)
+      return false
+    }
+    if label == persisted {
+      storeWalletLabelDraft(nil, for: id)
+    } else {
+      storeWalletLabelDraft(label, for: id)
+    }
+    return true
+  }
+
+  @discardableResult
+  func commitWalletLabelDraft(id: UUID) async -> Bool {
+    guard let draft = walletLabelDrafts[id] else { return true }
+    guard let persisted = document.wallets.first(where: { $0.id == id })?.label else {
+      storeWalletLabelDraft(nil, for: id)
+      return false
+    }
+    guard let normalized = AppState.normalizedWalletLabel(draft) else {
+      error = "Wallet labels must be between 1 and 80 characters."
+      return false
+    }
+    if normalized == persisted {
+      storeWalletLabelDraft(nil, for: id)
+      return true
+    }
+    guard await updateWalletLabel(id: id, label: normalized) else { return false }
+    if walletLabelDrafts[id] == draft {
+      storeWalletLabelDraft(nil, for: id)
+    }
+    return true
+  }
+
   @discardableResult
   func updateWalletLabel(id: UUID, label: String) async -> Bool {
     guard canMutateVault() else { return false }
@@ -60,7 +174,9 @@ extension AppState {
 
   func removeWallet(id: UUID) async {
     guard canMutateVault() else { return }
-    _ = await mutateDocument { $0.wallets.removeAll { $0.id == id } }
+    if await mutateDocument({ $0.wallets.removeAll { $0.id == id } }) {
+      storeWalletLabelDraft(nil, for: id)
+    }
   }
 
   @discardableResult

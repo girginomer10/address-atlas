@@ -13,7 +13,8 @@ public protocol EndpointConfigTrustPersisting: Sendable {
 
   /// Atomically verifies and advances the per-origin endpoint-config high-water
   /// mark. A return means the config may be applied; every storage, rollback,
-  /// or equivocation failure must be treated as a fail-closed rejection.
+  /// equivocation, or pre-commit task cancellation must be treated as a
+  /// fail-closed rejection without advancing the record.
   func validateAndRecord(_ config: NativeEndpointConfig, for serverOrigin: URL) async throws
 }
 
@@ -83,9 +84,11 @@ public actor EndpointConfigTrustStore: EndpointConfigTrustPersisting {
     _ config: NativeEndpointConfig,
     for serverOrigin: URL
   ) throws {
+    try Task.checkCancellation()
     let candidate = try Self.candidate(config, for: serverOrigin)
 
     try withExclusiveFileLock {
+      try Task.checkCancellation()
       var document = try load()
       if let previous = document.records[candidate.origin] {
         try Self.validate(candidate, against: previous)
@@ -98,6 +101,10 @@ public actor EndpointConfigTrustStore: EndpointConfigTrustPersisting {
         }
       }
 
+      // Generation/server invalidation cancels the shared refresh task. Check
+      // at the last side-effect-free boundary so a stale request cannot advance
+      // the durable high-water mark while queued behind another file-lock user.
+      try Task.checkCancellation()
       document.records[candidate.origin] = Record(
         version: candidate.version,
         digest: candidate.digest
@@ -149,6 +156,8 @@ public actor EndpointConfigTrustStore: EndpointConfigTrustPersisting {
       }
       defer { _ = endpointConfigFlock(descriptor, LOCK_UN) }
       return try operation()
+    } catch is CancellationError {
+      throw CancellationError()
     } catch let error as EndpointConfigTrustStoreError {
       throw error
     } catch {
@@ -314,8 +323,10 @@ public actor EphemeralEndpointConfigTrustStore: EndpointConfigTrustPersisting {
     _ config: NativeEndpointConfig,
     for serverOrigin: URL
   ) throws {
+    try Task.checkCancellation()
     let candidate = try Self.candidate(config, for: serverOrigin)
     try Self.validate(candidate, against: records[candidate.origin])
+    try Task.checkCancellation()
     records[candidate.origin] = (candidate.version, candidate.digest)
   }
 

@@ -103,7 +103,8 @@ describe("self-service account deletion", () => {
       }
     }));
     expect(response.status).toBe(200);
-    expect(response.headers.get("x-request-id")).toBe("delete_req-1234");
+    expect(response.headers.get("x-request-id")).toMatch(/^[0-9a-f-]{36}$/);
+    expect(response.headers.get("x-request-id")).not.toBe("delete_req-1234");
     expect(await response.json()).toEqual({ ok: true });
     expect(mocks.deleteBearerAccount).toHaveBeenCalledWith("Bearer token", expectedDigest, true);
     expect(JSON.stringify([

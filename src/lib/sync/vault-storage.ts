@@ -43,60 +43,50 @@ export interface VaultSaveResult {
   idempotent: boolean;
 }
 
+const ingressAdmissions = new WeakSet<object>();
+const ingressAdmissionBrand: unique symbol = Symbol("vault-ingress-admission");
+
 /**
- * Durably charge every authenticated request body before interpreting its JSON
- * or snapshot semantics. The service-wide charge commits in its own transaction
- * before the account transaction begins, so an exhausted or concurrently deleted
- * account cannot roll back bytes the service already received. Both counters are
- * row-serialized by PostgreSQL and remain exact across processes/restarts.
+ * An in-process, single-use proof that this request authenticated and locked a
+ * live account before receiving its body. Callers cannot construct one because
+ * the runtime proof is retained in this module's WeakSet.
  */
-export async function chargeVaultIngress(
-  userId: string,
-  chargedBytes: number
-): Promise<void> {
-  assertValidChargedBytes(chargedBytes);
+export interface VaultIngressAdmission {
+  readonly userId: string;
+  readonly [ingressAdmissionBrand]: true;
+}
+
+/**
+ * Fail closed before an authenticated request body is read when either durable
+ * ingress budget is already exhausted. This is intentionally only a capacity
+ * check, not a reservation: concurrent bodies are bounded by the route's
+ * account/global concurrency permits and are all charged after they are read.
+ */
+export async function assertVaultIngressCapacity(userId: string): Promise<VaultIngressAdmission> {
   const client = await getSyncPool().connect();
   let discardClient = false;
   let transactionOpen = false;
   try {
     const limits = getSyncLimitConfig();
 
-    // Commit received service-wide bytes independently. Do not merge this with
-    // the account transaction: account-quota rejection must not refund traffic
-    // that already crossed the public request boundary.
     transactionOpen = true;
     await client.query("BEGIN");
-    const globalUsage = await client.query(
-      `INSERT INTO vault_global_ingress_usage (usage_date, byte_count)
-       VALUES ((now() AT TIME ZONE 'UTC')::date, $1)
-       ON CONFLICT (usage_date) DO UPDATE SET
-         byte_count = vault_global_ingress_usage.byte_count + excluded.byte_count,
-         updated_at = now()
-       WHERE vault_global_ingress_usage.byte_count + excluded.byte_count <= $2
-       RETURNING byte_count`,
-      [chargedBytes, limits.globalDailyVaultIngressByteLimit]
-    );
-    if (globalUsage.rowCount === 0) throw new VaultGlobalIngressQuotaError();
-    await client.query("COMMIT");
-    transactionOpen = false;
+    const accountBytes = await lockAccountIngressUsage(client, userId);
+    if (accountBytes >= limits.dailyVaultByteLimit) throw new VaultQuotaError();
 
-    transactionOpen = true;
-    await client.query("BEGIN");
-    const account = await client.query("SELECT id FROM users WHERE id = $1 FOR UPDATE", [userId]);
-    if (account.rowCount === 0) throw new VaultAccountMissingError();
-    const usage = await client.query(
-      `INSERT INTO vault_write_usage (user_id, usage_date, write_count, byte_count)
-       VALUES ($1, (now() AT TIME ZONE 'UTC')::date, 0, $2)
-       ON CONFLICT (user_id, usage_date) DO UPDATE SET
-         byte_count = vault_write_usage.byte_count + excluded.byte_count,
-         updated_at = now()
-       WHERE vault_write_usage.byte_count + excluded.byte_count <= $3
-       RETURNING byte_count`,
-      [userId, chargedBytes, limits.dailyVaultByteLimit]
-    );
-    if (usage.rowCount === 0) throw new VaultQuotaError();
+    const globalBytes = await lockGlobalIngressUsage(client);
+    if (globalBytes >= limits.globalDailyVaultIngressByteLimit) {
+      throw new VaultGlobalIngressQuotaError();
+    }
+
     await client.query("COMMIT");
     transactionOpen = false;
+    const admission = Object.freeze({
+      userId,
+      [ingressAdmissionBrand]: true as const
+    });
+    ingressAdmissions.add(admission);
+    return admission;
   } catch (error) {
     if (transactionOpen) discardClient = !(await rollbackQuietly(client));
     throw error;
@@ -104,6 +94,129 @@ export async function chargeVaultIngress(
     if (discardClient) client.release(true);
     else client.release();
   }
+}
+
+/**
+ * Durably charge every authenticated request body before interpreting its JSON
+ * or snapshot semantics. Rows are always locked in account -> account usage ->
+ * global usage order. An over-budget body saturates the account counter, adds
+ * every received byte to the global counter, commits both changes, and only
+ * then reports the quota failure. That makes concurrent bodies accountable
+ * without letting a never-admitted missing account consume shared capacity.
+ */
+export async function chargeVaultIngress(
+  userId: string,
+  chargedBytes: number,
+  admission?: VaultIngressAdmission
+): Promise<void> {
+  assertValidChargedBytes(chargedBytes);
+  const admittedBeforeBodyRead = consumeIngressAdmission(admission, userId);
+  const client = await getSyncPool().connect();
+  let discardClient = false;
+  let transactionOpen = false;
+  try {
+    const limits = getSyncLimitConfig();
+
+    // Mark the transaction as potentially open before BEGIN: a client-side
+    // timeout does not prove that PostgreSQL did not execute the statement.
+    transactionOpen = true;
+    await client.query("BEGIN");
+    let accountBytes: number | null;
+    try {
+      accountBytes = await lockAccountIngressUsage(client, userId);
+    } catch (error) {
+      if (!(error instanceof VaultAccountMissingError) || !admittedBeforeBodyRead) throw error;
+      // The account existed and was locked immediately before this request body
+      // was admitted, but self-service deletion won the race while the body was
+      // in flight. Preserve the shared ingress charge, then return the same
+      // privacy-safe missing-account result after commit.
+      accountBytes = null;
+    }
+    const globalBytes = await lockGlobalIngressUsage(client);
+    const accountExceeded = accountBytes !== null
+      && chargedBytes > limits.dailyVaultByteLimit - accountBytes;
+    const globalExceeded = chargedBytes
+      > limits.globalDailyVaultIngressByteLimit - globalBytes;
+
+    if (accountBytes !== null) {
+      await client.query(
+        `UPDATE vault_write_usage
+         SET byte_count = LEAST($3::bigint, byte_count + $2::bigint), updated_at = now()
+         WHERE user_id = $1 AND usage_date = (now() AT TIME ZONE 'UTC')::date`,
+        [userId, chargedBytes, limits.dailyVaultByteLimit]
+      );
+    }
+    await client.query(
+      `UPDATE vault_global_ingress_usage
+       SET byte_count = byte_count + $1::bigint, updated_at = now()
+       WHERE usage_date = (now() AT TIME ZONE 'UTC')::date`,
+      [chargedBytes]
+    );
+    await client.query("COMMIT");
+    transactionOpen = false;
+
+    if (accountBytes === null) throw new VaultAccountMissingError();
+    if (globalExceeded) throw new VaultGlobalIngressQuotaError();
+    if (accountExceeded) throw new VaultQuotaError();
+  } catch (error) {
+    if (transactionOpen) discardClient = !(await rollbackQuietly(client));
+    throw error;
+  } finally {
+    if (discardClient) client.release(true);
+    else client.release();
+  }
+}
+
+function consumeIngressAdmission(
+  admission: VaultIngressAdmission | undefined,
+  userId: string
+) {
+  if (!admission || !ingressAdmissions.has(admission)) return false;
+  ingressAdmissions.delete(admission);
+  return admission.userId === userId;
+}
+
+async function lockAccountIngressUsage(client: PoolClient, userId: string) {
+  const account = await client.query("SELECT id FROM users WHERE id = $1 FOR UPDATE", [userId]);
+  if (account.rowCount === 0) throw new VaultAccountMissingError();
+
+  await client.query(
+    `INSERT INTO vault_write_usage (user_id, usage_date, write_count, byte_count)
+     VALUES ($1, (now() AT TIME ZONE 'UTC')::date, 0, 0)
+     ON CONFLICT (user_id, usage_date) DO NOTHING`,
+    [userId]
+  );
+  const usage = await client.query<{ byte_count: string }>(
+    `SELECT byte_count::text AS byte_count
+     FROM vault_write_usage
+     WHERE user_id = $1 AND usage_date = (now() AT TIME ZONE 'UTC')::date
+     FOR UPDATE`,
+    [userId]
+  );
+  return parseStoredByteCount(usage.rows[0]?.byte_count);
+}
+
+async function lockGlobalIngressUsage(client: PoolClient) {
+  await client.query(
+    `INSERT INTO vault_global_ingress_usage (usage_date, byte_count)
+     VALUES ((now() AT TIME ZONE 'UTC')::date, 0)
+     ON CONFLICT (usage_date) DO NOTHING`
+  );
+  const usage = await client.query<{ byte_count: string }>(
+    `SELECT byte_count::text AS byte_count
+     FROM vault_global_ingress_usage
+     WHERE usage_date = (now() AT TIME ZONE 'UTC')::date
+     FOR UPDATE`
+  );
+  return parseStoredByteCount(usage.rows[0]?.byte_count);
+}
+
+function parseStoredByteCount(value: string | undefined) {
+  const byteCount = Number(value);
+  if (!Number.isSafeInteger(byteCount) || byteCount < 0) {
+    throw new VaultQuotaError();
+  }
+  return byteCount;
 }
 
 /**
@@ -227,10 +340,9 @@ async function chargeDailyWrite(client: PoolClient, userId: string) {
 }
 
 function assertValidChargedBytes(
-  chargedBytes: number,
-  maxBytes = getSyncLimitConfig().dailyVaultByteLimit
+  chargedBytes: number
 ) {
-  if (!Number.isSafeInteger(chargedBytes) || chargedBytes < 1 || chargedBytes > maxBytes) {
+  if (!Number.isSafeInteger(chargedBytes) || chargedBytes < 1) {
     throw new VaultQuotaError();
   }
 }

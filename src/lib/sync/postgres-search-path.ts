@@ -1,3 +1,5 @@
+import { OperationalError } from "./diagnostics";
+
 export const PRODUCTION_SEARCH_PATH_SETTING = "public";
 export const PRODUCTION_POOL_OPTIONS = `-csearch_path=${PRODUCTION_SEARCH_PATH_SETTING}`;
 
@@ -49,7 +51,10 @@ export function assertSafeRestoreDatabaseContext(
     || !sameOrderedMembers(row.effective_schemas, PRODUCTION_EFFECTIVE_SCHEMAS)
     || row.spoof_schema_count !== 0
   ) {
-    throw new Error("Restored database owner/search-path context is unsafe.");
+    throw new OperationalError(
+      "restore_context_invalid",
+      "Restored database owner/search-path context is unsafe."
+    );
   }
 }
 

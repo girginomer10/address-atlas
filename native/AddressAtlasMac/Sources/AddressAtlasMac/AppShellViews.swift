@@ -64,7 +64,7 @@ struct MainView: View {
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    .frame(minWidth: 1220, minHeight: 780)
+    .frame(minWidth: 900, minHeight: 600)
     .background(AtlasTheme.paper)
   }
 }
@@ -74,43 +74,47 @@ struct Sidebar: View {
   var onNavigate: () -> Void
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 26) {
+    VStack(alignment: .leading, spacing: 20) {
       BrandLockup()
         .padding(.bottom, 20)
         .overlay(alignment: .bottom) {
           Rectangle().fill(AtlasTheme.rule).frame(height: 1)
         }
 
-      VStack(spacing: 2) {
-        ForEach(MainView.Section.allCases) { item in
-          Button {
-            guard selection != item else { return }
-            // Clear the source page's transient status before SwiftUI installs
-            // the destination. An `onChange` on the parent runs after the
-            // selection mutation and can erase a message emitted by the new
-            // destination during that same update cycle.
-            onNavigate()
-            selection = item
-          } label: {
-            HStack(spacing: 12) {
-              Image(systemName: item.systemImage)
-                .frame(width: 18)
-              Text(item.rawValue)
-                .frame(maxWidth: .infinity, alignment: .leading)
-              Text(item.ordinal)
-                .font(.system(size: 12, design: .serif))
-                .italic()
-                .opacity(0.72)
+      ScrollView {
+        VStack(spacing: 2) {
+          ForEach(MainView.Section.allCases) { item in
+            Button {
+              guard selection != item else { return }
+              // Clear the source page's transient status before SwiftUI installs
+              // the destination. An `onChange` on the parent runs after the
+              // selection mutation and can erase a message emitted by the new
+              // destination during that same update cycle.
+              onNavigate()
+              selection = item
+            } label: {
+              HStack(spacing: 12) {
+                Image(systemName: item.systemImage)
+                  .frame(width: 18)
+                Text(item.rawValue)
+                  .frame(maxWidth: .infinity, alignment: .leading)
+                Text(item.ordinal)
+                  .font(.system(.caption, design: .serif))
+                  .italic()
+                  .opacity(0.72)
+              }
+              .padding(.horizontal, 12)
+              .padding(.vertical, 10)
+              .frame(minHeight: 42)
+              .contentShape(Rectangle())
             }
-            .padding(.horizontal, 12)
-            .frame(height: 42)
-            .contentShape(Rectangle())
+            .buttonStyle(SidebarButtonStyle(active: selection == item))
+            .accessibilityAddTraits(selection == item ? .isSelected : [])
+            .accessibilityValue(selection == item ? "Selected" : "")
           }
-          .buttonStyle(SidebarButtonStyle(active: selection == item))
         }
       }
-
-      Spacer()
+      .scrollIndicators(.visible)
 
       VStack(alignment: .leading, spacing: 8) {
         HStack(spacing: 8) {
@@ -121,7 +125,7 @@ struct Sidebar: View {
         Text("RPC/API from Mac")
         Text("Server cannot decrypt")
       }
-      .font(.system(size: 10, design: .monospaced))
+      .font(.caption2.monospaced())
       .textCase(.uppercase)
       .foregroundStyle(AtlasTheme.ink3)
       .padding(.top, 18)
@@ -129,8 +133,8 @@ struct Sidebar: View {
         Rectangle().fill(AtlasTheme.rule).frame(height: 1)
       }
     }
-    .padding(28)
-    .frame(width: 248)
+    .padding(22)
+    .frame(width: 228)
     .frame(maxHeight: .infinity, alignment: .topLeading)
     .background(AtlasTheme.paper)
   }

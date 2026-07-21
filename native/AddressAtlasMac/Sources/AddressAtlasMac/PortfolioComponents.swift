@@ -12,23 +12,27 @@ struct AssetList: View {
         title: "No assets yet", systemImage: "wallet.pass", copy: "Add a wallet and run a scan.")
     } else {
       Surface(padding: 0) {
-        VStack(spacing: 0) {
-          HStack {
-            TableHeader("Asset", width: 210)
-            TableHeader("Chain / source")
-            TableHeader("Amount", alignment: .trailing, width: 150)
-            TableHeader("Value", alignment: .trailing, width: 150)
-          }
-          .padding(.horizontal, 18)
-          .frame(height: 38)
-          .background(AtlasTheme.paper2)
-          Divider().overlay(AtlasTheme.rule)
-          ForEach(assets) { asset in
-            AssetRow(asset: asset)
-            if asset.id != assets.last?.id {
-              Divider().overlay(AtlasTheme.ruleSoft)
+        ScrollView(.horizontal) {
+          VStack(spacing: 0) {
+            HStack {
+              TableHeader("Asset", width: 210)
+              TableHeader("Chain / source")
+              TableHeader("Amount", alignment: .trailing, width: 150)
+              TableHeader("Value", alignment: .trailing, width: 150)
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 8)
+            .frame(minHeight: 38)
+            .background(AtlasTheme.paper2)
+            Divider().overlay(AtlasTheme.rule)
+            ForEach(assets) { asset in
+              AssetRow(asset: asset)
+              if asset.id != assets.last?.id {
+                Divider().overlay(AtlasTheme.ruleSoft)
+              }
             }
           }
+          .frame(minWidth: 760)
         }
       }
     }
@@ -47,9 +51,9 @@ struct ScanWarningsView: View {
         ForEach(Array(warnings.enumerated()), id: \.offset) { _, warning in
           HStack(alignment: .top, spacing: 9) {
             Image(systemName: "exclamationmark.triangle")
-              .foregroundStyle(Color.orange)
+              .foregroundStyle(AtlasTheme.warning)
             Text(warning)
-              .font(.system(size: 12))
+              .font(.callout)
               .foregroundStyle(AtlasTheme.ink2)
               .textSelection(.enabled)
           }
@@ -69,16 +73,16 @@ struct AssetRow: View {
       VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: 8) {
           Text(asset.symbol)
-            .font(.system(size: 16, weight: .semibold))
+            .font(.body.weight(.semibold))
             .lineLimit(1)
             .truncationMode(.middle)
             .help(asset.symbol)
           if asset.priceUsd <= 0 && asset.valueUsd <= 0 {
-            Badge("UNPRICED", color: Color.orange)
+            Badge("UNPRICED", color: AtlasTheme.warning)
           }
         }
         Text(asset.name)
-          .font(.system(size: 12))
+          .font(.caption)
           .foregroundStyle(AtlasTheme.ink3)
           .lineLimit(1)
       }
@@ -86,9 +90,9 @@ struct AssetRow: View {
 
       VStack(alignment: .leading, spacing: 4) {
         Text(asset.chainName)
-          .font(.system(size: 14))
+          .font(.body)
         Text(asset.walletLabel ?? asset.address)
-          .font(.system(size: 10, design: .monospaced))
+          .font(.caption2.monospaced())
           .foregroundStyle(AtlasTheme.ink3)
           .lineLimit(1)
           .truncationMode(.middle)
@@ -96,14 +100,15 @@ struct AssetRow: View {
       .frame(maxWidth: .infinity, alignment: .leading)
 
       Text(asset.amount.formatted())
-        .font(.system(size: 13, design: .monospaced))
+        .font(.callout.monospaced())
         .frame(width: 150, alignment: .trailing)
       Text(money(asset.valueUsd))
-        .font(.system(size: 13, weight: .semibold, design: .monospaced))
+        .font(.callout.monospaced().weight(.semibold))
         .frame(width: 150, alignment: .trailing)
     }
     .padding(.horizontal, 18)
-    .frame(height: 62)
+    .padding(.vertical, 9)
+    .frame(minHeight: 62)
   }
 }
 
@@ -140,6 +145,7 @@ struct QuickActionsPanel: View {
 }
 
 struct TotalBlock: View {
+  @ScaledMetric(relativeTo: .largeTitle) private var totalSize: CGFloat = 62
   var total: Double
   var generatedAt: Date?
   var assetCount: Int
@@ -148,14 +154,14 @@ struct TotalBlock: View {
     VStack(alignment: .leading, spacing: 12) {
       AtlasLabel("TOTAL VALUE")
       Text(money(total))
-        .font(.system(size: 62, weight: .regular, design: .serif))
+        .font(.system(size: totalSize, weight: .regular, design: .serif))
         .italic()
         .lineLimit(1)
         .minimumScaleFactor(0.6)
       Text(
         "\(assetCount) assets - \(generatedAt?.formatted(date: .abbreviated, time: .shortened) ?? "no snapshot")"
       )
-      .font(.system(size: 12, design: .monospaced))
+      .font(.caption.monospaced())
       .foregroundStyle(AtlasTheme.ink3)
     }
     .padding(.bottom, 22)
@@ -174,7 +180,7 @@ struct MetricStrip: View {
         VStack(alignment: .leading, spacing: 5) {
           AtlasLabel(item.0)
           Text(item.1)
-            .font(.system(size: 34, weight: .regular, design: .serif))
+            .font(.system(.largeTitle, design: .serif))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.leading, index == 0 ? 0 : 18)

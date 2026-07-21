@@ -101,7 +101,7 @@ export async function createPasskeyOptions(body: unknown) {
   // SimpleWebAuthn treats string challenges as UTF-8 input and encodes them
   // again. Pass raw entropy and bind the token to its exact browser output.
   if (input.mode === "register") {
-    await reserveRegistrationAdmission();
+    assertRegistrationEnabled();
     const pendingUserId = randomUUID();
     const publicKey = await generateRegistrationOptions({
       rpName: config.rpName,
@@ -257,6 +257,12 @@ async function verifyRegistration(
     if (Number(accountCount.rows[0]?.count ?? 0) >= maxAccounts) {
       throw new PasskeyVerificationError();
     }
+
+    // Reserve durable admission only after WebAuthn succeeds and inside the
+    // same transaction as account creation. Forged assertions and abandoned
+    // options cannot consume registration capacity, while any later insert
+    // failure rolls the reservation back with the account changes.
+    await reserveRegistrationAdmission(client);
 
     await client.query("INSERT INTO users (id) VALUES ($1) ON CONFLICT (id) DO NOTHING", [challenge.pendingUserId]);
     // A credential ID is globally unique at the RP. Never mutate or reuse an

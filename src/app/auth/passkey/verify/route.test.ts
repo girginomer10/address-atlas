@@ -20,7 +20,10 @@ vi.mock("@/lib/sync/rate-limit", () => ({
 }));
 
 import { PasskeyVerificationError } from "@/lib/sync/passkeys";
-import { RegistrationDisabledError } from "@/lib/sync/registration";
+import {
+  RegistrationAdmissionQuotaError,
+  RegistrationDisabledError
+} from "@/lib/sync/registration";
 import { PASSKEY_BODY_DEADLINE_MS } from "../body-concurrency";
 import { POST } from "./route";
 
@@ -142,7 +145,7 @@ describe("passkey verification error boundary", () => {
     expect(mocks.rateLimitMany).toHaveBeenCalledOnce();
   });
 
-  it("applies the stricter registration quota after the public quota", async () => {
+  it("adds the stricter edge quota for registration verification", async () => {
     const response = await POST(new NextRequest("https://sync.example/auth/passkey/verify", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -160,6 +163,25 @@ describe("passkey verification error boundary", () => {
       { key: "auth-register-verify:global", limit: 100, windowMs: 3_600_000 },
       { key: "auth-register-verify:client:client", limit: 5, windowMs: 3_600_000 }
     ]);
+  });
+
+  it("maps durable registration capacity only at verified account creation", async () => {
+    mocks.verifyPasskey.mockRejectedValueOnce(new RegistrationAdmissionQuotaError());
+    const response = await POST(new NextRequest("https://sync.example/auth/passkey/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        mode: "register",
+        challengeToken: "token",
+        response: { id: "credential" }
+      })
+    }));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("3600");
+    expect(await response.json()).toEqual({
+      error: "Registration capacity is temporarily unavailable."
+    });
   });
 
   it("honors a registration kill-switch change after options were issued", async () => {

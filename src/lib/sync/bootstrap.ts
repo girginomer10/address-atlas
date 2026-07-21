@@ -1,5 +1,9 @@
 import { SyncConfigurationError } from "./config";
-import { generatedDiagnostics, recordSecurityEvent } from "./diagnostics";
+import {
+  generatedDiagnostics,
+  operationalErrorCode,
+  recordSecurityEvent
+} from "./diagnostics";
 import { bootstrapSyncSchema, closeSyncPools } from "./postgres";
 
 async function main() {
@@ -15,6 +19,7 @@ async function main() {
     recordSecurityEvent("schema.bootstrap_failed", diagnostics, {
       status: 503,
       reason: error instanceof SyncConfigurationError ? "configuration_invalid" : "migration_failed",
+      errorCode: operationalErrorCode(error, "migration_failed"),
       severity: "error"
     });
     process.exitCode = 1;

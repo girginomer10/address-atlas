@@ -342,6 +342,7 @@ public struct JSONHTTPClient: Sendable {
   private let http: HTTPClient
   private let maxResponseBytes: Int
   private let maxRateLimitRetries: Int
+  private let maxTransientRetries = 1
 
   public init(
     http: HTTPClient? = nil,
@@ -359,12 +360,27 @@ public struct JSONHTTPClient: Sendable {
     self.maxRateLimitRetries = max(0, min(maxRateLimitRetries, 3))
   }
 
-  public func get<T: Decodable>(_ url: URL, as type: T.Type = T.self) async throws -> T {
+  public func get<T: Decodable>(
+    _ url: URL,
+    headers: [String: String] = [:],
+    as type: T.Type = T.self
+  ) async throws -> T {
+    try await getResponse(url, headers: headers, as: type).value
+  }
+
+  func getResponse<T: Decodable>(
+    _ url: URL,
+    headers: [String: String] = [:],
+    as type: T.Type = T.self
+  ) async throws -> (value: T, response: HTTPURLResponse) {
     var request = URLRequest(url: url)
     request.timeoutInterval = 30
     request.setValue("application/json", forHTTPHeaderField: "accept")
-    let data = try await send(request)
-    return try JSONDecoder.addressAtlas.decode(T.self, from: data)
+    for (field, value) in headers {
+      request.setValue(value, forHTTPHeaderField: field)
+    }
+    let (data, response) = try await send(request)
+    return (try JSONDecoder.addressAtlas.decode(T.self, from: data), response)
   }
 
   public func post<T: Decodable, B: Encodable>(_ url: URL, body: B, as type: T.Type = T.self)
@@ -376,15 +392,27 @@ public struct JSONHTTPClient: Sendable {
     request.setValue("application/json", forHTTPHeaderField: "accept")
     request.setValue("application/json", forHTTPHeaderField: "content-type")
     request.httpBody = try JSONEncoder.addressAtlas.encode(body)
-    let data = try await send(request)
+    let (data, _) = try await send(request)
     return try JSONDecoder.addressAtlas.decode(T.self, from: data)
   }
 
-  private func send(_ request: URLRequest) async throws -> Data {
+  private func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
     var rateLimitRetries = 0
+    var transientRetries = 0
     while true {
       try Task.checkCancellation()
-      let (data, response) = try await http.data(for: request)
+      let data: Data
+      let response: HTTPURLResponse
+      do {
+        (data, response) = try await http.data(for: request)
+      } catch {
+        try throwIfCancellation(error)
+        guard transientRetries < maxTransientRetries, Self.isTransientTransportFailure(error)
+        else { throw error }
+        transientRetries += 1
+        try await Self.sleepBeforeRetry(seconds: 0.25)
+        continue
+      }
       if response.statusCode == 429,
         rateLimitRetries < maxRateLimitRetries,
         let delay = Self.boundedRetryDelay(response.value(forHTTPHeaderField: "Retry-After"))
@@ -395,14 +423,52 @@ public struct JSONHTTPClient: Sendable {
         }
         continue
       }
+      if Self.isTransientStatus(response.statusCode), transientRetries < maxTransientRetries {
+        transientRetries += 1
+        let delay =
+          Self.boundedRetryDelay(response.value(forHTTPHeaderField: "Retry-After")) ?? 0.25
+        try await Self.sleepBeforeRetry(seconds: delay)
+        continue
+      }
       guard (200..<300).contains(response.statusCode) else {
         throw JSONHTTPClientError.httpStatus(response.statusCode)
       }
       guard data.count <= maxResponseBytes else {
         throw JSONHTTPClientError.responseTooLarge
       }
-      return data
+      return (data, response)
     }
+  }
+
+  static func isTransientFailure(_ error: Error) -> Bool {
+    if let httpError = error as? JSONHTTPClientError,
+      let statusCode = httpError.statusCode
+    {
+      return isTransientStatus(statusCode)
+    }
+    return isTransientTransportFailure(error)
+  }
+
+  private static func isTransientStatus(_ statusCode: Int) -> Bool {
+    statusCode == 408 || statusCode == 425 || (500...599).contains(statusCode)
+  }
+
+  private static func isTransientTransportFailure(_ error: Error) -> Bool {
+    guard let code = (error as? URLError)?.code else { return false }
+    return [
+      .timedOut,
+      .cannotFindHost,
+      .cannotConnectToHost,
+      .networkConnectionLost,
+      .dnsLookupFailed,
+      .notConnectedToInternet,
+      .resourceUnavailable,
+    ].contains(code)
+  }
+
+  private static func sleepBeforeRetry(seconds: TimeInterval) async throws {
+    guard seconds > 0 else { return }
+    try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
   }
 
   private static func boundedRetryDelay(_ value: String?) -> TimeInterval? {

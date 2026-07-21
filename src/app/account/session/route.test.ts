@@ -34,7 +34,8 @@ describe("targeted session revocation", () => {
       headers: { authorization: "Bearer token", "x-request-id": "session_req-1234" }
     }));
     expect(response.status).toBe(200);
-    expect(response.headers.get("x-request-id")).toBe("session_req-1234");
+    expect(response.headers.get("x-request-id")).toMatch(/^[0-9a-f-]{36}$/);
+    expect(response.headers.get("x-request-id")).not.toBe("session_req-1234");
     expect(await response.json()).toEqual({ ok: true });
     expect(mocks.revokeBearerSession).toHaveBeenCalledWith("Bearer token");
     expect(mocks.rateLimitMany).toHaveBeenCalledWith([

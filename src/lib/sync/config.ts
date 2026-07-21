@@ -1,9 +1,10 @@
 import { MAX_SNAPSHOT_REQUEST_BYTES } from "./envelope";
+import { OperationalError } from "./diagnostics";
 import { parse as parseDomain } from "tldts";
 
-export class SyncConfigurationError extends Error {
+export class SyncConfigurationError extends OperationalError {
   constructor(message: string) {
-    super(message);
+    super("configuration_invalid", message);
     this.name = "SyncConfigurationError";
   }
 }

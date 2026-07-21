@@ -1,3 +1,4 @@
+import AddressAtlasCore
 import Foundation
 import XCTest
 
@@ -14,6 +15,92 @@ final class AtlasDesignSystemTests: XCTestCase {
     XCTAssertGreaterThanOrEqual(
       contrastRatio(foreground, AtlasTheme.paper2RGB),
       4.5
+    )
+  }
+
+  func testWarningTextMeetsNormalTextContrastOnBothPaperSurfaces() {
+    XCTAssertGreaterThanOrEqual(
+      contrastRatio(AtlasTheme.warningRGB, AtlasTheme.paperRGB),
+      4.5
+    )
+    XCTAssertGreaterThanOrEqual(
+      contrastRatio(AtlasTheme.warningRGB, AtlasTheme.paper2RGB),
+      4.5
+    )
+  }
+
+  func testExportPreviewIsReadOnlySizedAndDisclosesTruncation() {
+    let data = Data("0123456789".utf8)
+
+    let preview = ExportPipeline.preview(for: data, maximumByteCount: 4)
+
+    XCTAssertTrue(preview.hasPrefix("0123"))
+    XCTAssertTrue(preview.contains("Preview truncated"))
+    XCTAssertTrue(preview.contains("saved export includes all records"))
+    XCTAssertEqual(
+      ExportPipeline.preview(for: data, maximumByteCount: data.count),
+      "0123456789"
+    )
+  }
+
+  func testExportPipelineWritesTheExactRenderedDataRatherThanPreviewText() throws {
+    let destination = FileManager.default.temporaryDirectory
+      .appending(path: "AddressAtlasExport-\(UUID().uuidString).csv")
+    defer { try? FileManager.default.removeItem(at: destination) }
+    let payload = ExportPayload.csv([])
+    let expected = try ExportPipeline.data(for: payload)
+
+    let preview = try ExportPipeline.write(payload, to: destination)
+
+    XCTAssertEqual(try Data(contentsOf: destination), expected)
+    XCTAssertEqual(preview, String(decoding: expected, as: UTF8.self))
+  }
+
+  func testAccessibilityIdentitiesDisambiguateDuplicateVisibleLabels() {
+    let firstToken = CustomTokenRecord(
+      chainKind: .evm,
+      chainId: "ethereum",
+      address: "0x0000000000000000000000000000000000000001",
+      symbol: "USD",
+      name: "Dollar One",
+      decimals: 18
+    )
+    let secondToken = CustomTokenRecord(
+      chainKind: .evm,
+      chainId: "base",
+      address: "0x0000000000000000000000000000000000000002",
+      symbol: "USD",
+      name: "Dollar Two",
+      decimals: 18
+    )
+    let firstHolding = ManualHoldingRecord(
+      id: UUID(uuidString: "11111111-1111-4111-8111-111111111111")!,
+      label: "Offline",
+      provider: "manual",
+      symbol: "BTC",
+      name: "Bitcoin",
+      amount: 1,
+      priceUsd: nil,
+      valueUsd: 1
+    )
+    let secondHolding = ManualHoldingRecord(
+      id: UUID(uuidString: "22222222-2222-4222-8222-222222222222")!,
+      label: "Offline",
+      provider: "manual",
+      symbol: "BTC",
+      name: "Bitcoin",
+      amount: 1,
+      priceUsd: nil,
+      valueUsd: 1
+    )
+
+    XCTAssertNotEqual(
+      AtlasAccessibility.tokenIdentity(firstToken),
+      AtlasAccessibility.tokenIdentity(secondToken)
+    )
+    XCTAssertNotEqual(
+      AtlasAccessibility.manualHoldingIdentity(firstHolding),
+      AtlasAccessibility.manualHoldingIdentity(secondHolding)
     )
   }
 

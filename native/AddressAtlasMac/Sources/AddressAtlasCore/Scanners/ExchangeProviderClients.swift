@@ -48,6 +48,11 @@ private struct ExchangeBalanceAccumulator {
   }
 }
 
+private struct BinanceBalanceRecord: Equatable {
+  var free: Double
+  var locked: Double
+}
+
 public struct NativeExchangeBalanceClient: Sendable {
   private let http: HTTPClient
   private let binanceBaseURL: URL
@@ -212,6 +217,10 @@ public struct NativeExchangeBalanceClient: Sendable {
     var warnings: [String] = []
     var invalidSymbolCount = 0
     var invalidAmountCount = 0
+    var recordsBySymbol: [String: BinanceBalanceRecord] = [:]
+    var malformedSymbols = Set<String>()
+    var conflictingSymbols = Set<String>()
+    var identicalDuplicateCount = 0
     for balance in response.balances {
       guard let validatedAsset = ExchangeBalanceNormalizer.validatedExchangeSymbol(balance.asset)
       else {
@@ -227,9 +236,27 @@ public struct NativeExchangeBalanceClient: Sendable {
         let lockedAmount = Self.parseAmount(balance.locked)
       else {
         invalidAmountCount += 1
+        malformedSymbols.insert(symbol)
+        recordsBySymbol.removeValue(forKey: symbol)
         continue
       }
-      accumulator.addAvailable(freeAmount, restricted: lockedAmount, for: symbol)
+      guard !malformedSymbols.contains(symbol), !conflictingSymbols.contains(symbol) else {
+        continue
+      }
+      let candidate = BinanceBalanceRecord(free: freeAmount, locked: lockedAmount)
+      if let existing = recordsBySymbol[symbol] {
+        if existing == candidate {
+          identicalDuplicateCount += 1
+        } else {
+          recordsBySymbol.removeValue(forKey: symbol)
+          conflictingSymbols.insert(symbol)
+        }
+      } else {
+        recordsBySymbol[symbol] = candidate
+      }
+    }
+    for (symbol, record) in recordsBySymbol {
+      accumulator.addAvailable(record.free, restricted: record.locked, for: symbol)
     }
     if invalidSymbolCount > 0 {
       warnings.append(
@@ -239,6 +266,18 @@ public struct NativeExchangeBalanceClient: Sendable {
     if invalidAmountCount > 0 {
       warnings.append(
         "Binance returned \(invalidAmountCount) account balance record(s) with invalid numeric amounts; they were skipped."
+      )
+    }
+    if identicalDuplicateCount > 0 {
+      warnings.append(
+        identicalDuplicateCount == 1
+          ? "Binance repeated one identical account balance record; the duplicate was skipped."
+          : "Binance repeated \(identicalDuplicateCount) identical account balance records; the duplicates were skipped."
+      )
+    }
+    if !conflictingSymbols.isEmpty {
+      warnings.append(
+        "Binance returned conflicting balance records for \(ExchangeBalanceNormalizer.formattedSymbols(Array(conflictingSymbols))); every conflicting version was skipped."
       )
     }
     if !accumulator.overflowedSymbols.isEmpty {

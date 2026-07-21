@@ -170,7 +170,7 @@ extension AppStateNetworkBoundaryTests {
       case "blockstream.info":
         return stubJSONResponse(
           request,
-          #"{"chain_stats":{"funded_txo_sum":100000000,"spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0}}"#
+          #"{"address":"1BoatSLRHtKNngkdXEeobR76b53LETtpyT","chain_stats":{"funded_txo_sum":100000000,"spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0}}"#
         )
       case "api.coingecko.com":
         return stubJSONResponse(request, #"{"bitcoin":{"usd":100000},"usd-coin":{"usd":1}}"#)

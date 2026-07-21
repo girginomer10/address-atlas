@@ -242,14 +242,14 @@ jobs:
           ) VALUES (
             '11111111-2222-4333-8444-555555555555',
             7,
-            '{"schemaVersion":1,"ciphertext":"ci-ciphertext","nonce":"ci-nonce"}'::jsonb,
-            123,
-            'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            '{"checksum":"60b1cfca31587a2af4be1c9070ccdfb9dfcd74edc6c3e43efbebe3a20df7fcda","ciphertext":"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC","createdAt":"2026-07-12T12:00:00Z","cryptoVersion":2,"keyId":"sync-v2","nonce":"AQEBAQEBAQEBAQEB","schemaVersion":2}'::jsonb,
+            275,
+            'cf86567cbc441cef3d7d7c5aa2fb5e80281905ce92c80bd50c63786577187c51',
             '2026-07-20T12:00:09Z',
             '2026-07-20T12:00:10Z'
           );
           UPDATE public.sync_storage_usage
-          SET total_snapshot_bytes = 123,
+          SET total_snapshot_bytes = 275,
               reconciled_contract_version = 1,
               reconcile_required = false,
               updated_at = '2026-07-20T12:00:11Z'
@@ -266,7 +266,7 @@ jobs:
             AND (SELECT pg_catalog.count(*) FROM public.passkey_credentials) = 1
             AND (SELECT pg_catalog.count(*) FROM public.vault_snapshots) = 1
             AND (SELECT total_snapshot_bytes FROM public.sync_storage_usage
-                 WHERE singleton = true) = 123
+                 WHERE singleton = true) = 275
             AND (SELECT pg_catalog.count(*)
                  FROM public.account_deletion_receipts) = 1
           THEN 'seeded' ELSE 'invalid' END;
@@ -329,7 +329,7 @@ jobs:
                  WHERE id = 'Y2ktcGFzc2tleS0wMDE') = 7
             AND (SELECT pg_catalog.count(*) FROM public.vault_snapshots) = 1
             AND (SELECT total_snapshot_bytes FROM public.sync_storage_usage
-                 WHERE singleton = true) = 123
+                 WHERE singleton = true) = 275
             AND (SELECT pg_catalog.count(*)
                  FROM public.account_deletion_receipts) = 1
           THEN 'restored' ELSE 'invalid' END;
@@ -607,12 +607,13 @@ jobs:
               AND EXISTS (
                 SELECT 1 FROM public.vault_snapshots
                 WHERE user_id = '11111111-2222-4333-8444-555555555555'
-                  AND version = 7 AND byte_size = 123
-                  AND checksum = pg_catalog.repeat('b', 64)
+                  AND version = 7 AND byte_size = 275
+                  AND checksum =
+                    'cf86567cbc441cef3d7d7c5aa2fb5e80281905ce92c80bd50c63786577187c51'
               )
               AND EXISTS (
                 SELECT 1 FROM public.sync_storage_usage
-                WHERE singleton = true AND total_snapshot_bytes = 123
+                WHERE singleton = true AND total_snapshot_bytes = 275
                   AND reconciled_contract_version = 1
                   AND reconcile_required = false
               )

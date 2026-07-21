@@ -102,6 +102,16 @@ public enum AddressDetection {
     return value
   }
 
+  static func tronHexAddress(_ address: String) -> String? {
+    let value = address.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard value.utf8.count == 34,
+      let payload = decodeBase58Check(value, alphabet: bitcoinBase58Alphabet),
+      payload.count == 21,
+      payload[0] == 0x41
+    else { return nil }
+    return payload.map { String(format: "%02x", $0) }.joined()
+  }
+
   /// Recognizes a retired Cosmos address only for persisted-record compatibility.
   /// A retired address is never returned by `detectChains`, so it cannot be
   /// newly added or sent to a dead provider for scanning.

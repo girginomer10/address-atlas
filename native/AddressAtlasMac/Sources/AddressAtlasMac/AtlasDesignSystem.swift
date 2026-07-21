@@ -7,6 +7,7 @@ enum AtlasTheme {
   static let paperRGB = (red: 0.965, green: 0.952, blue: 0.92)
   static let paper2RGB = (red: 0.925, green: 0.912, blue: 0.88)
   static let ink3RGB = (red: 0.42, green: 0.39, blue: 0.34)
+  static let warningRGB = (red: 0.55, green: 0.30, blue: 0.02)
   static let paper = Color(red: paperRGB.red, green: paperRGB.green, blue: paperRGB.blue)
   static let paper2 = Color(red: paper2RGB.red, green: paper2RGB.green, blue: paper2RGB.blue)
   static let paper3 = Color(red: 0.885, green: 0.872, blue: 0.84)
@@ -18,9 +19,16 @@ enum AtlasTheme {
   static let accent = Color(red: 0.18, green: 0.31, blue: 0.56)
   static let gain = Color(red: 0.12, green: 0.45, blue: 0.27)
   static let loss = Color(red: 0.72, green: 0.17, blue: 0.12)
+  /// Dark enough for normal-size warning text on both paper surfaces.
+  static let warning = Color(
+    red: warningRGB.red,
+    green: warningRGB.green,
+    blue: warningRGB.blue
+  )
 }
 
 struct Page<Content: View>: View {
+  @ScaledMetric(relativeTo: .largeTitle) private var titleSize: CGFloat = 58
   var eyebrow: String
   var title: String
   var subtitle: String
@@ -47,27 +55,22 @@ struct Page<Content: View>: View {
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 26) {
-        HStack(alignment: .top, spacing: 28) {
-          VStack(alignment: .leading, spacing: 12) {
-            AtlasLabel(eyebrow)
-            Text(title)
-              .font(.system(size: 58, weight: .regular, design: .serif))
-              .italic()
-              .lineLimit(1)
-              .minimumScaleFactor(0.7)
-            Text(subtitle)
-              .font(.system(size: 15))
-              .foregroundStyle(AtlasTheme.ink2)
-              .lineSpacing(3)
-              .frame(maxWidth: 680, alignment: .leading)
+        ViewThatFits(in: .horizontal) {
+          HStack(alignment: .top, spacing: 28) {
+            heading(lineLimit: 1)
+            Spacer()
+            headerStat
+              .frame(minWidth: 170, alignment: .trailing)
           }
-          Spacer()
-          VStack(alignment: .trailing, spacing: 5) {
-            AtlasLabel(statTitle)
-            Text(statValue)
-              .font(.system(size: 13, weight: .semibold, design: .monospaced))
+          // Below this width the subtitle becomes an unreadably narrow sliver
+          // beside the stat block even if SwiftUI can technically compress it.
+          .frame(minWidth: 760)
+
+          VStack(alignment: .leading, spacing: 18) {
+            heading(lineLimit: 2)
+            headerStat
+              .frame(maxWidth: .infinity, alignment: .leading)
           }
-          .frame(minWidth: 170, alignment: .trailing)
         }
         .padding(.bottom, 28)
         .overlay(alignment: .bottom) {
@@ -77,12 +80,36 @@ struct Page<Content: View>: View {
         StatusLine()
         content
       }
-      .padding(.horizontal, 48)
+      .padding(.horizontal, 30)
       .padding(.vertical, 30)
       .frame(maxWidth: 1220, alignment: .leading)
     }
     .scrollContentBackground(.hidden)
     .background(AtlasTheme.paper)
+  }
+
+  private func heading(lineLimit: Int) -> some View {
+    VStack(alignment: .leading, spacing: 12) {
+      AtlasLabel(eyebrow)
+      Text(title)
+        .font(.system(size: titleSize, weight: .regular, design: .serif))
+        .italic()
+        .lineLimit(lineLimit)
+        .minimumScaleFactor(0.7)
+      Text(subtitle)
+        .font(.body)
+        .foregroundStyle(AtlasTheme.ink2)
+        .lineSpacing(3)
+        .frame(maxWidth: 680, alignment: .leading)
+    }
+  }
+
+  private var headerStat: some View {
+    VStack(alignment: .trailing, spacing: 5) {
+      AtlasLabel(statTitle)
+      Text(statValue)
+        .font(.callout.monospaced().weight(.semibold))
+    }
   }
 }
 
@@ -102,6 +129,39 @@ struct Surface<Content: View>: View {
       .background(AtlasTheme.paper)
       .foregroundStyle(AtlasTheme.ink)
       .overlay(Rectangle().stroke(AtlasTheme.rule, lineWidth: 1))
+  }
+}
+
+/// Keeps dense control groups horizontal when their intrinsic content fits,
+/// then exposes the same controls as a readable vertical stack in a narrow
+/// window or at larger accessibility text sizes.
+struct AdaptiveStack<Content: View>: View {
+  var horizontalSpacing: CGFloat
+  var verticalSpacing: CGFloat
+  @ViewBuilder var content: () -> Content
+
+  init(
+    horizontalSpacing: CGFloat = 10,
+    verticalSpacing: CGFloat = 10,
+    @ViewBuilder content: @escaping () -> Content
+  ) {
+    self.horizontalSpacing = horizontalSpacing
+    self.verticalSpacing = verticalSpacing
+    self.content = content
+  }
+
+  var body: some View {
+    ViewThatFits(in: .horizontal) {
+      HStack(alignment: .center, spacing: horizontalSpacing) {
+        content()
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+
+      VStack(alignment: .leading, spacing: verticalSpacing) {
+        content()
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+    }
   }
 }
 
@@ -127,7 +187,7 @@ struct AtlasLabel: View {
 
   var body: some View {
     Text(text.uppercased())
-      .font(.system(size: 10, weight: .medium, design: .monospaced))
+      .font(.caption2.monospaced().weight(.medium))
       .foregroundStyle(AtlasTheme.ink3)
       .tracking(1.1)
   }
@@ -144,10 +204,11 @@ struct Badge: View {
 
   var body: some View {
     Text(text)
-      .font(.system(size: 10, weight: .medium, design: .monospaced))
+      .font(.caption2.monospaced().weight(.medium))
       .foregroundStyle(color)
       .padding(.horizontal, 8)
-      .frame(height: 22)
+      .padding(.vertical, 4)
+      .frame(minHeight: 22)
       .overlay(Rectangle().stroke(color.opacity(0.55), lineWidth: 1))
   }
 }
@@ -180,7 +241,7 @@ struct KeyValueGrid: View {
           AtlasLabel(row.0)
             .frame(width: 140, alignment: .leading)
           Text(row.1)
-            .font(.system(size: 12, design: .monospaced))
+            .font(.caption.monospaced())
             .foregroundStyle(AtlasTheme.ink2)
             .textSelection(.enabled)
           Spacer()
@@ -202,12 +263,12 @@ struct EmptyState: View {
   var body: some View {
     VStack(spacing: 10) {
       Image(systemName: systemImage)
-        .font(.system(size: 26))
+        .font(.title2)
         .foregroundStyle(AtlasTheme.ink3)
       Text(title)
-        .font(.system(size: 18, weight: .semibold, design: .serif))
+        .font(.system(.title3, design: .serif).weight(.semibold))
       Text(copy)
-        .font(.system(size: 13))
+        .font(.callout)
         .foregroundStyle(AtlasTheme.ink3)
     }
     .frame(maxWidth: .infinity)
@@ -221,13 +282,13 @@ struct BrandLockup: View {
   var body: some View {
     HStack(spacing: 12) {
       Text("A")
-        .font(.system(size: 22, weight: .regular, design: .serif))
+        .font(.system(.title2, design: .serif))
         .italic()
         .frame(width: 36, height: 36)
         .overlay(Circle().stroke(AtlasTheme.ink, lineWidth: 1))
       VStack(alignment: .leading, spacing: 1) {
         Text("Address Atlas")
-          .font(.system(size: 19, weight: .regular, design: .serif))
+          .font(.system(.title3, design: .serif))
           .italic()
         AtlasLabel("Private portfolio map")
       }
@@ -243,7 +304,7 @@ struct SidebarTrustLine: View {
     VStack(alignment: .leading, spacing: 3) {
       AtlasLabel(title)
       Text(copy)
-        .font(.system(size: 13))
+        .font(.callout)
         .foregroundStyle(AtlasTheme.ink2)
     }
     .padding(.vertical, 11)
@@ -265,6 +326,14 @@ struct StatusLine: View {
         }
         .foregroundStyle(AtlasTheme.accent)
         .accessibilityLabel("Sync server message: \(operatorMessage)")
+      }
+      if let persistentGuidance = state.persistentOperationGuidance {
+        HStack(alignment: .top, spacing: 8) {
+          Image(systemName: "exclamationmark.shield")
+          Text(persistentGuidance)
+        }
+        .foregroundStyle(AtlasTheme.warning)
+        .accessibilityLabel("Action required: \(persistentGuidance)")
       }
       if !state.notice.isEmpty {
         HStack(spacing: 8) {
@@ -288,7 +357,7 @@ struct StatusLine: View {
         .accessibilityHint("Opens the hard-pinned Address Atlas releases page in your browser")
       }
     }
-    .font(.system(size: 12))
+    .font(.callout)
   }
 }
 
@@ -300,7 +369,8 @@ struct AtlasTextFieldStyle: TextFieldStyle {
       .textFieldStyle(.plain)
       .foregroundStyle(isEnabled ? AtlasTheme.ink : AtlasTheme.ink3)
       .padding(.horizontal, 12)
-      .frame(height: 40)
+      .padding(.vertical, 9)
+      .frame(minHeight: 40)
       .background(isEnabled ? AtlasTheme.paper : AtlasTheme.paper2)
       .overlay(
         Rectangle().stroke(isEnabled ? AtlasTheme.rule : AtlasTheme.ruleSoft, lineWidth: 1)
@@ -314,7 +384,7 @@ struct AtlasPrimaryButtonStyle: ButtonStyle {
 
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .font(.system(size: 13, weight: .semibold))
+      .font(.callout.weight(.semibold))
       .foregroundStyle(isEnabled ? AtlasTheme.paper : AtlasTheme.ink3)
       .padding(.horizontal, 15)
       .frame(minHeight: 40)
@@ -336,7 +406,7 @@ struct AtlasSecondaryButtonStyle: ButtonStyle {
 
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .font(.system(size: 13, weight: .medium))
+      .font(.callout.weight(.medium))
       .foregroundStyle(
         isEnabled
           ? (configuration.isPressed ? AtlasTheme.accent : AtlasTheme.ink)
@@ -362,7 +432,7 @@ struct SidebarButtonStyle: ButtonStyle {
 
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .font(.system(size: 14, weight: .medium))
+      .font(.body.weight(.medium))
       .foregroundStyle(active ? AtlasTheme.paper : AtlasTheme.ink2)
       .background(
         active ? AtlasTheme.ink : (configuration.isPressed ? AtlasTheme.paper2 : Color.clear))
@@ -374,7 +444,7 @@ struct IconButtonStyle: ButtonStyle {
 
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .font(.system(size: 13))
+      .font(.callout)
       .foregroundStyle(
         isEnabled
           ? (configuration.isPressed ? AtlasTheme.loss : AtlasTheme.ink3)
@@ -383,6 +453,28 @@ struct IconButtonStyle: ButtonStyle {
       .frame(width: 30, height: 30)
       .contentShape(Rectangle())
       .opacity(isEnabled ? 1 : 0.55)
+  }
+}
+
+enum AtlasAccessibility {
+  static func walletIdentity(_ wallet: WalletRecord) -> String {
+    "\(wallet.label), \(wallet.chainKind.rawValue), address \(wallet.address)"
+  }
+
+  static func tokenIdentity(_ token: CustomTokenRecord) -> String {
+    "\(token.symbol), \(token.chainId), address \(token.address)"
+  }
+
+  static func manualHoldingIdentity(_ holding: ManualHoldingRecord) -> String {
+    "\(holding.symbol), \(holding.label), record ID \(holding.id.uuidString.lowercased())"
+  }
+
+  static func exchangeIdentity(_ connection: ExchangeConnectionRecord) -> String {
+    "\(connection.label), \(connection.provider.label), record ID \(connection.id.uuidString.lowercased())"
+  }
+
+  static func snapshotIdentity(_ run: ScanRunRecord) -> String {
+    "\(run.generatedAt.formatted(date: .abbreviated, time: .shortened)), record ID \(run.id.uuidString.lowercased())"
   }
 }
 

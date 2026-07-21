@@ -9,7 +9,7 @@ final class ScannerWorkflowTests: XCTestCase {
     let http = ScannerHTTPStub { request in
       scannerResponse(
         request,
-        #"{"chain_stats":{"funded_txo_sum":1e308,"spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0}}"#
+        #"{"address":"1BoatSLRHtKNngkdXEeobR76b53LETtpyT","chain_stats":{"funded_txo_sum":1e308,"spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0}}"#
       )
     }
     let scanner = NativeScanner(
@@ -37,14 +37,20 @@ final class ScannerWorkflowTests: XCTestCase {
       let bodyText = String(decoding: request.httpBody ?? Data(), as: UTF8.self)
       let body = try scannerJSONObject(request.httpBody ?? Data())
       if body["method"] as? String == "getBalance" {
-        return scannerResponse(request, #"{"result":{"value":0}}"#)
+        return scannerResponse(
+          request,
+          #"{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":123},"value":0}}"#
+        )
       }
       let requestedProgram =
         bodyText.contains("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb")
         ? "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         : "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
       let payload: [String: Any] = [
+        "jsonrpc": "2.0",
+        "id": 2,
         "result": [
+          "context": ["slot": 123],
           "value": [
             [
               "pubkey": bodyText.contains("TokenzQdBN")
@@ -64,8 +70,8 @@ final class ScannerWorkflowTests: XCTestCase {
                 ],
               ],
             ]
-          ]
-        ]
+          ],
+        ],
       ]
       return (
         try JSONSerialization.data(withJSONObject: payload),
@@ -116,7 +122,7 @@ final class ScannerWorkflowTests: XCTestCase {
       _ = requests.append(request)
       return scannerResponse(
         request,
-        #"{"chain_stats":{"funded_txo_sum":100000000,"spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0}}"#
+        #"{"address":"1BoatSLRHtKNngkdXEeobR76b53LETtpyT","chain_stats":{"funded_txo_sum":100000000,"spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0}}"#
       )
     }
     let scanner = NativeScanner(
@@ -192,11 +198,73 @@ final class ScannerWorkflowTests: XCTestCase {
       }))
   }
 
+  func testPersistentTransientErc20BatchDoesNotFanOutAfterBoundedRetry() async throws {
+    let requests = ScannerRequestLog()
+    let http = ScannerHTTPStub { request in
+      _ = requests.append(request)
+      let body = request.httpBody.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+      if body.contains("\"eth_blockNumber\"") {
+        return scannerResponse(request, #"{"jsonrpc":"2.0","id":1,"result":"0x10"}"#)
+      }
+      if body.contains("\"eth_getBalance\"") {
+        return scannerResponse(request, #"{"jsonrpc":"2.0","id":2,"result":"0x0"}"#)
+      }
+      if body.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("[") {
+        return scannerResponse(
+          request,
+          #"{"error":"temporarily unavailable"}"#,
+          statusCode: 503,
+          headerFields: ["Retry-After": "0"]
+        )
+      }
+      XCTFail("Unexpected individual ERC-20 request after persistent batch failure: \(body)")
+      return scannerResponse(request, #"{"jsonrpc":"2.0","id":1,"result":"0x0"}"#)
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: ScannerStaticPriceProvider(values: [:])
+    )
+
+    let result = try await scanner.scan(
+      addresses: "0x0000000000000000000000000000000000000001")
+    let bodies = requests.snapshot().compactMap { request in
+      request.httpBody.flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    let batchRequests = requests.snapshot().filter { request in
+      let body = request.httpBody.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+      return body.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("[")
+    }
+    XCTAssertFalse(batchRequests.isEmpty)
+    XCTAssertTrue(
+      Dictionary(grouping: batchRequests, by: { $0.url?.absoluteString ?? "" })
+        .values.allSatisfy { $0.count == 2 }
+    )
+    XCTAssertFalse(
+      bodies.contains(where: {
+        $0.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{")
+          && $0.contains("\"eth_call\"")
+      }))
+    XCTAssertTrue(
+      result.warnings.contains(where: {
+        $0.contains("after one retry") && $0.contains("individual requests were skipped")
+      }))
+  }
+
   func testMalformedSolanaTokenAmountProducesVisibleWarning() async throws {
     let http = ScannerHTTPStub { request in
       let body = request.httpBody.flatMap { String(data: $0, encoding: .utf8) } ?? ""
       if body.contains("getBalance") {
-        return scannerResponse(request, #"{"result":{"value":-1}}"#)
+        return scannerResponse(
+          request,
+          #"{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":123},"value":-1}}"#
+        )
+      }
+      if body.contains("getSlot") {
+        return scannerResponse(
+          request,
+          #"{"jsonrpc":"2.0","id":3,"result":123}"#
+        )
       }
       let requestedProgram =
         body.contains("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb")
@@ -205,7 +273,7 @@ final class ScannerWorkflowTests: XCTestCase {
       return scannerResponse(
         request,
         """
-        {"result":{"value":[{"pubkey":"So11111111111111111111111111111111111111112","account":{"owner":"\(requestedProgram)","data":{"parsed":{"type":"account","info":{"owner":"11111111111111111111111111111111","mint":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v","tokenAmount":{"amount":"not-a-number","decimals":6}}}}}}]}}
+        {"jsonrpc":"2.0","id":2,"result":{"context":{"slot":123},"value":[{"pubkey":"So11111111111111111111111111111111111111112","account":{"owner":"\(requestedProgram)","data":{"parsed":{"type":"account","info":{"owner":"11111111111111111111111111111111","mint":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v","tokenAmount":{"amount":"not-a-number","decimals":6}}}}}}]}}
         """
       )
     }
@@ -227,7 +295,7 @@ final class ScannerWorkflowTests: XCTestCase {
     let http = ScannerHTTPStub { request in
       scannerResponse(
         request,
-        #"{"chain_stats":{"funded_txo_sum":-1,"spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0}}"#
+        #"{"address":"1BoatSLRHtKNngkdXEeobR76b53LETtpyT","chain_stats":{"funded_txo_sum":-1,"spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0}}"#
       )
     }
     let scanner = NativeScanner(
@@ -241,16 +309,45 @@ final class ScannerWorkflowTests: XCTestCase {
     XCTAssertTrue(result.warnings.contains(where: { $0.contains("invalid statistics") }))
   }
 
+  func testBitcoinRejectsBalanceForDifferentEchoedAddress() async throws {
+    let http = ScannerHTTPStub { request in
+      scannerResponse(
+        request,
+        #"{"address":"3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy","chain_stats":{"funded_txo_sum":100000000,"spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0}}"#
+      )
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: ScannerStaticPriceProvider(values: [:])
+    )
+
+    let result = try await scanner.scan(addresses: "1BoatSLRHtKNngkdXEeobR76b53LETtpyT")
+
+    XCTAssertFalse(result.holdings.contains(where: { $0.symbol == "BTC" }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("different address") }))
+  }
+
   func testMalformedCosmosAmountProducesVisibleWarning() async throws {
     let http = ScannerHTTPStub { request in
       switch request.url?.path {
       case let path? where path.contains("/cosmos/bank/"):
         return scannerResponse(
-          request, #"{"balances":[{"denom":"uatom","amount":"not-a-number"}]}"#)
+          request,
+          #"{"balances":[{"denom":"uatom","amount":"not-a-number"}]}"#,
+          headerFields: ["x-cosmos-block-height": "123"]
+        )
       case let path? where path.contains("/cosmos/staking/"):
-        return scannerResponse(request, #"{"delegation_responses":[]}"#)
+        return scannerResponse(
+          request,
+          #"{"delegation_responses":[]}"#,
+          headerFields: ["x-cosmos-block-height": "123"]
+        )
       default:
-        return scannerResponse(request, #"{"total":[]}"#)
+        return scannerResponse(
+          request,
+          #"{"total":[]}"#,
+          headerFields: ["x-cosmos-block-height": "123"]
+        )
       }
     }
     let scanner = NativeScanner(
@@ -278,28 +375,36 @@ final class ScannerWorkflowTests: XCTestCase {
         if nextKey == nil {
           return scannerResponse(
             request,
-            #"{"balances":[{"denom":"uother","amount":"9"}],"pagination":{"next_key":"bank+/="}}"#
+            #"{"balances":[{"denom":"uother","amount":"9"}],"pagination":{"next_key":"bank+/="}}"#,
+            headerFields: ["x-cosmos-block-height": "123"]
           )
         }
         XCTAssertEqual(nextKey, "bank+/=")
         return scannerResponse(
           request,
-          #"{"balances":[{"denom":"uatom","amount":"1200000"}],"pagination":{"next_key":null}}"#
+          #"{"balances":[{"denom":"uatom","amount":"1200000"}],"pagination":{"next_key":null}}"#,
+          headerFields: ["x-cosmos-block-height": "123"]
         )
       case let path? where path.contains("/cosmos/staking/"):
         if nextKey == nil {
           return scannerResponse(
             request,
-            #"{"delegation_responses":[{"balance":{"denom":"uatom","amount":"1000000"}}],"pagination":{"next_key":"stake-key"}}"#
+            #"{"delegation_responses":[{"delegation":{"delegator_address":"cosmos1qqqtduhx4t2xvgcxrqfmrz0heq00vlvjqhuz93nwt6d2y0quqlqqxxec22","validator_address":"cosmosvaloper1first"},"balance":{"denom":"uatom","amount":"1000000"}}],"pagination":{"next_key":"stake-key"}}"#,
+            headerFields: ["x-cosmos-block-height": "123"]
           )
         }
         XCTAssertEqual(nextKey, "stake-key")
         return scannerResponse(
           request,
-          #"{"delegation_responses":[{"balance":{"denom":"uatom","amount":"1500000"}}],"pagination":{"next_key":""}}"#
+          #"{"delegation_responses":[{"delegation":{"delegator_address":"cosmos1qqqtduhx4t2xvgcxrqfmrz0heq00vlvjqhuz93nwt6d2y0quqlqqxxec22","validator_address":"cosmosvaloper1second"},"balance":{"denom":"uatom","amount":"1500000"}}],"pagination":{"next_key":""}}"#,
+          headerFields: ["x-cosmos-block-height": "123"]
         )
       default:
-        return scannerResponse(request, #"{"total":[]}"#)
+        return scannerResponse(
+          request,
+          #"{"total":[]}"#,
+          headerFields: ["x-cosmos-block-height": "123"]
+        )
       }
     }
     let scanner = NativeScanner(
@@ -341,12 +446,21 @@ final class ScannerWorkflowTests: XCTestCase {
         _ = requests.append(request)
         return scannerResponse(
           request,
-          #"{"balances":[{"denom":"uatom","amount":"1000000"}],"pagination":{"next_key":"repeat"}}"#
+          #"{"balances":[{"denom":"uatom","amount":"1000000"}],"pagination":{"next_key":"repeat"}}"#,
+          headerFields: ["x-cosmos-block-height": "123"]
         )
       case let path? where path.contains("/cosmos/staking/"):
-        return scannerResponse(request, #"{"delegation_responses":[]}"#)
+        return scannerResponse(
+          request,
+          #"{"delegation_responses":[]}"#,
+          headerFields: ["x-cosmos-block-height": "123"]
+        )
       default:
-        return scannerResponse(request, #"{"total":[]}"#)
+        return scannerResponse(
+          request,
+          #"{"total":[]}"#,
+          headerFields: ["x-cosmos-block-height": "123"]
+        )
       }
     }
     let scanner = NativeScanner(
@@ -363,11 +477,180 @@ final class ScannerWorkflowTests: XCTestCase {
     XCTAssertTrue(result.warnings.contains(where: { $0.contains("repeated key") }))
   }
 
+  func testCosmosRequiresAndPinsOneResponseHeightAcrossParts() async throws {
+    let address = "cosmos1qqqtduhx4t2xvgcxrqfmrz0heq00vlvjqhuz93nwt6d2y0quqlqqxxec22"
+    let requests = ScannerRequestLog()
+    let http = ScannerHTTPStub { request in
+      _ = requests.append(request)
+      switch request.url?.path {
+      case let path? where path.contains("/cosmos/bank/"):
+        XCTAssertNil(request.value(forHTTPHeaderField: "x-cosmos-block-height"))
+        return scannerResponse(
+          request,
+          #"{"balances":[{"denom":"uatom","amount":"1000000"}]}"#,
+          headerFields: ["x-cosmos-block-height": "700"]
+        )
+      case let path? where path.contains("/cosmos/staking/"):
+        XCTAssertEqual(request.value(forHTTPHeaderField: "x-cosmos-block-height"), "700")
+        return scannerResponse(
+          request,
+          """
+          {"delegation_responses":[{"delegation":{"delegator_address":"\(address)","validator_address":"cosmosvaloper1first"},"balance":{"denom":"uatom","amount":"2000000"}}]}
+          """,
+          headerFields: ["x-cosmos-block-height": "701"]
+        )
+      default:
+        XCTAssertEqual(request.value(forHTTPHeaderField: "x-cosmos-block-height"), "700")
+        return scannerResponse(
+          request,
+          #"{"total":[]}"#,
+          headerFields: ["x-cosmos-block-height": "700"]
+        )
+      }
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: ScannerStaticPriceProvider(values: [:])
+    )
+
+    let result = try await scanner.scan(addresses: address)
+
+    XCTAssertEqual(result.holdings.first(where: { $0.source == .native })?.amount, 1)
+    XCTAssertFalse(result.holdings.contains(where: { $0.source == .staked }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("Delegations could not be read") }))
+    XCTAssertEqual(requests.snapshot().count, 3)
+  }
+
+  func testCosmosFallsBackToLatestBlockAndPinsProvidersThatDoNotEchoHeight() async throws {
+    let address = "cosmos1qqqtduhx4t2xvgcxrqfmrz0heq00vlvjqhuz93nwt6d2y0quqlqqxxec22"
+    let requests = ScannerRequestLog()
+    let http = ScannerHTTPStub { request in
+      _ = requests.append(request)
+      let pinnedHeight = request.value(forHTTPHeaderField: "x-cosmos-block-height")
+      switch request.url?.path {
+      case "/cosmos/base/tendermint/v1beta1/blocks/latest":
+        XCTAssertNil(pinnedHeight)
+        return scannerResponse(
+          request,
+          #"{"block":{"header":{"chain_id":"cosmoshub-4","height":"700"}}}"#
+        )
+      case let path? where path.contains("/cosmos/bank/"):
+        if pinnedHeight == nil {
+          // This unbound discovery response is deliberately discarded because
+          // the provider did not echo a height.
+          return scannerResponse(
+            request, #"{"balances":[{"denom":"uatom","amount":"9000000"}]}"#)
+        }
+        XCTAssertEqual(pinnedHeight, "700")
+        return scannerResponse(
+          request, #"{"balances":[{"denom":"uatom","amount":"1000000"}]}"#)
+      case let path? where path.contains("/cosmos/staking/"):
+        XCTAssertEqual(pinnedHeight, "700")
+        return scannerResponse(request, #"{"delegation_responses":[]}"#)
+      default:
+        XCTAssertEqual(pinnedHeight, "700")
+        return scannerResponse(request, #"{"total":[]}"#)
+      }
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: ScannerStaticPriceProvider(values: [:])
+    )
+
+    let result = try await scanner.scan(addresses: address)
+
+    XCTAssertEqual(result.holdings.first(where: { $0.source == .native })?.amount, 1)
+    XCTAssertEqual(requests.snapshot().count, 5)
+    XCTAssertFalse(result.warnings.contains(where: { $0.contains("height-bound Cosmos snapshot") }))
+  }
+
+  func testCosmosRejectsLatestBlockFromTheWrongNetwork() async throws {
+    let address = "cosmos1qqqtduhx4t2xvgcxrqfmrz0heq00vlvjqhuz93nwt6d2y0quqlqqxxec22"
+    let requests = ScannerRequestLog()
+    let http = ScannerHTTPStub { request in
+      _ = requests.append(request)
+      if request.url?.path == "/cosmos/base/tendermint/v1beta1/blocks/latest" {
+        return scannerResponse(
+          request,
+          #"{"block":{"header":{"chain_id":"osmosis-1","height":"700"}}}"#
+        )
+      }
+      return scannerResponse(request, #"{"balances":[]}"#)
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: ScannerStaticPriceProvider(values: [:])
+    )
+
+    let result = try await scanner.scan(addresses: address)
+
+    XCTAssertTrue(result.holdings.isEmpty)
+    XCTAssertEqual(requests.snapshot().count, 2)
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("height-bound Cosmos snapshot") }))
+  }
+
+  func testCosmosDelegationPaginationDeduplicatesAndRejectsConflicts() async throws {
+    let address = "cosmos1qqqtduhx4t2xvgcxrqfmrz0heq00vlvjqhuz93nwt6d2y0quqlqqxxec22"
+    let http = ScannerHTTPStub { request in
+      let nextKey = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+        .queryItems?.first(where: { $0.name == "pagination.key" })?.value
+      switch request.url?.path {
+      case let path? where path.contains("/cosmos/bank/"):
+        return scannerResponse(
+          request,
+          #"{"balances":[]}"#,
+          headerFields: ["x-cosmos-block-height": "123"]
+        )
+      case let path? where path.contains("/cosmos/staking/"):
+        if nextKey == nil {
+          return scannerResponse(
+            request,
+            """
+            {"delegation_responses":[
+              {"delegation":{"delegator_address":"\(address)","validator_address":"validator-a"},"balance":{"denom":"uatom","amount":"1000000"}},
+              {"delegation":{"delegator_address":"\(address)","validator_address":"validator-b"},"balance":{"denom":"uatom","amount":"2000000"}}
+            ],"pagination":{"next_key":"next"}}
+            """,
+            headerFields: ["x-cosmos-block-height": "123"]
+          )
+        }
+        return scannerResponse(
+          request,
+          """
+          {"delegation_responses":[
+            {"delegation":{"delegator_address":"\(address)","validator_address":"validator-a"},"balance":{"denom":"uatom","amount":"1000000"}},
+            {"delegation":{"delegator_address":"\(address)","validator_address":"validator-b"},"balance":{"denom":"uatom","amount":"3000000"}},
+            {"delegation":{"delegator_address":"cosmos1qypqxpq9qcrsszg2pvxq6rs0zqg3yyc5lzv7xu","validator_address":"validator-c"},"balance":{"denom":"uatom","amount":"9000000"}}
+          ]}
+          """,
+          headerFields: ["x-cosmos-block-height": "123"]
+        )
+      default:
+        return scannerResponse(
+          request,
+          #"{"total":[]}"#,
+          headerFields: ["x-cosmos-block-height": "123"]
+        )
+      }
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: ScannerStaticPriceProvider(values: [:])
+    )
+
+    let result = try await scanner.scan(addresses: address)
+
+    XCTAssertEqual(result.holdings.first(where: { $0.source == .staked })?.amount, 1)
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("identical delegation") }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("conflicting delegation") }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("validator identity") }))
+  }
+
   func testMalformedTronTokenAmountProducesVisibleWarning() async throws {
     let http = ScannerHTTPStub { request in
       scannerResponse(
         request,
-        #"{"data":[{"balance":-1,"trc20":[{"TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t":"not-a-number"}]}]}"#
+        #"{"success":true,"data":[{"address":"4174472e7d35395a6b5add427eecb7f4b62ad2b071","balance":-1,"trc20":[{"TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t":"not-a-number"}]}]}"#
       )
     }
     let scanner = NativeScanner(
@@ -387,7 +670,10 @@ final class ScannerWorkflowTests: XCTestCase {
   func testTronScanPublishesFragmentBasedExplorerURL() async throws {
     let address = "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7"
     let http = ScannerHTTPStub { request in
-      scannerResponse(request, #"{"data":[{"balance":1000000,"trc20":[]}]}"#)
+      scannerResponse(
+        request,
+        #"{"success":true,"data":[{"address":"4174472e7d35395a6b5add427eecb7f4b62ad2b071","balance":1000000,"trc20":[]}]}"#
+      )
     }
     let scanner = NativeScanner(
       http: JSONHTTPClient(http: http),
@@ -402,11 +688,42 @@ final class ScannerWorkflowTests: XCTestCase {
     )
   }
 
+  func testTronRejectsFailureWrongAccountAndMultipleRows() async throws {
+    let requestedAddress = "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7"
+    let scenarios: [(json: String, expectedWarning: String)] = [
+      (#"{"success":false,"data":[]}"#, "did not report success"),
+      (
+        #"{"success":true,"data":[{"address":"410000000000000000000000000000000000000000","balance":1000000}]}"#,
+        "different account"
+      ),
+      (
+        #"{"success":true,"data":[{"address":"4174472e7d35395a6b5add427eecb7f4b62ad2b071","balance":1000000},{"address":"4174472e7d35395a6b5add427eecb7f4b62ad2b071","balance":1000000}]}"#,
+        "multiple account records"
+      ),
+    ]
+
+    for scenario in scenarios {
+      let http = ScannerHTTPStub { request in scannerResponse(request, scenario.json) }
+      let scanner = NativeScanner(
+        http: JSONHTTPClient(http: http),
+        priceProvider: ScannerStaticPriceProvider(values: [:])
+      )
+
+      let result = try await scanner.scan(addresses: requestedAddress)
+
+      XCTAssertFalse(result.holdings.contains(where: { $0.symbol == "TRX" }))
+      XCTAssertTrue(
+        result.warnings.contains(where: { $0.contains(scenario.expectedWarning) }),
+        "Expected \(scenario.expectedWarning), got \(result.warnings)"
+      )
+    }
+  }
+
   func testPriceOutagePreservesSuccessfulNativeBalance() async throws {
     let http = ScannerHTTPStub { request in
       scannerResponse(
         request,
-        #"{"chain_stats":{"funded_txo_sum":150000000,"spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0}}"#
+        #"{"address":"1BoatSLRHtKNngkdXEeobR76b53LETtpyT","chain_stats":{"funded_txo_sum":150000000,"spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0}}"#
       )
     }
     let scanner = NativeScanner(
@@ -507,7 +824,7 @@ final class ScannerWorkflowTests: XCTestCase {
       if request.url?.path.contains("/address/") == true {
         return scannerResponse(
           request,
-          #"{"chain_stats":{"funded_txo_sum":100000000,"spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0}}"#
+          #"{"address":"1BoatSLRHtKNngkdXEeobR76b53LETtpyT","chain_stats":{"funded_txo_sum":100000000,"spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0}}"#
         )
       }
       try await Task.sleep(nanoseconds: 5_000_000_000)
@@ -688,8 +1005,8 @@ final class ScannerWorkflowTests: XCTestCase {
 
     let prices = try await client.prices(for: (0..<205).map { "coin-\($0)" })
 
-    XCTAssertEqual(requests.snapshot().count, 3)
-    XCTAssertEqual(prices.count, 105)
+    XCTAssertEqual(requests.snapshot().count, 4)
+    XCTAssertEqual(prices.count, 205)
   }
 
   func testScannerRequestsHitExpectedProductionEndpointsForEveryChain() async throws {
