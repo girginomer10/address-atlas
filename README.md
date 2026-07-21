@@ -136,9 +136,16 @@ swift test
 
 GitHub Actions also verifies repository hygiene, dependency security, server behavior, native tests, production operations, and release governance.
 
-## Built with OpenAI Codex
+## Built with OpenAI Codex and GPT-5.6
 
-OpenAI Codex has been used as an engineering collaborator for architecture review, implementation, security hardening, tests, and repository QA. **Codex is not a product feature:** Address Atlas has no OpenAI runtime dependency and does not send portfolio data to OpenAI.
+OpenAI Codex with GPT-5.6 was used as an engineering collaborator throughout Build Week—not as a runtime product feature.
+
+- **Architecture and threat modeling:** challenged the local-first, read-only trust boundaries, exchange-permission policy, encrypted sync design, and failure modes before implementation.
+- **Cross-stack implementation:** supported focused work across the native Swift/SwiftUI app and the optional Next.js, TypeScript, PostgreSQL, and passkey sync service.
+- **Adversarial review:** searched for edge cases in multi-chain scanning, partial-result disclosure, encrypted-state recovery, exports, provider integrity, and accessibility.
+- **Verification and hardening:** expanded regression tests, reviewed CI and release gates, and repeated security and repository-quality sweeps until confirmed findings were resolved.
+
+Every suggested change remained subject to human review and repository tests. **Address Atlas has no OpenAI runtime dependency and does not send portfolio data to OpenAI.**
 
 ## Contributing
 

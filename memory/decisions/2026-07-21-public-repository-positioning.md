@@ -27,8 +27,11 @@ not communicate the product or its actual trust boundaries.
   identifying reports. Share-safer output reduces disclosure but is not anonymous.
 - Until a signed and notarized GitHub release exists, call the project a
   source-first preview and do not advertise a public download.
-- OpenAI Codex may be credited as an engineering collaborator. It is not a
-  product feature, and Address Atlas has no OpenAI runtime dependency.
+- For hackathon attribution, name OpenAI Codex and GPT-5.6 explicitly and
+  describe their concrete development roles: architecture and threat modeling,
+  cross-stack implementation, adversarial review, testing, and release
+  hardening. Keep that attribution within the development process: neither is
+  a product feature, and Address Atlas has no OpenAI runtime dependency.
 - Keep the GitHub homepage empty until a real Devpost or product URL is public.
   Do not invent a domain or publish a dead link.
 - Keep the editable social-card source and its 1280x640 rendered asset under
