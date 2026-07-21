@@ -75,6 +75,16 @@ describe("Postgres runtime orchestration", () => {
     expect(mocks.configs[0]).toMatchObject({ max: 7, idleTimeoutMillis: 45_000 });
   });
 
+  it("pins the production pool search path independently of the URL", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv(
+      "SYNC_DATABASE_URL",
+      "postgres://address_atlas_runtime:runtime-secret-value@localhost:5432/address_atlas_sync"
+    );
+    getSyncPool();
+    expect(mocks.configs[0]).toMatchObject({ options: "-csearch_path=public" });
+  });
+
   it("keeps validate-only request startup free of bootstrap connections", async () => {
     await expect(ensureSyncSchema()).resolves.toBeUndefined();
     expect(mocks.assertSyncSchemaReady).toHaveBeenCalledOnce();

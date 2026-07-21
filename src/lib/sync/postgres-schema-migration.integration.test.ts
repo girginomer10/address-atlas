@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { SYNC_MIGRATIONS } from "./postgres-migrations";
+import { STORAGE_RECONCILIATION_VERSION, SYNC_MIGRATIONS } from "./postgres-migrations";
 import {
   checkSyncSchemaReadiness,
   closeSyncPoolForTests,
@@ -140,7 +140,114 @@ maybeDescribe("versioned Postgres schema migrations", () => {
     });
   });
 
-  it("reconciles aggregate storage under a row lock without replaying migrations", async () => {
+  it("rejects v1 surface drift before a pending migration mutates anything", async () => {
+    await withIsolatedSchema(async () => {
+      await ensureSyncSchema();
+      await getSyncPool().query("DROP TABLE account_deletion_receipts");
+      await getSyncPool().query("DROP TABLE vault_snapshots");
+      await getSyncPool().query("DROP FUNCTION address_atlas_decrement_snapshot_usage()");
+      await getSyncPool().query("DELETE FROM sync_schema_migrations WHERE version > 1");
+      await getSyncPool().query(
+        `UPDATE sync_storage_usage
+         SET total_snapshot_bytes = 0,
+             reconciled_contract_version = 0,
+             reconcile_required = true,
+             updated_at = '2000-01-01T00:00:00Z'::pg_catalog.timestamptz
+         WHERE singleton = true`
+      );
+
+      // This is deliberately compatible enough for migration 002's
+      // IF-NOT-EXISTS/function/trigger statements to succeed, but it is not a
+      // version-1 object and must be rejected before any of those statements.
+      await getSyncPool().query(
+        `CREATE TABLE vault_snapshots (
+           user_id pg_catalog.uuid PRIMARY KEY,
+           byte_size pg_catalog.int4 NOT NULL,
+           operator_drift pg_catalog.text NOT NULL
+         )`
+      );
+      await getSyncPool().query(
+        `CREATE FUNCTION address_atlas_decrement_snapshot_usage()
+         RETURNS trigger
+         LANGUAGE plpgsql
+         AS $body$
+         BEGIN
+           RETURN OLD;
+         END;
+         $body$`
+      );
+      await getSyncPool().query(
+        `CREATE TRIGGER address_atlas_snapshot_delete_usage
+         BEFORE UPDATE ON vault_snapshots
+         FOR EACH ROW EXECUTE FUNCTION address_atlas_decrement_snapshot_usage()`
+      );
+
+      const captureState = async () => {
+        const result = await getSyncPool().query(
+          `SELECT (
+                    SELECT pg_catalog.jsonb_agg(
+                      pg_catalog.jsonb_build_array(
+                        ledger.version, ledger.name, ledger.checksum, ledger.applied_at::text
+                      ) ORDER BY ledger.version
+                    )
+                    FROM sync_schema_migrations AS ledger
+                  ) AS ledger,
+                  pg_catalog.to_regclass(
+                    pg_catalog.format('%I.vault_snapshots', current_schema())
+                  )::pg_catalog.oid::text AS vault_oid,
+                  (
+                    SELECT pg_catalog.jsonb_agg(
+                      pg_catalog.jsonb_build_array(
+                        attribute.attname,
+                        pg_catalog.format_type(attribute.atttypid, attribute.atttypmod),
+                        attribute.attnotnull
+                      ) ORDER BY attribute.attnum
+                    )
+                    FROM pg_catalog.pg_attribute AS attribute
+                    WHERE attribute.attrelid = 'vault_snapshots'::pg_catalog.regclass
+                      AND attribute.attnum > 0
+                      AND NOT attribute.attisdropped
+                  ) AS vault_columns,
+                  pg_catalog.pg_get_functiondef(
+                    'address_atlas_decrement_snapshot_usage()'::pg_catalog.regprocedure
+                  ) AS function_definition,
+                  (
+                    SELECT pg_catalog.pg_get_triggerdef(trigger_row.oid, false)
+                    FROM pg_catalog.pg_trigger AS trigger_row
+                    WHERE trigger_row.tgrelid = 'vault_snapshots'::pg_catalog.regclass
+                      AND trigger_row.tgname = 'address_atlas_snapshot_delete_usage'
+                      AND NOT trigger_row.tgisinternal
+                  ) AS trigger_definition,
+                  (
+                    SELECT pg_catalog.jsonb_build_array(
+                      usage.total_snapshot_bytes::text,
+                      usage.reconciled_contract_version,
+                      usage.reconcile_required,
+                      usage.updated_at::text
+                    )
+                    FROM sync_storage_usage AS usage
+                    WHERE usage.singleton = true
+                  ) AS storage,
+                  pg_catalog.to_regclass(
+                    pg_catalog.format('%I.account_deletion_receipts', current_schema())
+                  ) IS NOT NULL AS receipts_present`
+        );
+        return result.rows[0];
+      };
+      const before = await captureState();
+
+      await closeSyncPoolForTests();
+      await expect(ensureSyncSchema()).rejects.toThrow(
+        /relation set differs.*vault_snapshots/i
+      );
+
+      expect(await captureState()).toEqual(before);
+      expect(await migrationRows()).toHaveLength(1);
+      expect(before?.receipts_present).toBe(false);
+    });
+  });
+
+  it("reconciles a stale aggregate under a row lock despite current markers", async () => {
     await withIsolatedSchema(async () => {
       await ensureSyncSchema();
       const userId = randomUUID();
@@ -153,9 +260,10 @@ maybeDescribe("versioned Postgres schema migrations", () => {
       await getSyncPool().query(
         `UPDATE sync_storage_usage
          SET total_snapshot_bytes = 999,
-             reconciled_contract_version = 0,
-             reconcile_required = true
-         WHERE singleton = true`
+             reconciled_contract_version = $1,
+             reconcile_required = false
+         WHERE singleton = true`,
+        [STORAGE_RECONCILIATION_VERSION]
       );
 
       await closeSyncPoolForTests();

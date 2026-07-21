@@ -31,27 +31,38 @@ final class ScannerWorkflowTests: XCTestCase {
     XCTAssertNoThrow(try JSONEncoder.addressAtlas.encode(result))
   }
 
-  func testSPLAggregationRejectsTwoFiniteAmountsWhoseSumOverflows() async throws {
+  func testSPLParserRejectsExponentAmountsBeforeAggregation() async throws {
     let usdcMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
     let http = ScannerHTTPStub { request in
+      let bodyText = String(decoding: request.httpBody ?? Data(), as: UTF8.self)
       let body = try scannerJSONObject(request.httpBody ?? Data())
       if body["method"] as? String == "getBalance" {
         return scannerResponse(request, #"{"result":{"value":0}}"#)
       }
+      let requestedProgram =
+        bodyText.contains("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb")
+        ? "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        : "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
       let payload: [String: Any] = [
         "result": [
           "value": [
             [
+              "pubkey": bodyText.contains("TokenzQdBN")
+                ? "11111111111111111111111111111111"
+                : "So11111111111111111111111111111111111111112",
               "account": [
+                "owner": requestedProgram,
                 "data": [
                   "parsed": [
+                    "type": "account",
                     "info": [
+                      "owner": "11111111111111111111111111111111",
                       "mint": usdcMint,
                       "tokenAmount": ["amount": "1e308", "decimals": 0],
-                    ]
+                    ],
                   ]
-                ]
-              ]
+                ],
+              ],
             ]
           ]
         ]
@@ -70,9 +81,9 @@ final class ScannerWorkflowTests: XCTestCase {
 
     XCTAssertFalse(result.holdings.contains { $0.symbol == "USDC" })
     XCTAssertTrue(
-      result.warnings.contains {
-        $0.contains("SPL balances exceeded") && $0.contains("USDC")
-      })
+      result.warnings.contains { $0.contains("invalid parsed data") },
+      "Expected invalid SPL data warning, got: \(result.warnings)"
+    )
     XCTAssertTrue(result.totalUsd.isFinite)
   }
 
@@ -139,8 +150,13 @@ final class ScannerWorkflowTests: XCTestCase {
     let http = ScannerHTTPStub { request in
       _ = requests.append(request)
       let body = request.httpBody.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+      if body.contains("\"eth_blockNumber\"") {
+        return scannerResponse(
+          request, #"{"jsonrpc":"2.0","id":1,"result":"0x10"}"#)
+      }
       if body.contains("\"eth_getBalance\"") {
-        return scannerResponse(request, #"{"result":"0x0"}"#)
+        return scannerResponse(
+          request, #"{"jsonrpc":"2.0","id":2,"result":"0x0"}"#)
       }
       if body.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("[") {
         return scannerResponse(
@@ -182,9 +198,15 @@ final class ScannerWorkflowTests: XCTestCase {
       if body.contains("getBalance") {
         return scannerResponse(request, #"{"result":{"value":-1}}"#)
       }
+      let requestedProgram =
+        body.contains("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb")
+        ? "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        : "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
       return scannerResponse(
         request,
-        #"{"result":{"value":[{"account":{"data":{"parsed":{"info":{"mint":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v","tokenAmount":{"amount":"not-a-number","decimals":6}}}}}}]}}"#
+        """
+        {"result":{"value":[{"pubkey":"So11111111111111111111111111111111111111112","account":{"owner":"\(requestedProgram)","data":{"parsed":{"type":"account","info":{"owner":"11111111111111111111111111111111","mint":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v","tokenAmount":{"amount":"not-a-number","decimals":6}}}}}}]}}
+        """
       )
     }
     let scanner = NativeScanner(
@@ -401,25 +423,35 @@ final class ScannerWorkflowTests: XCTestCase {
       result.warnings.contains(where: { $0.contains("pricing is temporarily unavailable") }))
   }
 
-  func testXrpAccountLinesMarkerPaginationPreservesAllPages() async throws {
+  func testXrpAccountInfoAndTrustLinePaginationStayPinnedToOneValidatedLedger() async throws {
+    let address = "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn"
+    let ledgerHash = String(repeating: "A", count: 64)
     let requests = ScannerRequestLog()
     let http = ScannerHTTPStub { request in
       let body = try scannerJSONObject(request.httpBody ?? Data())
       let method = body["method"] as? String
       if method == "account_info" {
         return scannerResponse(
-          request, #"{"result":{"status":"success","account_data":{"Balance":"1000000"}}}"#)
+          request,
+          """
+          {"result":{"status":"success","validated":true,"ledger_hash":"\(ledgerHash)","ledger_index":123,"account_data":{"Account":"\(address)","Balance":"1000000"}}}
+          """
+        )
       }
       let page = requests.append(request)
       if page == 1 {
         return scannerResponse(
           request,
-          #"{"result":{"status":"success","lines":[{"account":"rIssuerOne","balance":"2","currency":"USD"}],"marker":{"ledger":123,"seq":1}}}"#
+          """
+          {"result":{"status":"success","account":"\(address)","validated":true,"ledger_hash":"\(ledgerHash)","ledger_index":123,"lines":[{"account":"rDsbeomae4FXwgQTJp9Rs64Qg9vDiTCdBv","balance":"2","currency":"USD"}],"marker":{"ledger":123,"seq":1}}}
+          """
         )
       }
       return scannerResponse(
         request,
-        #"{"result":{"status":"success","lines":[{"account":"rIssuerTwo","balance":"3","currency":"EUR"}]}}"#
+        """
+        {"result":{"status":"success","account":"\(address)","validated":true,"ledger_hash":"\(ledgerHash)","ledger_index":123,"lines":[{"account":"rhub8VRN55s94qWKDv6jmDy1pUykJzF3wq","balance":"3","currency":"EUR"}]}}
+        """
       )
     }
     let scanner = NativeScanner(
@@ -427,15 +459,47 @@ final class ScannerWorkflowTests: XCTestCase {
       priceProvider: ScannerStaticPriceProvider(values: ["ripple": PricePoint(usd: 1)])
     )
 
-    let result = try await scanner.scan(addresses: "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn")
+    let result = try await scanner.scan(addresses: address)
     let issued = result.holdings.filter { $0.source == .issued }
-    let secondBody = try scannerJSONObject(requests.snapshot()[1].httpBody ?? Data())
-    let params = (secondBody["params"] as? [[String: Any]])?.first
+    let requestBodies = try requests.snapshot().map {
+      try scannerJSONObject($0.httpBody ?? Data())
+    }
 
     XCTAssertEqual(Set(issued.map(\.symbol)), ["USD", "EUR"])
     XCTAssertEqual(requests.snapshot().count, 2)
-    XCTAssertNotNil(params?["marker"] as? [String: Any])
+    for body in requestBodies {
+      let params = (body["params"] as? [[String: Any]])?.first
+      XCTAssertEqual(params?["ledger_hash"] as? String, ledgerHash)
+      XCTAssertNil(params?["ledger_index"])
+    }
+    let secondParams = (requestBodies[1]["params"] as? [[String: Any]])?.first
+    XCTAssertNotNil(secondParams?["marker"] as? [String: Any])
     XCTAssertFalse(result.warnings.contains(where: { $0.contains("trustline") }))
+  }
+
+  func testMultiWalletWarningsUseDistinctShortHintsWithoutFullAddresses() async throws {
+    let first = "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn"
+    let second = "rDsbeomae4FXwgQTJp9Rs64Qg9vDiTCdBv"
+    let http = ScannerHTTPStub { request in
+      let body = try scannerJSONObject(request.httpBody ?? Data())
+      XCTAssertEqual(body["method"] as? String, "account_info")
+      return scannerResponse(
+        request,
+        #"{"result":{"status":"error","error":"temporarilyUnavailable","error_message":"ledger lookup unavailable"}}"#
+      )
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: ScannerStaticPriceProvider(values: ["ripple": PricePoint(usd: 1)])
+    )
+
+    let result = try await scanner.scan(addresses: "\(first) \(second)")
+    let warningText = result.warnings.joined(separator: "\n")
+
+    XCTAssertTrue(warningText.contains("rG1QQv...3jCn"), warningText)
+    XCTAssertTrue(warningText.contains("rDsbeo...CdBv"), warningText)
+    XCTAssertFalse(warningText.contains(first))
+    XCTAssertFalse(warningText.contains(second))
   }
 
   func testNativeGlobalDeadlineKeepsCompletedChainsAndSkipsRemainder() async throws {

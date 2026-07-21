@@ -133,12 +133,17 @@ public struct NativeScanner: Sendable {
                 )
               }
               outcome = ChainScanOutcome(
-                index: job.index, chainName: job.chain.name, result: scanned)
+                index: job.index,
+                chainName: job.chain.name,
+                addressHint: Self.displayAddress(job.address),
+                result: scanned
+              )
             } catch {
               try throwIfCancellation(error)
               outcome = ChainScanOutcome(
                 index: job.index,
                 chainName: job.chain.name,
+                addressHint: Self.displayAddress(job.address),
                 result: NativeScanResult(warnings: [error.localizedDescription])
               )
             }
@@ -162,7 +167,9 @@ public struct NativeScanner: Sendable {
     let assets = ordered.flatMap(\.result.assets)
     warnings.append(
       contentsOf: ordered.flatMap { outcome in
-        outcome.result.warnings.map { "\(outcome.chainName): \($0)" }
+        outcome.result.warnings.map {
+          "\(outcome.chainName) [\(outcome.addressHint)]: \($0)"
+        }
       })
     let unpricedSymbols =
       assets

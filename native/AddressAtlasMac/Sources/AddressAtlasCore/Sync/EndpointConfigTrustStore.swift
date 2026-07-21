@@ -6,6 +6,11 @@ import Foundation
 private func endpointConfigFlock(_ descriptor: Int32, _ operation: Int32) -> Int32
 
 public protocol EndpointConfigTrustPersisting: Sendable {
+  /// Verifies a candidate against the current per-origin high-water mark
+  /// without advancing durable trust. Authentication flows use this before
+  /// presenting UI, then commit only after the authority is authenticated.
+  func validate(_ config: NativeEndpointConfig, for serverOrigin: URL) async throws
+
   /// Atomically verifies and advances the per-origin endpoint-config high-water
   /// mark. A return means the config may be applied; every storage, rollback,
   /// or equivocation failure must be treated as a fail-closed rejection.
@@ -63,29 +68,28 @@ public actor EndpointConfigTrustStore: EndpointConfigTrustPersisting {
     self.fileURL = fileURL
   }
 
+  public func validate(
+    _ config: NativeEndpointConfig,
+    for serverOrigin: URL
+  ) throws {
+    let candidate = try Self.candidate(config, for: serverOrigin)
+    try withExclusiveFileLock {
+      let document = try load()
+      try Self.validate(candidate, against: document.records[candidate.origin])
+    }
+  }
+
   public func validateAndRecord(
     _ config: NativeEndpointConfig,
     for serverOrigin: URL
   ) throws {
-    guard let origin = SyncServerURL.validatedOrigin(serverOrigin.absoluteString) else {
-      throw EndpointConfigTrustStoreError.invalidOrigin
-    }
-    let originKey = origin.absoluteString
-    let digest = try Self.digest(config)
+    let candidate = try Self.candidate(config, for: serverOrigin)
 
     try withExclusiveFileLock {
       var document = try load()
-      if let previous = document.records[originKey] {
-        guard config.configVersion >= previous.version else {
-          throw EndpointConfigTrustStoreError.rollback(
-            previous: previous.version,
-            received: config.configVersion
-          )
-        }
-        guard config.configVersion != previous.version || digest == previous.digest else {
-          throw EndpointConfigTrustStoreError.equivocation(version: config.configVersion)
-        }
-        if config.configVersion == previous.version {
+      if let previous = document.records[candidate.origin] {
+        try Self.validate(candidate, against: previous)
+        if candidate.version == previous.version {
           return
         }
       } else {
@@ -94,7 +98,10 @@ public actor EndpointConfigTrustStore: EndpointConfigTrustPersisting {
         }
       }
 
-      document.records[originKey] = Record(version: config.configVersion, digest: digest)
+      document.records[candidate.origin] = Record(
+        version: candidate.version,
+        digest: candidate.digest
+      )
       try persist(document)
     }
   }
@@ -256,6 +263,36 @@ public actor EndpointConfigTrustStore: EndpointConfigTrustPersisting {
     let data = try JSONEncoder.addressAtlas.encode(config)
     return Data(SHA256.hash(data: data)).hexString
   }
+
+  private static func candidate(
+    _ config: NativeEndpointConfig,
+    for serverOrigin: URL
+  ) throws -> (origin: String, version: Int, digest: String) {
+    guard let origin = SyncServerURL.validatedOrigin(serverOrigin.absoluteString) else {
+      throw EndpointConfigTrustStoreError.invalidOrigin
+    }
+    return (
+      origin.absoluteString,
+      config.configVersion,
+      try digest(config)
+    )
+  }
+
+  private static func validate(
+    _ candidate: (origin: String, version: Int, digest: String),
+    against previous: Record?
+  ) throws {
+    guard let previous else { return }
+    guard candidate.version >= previous.version else {
+      throw EndpointConfigTrustStoreError.rollback(
+        previous: previous.version,
+        received: candidate.version
+      )
+    }
+    guard candidate.version != previous.version || candidate.digest == previous.digest else {
+      throw EndpointConfigTrustStoreError.equivocation(version: candidate.version)
+    }
+  }
 }
 
 /// Deterministic test/default seam for callers that intentionally do not want
@@ -265,24 +302,51 @@ public actor EphemeralEndpointConfigTrustStore: EndpointConfigTrustPersisting {
 
   public init() {}
 
+  public func validate(
+    _ config: NativeEndpointConfig,
+    for serverOrigin: URL
+  ) throws {
+    let candidate = try Self.candidate(config, for: serverOrigin)
+    try Self.validate(candidate, against: records[candidate.origin])
+  }
+
   public func validateAndRecord(
     _ config: NativeEndpointConfig,
     for serverOrigin: URL
   ) throws {
+    let candidate = try Self.candidate(config, for: serverOrigin)
+    try Self.validate(candidate, against: records[candidate.origin])
+    records[candidate.origin] = (candidate.version, candidate.digest)
+  }
+
+  private static func candidate(
+    _ config: NativeEndpointConfig,
+    for serverOrigin: URL
+  ) throws -> (origin: String, version: Int, digest: String) {
     guard let origin = SyncServerURL.validatedOrigin(serverOrigin.absoluteString) else {
       throw EndpointConfigTrustStoreError.invalidOrigin
     }
     let data = try JSONEncoder.addressAtlas.encode(config)
-    let digest = Data(SHA256.hash(data: data)).hexString
-    if let previous = records[origin.absoluteString] {
-      guard config.configVersion >= previous.version else {
-        throw EndpointConfigTrustStoreError.rollback(
-          previous: previous.version, received: config.configVersion)
-      }
-      guard config.configVersion != previous.version || digest == previous.digest else {
-        throw EndpointConfigTrustStoreError.equivocation(version: config.configVersion)
-      }
+    return (
+      origin.absoluteString,
+      config.configVersion,
+      Data(SHA256.hash(data: data)).hexString
+    )
+  }
+
+  private static func validate(
+    _ candidate: (origin: String, version: Int, digest: String),
+    against previous: (version: Int, digest: String)?
+  ) throws {
+    guard let previous else { return }
+    guard candidate.version >= previous.version else {
+      throw EndpointConfigTrustStoreError.rollback(
+        previous: previous.version,
+        received: candidate.version
+      )
     }
-    records[origin.absoluteString] = (config.configVersion, digest)
+    guard candidate.version != previous.version || candidate.digest == previous.digest else {
+      throw EndpointConfigTrustStoreError.equivocation(version: candidate.version)
+    }
   }
 }

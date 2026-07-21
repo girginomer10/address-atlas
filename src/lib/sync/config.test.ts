@@ -96,21 +96,24 @@ describe("sync runtime configuration", () => {
 
   it("separates validate-only runtime from the production schema-owner URL", () => {
     vi.stubEnv("NODE_ENV", "production");
-    vi.stubEnv("SYNC_DATABASE_URL", "postgres://runtime:runtime-secret-value@postgres:5432/address_atlas_sync");
+    vi.stubEnv(
+      "SYNC_DATABASE_URL",
+      "postgres://address_atlas_runtime:runtime-secret-value@postgres:5432/address_atlas_sync"
+    );
     expect(getSyncSchemaMode()).toBe("validate");
     expect(() => getSyncSchemaDatabaseConfig()).toThrow(/SYNC_SCHEMA_DATABASE_URL.*required/i);
 
     vi.stubEnv(
       "SYNC_SCHEMA_DATABASE_URL",
-      "postgres://schema_owner:schema-owner-secret-value@postgres:5432/address_atlas_sync"
+      "postgres://address_atlas:schema-owner-secret-value@postgres:5432/address_atlas_sync"
     );
-    expect(getSyncSchemaDatabaseConfig().connectionString).toContain("schema_owner");
+    expect(getSyncSchemaDatabaseConfig().connectionString).toContain("address_atlas");
 
     vi.stubEnv("SYNC_SCHEMA_DATABASE_URL", "");
     expect(() => getSyncSchemaDatabaseConfig()).toThrow(/must not be blank/i);
     vi.stubEnv(
       "SYNC_SCHEMA_DATABASE_URL",
-      "postgres://schema_owner:schema-owner-secret-value@postgres:5432/address_atlas_sync"
+      "postgres://address_atlas:schema-owner-secret-value@postgres:5432/address_atlas_sync"
     );
 
     vi.stubEnv("SYNC_SCHEMA_MODE", "bootstrap");
@@ -222,8 +225,107 @@ describe("sync runtime configuration", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv(
       "SYNC_DATABASE_URL",
-      "postgres://address_atlas:replace-with-password@postgres:5432/address_atlas_sync"
+      "postgres://address_atlas_runtime:replace-with-password@postgres:5432/address_atlas_sync"
     );
     expect(() => getSyncDatabaseConfig()).toThrow(/non-placeholder username and password/i);
+  });
+
+  it("pins production database URLs to the runtime and owner identities", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv(
+      "SYNC_DATABASE_URL",
+      "postgres://address_atlas:runtime-secret-value@postgres:5432/address_atlas_sync"
+    );
+    expect(() => getSyncDatabaseConfig()).toThrow(/fixed production role address_atlas_runtime/i);
+
+    vi.stubEnv(
+      "SYNC_DATABASE_URL",
+      "postgres://address_atlas_runtime:runtime-secret-value@postgres:5432/address_atlas_other"
+    );
+    expect(() => getSyncDatabaseConfig()).toThrow(/exact production database address_atlas_sync/i);
+
+    vi.stubEnv(
+      "SYNC_SCHEMA_DATABASE_URL",
+      "postgres://address_atlas_runtime:owner-secret-value@postgres:5432/address_atlas_sync"
+    );
+    expect(() => getSyncSchemaDatabaseConfig()).toThrow(/fixed production role address_atlas/i);
+
+    vi.stubEnv(
+      "SYNC_SCHEMA_DATABASE_URL",
+      "postgres://address_atlas:owner-secret-value@postgres:5432/address_atlas_sync"
+    );
+    expect(getSyncSchemaDatabaseConfig().connectionString).toContain("address_atlas_sync");
+  });
+
+  it.each([
+    "options=-csearch_path%3Devil",
+    "application_name=spoofed",
+    "statement_timeout=0",
+    "connect_timeout=0",
+    "target_session_attrs=read-write"
+  ])("rejects a dangerous production database URL parameter: %s", (parameter) => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv(
+      "SYNC_DATABASE_URL",
+      `postgres://address_atlas_runtime:runtime-secret-value@postgres:5432/address_atlas_sync?${parameter}`
+    );
+    expect(() => getSyncDatabaseConfig()).toThrow(/forbidden or duplicate production URL parameter/i);
+  });
+
+  it("allows a single TLS-only production URL parameter and rejects duplicates", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv(
+      "SYNC_DATABASE_URL",
+      "postgres://address_atlas_runtime:runtime-secret-value@postgres:5432/address_atlas_sync?sslmode=require"
+    );
+    expect(getSyncDatabaseConfig().connectionString).toContain("sslmode=require");
+
+    vi.stubEnv(
+      "SYNC_DATABASE_URL",
+      "postgres://address_atlas_runtime:runtime-secret-value@postgres:5432/address_atlas_sync?sslmode=require&sslmode=verify-full"
+    );
+    expect(() => getSyncDatabaseConfig()).toThrow(/forbidden or duplicate production URL parameter/i);
+  });
+
+  it.each([
+    "atlas_drill_case1",
+    "atlas_restore_case_2",
+    "atlas_bootstrap_case3"
+  ])("allows only an explicitly marked isolated restore schema migration: %s", (database) => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("ADDRESS_ATLAS_RESTORE_MIGRATION", "1");
+    vi.stubEnv("SYNC_SCHEMA_MODE", "bootstrap");
+    vi.stubEnv(
+      "SYNC_SCHEMA_DATABASE_URL",
+      `postgres://address_atlas:owner-secret-value@postgres:5432/${database}`
+    );
+    expect(getSyncSchemaDatabaseConfig().connectionString).toContain(database);
+  });
+
+  it("rejects restore database exceptions with a missing flag, wrong mode, source, or name", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("SYNC_SCHEMA_MODE", "bootstrap");
+    vi.stubEnv(
+      "SYNC_SCHEMA_DATABASE_URL",
+      "postgres://address_atlas:owner-secret-value@postgres:5432/atlas_restore_case1"
+    );
+    expect(() => getSyncSchemaDatabaseConfig()).toThrow(/exact production database/i);
+
+    vi.stubEnv("ADDRESS_ATLAS_RESTORE_MIGRATION", "1");
+    vi.stubEnv("SYNC_SCHEMA_MODE", "validate");
+    expect(() => getSyncSchemaDatabaseConfig()).toThrow(/exact production database/i);
+
+    vi.stubEnv("SYNC_SCHEMA_MODE", "bootstrap");
+    vi.stubEnv(
+      "SYNC_SCHEMA_DATABASE_URL",
+      "postgres://address_atlas:owner-secret-value@postgres:5432/customer_database"
+    );
+    expect(() => getSyncSchemaDatabaseConfig()).toThrow(/exact production database/i);
+
+    vi.stubEnv(
+      "SYNC_DATABASE_URL",
+      "postgres://address_atlas_runtime:runtime-secret-value@postgres:5432/atlas_restore_case1"
+    );
+    expect(() => getSyncDatabaseConfig()).toThrow(/exact production database/i);
   });
 });

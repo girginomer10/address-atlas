@@ -57,6 +57,7 @@ public struct EncryptedVaultEnvelope: Codable, Equatable, Hashable, Sendable {
 public enum VaultSubkey: String, CaseIterable, Sendable {
   case localDatabase = "local-db"
   case syncBlob = "sync-blob"
+  case syncOperation = "sync-operation"
   case exchangeCredentials = "exchange-credentials"
 }
 
@@ -163,17 +164,17 @@ public struct VaultCrypto: Sendable {
     }
     try validateMetadata(schemaVersion: envelope.schemaVersion, keyId: envelope.keyId)
     guard envelope.checksum.count == 64,
-          envelope.checksum.unicodeScalars.allSatisfy({ scalar in
-            (48...57).contains(scalar.value) || (97...102).contains(scalar.value)
-          })
+      envelope.checksum.unicodeScalars.allSatisfy({ scalar in
+        (48...57).contains(scalar.value) || (97...102).contains(scalar.value)
+      })
     else {
       throw VaultCryptoError.invalidEnvelope
     }
     let nonceData = try Base64URL.decode(envelope.nonce)
     let body = try Base64URL.decode(envelope.ciphertext)
     guard nonceData.count == 12,
-          body.count >= 16,
-          body.count <= envelopeBodyByteLimit
+      body.count >= 16,
+      body.count <= envelopeBodyByteLimit
     else {
       throw VaultCryptoError.invalidEnvelope
     }
@@ -232,22 +233,24 @@ public struct VaultCrypto: Sendable {
 
   private func validateMetadata(schemaVersion: Int, keyId: String) throws {
     guard (1...VaultDocument.currentSchemaVersion).contains(schemaVersion),
-          (3...80).contains(keyId.count),
-          keyId.unicodeScalars.allSatisfy({ scalar in
-            (65...90).contains(scalar.value)
-              || (97...122).contains(scalar.value)
-              || (48...57).contains(scalar.value)
-              || scalar == "-"
-              || scalar == "_"
-              || scalar == "."
-              || scalar == ":"
-          })
+      (3...80).contains(keyId.count),
+      keyId.unicodeScalars.allSatisfy({ scalar in
+        (65...90).contains(scalar.value)
+          || (97...122).contains(scalar.value)
+          || (48...57).contains(scalar.value)
+          || scalar == "-"
+          || scalar == "_"
+          || scalar == "."
+          || scalar == ":"
+      })
     else {
       throw VaultCryptoError.invalidEnvelope
     }
   }
 
-  private func checksumInput(schemaVersion: Int, cryptoVersion: Int, keyId: String, nonce: Data, ciphertext: Data) -> Data {
+  private func checksumInput(
+    schemaVersion: Int, cryptoVersion: Int, keyId: String, nonce: Data, ciphertext: Data
+  ) -> Data {
     var data = Data()
     data.append(Data("schema:\(schemaVersion)|crypto:\(cryptoVersion)|key:\(keyId)|".utf8))
     data.append(nonce)
@@ -288,7 +291,8 @@ extension JSONDecoder {
       fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
       let wholeSecondsFormatter = ISO8601DateFormatter()
       wholeSecondsFormatter.formatOptions = [.withInternetDateTime]
-      if let date = fractionalFormatter.date(from: value) ?? wholeSecondsFormatter.date(from: value) {
+      if let date = fractionalFormatter.date(from: value) ?? wholeSecondsFormatter.date(from: value)
+      {
         return date
       }
       throw DecodingError.dataCorruptedError(

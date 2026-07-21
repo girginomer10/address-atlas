@@ -1,6 +1,29 @@
 import Foundation
 
 extension NativeScanner {
+  private struct ExactParsedSplAccount: Equatable, Sendable {
+    var accountPublicKey: String
+    var program: String
+    var mint: String
+    var rawAmount: UInt64
+    var decimals: Int
+  }
+
+  private struct SolanaFetchedProgramOutcome: Sendable {
+    var accounts: [ExactParsedSplAccount] = []
+    var malformedAccountPublicKeys = Set<String>()
+    var warnings: [String] = []
+    var invalidMints: [String] = []
+    var invalidAccountCount = 0
+  }
+
+  private struct SolanaParsedAccountResult {
+    var accounts: [ExactParsedSplAccount] = []
+    var malformedAccountPublicKeys = Set<String>()
+    var invalidMints: [String] = []
+    var invalidAccountCount = 0
+  }
+
   func scanSolana(
     address: String,
     chain: ChainConfig,
@@ -98,23 +121,37 @@ extension NativeScanner {
             domain: "SolanaTokenAccounts", message: "Token account lookup returned an empty result."
           )
         }
-        let parsed = Self.parseSolanaTokenAccountResult(accounts)
-        return SolanaProgramOutcome(
+        let parsed = Self.parseSolanaTokenAccountResult(
+          accounts,
+          expectedOwner: owner,
+          expectedProgram: program
+        )
+        return SolanaFetchedProgramOutcome(
           accounts: parsed.accounts,
+          malformedAccountPublicKeys: parsed.malformedAccountPublicKeys,
           invalidMints: parsed.invalidMints,
-          unidentifiedInvalidAccountCount: parsed.unidentifiedInvalidAccountCount
+          invalidAccountCount: parsed.invalidAccountCount
         )
       } catch {
         try throwIfCancellation(error)
-        return SolanaProgramOutcome(
+        return SolanaFetchedProgramOutcome(
           warnings: [
             "\(Self.solanaProgramLabel(program)) token account scan failed; SPL balances may be incomplete."
           ]
         )
       }
     }
-    let parsedAccounts = outcomes.flatMap(\.accounts)
     var warnings = outcomes.flatMap(\.warnings)
+    let malformedAccountPublicKeys = outcomes.reduce(into: Set<String>()) { result, outcome in
+      result.formUnion(outcome.malformedAccountPublicKeys)
+    }
+    let deduplicatedAccounts = Self.deduplicateSolanaAccountRecords(
+      outcomes.flatMap(\.accounts),
+      taintedAccountPublicKeys: malformedAccountPublicKeys,
+      publicKey: \.accountPublicKey
+    )
+    warnings.append(contentsOf: deduplicatedAccounts.warnings)
+    let parsedAccounts = deduplicatedAccounts.accounts
 
     let registryByMint = registry.reduce(into: [String: TokenConfig]()) { result, token in
       if result[token.address] == nil { result[token.address] = token }
@@ -128,81 +165,228 @@ extension NativeScanner {
         "SPL token balance data was invalid for \(Self.formattedSymbols(malformedSymbols)); balances may be incomplete."
       )
     }
-    if outcomes.reduce(0, { $0 + $1.unidentifiedInvalidAccountCount }) > 0 {
+    if outcomes.reduce(0, { $0 + $1.invalidAccountCount }) > 0 {
       warnings.append(
-        "Some SPL token accounts returned invalid parsed amount data; balances may be incomplete.")
+        "Some SPL token accounts returned invalid parsed data; balances may be incomplete.")
     }
-    var totals: [String: Double] = [:]
-    var warnedMints = Set<String>()
-    var overflowedMints = Set<String>()
-    for account in parsedAccounts {
-      guard let token = registryByMint[account.mint] else { continue }
-      guard !overflowedMints.contains(account.mint) else { continue }
-      guard (0...36).contains(account.decimals), account.rawAmount.isFinite, account.rawAmount >= 0
-      else {
-        if warnedMints.insert(account.mint).inserted {
-          warnings.append(
-            "\(token.symbol) returned invalid on-chain amount metadata and was skipped.")
-        }
+    let accountsByMint = Dictionary(
+      grouping: parsedAccounts.filter { registryByMint[$0.mint] != nil },
+      by: \.mint
+    )
+    var balances: [(token: TokenConfig, amount: Double)] = []
+    var inconsistentDecimalsSymbols: [String] = []
+    var overflowedSymbols: [String] = []
+    for mint in accountsByMint.keys.sorted() {
+      guard let token = registryByMint[mint], let mintAccounts = accountsByMint[mint] else {
         continue
       }
-      // Trust the on-chain decimals for the conversion rather than silently
-      // dropping the balance when they differ from the bundled registry value
-      // (which previously made real balances read as zero with no warning).
-      if token.decimals != account.decimals, !warnedMints.contains(account.mint) {
-        warnedMints.insert(account.mint)
+      let decimalsValues = Set(mintAccounts.map(\.decimals))
+      guard decimalsValues.count == 1, let decimals = decimalsValues.first else {
+        inconsistentDecimalsSymbols.append(token.symbol)
+        continue
+      }
+
+      var rawTotal: UInt64 = 0
+      var didOverflow = false
+      for account in mintAccounts {
+        let addition = rawTotal.addingReportingOverflow(account.rawAmount)
+        guard !addition.overflow else {
+          didOverflow = true
+          break
+        }
+        rawTotal = addition.partialValue
+      }
+      guard !didOverflow else {
+        overflowedSymbols.append(token.symbol)
+        continue
+      }
+
+      // Trust the one consistent on-chain decimals value for conversion rather
+      // than silently dropping a real balance when the bundled registry differs.
+      if token.decimals != decimals {
         warnings.append(
-          "\(token.symbol) on-chain decimals (\(account.decimals)) differ from the registry (\(token.decimals)); using on-chain decimals."
+          "\(token.symbol) on-chain decimals (\(decimals)) differ from the registry (\(token.decimals)); using on-chain decimals."
         )
       }
-      let scaledAmount = account.rawAmount / pow(10, Double(account.decimals))
-      guard scaledAmount.isFinite,
-        let nextTotal = FiniteValueMath.addingNonnegative(
-          totals[account.mint, default: 0], scaledAmount)
-      else {
-        totals.removeValue(forKey: account.mint)
-        overflowedMints.insert(account.mint)
+      let scaledAmount = Double(rawTotal) / pow(10, Double(decimals))
+      guard scaledAmount.isFinite else {
+        overflowedSymbols.append(token.symbol)
         continue
       }
-      totals[account.mint] = nextTotal
+      balances.append((token, scaledAmount))
     }
-    if !overflowedMints.isEmpty {
-      let symbols = overflowedMints.compactMap { registryByMint[$0]?.symbol }
+    if !inconsistentDecimalsSymbols.isEmpty {
       warnings.append(
-        "SPL balances exceeded the supported numeric range for \(Self.formattedSymbols(symbols)); those tokens were skipped."
+        "SPL balances used inconsistent on-chain decimals for \(Self.formattedSymbols(inconsistentDecimalsSymbols)); those tokens were skipped."
       )
     }
-    let balances: [(token: TokenConfig, amount: Double)] = totals.compactMap { mint, amount in
-      guard let token = registryByMint[mint] else { return nil }
-      return (token, amount)
+    if !overflowedSymbols.isEmpty {
+      warnings.append(
+        "SPL balances exceeded the supported numeric range for \(Self.formattedSymbols(overflowedSymbols)); those tokens were skipped."
+      )
     }
     return SolanaTokenBalanceScan(balances: balances, warnings: warnings)
   }
 
-  public static func parseSolanaTokenAccounts(_ accounts: [SolanaTokenAccount])
-    -> [ParsedSplAccount]
-  {
-    parseSolanaTokenAccountResult(accounts).accounts
+  static func deduplicateSolanaAccounts(
+    _ accounts: [ParsedSplAccount],
+    taintedAccountPublicKeys: Set<String> = []
+  ) -> SolanaProgramOutcome {
+    let result = deduplicateSolanaAccountRecords(
+      accounts,
+      taintedAccountPublicKeys: taintedAccountPublicKeys,
+      publicKey: \.accountPublicKey
+    )
+    return SolanaProgramOutcome(accounts: result.accounts, warnings: result.warnings)
   }
 
-  static func parseSolanaTokenAccountResult(_ accounts: [SolanaTokenAccount])
-    -> SolanaAccountParseResult
-  {
-    var result = SolanaAccountParseResult()
+  private static func deduplicateSolanaAccountRecords<Account: Equatable>(
+    _ accounts: [Account],
+    taintedAccountPublicKeys: Set<String>,
+    publicKey: (Account) -> String
+  ) -> (accounts: [Account], warnings: [String]) {
+    var accountsByPublicKey: [String: Account] = [:]
+    var conflictingAccountPublicKeys = Set<String>()
+    var identicalDuplicateAccountCount = 0
+    let validAccountPublicKeys = Set(accounts.map(publicKey))
+    let malformedDuplicatePublicKeys = taintedAccountPublicKeys.intersection(
+      validAccountPublicKeys
+    )
     for account in accounts {
-      guard let info = account.account.data.parsed?.info else {
-        result.unidentifiedInvalidAccountCount += 1
+      let accountPublicKey = publicKey(account)
+      guard !taintedAccountPublicKeys.contains(accountPublicKey) else { continue }
+      guard !conflictingAccountPublicKeys.contains(accountPublicKey) else { continue }
+      if let existing = accountsByPublicKey[accountPublicKey] {
+        if existing == account {
+          identicalDuplicateAccountCount += 1
+        } else {
+          accountsByPublicKey.removeValue(forKey: accountPublicKey)
+          conflictingAccountPublicKeys.insert(accountPublicKey)
+        }
         continue
       }
-      guard let amount = Double(info.tokenAmount.amount), amount.isFinite, amount >= 0 else {
-        result.invalidMints.append(info.mint)
+      accountsByPublicKey[accountPublicKey] = account
+    }
+    var warnings: [String] = []
+    if !malformedDuplicatePublicKeys.isEmpty {
+      warnings.append(
+        malformedDuplicatePublicKeys.count == 1
+          ? "Solana discarded one token account because a malformed duplicate used the same public key."
+          : "Solana discarded \(malformedDuplicatePublicKeys.count) token accounts because malformed duplicates used the same public keys."
+      )
+    }
+    if identicalDuplicateAccountCount > 0 {
+      warnings.append(
+        identicalDuplicateAccountCount == 1
+          ? "Solana repeated one identical token account record; the duplicate was skipped to avoid double-counting."
+          : "Solana repeated \(identicalDuplicateAccountCount) identical token account records; the duplicates were skipped to avoid double-counting."
+      )
+    }
+    if !conflictingAccountPublicKeys.isEmpty {
+      warnings.append(
+        conflictingAccountPublicKeys.count == 1
+          ? "Solana returned conflicting data for one repeated token account; every version was skipped."
+          : "Solana returned conflicting data for \(conflictingAccountPublicKeys.count) repeated token accounts; every version was skipped."
+      )
+    }
+    let parsedAccounts = accountsByPublicKey.keys.sorted().compactMap {
+      accountsByPublicKey[$0]
+    }
+    return (parsedAccounts, warnings)
+  }
+
+  public static func parseSolanaTokenAccounts(
+    _ accounts: [SolanaTokenAccount],
+    expectedOwner: String,
+    expectedProgram: String
+  )
+    -> [ParsedSplAccount]
+  {
+    parseSolanaTokenAccountResult(
+      accounts,
+      expectedOwner: expectedOwner,
+      expectedProgram: expectedProgram
+    ).accounts.map { account in
+      ParsedSplAccount(
+        accountPublicKey: account.accountPublicKey,
+        mint: account.mint,
+        rawAmount: Double(account.rawAmount),
+        decimals: account.decimals
+      )
+    }
+  }
+
+  private static func parseSolanaTokenAccountResult(
+    _ accounts: [SolanaTokenAccount],
+    expectedOwner: String,
+    expectedProgram: String
+  )
+    -> SolanaParsedAccountResult
+  {
+    var result = SolanaParsedAccountResult()
+    for account in accounts {
+      guard
+        let publicKey = account.pubkey.flatMap({
+          AddressDetection.canonicalAddress($0, family: .solana)
+        })
+      else {
+        result.invalidAccountCount += 1
+        continue
+      }
+      guard
+        let rpcAccount = account.account,
+        let parsed = rpcAccount.data?.parsed,
+        let info = parsed.info
+      else {
+        result.malformedAccountPublicKeys.insert(publicKey)
+        result.invalidAccountCount += 1
+        continue
+      }
+      guard
+        rpcAccount.owner == expectedProgram,
+        parsed.type == "account",
+        info.owner == expectedOwner
+      else {
+        result.malformedAccountPublicKeys.insert(publicKey)
+        if let mint = info.mint { result.invalidMints.append(mint) }
+        result.invalidAccountCount += 1
+        continue
+      }
+      guard
+        let rawMint = info.mint,
+        let mint = AddressDetection.canonicalAddress(rawMint, family: .solana),
+        let tokenAmount = info.tokenAmount,
+        let decimals = tokenAmount.decimals,
+        (0...36).contains(decimals),
+        let rawAmount = tokenAmount.amount,
+        let amount = solanaRawAmount(rawAmount)
+      else {
+        result.malformedAccountPublicKeys.insert(publicKey)
+        if let mint = info.mint { result.invalidMints.append(mint) }
+        result.invalidAccountCount += 1
         continue
       }
       result.accounts.append(
-        ParsedSplAccount(mint: info.mint, rawAmount: amount, decimals: info.tokenAmount.decimals)
+        ExactParsedSplAccount(
+          accountPublicKey: publicKey,
+          program: expectedProgram,
+          mint: mint,
+          rawAmount: amount,
+          decimals: decimals
+        )
       )
     }
     return result
+  }
+
+  private static func solanaRawAmount(_ value: String) -> UInt64? {
+    let bytes = value.utf8
+    guard !bytes.isEmpty,
+      bytes.allSatisfy({ byte in byte >= 48 && byte <= 57 }),
+      bytes.count == 1 || bytes.first != 48,
+      let amount = UInt64(value)
+    else { return nil }
+    return amount
   }
 
   static func solanaProgramLabel(_ program: String) -> String {

@@ -59,7 +59,13 @@ esac
     expect(args).toContain("node");
     expect(args).toContain("dist/sync-restore.cjs");
     expect(args).toContain("SYNC_SCHEMA_DATABASE_URL");
+    expect(args).toContain("ADDRESS_ATLAS_RESTORE_MIGRATION=1");
     expect(args.join(" ")).not.toContain("owner_6Vr2Kx8Qm4Np7Ts9Lc3Hw5Jf1Zd0By8Ua");
+    const hookSource = readFileSync(hook, "utf8");
+    expect(hookSource).not.toContain("?options=");
+    expect(hookSource).toContain(
+      'database_url="postgresql://address_atlas:${owner_password}@127.0.0.1:5432/${database}"'
+    );
   });
 
   it("fails closed on mutable-tag provenance drift", () => {
@@ -77,8 +83,18 @@ esac
     expect(() => readFileSync(invocationLog, "utf8")).toThrow();
   });
 
+  it("rejects a valid-looking database outside the isolated restore prefixes", () => {
+    const result = spawnSync("sh", [hook, "postgres-production", "customer_database", "1", "3"], {
+      encoding: "utf8",
+      env: environment()
+    });
+    expect(result.status).toBe(65);
+    expect(result.stderr).toContain("isolated migration contract");
+    expect(() => readFileSync(invocationLog, "utf8")).toThrow();
+  });
+
   function run(overrides: Record<string, string> = {}) {
-    return spawnSync("sh", [hook, "postgres-production", "address_atlas_sync", "1", "3"], {
+    return spawnSync("sh", [hook, "postgres-production", "atlas_restore_test1", "1", "3"], {
       encoding: "utf8",
       env: { ...environment(), ...overrides }
     });

@@ -34,7 +34,9 @@ export async function bootstrapSyncSchema() {
 
 /** Probe current runtime readiness independently of the cached startup path. */
 export async function checkSyncSchemaReadiness() {
-  await assertSyncSchemaReady(getSyncPool());
+  await assertSyncSchemaReady(getSyncPool(), {
+    verifyRuntimePrivileges: getSyncSchemaMode() === "validate"
+  });
 }
 
 export async function closeSyncPools() {

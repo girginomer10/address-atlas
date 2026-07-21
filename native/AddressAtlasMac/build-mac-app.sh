@@ -47,6 +47,28 @@ esac
 
 cd "$ROOT"
 
+APP_ICON_SOURCE="$ROOT/Resources/AppIcon.png"
+if [[ ! -f "$APP_ICON_SOURCE" || -L "$APP_ICON_SOURCE" ]]; then
+  echo "The production app icon source is missing or unsafe: $APP_ICON_SOURCE" >&2
+  exit 66
+fi
+
+for required_command in /usr/bin/sips /usr/bin/iconutil; do
+  [[ -x "$required_command" ]] || {
+    echo "Required icon build tool is missing: $required_command" >&2
+    exit 69
+  }
+done
+
+icon_metadata="$(/usr/bin/sips -g format -g pixelWidth -g pixelHeight "$APP_ICON_SOURCE" 2>/dev/null)"
+icon_format="$(sed -nE 's/^[[:space:]]*format: ([a-zA-Z0-9]+)$/\1/p' <<< "$icon_metadata")"
+icon_width="$(sed -nE 's/^[[:space:]]*pixelWidth: ([0-9]+)$/\1/p' <<< "$icon_metadata")"
+icon_height="$(sed -nE 's/^[[:space:]]*pixelHeight: ([0-9]+)$/\1/p' <<< "$icon_metadata")"
+if [[ "$icon_format" != "png" || "$icon_width" != "1024" || "$icon_height" != "1024" ]]; then
+  echo "The production app icon must be a valid, exact 1024x1024 PNG." >&2
+  exit 65
+fi
+
 "$ROOT/check-toolchain.sh"
 SELECTED_DEVELOPER_DIR="$(xcode-select -p 2>/dev/null || true)"
 BREW_SWIFT_PREFIX=""
@@ -83,6 +105,40 @@ done
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 
+ICON_WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/address-atlas-app-icon.XXXXXX")"
+cleanup_icon_work_dir() {
+  rm -rf -- "$ICON_WORK_DIR"
+}
+trap cleanup_icon_work_dir EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+ICONSET_DIR="$ICON_WORK_DIR/AppIcon.iconset"
+mkdir -p "$ICONSET_DIR"
+
+render_icon() {
+  local output_name="$1"
+  local pixels="$2"
+  /usr/bin/sips --resampleHeightWidth "$pixels" "$pixels" \
+    "$APP_ICON_SOURCE" --out "$ICONSET_DIR/$output_name" >/dev/null
+}
+
+render_icon icon_16x16.png 16
+render_icon icon_16x16@2x.png 32
+render_icon icon_32x32.png 32
+render_icon icon_32x32@2x.png 64
+render_icon icon_128x128.png 128
+render_icon icon_128x128@2x.png 256
+render_icon icon_256x256.png 256
+render_icon icon_256x256@2x.png 512
+render_icon icon_512x512.png 512
+render_icon icon_512x512@2x.png 1024
+/usr/bin/iconutil --convert icns --output \
+  "$APP_DIR/Contents/Resources/AppIcon.icns" "$ICONSET_DIR"
+[[ -s "$APP_DIR/Contents/Resources/AppIcon.icns" ]] || {
+  echo "The production AppIcon.icns was not generated." >&2
+  exit 74
+}
+
 if [[ "${#BINARIES[@]}" -eq 1 ]]; then
   cp "${BINARIES[0]}" "$APP_DIR/Contents/MacOS/$APP_NAME"
 else
@@ -96,10 +152,14 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <dict>
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
+  <key>CFBundleDisplayName</key>
+  <string>$APP_NAME</string>
   <key>CFBundleExecutable</key>
   <string>$APP_NAME</string>
   <key>CFBundleIdentifier</key>
   <string>com.addressatlas.mac</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon.icns</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
@@ -123,8 +183,12 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
   <string>$BUILD_VERSION</string>
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.finance</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>NSHumanReadableCopyright</key>
+  <string>Copyright © 2026 Omer Girgin</string>
 </dict>
 </plist>
 PLIST

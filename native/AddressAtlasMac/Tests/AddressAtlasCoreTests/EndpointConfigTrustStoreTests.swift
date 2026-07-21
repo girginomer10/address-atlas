@@ -2,23 +2,91 @@ import AddressAtlasCore
 import XCTest
 
 final class EndpointConfigTrustStoreTests: XCTestCase {
-  func testHighWaterSurvivesStoreRecreationAndRejectsRollback() async throws {
+  func testSuccessfulVersion20SurvivesStoreRecreationAndRejectsVersion19() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let origin = URL(string: "https://sync.example")!
 
     let firstProcess = EndpointConfigTrustStore(fileURL: fixture.file)
-    try await firstProcess.validateAndRecord(config(version: 7), for: origin)
+    try await firstProcess.validateAndRecord(config(version: 20), for: origin)
 
     let relaunchedProcess = EndpointConfigTrustStore(fileURL: fixture.file)
     do {
-      try await relaunchedProcess.validateAndRecord(config(version: 6), for: origin)
+      try await relaunchedProcess.validateAndRecord(config(version: 19), for: origin)
       XCTFail("Expected a persistent rollback rejection")
     } catch {
       XCTAssertEqual(
         error as? EndpointConfigTrustStoreError,
-        .rollback(previous: 7, received: 6)
+        .rollback(previous: 20, received: 19)
       )
+    }
+  }
+
+  func testReadOnlyVersion20CandidateDoesNotBlockVersion19InAnotherStoreInstance() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let origin = URL(string: "https://sync.example")!
+
+    try await EndpointConfigTrustStore(fileURL: fixture.file)
+      .validate(config(version: 20), for: origin)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.file.path))
+
+    try await EndpointConfigTrustStore(fileURL: fixture.file)
+      .validateAndRecord(config(version: 19), for: origin)
+    do {
+      try await EndpointConfigTrustStore(fileURL: fixture.file)
+        .validate(config(version: 18), for: origin)
+      XCTFail("Expected the committed version 19 high-water mark to reject version 18")
+    } catch {
+      XCTAssertEqual(
+        error as? EndpointConfigTrustStoreError,
+        .rollback(previous: 19, received: 18)
+      )
+    }
+  }
+
+  func testCommitRevalidatesAfterAnotherStoreAdvancesDuringCandidateWindow() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let origin = URL(string: "https://sync.example")!
+    let candidateStore = EndpointConfigTrustStore(fileURL: fixture.file)
+    let advancingStore = EndpointConfigTrustStore(fileURL: fixture.file)
+
+    try await candidateStore.validate(config(version: 20), for: origin)
+    try await advancingStore.validateAndRecord(config(version: 21), for: origin)
+
+    do {
+      try await candidateStore.validateAndRecord(config(version: 20), for: origin)
+      XCTFail("Expected commit-time rollback rejection after an independent advance")
+    } catch {
+      XCTAssertEqual(
+        error as? EndpointConfigTrustStoreError,
+        .rollback(previous: 21, received: 20)
+      )
+    }
+  }
+
+  func testCommitRevalidatesAfterAnotherStoreCommitsEquivocationDuringCandidateWindow()
+    async throws
+  {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let origin = URL(string: "https://sync.example")!
+    let candidateStore = EndpointConfigTrustStore(fileURL: fixture.file)
+    let competingStore = EndpointConfigTrustStore(fileURL: fixture.file)
+
+    let candidate = config(version: 20, message: "candidate")
+    try await candidateStore.validate(candidate, for: origin)
+    try await competingStore.validateAndRecord(
+      config(version: 20, message: "competing"),
+      for: origin
+    )
+
+    do {
+      try await candidateStore.validateAndRecord(candidate, for: origin)
+      XCTFail("Expected commit-time equivocation rejection after an independent commit")
+    } catch {
+      XCTAssertEqual(error as? EndpointConfigTrustStoreError, .equivocation(version: 20))
     }
   }
 
@@ -113,15 +181,17 @@ final class EndpointConfigTrustStoreTests: XCTestCase {
     let origin = URL(string: "https://sync.example")!
     let firstStore = EndpointConfigTrustStore(fileURL: fixture.file)
     let secondStore = EndpointConfigTrustStore(fileURL: fixture.file)
+    let firstConfig = config(version: 15, message: "first")
+    let secondConfig = config(version: 15, message: "second")
 
-    async let first = acceptance(
+    async let first = Self.acceptance(
       by: firstStore,
-      config: config(version: 15, message: "first"),
+      config: firstConfig,
       origin: origin
     )
-    async let second = acceptance(
+    async let second = Self.acceptance(
       by: secondStore,
-      config: config(version: 15, message: "second"),
+      config: secondConfig,
       origin: origin
     )
     let outcomes = await [first, second]
@@ -143,7 +213,7 @@ final class EndpointConfigTrustStoreTests: XCTestCase {
     return (directory, directory.appending(path: "trust.json"))
   }
 
-  private func acceptance(
+  private static func acceptance(
     by store: EndpointConfigTrustStore,
     config: NativeEndpointConfig,
     origin: URL
@@ -154,7 +224,6 @@ final class EndpointConfigTrustStoreTests: XCTestCase {
     } catch EndpointConfigTrustStoreError.equivocation {
       return false
     } catch {
-      XCTFail("Unexpected trust-store error: \(error)")
       return false
     }
   }

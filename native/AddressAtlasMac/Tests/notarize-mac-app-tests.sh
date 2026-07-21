@@ -106,7 +106,8 @@ EOF
 }
 
 run_notarize() {
-  local profile="${1-}" key_path="${2-$KEY_PATH}" key_id="${3-TESTKEY123}" issuer="${4-12345678-1234-1234-1234-123456789abc}"
+  local profile="${1-}" key_path="${2-$KEY_PATH}" key_id="${3-TESTKEY123}"
+  local issuer="${4-12345678-1234-1234-1234-123456789abc}" timeout="${5-}"
   set +e
   env -i \
     PATH="$CASE_DIR/bin:/usr/bin:/bin" \
@@ -120,6 +121,7 @@ run_notarize() {
     ADDRESS_ATLAS_NOTARY_KEY_PATH="$key_path" \
     ADDRESS_ATLAS_NOTARY_KEY_ID="$key_id" \
     ADDRESS_ATLAS_NOTARY_ISSUER_ID="$issuer" \
+    ADDRESS_ATLAS_NOTARY_TIMEOUT="$timeout" \
     XCRUN_BIN="$CASE_DIR/bin/xcrun" \
     CODESIGN_BIN="$CASE_DIR/bin/codesign" \
     SPCTL_BIN="$CASE_DIR/bin/spctl" \
@@ -137,6 +139,7 @@ test_direct_credentials() {
   assert_status "$RUN_STATUS" 0 'direct credentials exit status' || return
   assert_contains "$CASE_DIR/events.log" '<notarytool> <submit>' 'direct submit missing' || return
   assert_contains "$CASE_DIR/events.log" "<--key> <$KEY_PATH> <--key-id> <TESTKEY123>" 'direct credential arguments missing' || return
+  assert_contains "$CASE_DIR/events.log" '<--wait> <--timeout> <30m>' 'finite default notary timeout missing' || return
   assert_contains "$CASE_DIR/events.log" '<stapler> <staple>' 'accepted artifact was not stapled' || return
   assert_contains "$CASE_DIR/events.log" 'hdiutil <verify>' 'DMG verification missing' || return
   assert_contains "$CASE_DIR/stdout" 'Notarized and stapled' 'success output missing' || return
@@ -151,6 +154,44 @@ test_keychain_profile() {
   assert_contains "$CASE_DIR/events.log" '<--keychain-profile> <address-atlas-notary>' 'profile argument missing' || return
   assert_not_contains "$CASE_DIR/events.log" '<--key-id>' 'direct key arguments leaked into profile mode' || return
   pass 'Keychain profile credentials'
+}
+
+test_custom_timeout() {
+  new_case
+  run_notarize '' "$KEY_PATH" 'TESTKEY123' \
+    '12345678-1234-1234-1234-123456789abc' '17m'
+  assert_status "$RUN_STATUS" 0 'custom timeout exit status' || return
+  assert_contains "$CASE_DIR/events.log" '<--wait> <--timeout> <17m>' \
+    'custom notary timeout missing' || return
+  pass 'custom finite timeout'
+}
+
+test_invalid_timeouts_rejected() {
+  local timeout
+  for timeout in 0 01m 1.5m 59s 2h 3601s 30M infinite; do
+    new_case
+    run_notarize '' "$KEY_PATH" 'TESTKEY123' \
+      '12345678-1234-1234-1234-123456789abc' "$timeout"
+    assert_status "$RUN_STATUS" 64 "invalid timeout ${timeout} exit status" || return
+    assert_contains "$CASE_DIR/stderr" 'ADDRESS_ATLAS_NOTARY_TIMEOUT' \
+      "invalid timeout ${timeout} error missing" || return
+    assert_not_contains "$CASE_DIR/events.log" 'built' \
+      "invalid timeout ${timeout} reached artifact build" || return
+  done
+  pass 'invalid timeout rejection'
+}
+
+test_timeout_exit_is_fail_closed() {
+  new_case
+  FAKE_SUBMIT_STATUS=124
+  run_notarize
+  unset FAKE_SUBMIT_STATUS
+  assert_status "$RUN_STATUS" 124 'notary timeout exit status' || return
+  assert_contains "$CASE_DIR/stderr" 'notarization was not accepted' \
+    'notary timeout rejection message missing' || return
+  assert_not_contains "$CASE_DIR/events.log" '<stapler> <staple>' \
+    'timed-out artifact was stapled' || return
+  pass 'notary timeout failure handling'
 }
 
 test_mixed_credentials_rejected() {
@@ -201,6 +242,9 @@ run_test() {
 
 run_test test_direct_credentials
 run_test test_keychain_profile
+run_test test_custom_timeout
+run_test test_invalid_timeouts_rejected
+run_test test_timeout_exit_is_fail_closed
 run_test test_mixed_credentials_rejected
 run_test test_incomplete_credentials_rejected
 run_test test_key_permissions_rejected

@@ -4,12 +4,15 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 enum AtlasTheme {
-  static let paper = Color(red: 0.965, green: 0.952, blue: 0.92)
-  static let paper2 = Color(red: 0.925, green: 0.912, blue: 0.88)
+  static let paperRGB = (red: 0.965, green: 0.952, blue: 0.92)
+  static let paper2RGB = (red: 0.925, green: 0.912, blue: 0.88)
+  static let ink3RGB = (red: 0.42, green: 0.39, blue: 0.34)
+  static let paper = Color(red: paperRGB.red, green: paperRGB.green, blue: paperRGB.blue)
+  static let paper2 = Color(red: paper2RGB.red, green: paper2RGB.green, blue: paper2RGB.blue)
   static let paper3 = Color(red: 0.885, green: 0.872, blue: 0.84)
   static let ink = Color(red: 0.16, green: 0.15, blue: 0.13)
   static let ink2 = Color(red: 0.34, green: 0.32, blue: 0.28)
-  static let ink3 = Color(red: 0.55, green: 0.52, blue: 0.46)
+  static let ink3 = Color(red: ink3RGB.red, green: ink3RGB.green, blue: ink3RGB.blue)
   static let rule = Color(red: 0.78, green: 0.755, blue: 0.69)
   static let ruleSoft = Color(red: 0.84, green: 0.82, blue: 0.76)
   static let accent = Color(red: 0.18, green: 0.31, blue: 0.56)

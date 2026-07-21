@@ -8,6 +8,10 @@ import {
 import { clientKey, rateLimitMany } from "@/lib/sync/rate-limit";
 import { RegistrationAdmissionQuotaError, RegistrationDisabledError } from "@/lib/sync/registration";
 import { readLimitedJSON, RequestBodyError } from "@/lib/sync/request";
+import {
+  acquirePasskeyBodyConcurrency,
+  PASSKEY_BODY_DEADLINE_MS
+} from "../body-concurrency";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -29,10 +33,25 @@ export async function POST(request: NextRequest) {
       return rateLimitedResponse(diagnostics);
     }
 
+    const bodyPermit = acquirePasskeyBodyConcurrency(client);
+    if (!bodyPermit) {
+      recordSecurityEvent("auth.rate_limited", diagnostics, {
+        status: 429,
+        reason: "auth_body_concurrency_limit"
+      });
+      return rateLimitedResponse(diagnostics);
+    }
     // Apply the public quota before touching the body. Invalid content types,
     // malformed JSON, oversized streams, and shape-invalid inputs must not get
     // an unmetered parsing path.
-    const { value } = await readLimitedJSON(request, 4_096);
+    let value: unknown;
+    try {
+      ({ value } = await readLimitedJSON(request, 4_096, PASSKEY_BODY_DEADLINE_MS));
+    } finally {
+      // This permit protects only slow body readers. Parsing, rate limiting,
+      // WebAuthn work, and database calls have separate capacity controls.
+      bodyPermit();
+    }
     const input = parsePasskeyOptionsInput(value);
     mode = input.mode;
     const rules = [

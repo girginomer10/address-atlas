@@ -696,6 +696,7 @@ make_backup_fixture() {
   local head="${2:-3}"
   local schema="${3:-4}"
   local digest size ledger_digest created_at compact base_name
+  local completed_epoch native_updated_at_epoch_ms=1784505600000
   mkdir -p "$(dirname "$path")"
   printf '%s\n' 'AGE_ENCRYPTED_SOURCE_FIXTURE' > "$path"
   digest="$(sha256_for_test "$path")"
@@ -717,12 +718,17 @@ make_backup_fixture() {
       "$head" "$ledger_digest" > "${path}.manifest.json"
   else
     [[ "$schema" == 4 ]] || return 64
-    printf '{\n  "schemaVersion": 4,\n  "snapshotStartedAt": "%s",\n  "completedAt": "%s",\n  "database": "address_atlas_sync",\n  "encryptedBytes": %s,\n  "sha256": "%s",\n  "sourceWebRevision": "%s",\n  "sourceWebImageId": "sha256:%s",\n  "sourcePostgresImageId": "sha256:%s",\n  "nativeConfigVersion": 5,\n  "nativeConfigSha256": "%s",\n  "nativeConfigUpdatedAtEpochMs": 1784505600000,\n  "nativeConfigServingRevision": "%s",\n  "migrationHeadVersion": %s,\n  "migrationLedgerSha256": "%s"\n}\n' \
+    completed_epoch="$(iso8601_epoch_for_test "$created_at")"
+    if (( native_updated_at_epoch_ms > completed_epoch * 1000 + 300000 )); then
+      native_updated_at_epoch_ms=$((completed_epoch * 1000))
+    fi
+    printf '{\n  "schemaVersion": 4,\n  "snapshotStartedAt": "%s",\n  "completedAt": "%s",\n  "database": "address_atlas_sync",\n  "encryptedBytes": %s,\n  "sha256": "%s",\n  "sourceWebRevision": "%s",\n  "sourceWebImageId": "sha256:%s",\n  "sourcePostgresImageId": "sha256:%s",\n  "nativeConfigVersion": 5,\n  "nativeConfigSha256": "%s",\n  "nativeConfigUpdatedAtEpochMs": %s,\n  "nativeConfigServingRevision": "%s",\n  "migrationHeadVersion": %s,\n  "migrationLedgerSha256": "%s"\n}\n' \
       "$created_at" "$created_at" "$size" "$digest" \
       'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
       'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' \
       'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc' \
       'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff' \
+      "$native_updated_at_epoch_ms" \
       'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
       "$head" "$ledger_digest" > "${path}.manifest.json"
   fi
@@ -962,6 +968,22 @@ test_backup_create() {
     'create did not hold and re-prove the schema advisory lock across pg_dump'
   assert_file_equals "$CASE_DIR/log/age.events" $'encrypt\ndecrypt' 'create encrypt/self-verify sequence'
   assert_path_absent "$BACKUP_DIR/.backup-operation.lock" 'backup operation lock was not removed'
+}
+
+test_backup_rejects_future_native_config_receipt() {
+  local backup
+  new_case
+  install_backup_fakes
+  backup="$BACKUP_DIR/address-atlas-20260720T160000Z.dump.age"
+  NATIVE_CONFIG_UPDATED_AT_EPOCH_MS=$((MOCK_NOW_EPOCH * 1000 + 300001))
+  run_backup_capture create
+  assert_status "$CAPTURE_STATUS" 65 'future native-config receipt status'
+  assert_file_contains "$CASE_DIR/stderr" 'implausibly in the future' \
+    'future native-config receipt rejection message'
+  assert_file_not_contains "$CASE_DIR/log/docker.argv" 'pg_dump' \
+    'future native-config receipt reached pg_dump'
+  assert_path_absent "$backup" \
+    'future native-config receipt published a backup'
 }
 
 test_backup_rejects_lost_remote_schema_lock() {
@@ -1650,6 +1672,32 @@ test_restore_authorization_gate() {
   assert_file_not_contains "$CASE_DIR/log/docker.argv" 'pg_restore' 'restore invoked pg_restore before authorization gate'
 }
 
+test_restore_rejects_future_native_config_manifest_before_mutation() {
+  local backup completed_epoch future_timestamp
+  new_case
+  install_backup_fakes
+  backup="$CASE_DIR/future-native-config.dump.age"
+  make_backup_fixture "$backup"
+  completed_epoch="$(iso8601_epoch_for_test '2026-07-20T16:00:00Z')"
+  future_timestamp=$((completed_epoch * 1000 + 300001))
+  rewrite_and_resign_manifest "$backup" \
+    "s/\"nativeConfigUpdatedAtEpochMs\": 1784505600000/\"nativeConfigUpdatedAtEpochMs\": ${future_timestamp}/"
+  ALLOW_RESTORE='YES_I_UNDERSTAND_DATA_WILL_BE_REPLACED'
+  MOCK_WEB_RUNNING=0
+  run_backup_capture restore "$backup" --confirm 'RESTORE:address_atlas_sync'
+  assert_status "$CAPTURE_STATUS" 65 'future native-config restore status'
+  assert_file_contains "$CASE_DIR/stderr" 'exceeds snapshot completion plus allowed clock skew' \
+    'future native-config restore rejection message'
+  assert_file_not_contains "$CASE_DIR/log/admin.sql" 'NOLOGIN' \
+    'future native-config restore quiesced the runtime role'
+  assert_file_not_contains "$CASE_DIR/log/docker.argv" 'pg_dump' \
+    'future native-config restore created a safety backup'
+  assert_file_not_contains "$CASE_DIR/log/docker.argv" 'pg_restore' \
+    'future native-config restore reached database restore'
+  assert_path_absent "$CASE_DIR/log/cutover.done" \
+    'future native-config restore reached cutover'
+}
+
 test_restore_web_service_gate() {
   local backup
   new_case
@@ -2069,7 +2117,7 @@ EOF
 }
 
 test_backup_inspect_contract_and_native_boundaries() {
-  local backup digest expected_line version
+  local backup completed_epoch digest expected_line future_timestamp version
   new_case
   install_backup_fakes
   backup="$CASE_DIR/source.dump.age"
@@ -2115,6 +2163,21 @@ test_backup_inspect_contract_and_native_boundaries() {
   assert_status "$CAPTURE_STATUS" 0 'maximum native-config version status'
   assert_file_contains "$CASE_DIR/stdout" '|2000000000|' \
     'maximum native-config version inspect output'
+
+  new_case
+  install_backup_fakes
+  backup="$CASE_DIR/native-future.dump.age"
+  make_backup_fixture "$backup"
+  completed_epoch="$(iso8601_epoch_for_test '2026-07-20T16:00:00Z')"
+  future_timestamp=$((completed_epoch * 1000 + 300001))
+  rewrite_and_resign_manifest "$backup" \
+    "s/\"nativeConfigUpdatedAtEpochMs\": 1784505600000/\"nativeConfigUpdatedAtEpochMs\": ${future_timestamp}/"
+  run_backup_capture inspect "$backup"
+  assert_status "$CAPTURE_STATUS" 65 \
+    'future native-config manifest inspect status'
+  assert_file_contains "$CASE_DIR/stderr" \
+    'exceeds snapshot completion plus allowed clock skew' \
+    'future native-config manifest inspect rejection message'
 }
 
 test_bootstrap_restore_gates_and_managed_success() {
@@ -2720,6 +2783,7 @@ run_case 'backup classifies source fail-closed' test_backup_classify_source
 run_case 'backup schema advisory-lock contract' test_backup_schema_lock_constant_contract
 run_case 'backup rejects symlink destination' test_backup_rejects_symlink_destination
 run_case 'backup create' test_backup_create
+run_case 'backup rejects future native-config receipt' test_backup_rejects_future_native_config_receipt
 run_case 'backup rejects lost remote schema lock' test_backup_rejects_lost_remote_schema_lock
 run_case 'backup create-predeploy stopped-web provenance' test_backup_create_predeploy
 run_case 'backup lock-run reentrant contract' test_backup_lock_run_reentrant_contract
@@ -2742,6 +2806,7 @@ run_case 'backup drill preserves lock on cleanup failure' test_backup_drill_pres
 run_case 'backup rejects control-plane role drift' test_backup_rejects_control_plane_role_drift
 run_case 'restore confirmation gate' test_restore_confirmation_gate
 run_case 'restore authorization gate' test_restore_authorization_gate
+run_case 'restore rejects future native-config manifest before mutation' test_restore_rejects_future_native_config_manifest_before_mutation
 run_case 'restore running-web gate' test_restore_web_service_gate
 run_case 'restore preflights provisioning before quiesce' test_restore_preflights_provisioning_before_quiesce
 run_case 'restore preflights migration before quiesce' test_restore_preflights_migration_before_quiesce

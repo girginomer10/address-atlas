@@ -10,6 +10,16 @@ extension AppState {
     SyncServerURL.validatedOrigin(raw)
   }
 
+  /// Existing-session controls are bound to the canonical origin persisted with
+  /// the bearer grant. Equivalent URL spellings remain usable, while an edited
+  /// draft can never retarget an operation until it has been explicitly saved.
+  static func syncServerDraftMatchesPersisted(_ draft: String, persisted: String) -> Bool {
+    guard let draftURL = validatedSyncURL(draft),
+      let persistedURL = validatedSyncURL(persisted)
+    else { return false }
+    return draftURL == persistedURL
+  }
+
   static func resolvedAppVersion(_ bundleVersion: String?) -> String {
     guard let bundleVersion else { return currentAppVersion }
     let trimmed = bundleVersion.trimmingCharacters(in: .whitespacesAndNewlines)

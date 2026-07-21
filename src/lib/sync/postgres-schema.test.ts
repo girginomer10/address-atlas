@@ -4,17 +4,19 @@ const mocks = vi.hoisted(() => ({
   migrationLedgerExists: vi.fn(),
   assertAppliedMigrationHistory: vi.fn(),
   assertKnownUnversionedSchema: vi.fn(),
-  assertSyncSchemaReady: vi.fn()
+  assertSyncSchemaReady: vi.fn(),
+  assertSyncSchemaVersionReady: vi.fn()
 }));
 
 vi.mock("./postgres-readiness", () => ({
   migrationLedgerExists: mocks.migrationLedgerExists,
   assertAppliedMigrationHistory: mocks.assertAppliedMigrationHistory,
   assertKnownUnversionedSchema: mocks.assertKnownUnversionedSchema,
-  assertSyncSchemaReady: mocks.assertSyncSchemaReady
+  assertSyncSchemaReady: mocks.assertSyncSchemaReady,
+  assertSyncSchemaVersionReady: mocks.assertSyncSchemaVersionReady
 }));
 
-import { SYNC_MIGRATIONS } from "./postgres-migrations";
+import { STORAGE_RECONCILIATION_VERSION, SYNC_MIGRATIONS } from "./postgres-migrations";
 import { initializeSyncSchema } from "./postgres-schema";
 
 describe("versioned schema migration executor", () => {
@@ -25,9 +27,14 @@ describe("versioned schema migration executor", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.migrationLedgerExists.mockResolvedValue(false);
-    mocks.assertAppliedMigrationHistory.mockResolvedValue(SYNC_MIGRATIONS.length);
-    mocks.assertKnownUnversionedSchema.mockResolvedValue(undefined);
+    mocks.assertAppliedMigrationHistory.mockImplementation(async () =>
+      query.mock.calls.filter(([sql]) =>
+        String(sql).includes("INSERT INTO sync_schema_migrations")
+      ).length
+    );
+    mocks.assertKnownUnversionedSchema.mockResolvedValue("empty");
     mocks.assertSyncSchemaReady.mockResolvedValue(undefined);
+    mocks.assertSyncSchemaVersionReady.mockResolvedValue(undefined);
     query.mockImplementation(async (sql: string) => {
       if (sql.includes("SELECT reconciled_contract_version")) {
         return {
@@ -51,6 +58,8 @@ describe("versioned schema migration executor", () => {
     expect(query.mock.calls.filter(([sql]) => sql === "BEGIN")).toHaveLength(4);
     expect(query.mock.calls.filter(([sql]) => sql === "COMMIT")).toHaveLength(4);
     expect(mocks.assertKnownUnversionedSchema).toHaveBeenCalledOnce();
+    expect(mocks.assertSyncSchemaVersionReady.mock.calls.map(([, version]) => version))
+      .toEqual([1, 1, 2, 2, 3, 3]);
     expect(mocks.assertSyncSchemaReady).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledWith();
   });
@@ -74,6 +83,15 @@ describe("versioned schema migration executor", () => {
       .toBe(false);
     expect(query.mock.calls.filter(([sql]) => sql === "BEGIN")).toHaveLength(1);
     expect(mocks.assertKnownUnversionedSchema).not.toHaveBeenCalled();
+    const reconciliations = query.mock.calls.filter(([sql]) =>
+      String(sql).includes("SET total_snapshot_bytes = totals.total_snapshot_bytes")
+    );
+    expect(reconciliations).toHaveLength(1);
+    expect(reconciliations[0]?.[1]).toEqual([STORAGE_RECONCILIATION_VERSION]);
+    expect(mocks.assertSyncSchemaReady).toHaveBeenCalledWith(
+      expect.anything(),
+      { verifyRuntimePrivileges: false }
+    );
   });
 
   it("fails before migrations when applied history is unknown or newer", async () => {

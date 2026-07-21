@@ -33,6 +33,7 @@ struct ChainScanJob: Sendable {
 struct ChainScanOutcome: Sendable {
   var index: Int
   var chainName: String
+  var addressHint: String
   var result: NativeScanResult
 }
 
@@ -95,6 +96,7 @@ struct CosmosDelegationScan: Sendable {
 }
 
 public struct ParsedSplAccount: Equatable, Sendable {
+  public var accountPublicKey: String
   public var mint: String
   public var rawAmount: Double
   public var decimals: Int
@@ -115,34 +117,117 @@ public struct JSONRPCError: Decodable, Sendable {
 }
 
 struct EvmTokenBatchResponse: Decodable, Sendable {
+  var jsonrpc: String?
   var id: Int
   var result: String?
   var error: JSONRPCError?
+
+  init(
+    jsonrpc: String? = "2.0",
+    id: Int,
+    result: String?,
+    error: JSONRPCError?
+  ) {
+    self.jsonrpc = jsonrpc
+    self.id = id
+    self.result = result
+    self.error = error
+  }
 }
 
 public struct SolanaTokenAccount: Decodable, Sendable {
-  public var account: Account
+  public var pubkey: String?
+  public var account: Account?
+
+  private enum CodingKeys: String, CodingKey {
+    case pubkey
+    case account
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    pubkey = try? container.decode(String.self, forKey: .pubkey)
+    account = try? container.decode(Account.self, forKey: .account)
+  }
 
   public struct Account: Decodable, Sendable {
-    public var data: AccountData
+    public var owner: String?
+    public var data: AccountData?
+
+    private enum CodingKeys: String, CodingKey {
+      case owner
+      case data
+    }
+
+    public init(from decoder: Decoder) throws {
+      let container = try decoder.container(keyedBy: CodingKeys.self)
+      owner = try? container.decode(String.self, forKey: .owner)
+      data = try? container.decode(AccountData.self, forKey: .data)
+    }
   }
 
   public struct AccountData: Decodable, Sendable {
     public var parsed: Parsed?
+
+    private enum CodingKeys: String, CodingKey {
+      case parsed
+    }
+
+    public init(from decoder: Decoder) throws {
+      let container = try decoder.container(keyedBy: CodingKeys.self)
+      parsed = try? container.decode(Parsed.self, forKey: .parsed)
+    }
   }
 
   public struct Parsed: Decodable, Sendable {
-    public var info: Info
+    public var type: String?
+    public var info: Info?
+
+    private enum CodingKeys: String, CodingKey {
+      case type
+      case info
+    }
+
+    public init(from decoder: Decoder) throws {
+      let container = try decoder.container(keyedBy: CodingKeys.self)
+      type = try? container.decode(String.self, forKey: .type)
+      info = try? container.decode(Info.self, forKey: .info)
+    }
   }
 
   public struct Info: Decodable, Sendable {
-    public var mint: String
-    public var tokenAmount: TokenAmount
+    public var mint: String?
+    public var owner: String?
+    public var tokenAmount: TokenAmount?
+
+    private enum CodingKeys: String, CodingKey {
+      case mint
+      case owner
+      case tokenAmount
+    }
+
+    public init(from decoder: Decoder) throws {
+      let container = try decoder.container(keyedBy: CodingKeys.self)
+      mint = try? container.decode(String.self, forKey: .mint)
+      owner = try? container.decode(String.self, forKey: .owner)
+      tokenAmount = try? container.decode(TokenAmount.self, forKey: .tokenAmount)
+    }
   }
 
   public struct TokenAmount: Decodable, Sendable {
-    public var amount: String
-    public var decimals: Int
+    public var amount: String?
+    public var decimals: Int?
+
+    private enum CodingKeys: String, CodingKey {
+      case amount
+      case decimals
+    }
+
+    public init(from decoder: Decoder) throws {
+      let container = try decoder.container(keyedBy: CodingKeys.self)
+      amount = try? container.decode(String.self, forKey: .amount)
+      decimals = try? container.decode(Int.self, forKey: .decimals)
+    }
   }
 }
 
@@ -198,6 +283,10 @@ public struct XrpAccountLinesResponse: Decodable, Sendable {
     public var status: String?
     public var error: String?
     public var errorMessage: String?
+    public var account: String?
+    public var ledgerHash: String?
+    public var ledgerIndex: Int?
+    public var validated: Bool?
     public var lines: [XrpTrustLine]?
     public var marker: JSONValue?
 
@@ -205,6 +294,10 @@ public struct XrpAccountLinesResponse: Decodable, Sendable {
       case status
       case error
       case errorMessage = "error_message"
+      case account
+      case ledgerHash = "ledger_hash"
+      case ledgerIndex = "ledger_index"
+      case validated
       case lines
       case marker
     }

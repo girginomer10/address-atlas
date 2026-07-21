@@ -932,6 +932,9 @@ jobs:
         working-directory: native/AddressAtlasMac
       - run: swift test
         working-directory: native/AddressAtlasMac
+      - name: Enforce complete Swift concurrency checking without warnings
+        run: swift test -Xswiftc -strict-concurrency=complete -Xswiftc -warnings-as-errors
+        working-directory: native/AddressAtlasMac
       - name: Detect data races under Thread Sanitizer
         run: swift test --sanitize=thread
         working-directory: native/AddressAtlasMac
@@ -943,6 +946,10 @@ jobs:
           ./build-mac-app.sh
           codesign --verify --deep --strict "dist/Address Atlas.app"
           plutil -lint "dist/Address Atlas.app/Contents/Info.plist"
+          test "$(plutil -extract CFBundleDisplayName raw "dist/Address Atlas.app/Contents/Info.plist")" = "Address Atlas"
+          test "$(plutil -extract CFBundleIconFile raw "dist/Address Atlas.app/Contents/Info.plist")" = "AppIcon.icns"
+          test "$(plutil -extract LSApplicationCategoryType raw "dist/Address Atlas.app/Contents/Info.plist")" = "public.app-category.finance"
+          test -s "dist/Address Atlas.app/Contents/Resources/AppIcon.icns"
           architectures="$(lipo -archs "dist/Address Atlas.app/Contents/MacOS/Address Atlas")"
           [[ " $architectures " == *" arm64 "* ]]
           [[ " $architectures " == *" x86_64 "* ]]

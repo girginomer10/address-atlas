@@ -1,4 +1,5 @@
 import AddressAtlasCore
+import CryptoKit
 import Foundation
 import XCTest
 
@@ -23,6 +24,9 @@ extension AppStateNetworkBoundaryTests {
         sessionToken: "upload-session-token"
       ))
     let persisted = try fixture.store.saveReturningPersistedDocument(document)
+    let expectedServerURL = try XCTUnwrap(
+      AppState.validatedSyncURL(persisted.syncState.serverURL)
+    )
     let http = RecordingHTTPStub { request in
       guard request.url?.path == "/vault/latest" else {
         throw URLError(.unsupportedURL)
@@ -42,7 +46,7 @@ extension AppStateNetworkBoundaryTests {
       httpClient: http
     )
 
-    await state.uploadEncryptedVault()
+    await state.uploadEncryptedVault(expectedServerURL: expectedServerURL)
 
     XCTAssertEqual(state.error, "")
     XCTAssertEqual(state.notice, "Encrypted vault uploaded.")
@@ -76,6 +80,37 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertEqual(try verifier.load().syncState.latestRemoteVersion, 1)
   }
 
+  func testUploadRejectsMismatchedExpectedServerBeforeHTTP() async throws {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let document = VaultDocument(
+      syncState: SyncState(
+        accountId: "69696969-6969-4969-8969-696969696969",
+        serverURL: "https://sync.example",
+        sessionToken: "bound-session"
+      )
+    )
+    let persisted = try fixture.store.saveReturningPersistedDocument(document)
+    let http = RecordingHTTPStub { request in
+      XCTFail("Mismatched bound action must not send HTTP: \(request)")
+      throw URLError(.cancelled)
+    }
+    let state = AppState(
+      testStore: fixture.store,
+      document: persisted,
+      testVaultKey: fixture.vaultKey,
+      httpClient: http
+    )
+
+    await state.uploadEncryptedVault(
+      expectedServerURL: URL(string: "https://other.example")!
+    )
+
+    XCTAssertTrue(state.error.contains("selection changed"))
+    XCTAssertTrue(http.requests.isEmpty)
+    XCTAssertEqual(state.document.syncState.sessionToken, "bound-session")
+  }
+
   func testUploadEncryptedVaultStopsOnRemoteVersionConflictBeforePUT() async throws {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -107,6 +142,9 @@ extension AppStateNetworkBoundaryTests {
       )
     )
     let persisted = try fixture.store.saveReturningPersistedDocument(document)
+    let expectedServerURL = try XCTUnwrap(
+      AppState.validatedSyncURL(persisted.syncState.serverURL)
+    )
     let http = RecordingHTTPStub { request in
       guard request.url?.path == "/vault/latest", request.httpMethod == "GET" else {
         throw URLError(.unsupportedURL)
@@ -123,7 +161,7 @@ extension AppStateNetworkBoundaryTests {
       httpClient: http
     )
 
-    await state.uploadEncryptedVault()
+    await state.uploadEncryptedVault(expectedServerURL: expectedServerURL)
 
     XCTAssertTrue(state.error.contains("Remote vault snapshot is newer"))
     XCTAssertEqual(http.requests.map(\.httpMethod), ["GET"])
@@ -131,7 +169,100 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertEqual(state.document.syncState.lastChecksum, staleLocalChecksum)
   }
 
-  func testUploadSaveFailureRetainsExactPostRemoteCandidateForRetry() async throws {
+  func testRejectedUploadKeepsFullLocalHistoryWhileSendingPrunedWireProjection() async throws {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let accountId = "67676767-6767-4676-8676-676767676767"
+    let old = ScanRunRecord(
+      generatedAt: Date(timeIntervalSince1970: 100),
+      totalUsd: 0,
+      inputCount: 1,
+      holdings: [],
+      warnings: [String(repeating: "o", count: 1_000)]
+    )
+    let newest = ScanRunRecord(
+      generatedAt: Date(timeIntervalSince1970: 200),
+      totalUsd: 0,
+      inputCount: 1,
+      holdings: [],
+      warnings: [String(repeating: "n", count: 1_000)]
+    )
+    var document = VaultDocument(scanRuns: [old, newest])
+    XCTAssertTrue(
+      document.syncState.connect(
+        accountId: accountId,
+        serverURL: "https://sync.example",
+        sessionToken: "rejected-upload-session"
+      ))
+    let persisted = try fixture.store.saveReturningPersistedDocument(document)
+    let expectedServerURL = try XCTUnwrap(
+      AppState.validatedSyncURL(persisted.syncState.serverURL)
+    )
+    var newestOnly = persisted
+    newestOnly.scanRuns = [newest]
+    let codec = VaultSyncCodec()
+    let syncLimit = max(
+      try codec.encodedSnapshotByteCount(document: newestOnly, accountId: accountId),
+      try codec.projectedPostSyncSnapshotByteCount(
+        document: newestOnly,
+        version: 1,
+        accountId: accountId
+      )
+    )
+    XCTAssertGreaterThan(
+      try codec.encodedSnapshotByteCount(document: persisted, accountId: accountId),
+      syncLimit
+    )
+    let http = RecordingHTTPStub { request in
+      guard request.url?.path == "/vault/latest" else {
+        throw URLError(.unsupportedURL)
+      }
+      if request.httpMethod == "PUT" {
+        return stubJSONResponse(
+          request,
+          #"{"error":"Upload temporarily unavailable."}"#,
+          statusCode: 503
+        )
+      }
+      return stubJSONResponse(request, #"{"error":"vault not found"}"#, statusCode: 404)
+    }
+    let state = AppState(
+      testStore: fixture.store,
+      document: persisted,
+      testVaultKey: fixture.vaultKey,
+      syncSnapshotByteLimit: syncLimit,
+      endpointConfigClient: FixedEndpointConfigClient(
+        config: NativeEndpointConfig(configVersion: 9, refreshAfterSeconds: 300)
+      ),
+      httpClient: http
+    )
+
+    await state.uploadEncryptedVault(expectedServerURL: expectedServerURL)
+
+    XCTAssertTrue(state.error.contains("Upload temporarily unavailable"))
+    XCTAssertEqual(state.document.scanRuns.map(\.id), [old.id, newest.id])
+    XCTAssertTrue(state.syncPersistencePending)
+    XCTAssertNotNil(state.pendingVaultUpload)
+    let put = try XCTUnwrap(http.requests.last)
+    XCTAssertEqual(put.httpMethod, "PUT")
+    let wireSnapshot = try JSONDecoder.addressAtlas.decode(
+      RemoteVaultSnapshot.self,
+      from: XCTUnwrap(put.httpBody)
+    )
+    let opened = try codec.open(
+      snapshot: wireSnapshot,
+      vaultKey: fixture.vaultKey,
+      expectedAccountId: accountId
+    )
+    XCTAssertEqual(opened.document.scanRuns.map(\.id), [newest.id])
+    let verifier = try EncryptedSQLiteVaultStore(
+      path: fixture.database,
+      vaultKey: fixture.vaultKey
+    )
+    XCTAssertEqual(try verifier.load().scanRuns.map(\.id), [old.id, newest.id])
+  }
+
+  func testPendingUploadBlocksCompetingWriterAndRetainsPreCommitLocalDocument() async throws {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let accountId = "78787878-7878-4787-8787-787878787878"
@@ -151,6 +282,9 @@ extension AppStateNetworkBoundaryTests {
         sessionToken: "upload-candidate-session"
       ))
     let persisted = try fixture.store.saveReturningPersistedDocument(document)
+    let expectedServerURL = try XCTUnwrap(
+      AppState.validatedSyncURL(persisted.syncState.serverURL)
+    )
     let competingStore = try EncryptedSQLiteVaultStore(
       path: fixture.database,
       vaultKey: fixture.vaultKey
@@ -178,19 +312,20 @@ extension AppStateNetworkBoundaryTests {
       httpClient: http
     )
 
-    await state.uploadEncryptedVault()
+    await state.uploadEncryptedVault(expectedServerURL: expectedServerURL)
 
     XCTAssertTrue(state.syncPersistencePending)
-    XCTAssertEqual(state.document.syncState.latestRemoteVersion, 1)
-    XCTAssertNotNil(state.document.syncState.lastChecksum)
-    XCTAssertTrue(state.error.contains("remote vault was uploaded"))
-    let remoteChecksum = state.document.syncState.lastChecksum
-
-    await state.retryPendingSyncPersistence()
-
-    XCTAssertTrue(state.syncPersistencePending)
-    XCTAssertEqual(state.document.syncState.latestRemoteVersion, 1)
-    XCTAssertEqual(state.document.syncState.lastChecksum, remoteChecksum)
+    XCTAssertEqual(state.document.syncState.latestRemoteVersion, 0)
+    XCTAssertNil(state.document.syncState.lastChecksum)
+    XCTAssertNotNil(state.pendingVaultUpload)
+    XCTAssertTrue(state.error.contains("remains safely pending"))
+    XCTAssertEqual(
+      try EncryptedSQLiteVaultStore(
+        path: fixture.database,
+        vaultKey: fixture.vaultKey
+      ).load().wallets.map(\.label),
+      ["Upload candidate"]
+    )
   }
 
   func testDownloadEncryptedVaultDecodesDecryptsPersistsAndMarksSynced() async throws {
@@ -217,6 +352,9 @@ extension AppStateNetworkBoundaryTests {
         sessionToken: "download-session-token"
       ))
     let persisted = try fixture.store.saveReturningPersistedDocument(document)
+    let expectedServerURL = try XCTUnwrap(
+      AppState.validatedSyncURL(persisted.syncState.serverURL)
+    )
     let http = RecordingHTTPStub { request in
       guard request.url?.path == "/vault/latest", request.httpMethod == "GET" else {
         throw URLError(.unsupportedURL)
@@ -233,7 +371,7 @@ extension AppStateNetworkBoundaryTests {
       httpClient: http
     )
 
-    await state.downloadEncryptedVault()
+    await state.downloadEncryptedVault(expectedServerURL: expectedServerURL)
 
     XCTAssertEqual(state.error, "")
     XCTAssertEqual(state.notice, "Encrypted vault downloaded.")
@@ -256,6 +394,89 @@ extension AppStateNetworkBoundaryTests {
     let reloaded = try verifier.load()
     XCTAssertEqual(reloaded.wallets.map(\.id), [remoteWallet.id])
     XCTAssertEqual(reloaded.syncState.latestRemoteVersion, 3)
+  }
+
+  func testLegacyUpgradeRevisionChangeAfterJournalStagingCancelsBeforePut() async throws {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let accountId = "70707070-7070-4070-8070-707070707070"
+    let remoteWallet = WalletRecord(
+      label: "Legacy remote",
+      address: "0x0000000000000000000000000000000000000707",
+      chainKind: .evm
+    )
+    let crypto = VaultCrypto()
+    let syncKey = try crypto.deriveKey(from: fixture.vaultKey, purpose: .syncBlob)
+    let legacyDocument = VaultDocument(
+      schemaVersion: 1,
+      wallets: [remoteWallet],
+      syncState: SyncState(accountId: accountId, latestRemoteVersion: 0)
+    )
+    let legacyEnvelope = try crypto.sealJSON(
+      legacyDocument,
+      with: syncKey,
+      keyId: "sync-v1",
+      schemaVersion: 1
+    )
+    let encodedLegacyEnvelope = try JSONEncoder.addressAtlas.encode(legacyEnvelope)
+    let legacySnapshot = RemoteVaultSnapshot(
+      version: 1,
+      envelope: legacyEnvelope,
+      byteSize: encodedLegacyEnvelope.count,
+      checksum: Data(SHA256.hash(data: encodedLegacyEnvelope)).map {
+        String(format: "%02x", $0)
+      }.joined()
+    )
+    var localDocument = VaultDocument()
+    XCTAssertTrue(
+      localDocument.syncState.connect(
+        accountId: accountId,
+        serverURL: "https://sync.example",
+        sessionToken: "legacy-upgrade-revision-session"
+      )
+    )
+    let persisted = try fixture.store.saveReturningPersistedDocument(localDocument)
+    let expectedServerURL = try XCTUnwrap(
+      AppState.validatedSyncURL(persisted.syncState.serverURL)
+    )
+    let server = RecoverableVaultHTTPState(
+      remoteSnapshot: legacySnapshot,
+      putBehaviors: [.accept]
+    )
+    let http = RecordingHTTPStub { request in try await server.handle(request) }
+    let state = AppState(
+      testStore: fixture.store,
+      document: persisted,
+      testVaultKey: fixture.vaultKey,
+      endpointConfigClient: FixedEndpointConfigClient(
+        config: NativeEndpointConfig(configVersion: 9, refreshAfterSeconds: 300)
+      ),
+      httpClient: http
+    )
+    state.pendingUploadStagedHook = {
+      state.document.preferences.hideDust = true
+    }
+
+    await state.downloadEncryptedVault(expectedServerURL: expectedServerURL)
+
+    XCTAssertTrue(state.document.preferences.hideDust)
+    XCTAssertTrue(state.document.wallets.isEmpty)
+    XCTAssertTrue(state.error.contains("local vault changed"))
+    XCTAssertNil(state.pendingVaultUpload)
+    XCTAssertFalse(state.syncPersistencePending)
+    XCTAssertEqual(http.requests.map(\.httpMethod), ["GET"])
+    let receivedSnapshots = await server.snapshotsReceived()
+    XCTAssertTrue(receivedSnapshots.isEmpty)
+    XCTAssertNil(try fixture.store.loadPendingVaultUpload())
+    let verifier = try EncryptedSQLiteVaultStore(
+      path: fixture.database,
+      vaultKey: fixture.vaultKey
+    )
+    let reloaded = try verifier.load()
+    XCTAssertFalse(reloaded.preferences.hideDust)
+    XCTAssertTrue(reloaded.wallets.isEmpty)
+    let currentRemote = await server.currentRemote()
+    XCTAssertEqual(currentRemote, legacySnapshot)
   }
 
   func testDownloadSaveFailureRetainsExactOpenedVaultCandidateForRetry() async throws {
@@ -281,6 +502,9 @@ extension AppStateNetworkBoundaryTests {
         sessionToken: "download-candidate-session"
       ))
     let persisted = try fixture.store.saveReturningPersistedDocument(document)
+    let expectedServerURL = try XCTUnwrap(
+      AppState.validatedSyncURL(persisted.syncState.serverURL)
+    )
     let competingStore = try EncryptedSQLiteVaultStore(
       path: fixture.database,
       vaultKey: fixture.vaultKey
@@ -303,7 +527,7 @@ extension AppStateNetworkBoundaryTests {
       httpClient: http
     )
 
-    await state.downloadEncryptedVault()
+    await state.downloadEncryptedVault(expectedServerURL: expectedServerURL)
 
     XCTAssertTrue(state.syncPersistencePending)
     XCTAssertEqual(state.document.wallets.map(\.id), [remoteWallet.id])

@@ -6,6 +6,39 @@ import XCTest
 
 @MainActor
 extension AppStateNetworkBoundaryTests {
+  func testLifecycleActionsRejectMismatchedExpectedServerBeforeHTTP() async throws {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let document = VaultDocument(
+      syncState: SyncState(
+        accountId: "10101010-1010-4010-8010-101010101010",
+        serverURL: "https://sync.example",
+        sessionToken: "origin-bound-session"
+      )
+    )
+    let persisted = try fixture.store.saveReturningPersistedDocument(document)
+    let http = RecordingHTTPStub { request in
+      XCTFail("Mismatched lifecycle action must not send HTTP: \(request)")
+      throw URLError(.cancelled)
+    }
+    let state = AppState(
+      testStore: fixture.store,
+      document: persisted,
+      testVaultKey: fixture.vaultKey,
+      httpClient: http
+    )
+    let otherServerURL = try XCTUnwrap(URL(string: "https://other.example"))
+
+    await state.revokeCurrentSyncSession(expectedServerURL: otherServerURL)
+    XCTAssertTrue(state.error.contains("selection changed"))
+    XCTAssertEqual(state.document.syncState.sessionToken, "origin-bound-session")
+
+    await state.deleteSyncAccount(expectedServerURL: otherServerURL)
+    XCTAssertTrue(state.error.contains("selection changed"))
+    XCTAssertEqual(state.document.syncState.accountId, "10101010-1010-4010-8010-101010101010")
+    XCTAssertTrue(http.requests.isEmpty)
+  }
+
   func testRevokingCurrentSessionCallsLifecycleEndpointAndPersistsOnlyTokenRemoval() async throws {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -34,8 +67,11 @@ extension AppStateNetworkBoundaryTests {
       testVaultKey: fixture.vaultKey,
       httpClient: http
     )
+    let expectedServerURL = try XCTUnwrap(
+      AppState.validatedSyncURL(persisted.syncState.serverURL)
+    )
 
-    await state.revokeCurrentSyncSession()
+    await state.revokeCurrentSyncSession(expectedServerURL: expectedServerURL)
 
     XCTAssertEqual(state.error, "")
     XCTAssertEqual(state.notice, "This Mac's sync session was revoked.")
@@ -108,8 +144,11 @@ extension AppStateNetworkBoundaryTests {
       httpClient: http,
       passkeyAuthenticator: authenticator
     )
+    let expectedServerURL = try XCTUnwrap(
+      AppState.validatedSyncURL(persisted.syncState.serverURL)
+    )
 
-    await state.deleteSyncAccount()
+    await state.deleteSyncAccount(expectedServerURL: expectedServerURL)
 
     XCTAssertEqual(state.error, "")
     XCTAssertEqual(state.notice, "Sync account deleted. Your encrypted local vault was kept.")
@@ -191,8 +230,11 @@ extension AppStateNetworkBoundaryTests {
       httpClient: http,
       passkeyAuthenticator: authenticator
     )
+    let expectedServerURL = try XCTUnwrap(
+      AppState.validatedSyncURL(persisted.syncState.serverURL)
+    )
 
-    await state.deleteSyncAccount()
+    await state.deleteSyncAccount(expectedServerURL: expectedServerURL)
 
     let pendingKey = try XCTUnwrap(
       state.document.syncState.accountDeletionIdempotencyKey
@@ -209,7 +251,7 @@ extension AppStateNetworkBoundaryTests {
       pendingKey
     )
 
-    await state.deleteSyncAccount()
+    await state.deleteSyncAccount(expectedServerURL: expectedServerURL)
 
     XCTAssertEqual(state.error, "")
     XCTAssertNil(state.document.syncState.accountId)
@@ -248,8 +290,11 @@ extension AppStateNetworkBoundaryTests {
       httpClient: http,
       passkeyAuthenticator: authenticator
     )
+    let expectedServerURL = try XCTUnwrap(
+      AppState.validatedSyncURL(persisted.syncState.serverURL)
+    )
 
-    await state.deleteSyncAccount()
+    await state.deleteSyncAccount(expectedServerURL: expectedServerURL)
 
     XCTAssertEqual(state.error, "")
     XCTAssertNil(state.document.syncState.accountId)
@@ -282,8 +327,11 @@ extension AppStateNetworkBoundaryTests {
     var externalWinner = try winningStore.load()
     externalWinner.preferences.hideDust.toggle()
     try winningStore.save(externalWinner)
+    let expectedServerURL = try XCTUnwrap(
+      AppState.validatedSyncURL(persisted.syncState.serverURL)
+    )
 
-    await state.revokeCurrentSyncSession()
+    await state.revokeCurrentSyncSession(expectedServerURL: expectedServerURL)
 
     XCTAssertEqual(state.document.syncState.sessionToken, "")
     XCTAssertTrue(state.syncPersistencePending)

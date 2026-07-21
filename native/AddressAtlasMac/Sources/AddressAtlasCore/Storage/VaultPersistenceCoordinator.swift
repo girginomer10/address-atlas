@@ -48,14 +48,12 @@ public actor VaultPersistenceCoordinator {
     _ input: VaultDocument,
     projectedSyncVersion: Int? = nil
   ) throws -> VaultPersistenceResult {
-    let prepared = try prepareForSyncPersistence(
-      input,
-      projectedVersion: projectedSyncVersion
-    )
-    let persisted = try store.saveReturningPersistedDocument(prepared.document)
+    // Local persistence is lossless. The sync byte limit is a wire concern and
+    // may only produce a temporary upload projection.
+    let persisted = try store.saveReturningPersistedDocument(input)
     return VaultPersistenceResult(
       document: persisted,
-      removedScanRunCount: prepared.removedScanRunCount,
+      removedScanRunCount: 0,
       hasLocalChanges: try syncCodec.hasLocalChanges(in: persisted)
     )
   }
@@ -110,6 +108,73 @@ public actor VaultPersistenceCoordinator {
 
   public func validateRemoteSnapshot(_ snapshot: RemoteVaultSnapshot) throws {
     try syncCodec.validateRemoteSnapshot(snapshot)
+  }
+
+  public func savePendingVaultUpload(
+    _ upload: PendingVaultUpload,
+    vaultKey: Data
+  ) throws {
+    try validatePendingVaultUpload(upload, vaultKey: vaultKey)
+    try store.savePendingVaultUpload(upload)
+  }
+
+  public func loadPendingVaultUpload(vaultKey: Data) throws -> PendingVaultUpload? {
+    guard let upload = try store.loadPendingVaultUpload() else { return nil }
+    try validatePendingVaultUpload(upload, vaultKey: vaultKey)
+    return upload
+  }
+
+  public func completePendingVaultUpload(
+    _ upload: PendingVaultUpload,
+    currentDocument: VaultDocument,
+    vaultKey: Data,
+    localSessionToken: String? = nil
+  ) throws -> VaultPersistenceResult {
+    try validatePendingVaultUpload(upload, vaultKey: vaultKey)
+    guard try syncCodec.contentChecksum(for: currentDocument) == upload.baseLocalContentChecksum
+    else {
+      throw PendingVaultUploadError.localDocumentChanged
+    }
+    if let localSessionToken {
+      guard SyncSessionToken.isValid(localSessionToken) else {
+        throw PendingVaultUploadError.invalidOperation
+      }
+    }
+    let persisted = try store.completePendingVaultUpload(
+      upload,
+      localSessionToken: localSessionToken
+    )
+    return VaultPersistenceResult(
+      document: persisted,
+      removedScanRunCount: upload.removedScanRunCount,
+      hasLocalChanges: try syncCodec.hasLocalChanges(in: persisted)
+    )
+  }
+
+  public func abandonPendingVaultUpload(
+    _ upload: PendingVaultUpload,
+    currentDocument: VaultDocument,
+    vaultKey: Data
+  ) throws -> VaultPersistenceResult {
+    try validatePendingVaultUpload(upload, vaultKey: vaultKey)
+    guard try syncCodec.contentChecksum(for: currentDocument) == upload.baseLocalContentChecksum
+    else {
+      throw PendingVaultUploadError.localDocumentChanged
+    }
+    let persisted = try store.abandonPendingVaultUpload(upload)
+    return VaultPersistenceResult(
+      document: persisted,
+      removedScanRunCount: 0,
+      hasLocalChanges: try syncCodec.hasLocalChanges(in: persisted)
+    )
+  }
+
+  public func cancelPendingVaultUploadBeforeUpload(
+    _ upload: PendingVaultUpload,
+    vaultKey: Data
+  ) throws {
+    try validatePendingVaultUpload(upload, vaultKey: vaultKey)
+    try store.cancelPendingVaultUploadBeforeUpload(upload)
   }
 
   public func markingSynced(
@@ -191,5 +256,68 @@ public actor VaultPersistenceCoordinator {
     var pruned = input
     pruned.scanRuns = Array(newestFirst.prefix(bestKeptCount))
     return (pruned, newestFirst.count - bestKeptCount)
+  }
+
+  private func validatePendingVaultUpload(
+    _ upload: PendingVaultUpload,
+    vaultKey: Data
+  ) throws {
+    let canonicalOrigin = SyncServerURL.validatedOrigin(upload.serverOrigin)
+    let normalizedAccount = SyncAccountIdentifier.normalized(upload.accountId)
+    let expectedMetadataIsPaired =
+      (upload.expectedRemoteVersion == nil) == (upload.expectedRemoteChecksum == nil)
+    let expectedVersionIsExact: Bool
+    if let expectedRemoteVersion = upload.expectedRemoteVersion,
+      let expectedRemoteChecksum = upload.expectedRemoteChecksum
+    {
+      expectedVersionIsExact =
+        (try? syncCodec.nextVersion(after: expectedRemoteVersion)) == upload.snapshot.version
+        && expectedRemoteChecksum != upload.snapshot.checksum
+    } else {
+      expectedVersionIsExact = upload.snapshot.version == 1
+    }
+    guard
+      upload.schemaVersion == PendingVaultUpload.currentSchemaVersion,
+      let operationUUID = UUID(uuidString: upload.operationId),
+      operationUUID.uuidString.lowercased() == upload.operationId,
+      canonicalOrigin?.absoluteString == upload.serverOrigin,
+      normalizedAccount == upload.accountId,
+      expectedMetadataIsPaired,
+      expectedVersionIsExact,
+      upload.expectedRemoteChecksum.map(Self.isChecksum) ?? true,
+      Self.isChecksum(upload.baseLocalContentChecksum),
+      upload.removedScanRunCount >= 0,
+      upload.createdAt.timeIntervalSince1970.isFinite,
+      upload.postCommitDocument.syncState.accountId == upload.accountId,
+      SyncServerURL.validatedOrigin(upload.postCommitDocument.syncState.serverURL)?.absoluteString
+        == upload.serverOrigin,
+      upload.postCommitDocument.syncState.latestRemoteVersion == upload.snapshot.version,
+      upload.postCommitDocument.syncState.lastChecksum == upload.snapshot.checksum,
+      SyncSessionToken.isValid(upload.postCommitDocument.syncState.sessionToken),
+      upload.postCommitDocument.syncState.lastSyncedContentChecksum
+        == (try syncCodec.contentChecksum(for: upload.postCommitDocument))
+    else {
+      throw PendingVaultUploadError.invalidOperation
+    }
+    try syncCodec.validateRemoteSnapshot(upload.snapshot)
+    let opened = try syncCodec.open(
+      snapshot: upload.snapshot,
+      vaultKey: vaultKey,
+      expectedAccountId: upload.accountId
+    )
+    guard
+      !opened.requiresV2Upgrade,
+      try syncCodec.contentChecksum(for: opened.document)
+        == upload.postCommitDocument.syncState.lastSyncedContentChecksum
+    else {
+      throw PendingVaultUploadError.invalidOperation
+    }
+  }
+
+  private static func isChecksum(_ value: String) -> Bool {
+    value.count == 64
+      && value.unicodeScalars.allSatisfy { scalar in
+        (48...57).contains(scalar.value) || (97...102).contains(scalar.value)
+      }
   }
 }

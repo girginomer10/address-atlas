@@ -209,15 +209,37 @@ struct SyncView: View {
   @State private var confirmingDiscardDownload = false
   @State private var confirmingSessionRevocation = false
   @State private var confirmingAccountDeletion = false
+  @State private var confirmingStopUploadRecovery = false
+  @State private var pendingDownloadServerURL: URL?
+  @State private var pendingRevocationServerURL: URL?
+  @State private var pendingDeletionServerURL: URL?
 
   private var hasValidServerInput: Bool {
     AppState.validatedSyncURL(serverURL) != nil
   }
 
   private var hasActiveSyncSession: Bool {
-    hasValidServerInput
+    boundActionServerURL != nil
       && state.document.syncState.accountId != nil
       && !state.document.syncState.sessionToken.isEmpty
+  }
+
+  private var persistedServerURL: URL? {
+    AppState.validatedSyncURL(state.document.syncState.serverURL)
+  }
+
+  private var boundActionServerURL: URL? {
+    guard
+      AppState.syncServerDraftMatchesPersisted(
+        serverURL,
+        persisted: state.document.syncState.serverURL
+      )
+    else { return nil }
+    return AppState.validatedSyncURL(serverURL)
+  }
+
+  private var persistedServerOrigin: String {
+    persistedServerURL?.absoluteString ?? "not connected"
   }
 
   var body: some View {
@@ -238,6 +260,13 @@ struct SyncView: View {
               state.syncing || state.scanning || state.syncPersistencePending
                 || state.hasPendingAccountDeletion
             )
+          if hasValidServerInput, persistedServerURL != nil, boundActionServerURL == nil {
+            Text(
+              "This session remains bound to \(persistedServerOrigin). Save the edited server or restore that origin before using existing-session controls."
+            )
+            .font(.callout)
+            .foregroundStyle(AtlasTheme.loss)
+          }
           HStack(spacing: 10) {
             Button("Create passkey account") {
               Task {
@@ -258,7 +287,8 @@ struct SyncView: View {
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
             .disabled(
-              state.syncing || state.scanning || state.syncPersistencePending
+              state.syncing || state.scanning
+                || (state.syncPersistencePending && state.pendingVaultUpload == nil)
                 || state.hasPendingAccountDeletion || !hasValidServerInput
             )
             Button("Save server") {
@@ -280,11 +310,14 @@ struct SyncView: View {
               }
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
-            .disabled(state.syncing || state.scanning || !hasValidServerInput)
+            .disabled(
+              state.syncing || state.scanning || boundActionServerURL == nil
+            )
           }
           HStack(spacing: 10) {
             Button {
-              Task { await state.uploadEncryptedVault() }
+              guard let target = boundActionServerURL else { return }
+              Task { await state.uploadEncryptedVault(expectedServerURL: target) }
             } label: {
               if state.syncing {
                 ProgressView()
@@ -298,10 +331,12 @@ struct SyncView: View {
                 || state.hasPendingAccountDeletion || !hasActiveSyncSession
             )
             Button("Download encrypted vault") {
+              guard let target = boundActionServerURL else { return }
               if state.hasUnsyncedLocalChanges {
+                pendingDownloadServerURL = target
                 confirmingDiscardDownload = true
               } else {
-                Task { await state.downloadEncryptedVault() }
+                Task { await state.downloadEncryptedVault(expectedServerURL: target) }
               }
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
@@ -310,11 +345,19 @@ struct SyncView: View {
                 || state.hasPendingAccountDeletion || !hasActiveSyncSession
             )
             if state.syncPersistencePending {
-              Button("Retry local save") {
+              Button(state.pendingVaultUpload == nil ? "Retry local save" : "Retry upload recovery")
+              {
                 Task { await state.retryPendingSyncPersistence() }
               }
               .buttonStyle(AtlasSecondaryButtonStyle())
               .disabled(state.syncing || state.scanning || state.isUnlocking)
+              if state.pendingVaultUpload != nil {
+                Button("Stop upload recovery", role: .destructive) {
+                  confirmingStopUploadRecovery = true
+                }
+                .buttonStyle(AtlasSecondaryButtonStyle())
+                .disabled(state.syncing || state.scanning || boundActionServerURL == nil)
+              }
             }
           }
         }
@@ -324,6 +367,7 @@ struct SyncView: View {
         VStack(alignment: .leading, spacing: 12) {
           SectionHeader(title: "Sync state", meta: "Plain metadata only")
           KeyValueGrid(rows: [
+            ("Server", persistedServerOrigin),
             ("Account", state.document.syncState.accountId ?? "not connected"),
             (
               "Session",
@@ -340,10 +384,19 @@ struct SyncView: View {
             (
               "Local changes",
               state.syncPersistencePending
-                ? "remote synced; local save pending"
+                ? state.pendingVaultUpload == nil
+                  ? "remote synced; local save pending"
+                  : state.pendingVaultUploadHasRemoteConflict
+                    ? "upload recovery conflict"
+                    : "upload recovery pending"
                 : state.hasUnsyncedLocalChanges ? "not uploaded" : "synced"
             ),
-            ("Local persistence", state.syncPersistencePending ? "retry required" : "saved"),
+            (
+              "Local persistence",
+              state.pendingVaultUpload != nil
+                ? "full local vault protected"
+                : state.syncPersistencePending ? "retry required" : "saved"
+            ),
             (
               "Last synced",
               state.document.syncState.lastSyncedAt?.formatted(date: .abbreviated, time: .shortened)
@@ -356,7 +409,7 @@ struct SyncView: View {
 
       Surface {
         VStack(alignment: .leading, spacing: 12) {
-          SectionHeader(title: "Account controls", meta: "Server-side privacy")
+          SectionHeader(title: "Account controls", meta: persistedServerOrigin)
           Text(
             "Revoking signs out only this Mac. Deleting the sync account removes the remote account and encrypted server snapshots, while keeping this Mac's encrypted local vault."
           )
@@ -364,20 +417,27 @@ struct SyncView: View {
           .foregroundStyle(AtlasTheme.ink2)
           HStack(spacing: 10) {
             Button("Revoke this Mac's session") {
+              guard let target = boundActionServerURL else { return }
+              pendingRevocationServerURL = target
               confirmingSessionRevocation = true
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
-            .disabled(state.vaultEditsDisabled || state.document.syncState.sessionToken.isEmpty)
+            .disabled(
+              state.vaultEditsDisabled || state.document.syncState.sessionToken.isEmpty
+                || boundActionServerURL == nil
+            )
             Button(
               state.document.syncState.accountDeletionIdempotencyKey == nil
                 ? "Delete sync account"
                 : "Retry account deletion",
               role: .destructive
             ) {
+              guard let target = boundActionServerURL else { return }
+              pendingDeletionServerURL = target
               confirmingAccountDeletion = true
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
-            .disabled(state.accountDeletionControlDisabled)
+            .disabled(state.accountDeletionControlDisabled || boundActionServerURL == nil)
           }
         }
       }
@@ -389,45 +449,68 @@ struct SyncView: View {
       }
     }
     .confirmationDialog(
-      "Discard local changes and download?",
+      "Stop encrypted upload recovery?",
+      isPresented: $confirmingStopUploadRecovery,
+      titleVisibility: .visible
+    ) {
+      Button("Stop recovery and keep local vault", role: .destructive) {
+        guard let target = boundActionServerURL else { return }
+        Task { await state.abandonPendingVaultUpload(expectedServerURL: target) }
+      }
+      Button("Continue recovery", role: .cancel) {}
+    } message: {
+      Text(
+        "The full local vault will be kept, but the server may already contain the interrupted upload. Export the local vault as JSON before downloading or otherwise discarding local data."
+      )
+    }
+    .confirmationDialog(
+      "Discard local changes and download from \(pendingDownloadServerURL?.absoluteString ?? persistedServerOrigin)?",
       isPresented: $confirmingDiscardDownload,
       titleVisibility: .visible
     ) {
       Button("Discard local changes", role: .destructive) {
-        Task { await state.downloadEncryptedVault(discardingLocalChanges: true) }
+        guard let target = pendingDownloadServerURL else { return }
+        Task {
+          await state.downloadEncryptedVault(
+            discardingLocalChanges: true,
+            expectedServerURL: target
+          )
+        }
       }
       Button("Cancel", role: .cancel) {}
     } message: {
       Text(
-        "This replaces the local vault with the latest authenticated remote snapshot. Export or upload anything you need first."
+        "This replaces the local vault with the latest authenticated remote snapshot from \(pendingDownloadServerURL?.absoluteString ?? persistedServerOrigin). Export or upload anything you need first."
       )
     }
     .confirmationDialog(
-      "Revoke this Mac's sync session?",
+      "Revoke this Mac's sync session on \(pendingRevocationServerURL?.absoluteString ?? persistedServerOrigin)?",
       isPresented: $confirmingSessionRevocation,
       titleVisibility: .visible
     ) {
       Button("Revoke session", role: .destructive) {
-        Task { await state.revokeCurrentSyncSession() }
+        guard let target = pendingRevocationServerURL else { return }
+        Task { await state.revokeCurrentSyncSession(expectedServerURL: target) }
       }
       Button("Cancel", role: .cancel) {}
     } message: {
       Text(
-        "This Mac will need a new passkey sign-in before it can sync again. Other signed-in devices are not affected."
+        "This revokes the session on \(pendingRevocationServerURL?.absoluteString ?? persistedServerOrigin). This Mac will need a new passkey sign-in before it can sync again. Other signed-in devices are not affected."
       )
     }
     .confirmationDialog(
-      "Permanently delete the sync account?",
+      "Permanently delete the sync account on \(pendingDeletionServerURL?.absoluteString ?? persistedServerOrigin)?",
       isPresented: $confirmingAccountDeletion,
       titleVisibility: .visible
     ) {
       Button("Delete sync account", role: .destructive) {
-        Task { await state.deleteSyncAccount() }
+        guard let target = pendingDeletionServerURL else { return }
+        Task { await state.deleteSyncAccount(expectedServerURL: target) }
       }
       Button("Cancel", role: .cancel) {}
     } message: {
       Text(
-        "A passkey check confirms this destructive action. If a previous attempt had an uncertain network outcome, Address Atlas safely resumes the same deletion operation. This permanently removes the remote account, passkeys, sessions, and encrypted server snapshots; your encrypted local vault on this Mac is kept."
+        "A passkey check confirms this destructive action on \(pendingDeletionServerURL?.absoluteString ?? persistedServerOrigin). If a previous attempt had an uncertain network outcome, Address Atlas safely resumes the same deletion operation. This permanently removes the remote account, passkeys, sessions, and encrypted server snapshots; your encrypted local vault on this Mac is kept."
       )
     }
   }

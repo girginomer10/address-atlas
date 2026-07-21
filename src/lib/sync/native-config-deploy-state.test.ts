@@ -61,6 +61,7 @@ describe("native config deployment high-water state", () => {
     { ...validConfig(), configVersion: 4 },
     { ...validConfig(), unknown: true },
     { ...validConfig(), updatedAt: "2026-02-31T00:00:00.000Z" },
+    { ...validConfig(), updatedAt: "2620-01-01T00:00:00.000Z" },
     { ...validConfig(), minSupportedAppVersion: "2000000001.0" },
     { ...validConfig(), priceBaseUrl: "https://api.coingecko.com/other" },
     { ...validConfig(), chains: [] },
@@ -72,6 +73,18 @@ describe("native config deployment high-water state", () => {
     const result = run(["fingerprint"], JSON.stringify(config));
     expect(result.status).toBe(65);
     expect(result.stdout).toBe("");
+  });
+
+  it("allows small clock skew but rejects an implausibly future-dated policy", () => {
+    const withinSkew = validConfig();
+    withinSkew.updatedAt = new Date(Date.now() + 4 * 60_000).toISOString();
+    expect(run(["fingerprint"], JSON.stringify(withinSkew)).status).toBe(0);
+
+    const beyondSkew = validConfig();
+    beyondSkew.updatedAt = new Date(Date.now() + 6 * 60_000).toISOString();
+    const result = run(["fingerprint"], JSON.stringify(beyondSkew));
+    expect(result.status).toBe(65);
+    expect(result.stderr).toContain("implausibly in the future");
   });
 
   it("gates a native release on production config and minimum app compatibility", () => {
@@ -132,6 +145,33 @@ describe("native config deployment high-water state", () => {
       "}",
       ""
     ].join("\n"));
+  });
+
+  it("refuses a future-dated receipt without poisoning a later valid write", () => {
+    const result = run([
+      "write",
+      stateFile,
+      "5",
+      "a".repeat(64),
+      String(Date.now() + 6 * 60_000),
+      "b".repeat(40),
+      `sha256:${"c".repeat(64)}`
+    ]);
+    expect(result.status).toBe(66);
+    expect(result.stderr).toContain("implausibly in the future");
+    expect(run(["read", stateFile]).status).toBe(66);
+
+    const validWrite = run([
+      "write",
+      stateFile,
+      "6",
+      "d".repeat(64),
+      "1784505600000",
+      "e".repeat(40),
+      `sha256:${"f".repeat(64)}`
+    ]);
+    expect(validWrite.status).toBe(0);
+    expect(run(["read", stateFile]).stdout).toBe(validWrite.stdout);
   });
 
   it("rejects insecure parent permissions before creating state", () => {
@@ -195,6 +235,22 @@ describe("native config deployment high-water state", () => {
     writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
     chmodSync(stateFile, 0o644);
     expect(run(["read", stateFile]).status).toBe(66);
+  });
+
+  it("rejects a canonical existing receipt whose timestamp is in the future", () => {
+    const state = {
+      schemaVersion: 1,
+      version: 5,
+      digest: "a".repeat(64),
+      updatedAtEpochMs: Date.now() + 6 * 60_000,
+      revision: "b".repeat(40),
+      imageId: `sha256:${"c".repeat(64)}`
+    };
+    writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+
+    const result = run(["read", stateFile]);
+    expect(result.status).toBe(66);
+    expect(result.stderr).toContain("implausibly in the future");
   });
 
   it("persists only monotonic, provenance-bound first-install phases", () => {

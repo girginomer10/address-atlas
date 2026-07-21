@@ -223,6 +223,7 @@ public struct VaultSyncCodec: Sendable {
   /// Detect local user-content changes without relying on every UI mutation to
   /// remember to toggle a dirty flag.
   public func hasLocalChanges(in document: VaultDocument) throws -> Bool {
+    if document.syncState.remoteOutcomeUncertain { return true }
     let current = try contentChecksum(for: document)
     if let baseline = document.syncState.lastSyncedContentChecksum {
       return current != baseline
@@ -324,6 +325,7 @@ public struct VaultSyncCodec: Sendable {
     remoteDocument.syncState.sessionToken = ""
     remoteDocument.syncState.serverURL = ""
     remoteDocument.syncState.accountDeletionIdempotencyKey = nil
+    remoteDocument.syncState.remoteOutcomeUncertain = false
     return remoteDocument
   }
 

@@ -15,6 +15,7 @@ function createPool(
   const created = new Pool({
     connectionString: config.connectionString,
     application_name: applicationName,
+    ...(process.env.NODE_ENV === "production" ? { options: "-csearch_path=public" } : {}),
     max,
     connectionTimeoutMillis: config.connectTimeoutMs,
     idleTimeoutMillis: config.idleTimeoutMs,

@@ -455,6 +455,10 @@ public struct SyncState: Codable, Equatable, Sendable {
   /// SHA-256 of the user-controlled vault content at the last successful sync.
   /// Authentication/session fields are deliberately excluded from this digest.
   public var lastSyncedContentChecksum: String?
+  /// True when an upload may have committed remotely but the user explicitly
+  /// stopped replay. It forces every subsequent download through the discard
+  /// confirmation path, including for an otherwise empty vault.
+  public var remoteOutcomeUncertain: Bool
   /// Local-only operation identity for replay-safe remote account deletion.
   /// VaultSyncCodec strips it from encrypted server snapshots.
   public var accountDeletionIdempotencyKey: String?
@@ -467,6 +471,7 @@ public struct SyncState: Codable, Equatable, Sendable {
     case lastSyncedAt
     case lastChecksum
     case lastSyncedContentChecksum
+    case remoteOutcomeUncertain
     case accountDeletionIdempotencyKey
   }
 
@@ -478,6 +483,7 @@ public struct SyncState: Codable, Equatable, Sendable {
     lastSyncedAt: Date? = nil,
     lastChecksum: String? = nil,
     lastSyncedContentChecksum: String? = nil,
+    remoteOutcomeUncertain: Bool = false,
     accountDeletionIdempotencyKey: String? = nil
   ) {
     self.accountId = accountId
@@ -487,6 +493,7 @@ public struct SyncState: Codable, Equatable, Sendable {
     self.lastSyncedAt = lastSyncedAt
     self.lastChecksum = lastChecksum
     self.lastSyncedContentChecksum = lastSyncedContentChecksum
+    self.remoteOutcomeUncertain = remoteOutcomeUncertain
     self.accountDeletionIdempotencyKey = AccountDeletionIdempotencyKey.normalized(
       accountDeletionIdempotencyKey
     )
@@ -506,6 +513,8 @@ public struct SyncState: Codable, Equatable, Sendable {
     lastChecksum = try container.decodeIfPresent(String.self, forKey: .lastChecksum)
     lastSyncedContentChecksum = try container.decodeIfPresent(
       String.self, forKey: .lastSyncedContentChecksum)
+    remoteOutcomeUncertain =
+      try container.decodeIfPresent(Bool.self, forKey: .remoteOutcomeUncertain) ?? false
     accountDeletionIdempotencyKey = AccountDeletionIdempotencyKey.normalized(
       try container.decodeIfPresent(String.self, forKey: .accountDeletionIdempotencyKey)
     )
@@ -558,6 +567,7 @@ public struct SyncState: Codable, Equatable, Sendable {
     lastSyncedAt = nil
     lastChecksum = nil
     lastSyncedContentChecksum = nil
+    remoteOutcomeUncertain = false
   }
 
   /// Forget only the bearer grant after the server has revoked this device's
@@ -587,6 +597,7 @@ public struct SyncState: Codable, Equatable, Sendable {
     lastSyncedAt = date
     lastChecksum = snapshotChecksum
     lastSyncedContentChecksum = contentChecksum
+    remoteOutcomeUncertain = false
   }
 }
 

@@ -335,7 +335,11 @@ merge_signed_backup_native_config_baseline() {
     return 65
   }
 
-  if [[ -z "$BASELINE_CONFIG_VERSION" ]]; then
+  if [[ -z "$BASELINE_CONFIG_VERSION" ]] \
+      || (( BASELINE_CONFIG_VERSION < version )); then
+    # configVersion is the cross-version authority. updatedAt binds the exact
+    # identity of one version, but it must never make a higher reviewed version
+    # impossible to deploy because of a prior clock error.
     BASELINE_CONFIG_VERSION="$version"
     BASELINE_CONFIG_DIGEST="$digest"
     BASELINE_CONFIG_UPDATED_AT_MS="$updated_at"
@@ -345,21 +349,6 @@ merge_signed_backup_native_config_baseline() {
     [[ "$BASELINE_CONFIG_DIGEST" == "$digest" \
        && "$BASELINE_CONFIG_UPDATED_AT_MS" == "$updated_at" ]] || {
       echo "The durable and signed backup config baselines conflict at one version." >&2
-      return 67
-    }
-  elif (( BASELINE_CONFIG_VERSION < version )); then
-    (( BASELINE_CONFIG_UPDATED_AT_MS <= updated_at )) || {
-      echo "The signed backup config has a newer version but an older policy timestamp." >&2
-      return 67
-    }
-    BASELINE_CONFIG_VERSION="$version"
-    BASELINE_CONFIG_DIGEST="$digest"
-    BASELINE_CONFIG_UPDATED_AT_MS="$updated_at"
-    BASELINE_CONFIG_REVISION="$revision"
-    BASELINE_CONFIG_IMAGE_ID="$image_id"
-  else
-    (( BASELINE_CONFIG_UPDATED_AT_MS >= updated_at )) || {
-      echo "The durable config receipt has a newer version but an older policy timestamp." >&2
       return 67
     }
   fi
@@ -1625,14 +1614,12 @@ validate_candidate_native_config_transition() {
       echo "Candidate native config would roll clients back to an older version." >&2
       return 67
     }
-    (( CANDIDATE_CONFIG_UPDATED_AT_MS >= BASELINE_CONFIG_UPDATED_AT_MS )) || {
-      echo "Candidate native config has an older policy timestamp." >&2
-      return 67
-    }
-    if (( CANDIDATE_CONFIG_VERSION == BASELINE_CONFIG_VERSION )) \
-      && [[ "$CANDIDATE_CONFIG_DIGEST" != "$BASELINE_CONFIG_DIGEST" ]]; then
-      echo "Candidate native config changes policy without advancing configVersion." >&2
-      return 67
+    if (( CANDIDATE_CONFIG_VERSION == BASELINE_CONFIG_VERSION )); then
+      [[ "$CANDIDATE_CONFIG_DIGEST" == "$BASELINE_CONFIG_DIGEST" \
+         && "$CANDIDATE_CONFIG_UPDATED_AT_MS" == "$BASELINE_CONFIG_UPDATED_AT_MS" ]] || {
+        echo "Candidate native config changes one version's bound policy identity." >&2
+        return 67
+      }
     fi
   fi
 

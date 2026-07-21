@@ -18,6 +18,7 @@ OWNER_USER="address_atlas"
 ADMIN_USER="address_atlas_admin"
 RUNTIME_USER="address_atlas_runtime"
 MANIFEST_SCHEMA_VERSION=4
+NATIVE_CONFIG_MAX_FUTURE_SKEW_MS=300000
 EXPECTED_MIGRATION_HEAD=3
 SCHEMA_MIGRATION_ADVISORY_LOCK=1094992973
 EXPECTED_RESTORE_PROVISION_IMAGE='postgres:16.14-alpine3.24@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777'
@@ -663,6 +664,7 @@ database_context() {
 
 load_native_config_receipt() {
   local web_revision="$1"
+  local current_epoch
   NATIVE_CONFIG_VERSION="${ADDRESS_ATLAS_BACKUP_NATIVE_CONFIG_VERSION:-}"
   NATIVE_CONFIG_DIGEST="${ADDRESS_ATLAS_BACKUP_NATIVE_CONFIG_SHA256:-}"
   NATIVE_CONFIG_UPDATED_AT_EPOCH_MS="${ADDRESS_ATLAS_BACKUP_NATIVE_CONFIG_UPDATED_AT_EPOCH_MS:-}"
@@ -676,6 +678,12 @@ load_native_config_receipt() {
   [[ "$NATIVE_CONFIG_UPDATED_AT_EPOCH_MS" =~ ^[1-9][0-9]*$ \
       && "$NATIVE_CONFIG_UPDATED_AT_EPOCH_MS" -le 8640000000000000 ]] \
     || die "ADDRESS_ATLAS_BACKUP_NATIVE_CONFIG_UPDATED_AT_EPOCH_MS is invalid." 65
+  current_epoch="$(date +%s)"
+  [[ "$current_epoch" =~ ^[1-9][0-9]*$ ]] \
+    || die "Unable to establish the current time for the native-config receipt." 69
+  (( NATIVE_CONFIG_UPDATED_AT_EPOCH_MS \
+      <= current_epoch * 1000 + NATIVE_CONFIG_MAX_FUTURE_SKEW_MS )) \
+    || die "The native-config receipt timestamp is implausibly in the future." 65
   [[ "$NATIVE_CONFIG_SERVING_REVISION" =~ ^[0-9a-f]{40}$ \
       && "$NATIVE_CONFIG_SERVING_REVISION" == "$web_revision" ]] \
     || die "The native-config receipt must be bound to the inspected serving revision." 65
@@ -941,7 +949,7 @@ write_manifest() {
 
 parse_canonical_manifest() {
   local manifest="$1"
-  local line_count actual expected
+  local line_count actual expected snapshot_started_epoch completed_epoch
   MANIFEST_SCHEMA="$(sed -n 's/^  "schemaVersion": \([0-9][0-9]*\),$/\1/p' "$manifest")"
   line_count="$(wc -l < "$manifest" | tr -d '[:space:]')"
   case "$MANIFEST_SCHEMA" in
@@ -972,7 +980,9 @@ parse_canonical_manifest() {
   [[ "$MANIFEST_SNAPSHOT_STARTED" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ \
       && "$MANIFEST_COMPLETED" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
     || die "Backup manifest snapshot timing is malformed." 65
-  [[ "$(iso8601_epoch "$MANIFEST_COMPLETED")" -ge "$(iso8601_epoch "$MANIFEST_SNAPSHOT_STARTED")" ]] \
+  snapshot_started_epoch="$(iso8601_epoch "$MANIFEST_SNAPSHOT_STARTED")"
+  completed_epoch="$(iso8601_epoch "$MANIFEST_COMPLETED")"
+  [[ "$completed_epoch" -ge "$snapshot_started_epoch" ]] \
     || die "Backup manifest completion precedes its snapshot start." 65
   validate_identifier "$MANIFEST_DATABASE" "Backup manifest database name"
   [[ "$MANIFEST_SIZE" =~ ^[1-9][0-9]*$ ]] || die "Backup manifest size is malformed." 65
@@ -993,6 +1003,9 @@ parse_canonical_manifest() {
     [[ "$MANIFEST_NATIVE_CONFIG_UPDATED_AT_EPOCH_MS" =~ ^[1-9][0-9]*$ \
         && "$MANIFEST_NATIVE_CONFIG_UPDATED_AT_EPOCH_MS" -le 8640000000000000 ]] \
       || die "Backup manifest native-config timestamp is malformed." 65
+    (( MANIFEST_NATIVE_CONFIG_UPDATED_AT_EPOCH_MS \
+        <= completed_epoch * 1000 + NATIVE_CONFIG_MAX_FUTURE_SKEW_MS )) \
+      || die "Backup manifest native-config timestamp exceeds snapshot completion plus allowed clock skew." 65
     [[ "$MANIFEST_NATIVE_CONFIG_SERVING_REVISION" == "$MANIFEST_WEB_REVISION" ]] \
       || die "Backup manifest native-config receipt is not bound to its serving revision." 65
   fi

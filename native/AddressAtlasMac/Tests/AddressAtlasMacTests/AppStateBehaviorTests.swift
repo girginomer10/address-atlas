@@ -19,6 +19,27 @@ final class AppStateBehaviorTests: XCTestCase {
     XCTAssertEqual(state.error, "")
   }
 
+  func testSyncServerDraftBindingAcceptsCanonicalEquivalenceAndRejectsAnotherOrigin() {
+    XCTAssertTrue(
+      AppState.syncServerDraftMatchesPersisted(
+        "https://SYNC.EXAMPLE:443/",
+        persisted: "https://sync.example"
+      )
+    )
+    XCTAssertFalse(
+      AppState.syncServerDraftMatchesPersisted(
+        "https://other.example",
+        persisted: "https://sync.example"
+      )
+    )
+    XCTAssertFalse(
+      AppState.syncServerDraftMatchesPersisted(
+        "not a URL",
+        persisted: "https://sync.example"
+      )
+    )
+  }
+
   func testUserFacingErrorBoundaryNeverRendersRawFrameworkOrSwiftTypeNames() {
     let state = AppState()
 
@@ -78,7 +99,7 @@ final class AppStateBehaviorTests: XCTestCase {
     XCTAssertEqual(state.error, EncryptedSQLiteVaultStoreError.staleDocument.localizedDescription)
   }
 
-  func testSyncedSavePrunesOldestRunsByExactProjectedBytesAndKeepsBaselineDirty() async throws {
+  func testSyncedOrdinarySaveRetainsAllRunsDespiteWireLimit() async throws {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let codec = VaultSyncCodec()
@@ -119,18 +140,18 @@ final class AppStateBehaviorTests: XCTestCase {
     let didSave = await state.save()
     XCTAssertTrue(didSave)
 
-    XCTAssertEqual(state.document.scanRuns.map(\.id), [new.id, middle.id])
+    XCTAssertEqual(state.document.scanRuns.map(\.id), [old.id, new.id, middle.id])
     XCTAssertEqual(
       state.document.syncState.lastSyncedContentChecksum,
       originalContentBaseline
     )
-    XCTAssertTrue(state.hasUnsyncedLocalChanges)
-    XCTAssertTrue(state.notice.contains("Removed 1 oldest scan snapshot"))
+    XCTAssertFalse(state.hasUnsyncedLocalChanges)
+    XCTAssertEqual(state.notice, "Saved locally.")
     let verifier = try EncryptedSQLiteVaultStore(
       path: fixture.database,
       vaultKey: fixture.vaultKey
     )
-    XCTAssertEqual(try verifier.load().scanRuns.map(\.id), [new.id, middle.id])
+    XCTAssertEqual(try verifier.load().scanRuns.map(\.id), [old.id, new.id, middle.id])
   }
 
   func testLocalOnlySaveDoesNotPruneAtSyncLimit() async throws {
@@ -231,7 +252,7 @@ final class AppStateBehaviorTests: XCTestCase {
     )
   }
 
-  func testNewestRunTooLargeRejectsBeforeSQLiteAndPreservesMemoryRowAndCAS() async throws {
+  func testNewestRunAboveWireLimitStillPersistsExactlyLocally() async throws {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let codec = VaultSyncCodec()
@@ -263,22 +284,23 @@ final class AppStateBehaviorTests: XCTestCase {
       document: persisted,
       syncSnapshotByteLimit: minimumRequired - 1
     )
-    let envelopeBeforeRejectedSave = try XCTUnwrap(fixture.store.rawStoredEnvelopeBytes())
+    let savedOversized = await state.mutateDocument { $0.scanRuns.append(oversizedNewest) }
+    XCTAssertTrue(savedOversized)
 
-    let rejectedOversized = await state.mutateDocument { $0.scanRuns.append(oversizedNewest) }
-    XCTAssertFalse(rejectedOversized)
-
-    XCTAssertEqual(state.document, persisted)
-    XCTAssertEqual(try fixture.store.rawStoredEnvelopeBytes(), envelopeBeforeRejectedSave)
-    let verifierAfterFailure = try EncryptedSQLiteVaultStore(
+    XCTAssertEqual(
+      state.document.scanRuns.map(\.id), [persisted.scanRuns[0].id, oversizedNewest.id])
+    let verifierAfterSave = try EncryptedSQLiteVaultStore(
       path: fixture.database,
       vaultKey: fixture.vaultKey
     )
-    XCTAssertEqual(try verifierAfterFailure.load(), persisted)
-    XCTAssertTrue(state.error.contains("sync snapshot is too large"))
+    XCTAssertEqual(
+      try verifierAfterSave.load().scanRuns.map(\.id),
+      [persisted.scanRuns[0].id, oversizedNewest.id]
+    )
+    XCTAssertEqual(state.error, "")
 
-    // A normal follow-up mutation through the same store proves the rejected
-    // preflight did not advance or invalidate its compare-and-swap baseline.
+    // A normal follow-up mutation proves exact local persistence retained its
+    // compare-and-swap baseline despite exceeding the wire projection limit.
     let acceptedFollowUp = await state.mutateDocument { $0.preferences.autoRefresh = false }
     XCTAssertTrue(acceptedFollowUp)
     let finalVerifier = try EncryptedSQLiteVaultStore(
@@ -288,7 +310,7 @@ final class AppStateBehaviorTests: XCTestCase {
     XCTAssertFalse(try finalVerifier.load().preferences.autoRefresh)
   }
 
-  func testSaveUsesPostMarkSyncedHeadroomBeforePersisting() async throws {
+  func testOrdinarySaveDoesNotApplyPostMarkSyncedWireProjection() async throws {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let codec = VaultSyncCodec()
@@ -327,7 +349,7 @@ final class AppStateBehaviorTests: XCTestCase {
 
     let didSave = await state.save()
     XCTAssertTrue(didSave)
-    XCTAssertEqual(state.document.scanRuns.map(\.id), [new.id])
+    XCTAssertEqual(state.document.scanRuns.map(\.id), [old.id, new.id])
   }
 
   func testConcurrentVaultMutationsSerializeAndPersistExactlyOneCandidate() async throws {
@@ -367,6 +389,26 @@ final class AppStateBehaviorTests: XCTestCase {
 
     XCTAssertEqual(state.visibleLatestHoldings.map(\.id), ["visible"])
     XCTAssertEqual(state.visibleLatestTotalUsd, 100, accuracy: 0.000_001)
+  }
+
+  func testTopHoldingsSortByValidatedValueWithDeterministicTieBreaks() {
+    let state = AppState()
+    let low = asset(id: "low", priceUsd: 1, valueUsd: 1)
+    let tieLater = asset(id: "z-high", priceUsd: 10, valueUsd: 10)
+    let tieEarlier = asset(id: "a-high", priceUsd: 10, valueUsd: 10)
+    let invalid = asset(id: "invalid", priceUsd: 1, valueUsd: .infinity)
+    state.document.scanRuns = [
+      ScanRunRecord(
+        totalUsd: 21,
+        inputCount: 1,
+        holdings: [low, tieLater, invalid, tieEarlier]
+      )
+    ]
+
+    XCTAssertEqual(
+      state.visibleLatestHoldings.map(\.id),
+      ["a-high", "z-high", "low", "invalid"]
+    )
   }
 
   func testValueOnlyAssetRemainsVisibleWhenHidingUnpriced() {

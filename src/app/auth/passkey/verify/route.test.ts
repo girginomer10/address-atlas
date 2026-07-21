@@ -2,6 +2,8 @@ import { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  acquireConcurrencyMany: vi.fn(),
+  releaseBodyConcurrency: vi.fn(),
   verifyPasskey: vi.fn(),
   rateLimitMany: vi.fn()
 }));
@@ -12,12 +14,14 @@ vi.mock("@/lib/sync/passkeys", async (importOriginal) => ({
 }));
 
 vi.mock("@/lib/sync/rate-limit", () => ({
+  acquireConcurrencyMany: mocks.acquireConcurrencyMany,
   clientKey: () => "client",
   rateLimitMany: mocks.rateLimitMany
 }));
 
 import { PasskeyVerificationError } from "@/lib/sync/passkeys";
 import { RegistrationDisabledError } from "@/lib/sync/registration";
+import { PASSKEY_BODY_DEADLINE_MS } from "../body-concurrency";
 import { POST } from "./route";
 
 function request() {
@@ -31,6 +35,7 @@ function request() {
 describe("passkey verification error boundary", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.acquireConcurrencyMany.mockReturnValue(mocks.releaseBodyConcurrency);
     mocks.rateLimitMany.mockReturnValue(true);
     mocks.verifyPasskey.mockResolvedValue({
       verified: true,
@@ -40,9 +45,35 @@ describe("passkey verification error boundary", () => {
   });
 
   it("marks session-token responses as non-cacheable", async () => {
+    mocks.verifyPasskey.mockImplementationOnce(async () => {
+      expect(mocks.releaseBodyConcurrency).toHaveBeenCalledOnce();
+      return { verified: true, userId: "user-1", sessionToken: "session-token" };
+    });
     const response = await POST(request());
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(mocks.releaseBodyConcurrency).toHaveBeenCalledOnce();
+    expect(PASSKEY_BODY_DEADLINE_MS).toBe(15_000);
+  });
+
+  it("rejects at the active-body boundary before reading the request", async () => {
+    mocks.acquireConcurrencyMany.mockReturnValueOnce(null);
+    const response = await POST(new NextRequest("https://sync.example/auth/passkey/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not-json"
+    }));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({ error: "Too many requests." });
+    expect(mocks.acquireConcurrencyMany).toHaveBeenCalledWith([
+      { key: "auth-body-active:global", limit: 64 },
+      { key: "auth-body-active:client:client", limit: 4 }
+    ]);
+    expect(mocks.rateLimitMany).toHaveBeenCalledOnce();
+    expect(mocks.verifyPasskey).not.toHaveBeenCalled();
+    expect(mocks.releaseBodyConcurrency).not.toHaveBeenCalled();
   });
 
   it("normalizes expected authentication failures", async () => {
@@ -61,6 +92,7 @@ describe("passkey verification error boundary", () => {
     const body = JSON.stringify(await response.json());
     expect(body).toContain("Passkey verification failed");
     expect(body).not.toContain("secret");
+    expect(mocks.releaseBodyConcurrency).toHaveBeenCalledOnce();
   });
 
   it("marks rate-limit responses as non-cacheable", async () => {

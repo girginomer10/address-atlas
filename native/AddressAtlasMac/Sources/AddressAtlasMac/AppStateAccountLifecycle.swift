@@ -14,7 +14,7 @@ extension AppState {
   /// Revoke this device's server-side bearer grant, then durably remove the
   /// local copy. A completed remote revocation is never rolled back in memory
   /// merely because local persistence subsequently fails.
-  func revokeCurrentSyncSession() async {
+  func revokeCurrentSyncSession(expectedServerURL: URL) async {
     guard canMutateVault() else { return }
     guard persistence != nil, isUnlocked else {
       error = "Unlock the vault before revoking the sync session."
@@ -24,6 +24,11 @@ extension AppState {
       !document.syncState.sessionToken.isEmpty
     else {
       error = "Sign in with passkey before revoking the sync session."
+      return
+    }
+    guard expectedServerURL == serverURL else {
+      error =
+        "The sync server selection changed. Review the saved server before revoking the session."
       return
     }
     syncing = true
@@ -51,7 +56,7 @@ extension AppState {
   /// Delete the authenticated server account while preserving the encrypted
   /// local vault. The server call commits first; afterward account/session and
   /// remote-baseline metadata are cleared and persisted locally.
-  func deleteSyncAccount() async {
+  func deleteSyncAccount(expectedServerURL: URL) async {
     guard canMutateVault(allowPendingAccountDeletion: true) else { return }
     guard persistence != nil, isUnlocked else {
       error = "Unlock the vault before deleting the sync account."
@@ -63,6 +68,11 @@ extension AppState {
       )
     else {
       error = "Connect a passkey account before deleting the sync account."
+      return
+    }
+    guard expectedServerURL == serverURL else {
+      error =
+        "The sync server selection changed. Review the saved server before deleting the account."
       return
     }
     syncing = true
@@ -190,8 +200,16 @@ extension AppState {
       error = "Sync server URL must use https (http is allowed only for localhost)."
       return
     }
-    guard !syncPersistencePending else {
-      error = "Save the pending sync state locally before changing sync accounts."
+    if syncPersistencePending {
+      guard let pendingUpload = pendingVaultUpload else {
+        error = "Save the pending sync state locally before changing sync accounts."
+        return
+      }
+      await authenticateForPendingVaultUploadRecovery(
+        serverURL: url,
+        mode: mode,
+        pendingUpload: pendingUpload
+      )
       return
     }
     guard !hasPendingAccountDeletion else {
@@ -212,10 +230,17 @@ extension AppState {
     }
     syncing = true
     defer { syncing = false }
+    let priorEndpointConfig = endpointConfig
+    let priorEndpointConfigStatus = endpointConfigStatus
+    let priorAcceptedEndpointConfigServerURL = acceptedEndpointConfigServerURL
     do {
-      try await verifyCompatibilityPolicy(for: url)
+      let stagedEndpointConfig = try await compatibilityPolicyCandidate(for: url)
       let session = try await passkeyAuthenticator.authenticate(serverURL: url, mode: mode)
-      let previousServerURL = document.syncState.serverURL
+      guard AppState.validatedSyncURL(session.serverURL) == url else {
+        throw UserFacingAppError(
+          message: "Passkey sign-in returned a different sync server. Nothing was changed."
+        )
+      }
       var connected = document
       guard
         connected.syncState.connect(
@@ -226,52 +251,136 @@ extension AppState {
       else {
         throw URLError(.badServerResponse)
       }
+      // The passkey ceremony authenticates this authority. Revalidate under
+      // the durable store's lock in case another process advanced trust while
+      // the sheet was open, then commit before saving the server binding.
+      try await endpointConfigTrustStore.validateAndRecord(stagedEndpointConfig, for: url)
       guard await save(connected, projectedSyncVersion: nil) else {
+        endpointConfig = priorEndpointConfig
+        endpointConfigStatus = priorEndpointConfigStatus
+        acceptedEndpointConfigServerURL = priorAcceptedEndpointConfigServerURL
         return
       }
-      if previousServerURL != document.syncState.serverURL,
-        acceptedEndpointConfigServerURL
-          != AppState.validatedSyncURL(document.syncState.serverURL)
-      {
-        endpointConfig = .bundled
-        endpointConfigStatus = "Bundled endpoints"
-        acceptedEndpointConfigServerURL = nil
-      }
+      // The policy becomes active only after the authenticated server binding
+      // is durable. Cancellation, authentication failure and unsupported-build
+      // rejection all restore the exact policy that preceded this attempt.
+      endpointConfig = stagedEndpointConfig
+      acceptedEndpointConfigServerURL = url
+      endpointConfigStatus = "Remote v\(stagedEndpointConfig.configVersion)"
       let removedScanRunCount = lastSaveRemovedScanRunCount
       notice =
         (mode == .register ? "Passkey account connected." : "Passkey sign-in complete.")
         + pruningNoticeSuffix(removedScanRunCount)
       error = ""
     } catch {
+      endpointConfig = priorEndpointConfig
+      endpointConfigStatus = priorEndpointConfigStatus
+      acceptedEndpointConfigServerURL = priorAcceptedEndpointConfigServerURL
       presentUserFacingError(error, cancellationNotice: "Passkey sign-in cancelled.")
     }
   }
 
-  func verifyCompatibilityPolicy(for serverURL: URL) async throws {
-    if AppState.validatedSyncURL(document.syncState.serverURL) == serverURL {
-      guard await refreshEndpointConfig(silent: true) else {
+  private func authenticateForPendingVaultUploadRecovery(
+    serverURL: URL,
+    mode: PasskeyWebMode,
+    pendingUpload: PendingVaultUpload
+  ) async {
+    guard mode == .authenticate else {
+      error = "Sign in to the existing sync account to recover the interrupted upload."
+      return
+    }
+    guard
+      serverURL.absoluteString == pendingUpload.serverOrigin,
+      AppState.validatedSyncURL(document.syncState.serverURL) == serverURL,
+      document.syncState.accountId.flatMap(SyncAccountIdentifier.normalized)
+        == pendingUpload.accountId
+    else {
+      error =
+        "The interrupted upload is bound to a different sync server or account. Sign in to that exact account to recover it."
+      return
+    }
+    guard !hasPendingAccountDeletion else {
+      error = "Finish or retry the pending account deletion before recovering the upload."
+      return
+    }
+    guard !isPersisting else {
+      error = "Wait for the current local save before recovering the upload."
+      return
+    }
+    guard !isValidatingExchangeCredentials else {
+      error = "Wait for the exchange credential check before recovering the upload."
+      return
+    }
+    guard !syncing else {
+      notice = "A sync operation is already running."
+      return
+    }
+
+    let priorEndpointConfig = endpointConfig
+    let priorEndpointConfigStatus = endpointConfigStatus
+    let priorAcceptedEndpointConfigServerURL = acceptedEndpointConfigServerURL
+    syncing = true
+    do {
+      let stagedEndpointConfig = try await compatibilityPolicyCandidate(for: serverURL)
+      let session = try await passkeyAuthenticator.authenticate(
+        serverURL: serverURL,
+        mode: .authenticate
+      )
+      guard
+        SyncAccountIdentifier.normalized(session.userId) == pendingUpload.accountId,
+        AppState.validatedSyncURL(session.serverURL) == serverURL,
+        SyncSessionToken.isValid(session.sessionToken)
+      else {
         throw UserFacingAppError(
           message:
-            "The sync server's compatibility policy could not be verified. Passkey sign-in was not started."
+            "Passkey sign-in did not match the account bound to the interrupted upload. Recovery was not started."
         )
       }
-    } else {
-      endpointConfigRefreshGeneration &+= 1
-      endpointConfigRefreshRequest?.task.cancel()
-      endpointConfigRefreshRequest = nil
-      let config = try await endpointConfigClient.fetch(from: serverURL)
-      try await endpointConfigTrustStore.validateAndRecord(config, for: serverURL)
-      endpointConfig = config
+      try await endpointConfigTrustStore.validateAndRecord(stagedEndpointConfig, for: serverURL)
+
+      // The pending-upload trigger intentionally blocks an ordinary document
+      // save. Keep only the freshly authenticated token in memory; successful
+      // recovery writes it as an override while atomically finalizing the
+      // exact post-commit document stored in the recovery record.
+      document.syncState.sessionToken = session.sessionToken
+      endpointConfig = stagedEndpointConfig
       acceptedEndpointConfigServerURL = serverURL
-      endpointConfigStatus = acceptedEndpointStatus("Remote v\(config.configVersion)")
+      endpointConfigStatus = "Remote v\(stagedEndpointConfig.configVersion)"
+      error = ""
+      syncing = false
+      await recoverPendingVaultUpload()
+    } catch {
+      syncing = false
+      endpointConfig = priorEndpointConfig
+      endpointConfigStatus = priorEndpointConfigStatus
+      acceptedEndpointConfigServerURL = priorAcceptedEndpointConfigServerURL
+      presentUserFacingError(error, cancellationNotice: "Passkey sign-in cancelled.")
     }
-    guard isAppVersionSupported else {
-      endpointConfigStatus = "Update required"
+  }
+
+  func compatibilityPolicyCandidate(for serverURL: URL) async throws -> NativeEndpointConfig {
+    // An earlier background refresh must not race the staged candidate back
+    // into the published policy while the passkey sheet is open.
+    endpointConfigRefreshGeneration &+= 1
+    endpointConfigRefreshRequest?.task.cancel()
+    endpointConfigRefreshRequest = nil
+    let config: NativeEndpointConfig
+    do {
+      config = try await endpointConfigClient.fetch(from: serverURL)
+      try await endpointConfigTrustStore.validate(config, for: serverURL)
+    } catch {
+      throw UserFacingAppError(
+        message:
+          "The sync server's compatibility policy could not be verified. Passkey sign-in was not started."
+      )
+    }
+    guard AppState.supportsAppVersion(appVersion, minimum: config.minSupportedAppVersion) else {
       throw UserFacingAppError(
         message:
           "This app version is no longer supported. Update Address Atlas before signing in or creating an account."
       )
     }
+    return config
   }
 
 }

@@ -42,6 +42,20 @@ const PLACEHOLDER_RE = /(replace[-_ ]?with|change[-_ ]?me|example|your[-_ ]?secr
 const RP_ID_RE = /^(?:localhost|(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)$/;
 const RESERVED_PRODUCTION_RP_SUFFIXES = ["example.com", "example.net", "example.org"];
 const LOCAL_PASSKEY_HOST = "localhost";
+const PRODUCTION_DATABASE_NAME = "address_atlas_sync";
+const PRODUCTION_RUNTIME_ROLE = "address_atlas_runtime";
+const PRODUCTION_SCHEMA_OWNER_ROLE = "address_atlas";
+const RESTORE_MIGRATION_DATABASE_RE = /^atlas_(?:drill|restore|bootstrap)_[A-Za-z0-9_]+$/;
+const SAFE_PRODUCTION_DATABASE_URL_PARAMETERS = new Set([
+  "channel_binding",
+  "sslcert",
+  "sslcrl",
+  "sslkey",
+  "sslmode",
+  "sslnegotiation",
+  "sslpassword",
+  "sslrootcert"
+]);
 
 export function validateSessionSecret(value: string | undefined) {
   const configured = value?.trim();
@@ -168,14 +182,45 @@ function parseDatabaseConfig(connectionString: string, sourceName: string): Sync
     throw new SyncConfigurationError(`${sourceName} must point to a Postgres database.`);
   }
   if (isProduction()) {
+    let decodedUsername: string;
     let decodedPassword: string;
+    let decodedDatabase: string;
     try {
+      decodedUsername = decodeURIComponent(databaseURL.username);
       decodedPassword = decodeURIComponent(databaseURL.password);
+      decodedDatabase = decodeURIComponent(databaseURL.pathname.slice(1));
     } catch {
-      throw new SyncConfigurationError(`${sourceName} contains invalid password encoding.`);
+      throw new SyncConfigurationError(`${sourceName} contains invalid credential or database encoding.`);
     }
-    if (!databaseURL.username || !decodedPassword || PLACEHOLDER_RE.test(decodedPassword)) {
+    const expectedRole = sourceName === "SYNC_SCHEMA_DATABASE_URL"
+      ? PRODUCTION_SCHEMA_OWNER_ROLE
+      : PRODUCTION_RUNTIME_ROLE;
+    if (decodedUsername !== expectedRole) {
+      throw new SyncConfigurationError(
+        `${sourceName} must use the fixed production role ${expectedRole}.`
+      );
+    }
+    if (!decodedPassword || PLACEHOLDER_RE.test(decodedPassword)) {
       throw new SyncConfigurationError(`${sourceName} must include a non-placeholder username and password in production.`);
+    }
+    const restoreMigrationDatabase = sourceName === "SYNC_SCHEMA_DATABASE_URL"
+      && process.env.ADDRESS_ATLAS_RESTORE_MIGRATION === "1"
+      && process.env.SYNC_SCHEMA_MODE?.trim().toLowerCase() === "bootstrap"
+      && decodedDatabase.length <= 63
+      && RESTORE_MIGRATION_DATABASE_RE.test(decodedDatabase);
+    if ((decodedDatabase !== PRODUCTION_DATABASE_NAME && !restoreMigrationDatabase) || databaseURL.hash) {
+      throw new SyncConfigurationError(
+        `${sourceName} must target the exact production database ${PRODUCTION_DATABASE_NAME} without a fragment.`
+      );
+    }
+    const seenParameters = new Set<string>();
+    for (const [name] of databaseURL.searchParams) {
+      if (seenParameters.has(name) || !SAFE_PRODUCTION_DATABASE_URL_PARAMETERS.has(name)) {
+        throw new SyncConfigurationError(
+          `${sourceName} contains a forbidden or duplicate production URL parameter: ${name}.`
+        );
+      }
+      seenParameters.add(name);
     }
   }
 

@@ -24,8 +24,9 @@ final class AppState: ObservableObject {
   @Published private(set) var isPersisting = false
   @Published var isValidatingExchangeCredentials = false
   @Published var syncPersistencePending = false
+  @Published var pendingVaultUploadHasRemoteConflict = false
   @Published var hasUnsyncedLocalChanges = true
-  private(set) var lastSaveRemovedScanRunCount = 0
+  var lastSaveRemovedScanRunCount = 0
   @Published var notice = "" {
     didSet {
       if !notice.isEmpty, !error.isEmpty { error = "" }
@@ -63,6 +64,9 @@ final class AppState: ObservableObject {
   private lazy var vaultKeyManager = VaultKeyManager(store: keyStore, crypto: crypto)
   var vaultKey: Data?
   var persistence: VaultPersistenceCoordinator?
+  /// Encrypted upload intent mirrored from SQLite. Its presence blocks all
+  /// vault mutation until the exact remote snapshot is reconciled.
+  var pendingVaultUpload: PendingVaultUpload?
   /// Exact local state that still has to become durable after a remote side
   /// effect has already committed. Keeping only a Boolean is unsafe: upload
   /// and download assemble their authoritative result in a local candidate,
@@ -75,6 +79,11 @@ final class AppState: ObservableObject {
   var scanTask: Task<Void, Never>?
   var endpointConfigRefreshGeneration = 0
   var endpointConfigRefreshRequest: EndpointConfigRefreshRequest?
+  /// Focused test seam for proving revision checks at the journal/PUT boundary.
+  /// Production never installs this callback.
+  var pendingUploadStagedHook: (@MainActor () -> Void)?
+  /// Focused test seam for the post-CAS memory-adoption boundary.
+  var pendingUploadCompletedPersistenceHook: (@MainActor () -> Void)?
   /// The origin that supplied the currently accepted remote configuration.
   /// Versions are monotonic only within one authority; changing servers resets
   /// this state to the bundled baseline.
@@ -156,6 +165,8 @@ final class AppState: ObservableObject {
     self.document = document
     self.hasUnsyncedLocalChanges = (try? VaultSyncCodec().hasLocalChanges(in: document)) ?? true
     self.isUnlocked = true
+    self.pendingVaultUpload = try? testStore.loadPendingVaultUpload()
+    self.syncPersistencePending = pendingVaultUpload != nil
   }
 
   var latestScan: ScanRunRecord? {
@@ -164,12 +175,30 @@ final class AppState: ObservableObject {
 
   var visibleLatestHoldings: [TrackedAsset] {
     let holdings = latestScan?.holdings ?? []
-    guard document.preferences.hideDust else { return holdings }
     let threshold =
       document.preferences.dustThreshold.isFinite
       ? max(0, document.preferences.dustThreshold)
       : 0
-    return holdings.filter { $0.valueUsd >= threshold }
+    let visible =
+      document.preferences.hideDust
+      ? holdings.filter { $0.valueUsd.isFinite && $0.valueUsd >= threshold }
+      : holdings
+    return Self.sortedHoldingsForDisplay(visible)
+  }
+
+  static func sortedHoldingsForDisplay(_ holdings: [TrackedAsset]) -> [TrackedAsset] {
+    holdings.sorted { lhs, rhs in
+      let lhsValue = lhs.valueUsd.isFinite && lhs.valueUsd >= 0 ? lhs.valueUsd : 0
+      let rhsValue = rhs.valueUsd.isFinite && rhs.valueUsd >= 0 ? rhs.valueUsd : 0
+      if lhsValue != rhsValue { return lhsValue > rhsValue }
+      if lhs.symbol != rhs.symbol { return lhs.symbol < rhs.symbol }
+      if lhs.chainId != rhs.chainId { return lhs.chainId < rhs.chainId }
+      if lhs.address != rhs.address { return lhs.address < rhs.address }
+      if lhs.source.rawValue != rhs.source.rawValue {
+        return lhs.source.rawValue < rhs.source.rawValue
+      }
+      return lhs.id < rhs.id
+    }
   }
 
   var visibleLatestTotalUsd: Double {
@@ -262,9 +291,10 @@ final class AppState: ObservableObject {
         syncSnapshotByteLimit: syncSnapshotByteLimit
       )
       let loaded = try await coordinator.load()
+      let pendingUpload = try await coordinator.loadPendingVaultUpload(vaultKey: key)
       let normalized = normalizedLoadedDocument(loaded.document)
       let durable =
-        normalized == loaded.document
+        pendingUpload != nil || normalized == loaded.document
         ? loaded
         : try await coordinator.saveExactly(normalized)
       document = durable.document
@@ -274,9 +304,14 @@ final class AppState: ObservableObject {
       documentRevision &+= 1
       isUnlocked = true
       pendingSyncPersistence = nil
-      syncPersistencePending = false
-      notice = ""
+      pendingVaultUpload = pendingUpload
+      pendingVaultUploadHasRemoteConflict = false
+      syncPersistencePending = pendingUpload != nil
+      notice = pendingUpload == nil ? "" : "Recovering an interrupted encrypted vault upload."
       error = ""
+      if pendingUpload != nil {
+        await recoverPendingVaultUpload()
+      }
     } catch {
       presentUserFacingError(error)
       isUnlocked = false
@@ -331,7 +366,7 @@ final class AppState: ObservableObject {
       if resolvesPendingSyncPersistence {
         pendingSyncPersistence = nil
         syncPersistencePending = false
-      } else if pendingSyncPersistence == nil {
+      } else if pendingSyncPersistence == nil, pendingVaultUpload == nil {
         syncPersistencePending = false
       }
       notice = "Saved locally." + pruningNoticeSuffix(result.removedScanRunCount)
@@ -346,6 +381,10 @@ final class AppState: ObservableObject {
 
   func retryPendingSyncPersistence() async {
     guard syncPersistencePending else { return }
+    if pendingVaultUpload != nil {
+      await recoverPendingVaultUpload()
+      return
+    }
     guard let pendingSyncPersistence else {
       error =
         "The pending local sync state cannot be retried safely. Reopen Address Atlas before making more changes."
@@ -430,7 +469,10 @@ final class AppState: ObservableObject {
       return false
     }
     guard !syncPersistencePending else {
-      error = "Save the pending sync state locally before editing the vault."
+      error =
+        pendingVaultUpload == nil
+        ? "Save the pending sync state locally before editing the vault."
+        : "Recover the interrupted encrypted vault upload before editing the vault."
       return false
     }
     guard allowPendingAccountDeletion || !hasPendingAccountDeletion else {

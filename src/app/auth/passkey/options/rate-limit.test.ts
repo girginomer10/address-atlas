@@ -2,16 +2,19 @@ import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  createPasskeyOptions: vi.fn()
+  createPasskeyOptions: vi.fn(),
+  verifyPasskey: vi.fn()
 }));
 
 vi.mock("@/lib/sync/passkeys", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/sync/passkeys")>()),
-  createPasskeyOptions: mocks.createPasskeyOptions
+  createPasskeyOptions: mocks.createPasskeyOptions,
+  verifyPasskey: mocks.verifyPasskey
 }));
 
 import { resetRateLimitsForTests } from "@/lib/sync/rate-limit";
 import { POST } from "./route";
+import { POST as verifyPOST } from "../verify/route";
 
 describe("public passkey body throttling", () => {
   beforeEach(() => {
@@ -22,6 +25,11 @@ describe("public passkey body throttling", () => {
       mode: "authenticate",
       publicKey: {},
       challengeToken: "token"
+    });
+    mocks.verifyPasskey.mockResolvedValue({
+      verified: true,
+      userId: "user-1",
+      sessionToken: "session-token"
     });
   });
 
@@ -51,7 +59,57 @@ describe("public passkey body throttling", () => {
     expect((await POST(validRequest())).status).toBe(429);
     expect(mocks.createPasskeyOptions).toHaveBeenCalledTimes(30);
   });
+
+  it("shares and releases the per-client active-body ceiling across both public routes", async () => {
+    vi.useRealTimers();
+    const pending = [
+      heldRequest("options", '{"mode":"authenticate"'),
+      heldRequest("verify", '{"mode":"authenticate","challengeToken":"token","response":{"id":"credential"}'),
+      heldRequest("options", '{"mode":"authenticate"'),
+      heldRequest("verify", '{"mode":"authenticate","challengeToken":"token","response":{"id":"credential"}')
+    ];
+    const inFlight = pending.map(({ request }, index) => index % 2 === 0
+      ? POST(request)
+      : verifyPOST(request));
+
+    const rejected = await POST(validRequest());
+    expect(rejected.status).toBe(429);
+    expect(await rejected.json()).toEqual({ error: "Too many requests." });
+
+    for (const body of pending) body.close();
+    const completed = await Promise.all(inFlight);
+    expect(completed.map((response) => response.status)).toEqual([200, 200, 200, 200]);
+
+    expect((await POST(validRequest())).status).toBe(200);
+  });
 });
+
+function heldRequest(route: "options" | "verify", prefix: string) {
+  let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      bodyController = controller;
+      controller.enqueue(new TextEncoder().encode(prefix));
+    }
+  });
+  const streamedRequest = new Request(`https://sync.example/auth/passkey/${route}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-forwarded-for": "203.0.113.10"
+    },
+    body,
+    duplex: "half"
+  } as RequestInit & { duplex: "half" });
+  const request = new NextRequest(streamedRequest);
+  return {
+    request,
+    close() {
+      bodyController?.enqueue(new TextEncoder().encode("}"));
+      bodyController?.close();
+    }
+  };
+}
 
 function malformedRequest() {
   return new NextRequest("https://sync.example/auth/passkey/options", {

@@ -21,6 +21,22 @@ notary_profile="${ADDRESS_ATLAS_NOTARY_PROFILE:-}"
 notary_key_path="${ADDRESS_ATLAS_NOTARY_KEY_PATH:-}"
 notary_key_id="${ADDRESS_ATLAS_NOTARY_KEY_ID:-}"
 notary_issuer_id="${ADDRESS_ATLAS_NOTARY_ISSUER_ID:-}"
+notary_timeout="${ADDRESS_ATLAS_NOTARY_TIMEOUT:-30m}"
+if [[ ! "$notary_timeout" =~ ^([1-9][0-9]{0,3})([smh]?)$ ]]; then
+  echo "ADDRESS_ATLAS_NOTARY_TIMEOUT must be an integer duration using seconds, minutes, or hours." >&2
+  exit 64
+fi
+notary_timeout_value="${BASH_REMATCH[1]}"
+case "${BASH_REMATCH[2]}" in
+  '') notary_timeout_seconds="$notary_timeout_value" ;;
+  s) notary_timeout_seconds="$notary_timeout_value" ;;
+  m) notary_timeout_seconds=$((notary_timeout_value * 60)) ;;
+  h) notary_timeout_seconds=$((notary_timeout_value * 3600)) ;;
+esac
+if (( notary_timeout_seconds < 60 || notary_timeout_seconds > 3600 )); then
+  echo "ADDRESS_ATLAS_NOTARY_TIMEOUT must be between 60 seconds and 1 hour." >&2
+  exit 64
+fi
 direct_notary_value_present=false
 if [[ -n "$notary_key_path" || -n "$notary_key_id" || -n "$notary_issuer_id" ]]; then
   direct_notary_value_present=true
@@ -99,6 +115,7 @@ submit_status=0
 "$XCRUN_BIN" notarytool submit "$DMG_PATH" \
   "${notary_auth[@]}" \
   --wait \
+  --timeout "$notary_timeout" \
   --output-format json > "$submission_json" || submit_status=$?
 
 submission_id="$($PLUTIL_BIN -extract id raw -o - "$submission_json" 2>/dev/null || true)"

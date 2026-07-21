@@ -1,6 +1,13 @@
 import Foundation
 
 extension NativeScanner {
+  private struct EvmSingleResponse: Decodable {
+    var jsonrpc: String?
+    var id: Int?
+    var result: String?
+    var error: JSONRPCError?
+  }
+
   func scanBitcoin(address: String, chain: ChainConfig, prices: [String: PricePoint])
     async throws -> [TrackedAsset]
   {
@@ -51,28 +58,20 @@ extension NativeScanner {
     tokens: [TokenConfig],
     prices: [String: PricePoint]
   ) async throws -> NativeScanResult {
-    struct Response: Decodable {
-      var result: String?
-      var error: RPCError?
-      struct RPCError: Decodable { var message: String? }
-    }
     guard let rpc = chain.rpcUrl else { return NativeScanResult() }
+    let blockTag = try await resolveEvmBlockTag(rpc: rpc)
     var assets: [TrackedAsset] = []
     var warnings: [String] = []
     do {
       let response = try await http.post(
         rpc,
         body: JSONRPCRequest(
-          method: "eth_getBalance", params: [.string(address), .string("latest")]),
-        as: Response.self
+          id: 2,
+          method: "eth_getBalance", params: [.string(address), .string(blockTag)]),
+        as: EvmSingleResponse.self
       )
-      if let message = response.error?.message {
-        throw Self.messageError(domain: "EVM", message: message)
-      }
-      guard let rawResult = response.result else {
-        throw Self.messageError(
-          domain: "EVM", message: "Native balance lookup returned an empty result.")
-      }
+      let rawResult = try Self.validatedEvmResult(
+        response, expectedID: 2, operation: "Native balance lookup")
       guard let amount = Self.hexQuantityToDouble(rawResult, decimals: chain.decimals) else {
         throw Self.messageError(
           domain: "EVM", message: "Native balance lookup returned an invalid hex quantity.")
@@ -84,7 +83,7 @@ extension NativeScanner {
       warnings.append("\(chain.name) native balance failed: \(error.localizedDescription)")
     }
     let tokenScan = try await scanErc20Balances(
-      address: address, chain: chain, tokens: tokens, prices: prices)
+      address: address, chain: chain, tokens: tokens, prices: prices, blockTag: blockTag)
     assets.append(contentsOf: tokenScan.assets)
     warnings.append(contentsOf: tokenScan.warnings)
     return NativeScanResult(assets: assets, warnings: warnings)
@@ -94,7 +93,8 @@ extension NativeScanner {
     address: String,
     chain: ChainConfig,
     tokens: [TokenConfig],
-    prices: [String: PricePoint]
+    prices: [String: PricePoint],
+    blockTag: String
   ) async throws -> NativeScanResult {
     guard let rpc = chain.rpcUrl, !tokens.isEmpty else { return NativeScanResult() }
 
@@ -108,7 +108,7 @@ extension NativeScanner {
               "to": .string(token.address),
               "data": .string(Self.erc20BalanceOfData(address)),
             ]),
-            .string("latest"),
+            .string(blockTag),
           ]
         )
       }
@@ -129,7 +129,7 @@ extension NativeScanner {
     } catch {
       try throwIfCancellation(error)
       return try await scanErc20Individually(
-        address: address, chain: chain, tokens: tokens, prices: prices)
+        address: address, chain: chain, tokens: tokens, prices: prices, blockTag: blockTag)
     }
   }
 
@@ -137,12 +137,13 @@ extension NativeScanner {
     address: String,
     chain: ChainConfig,
     tokens: [TokenConfig],
-    prices: [String: PricePoint]
+    prices: [String: PricePoint],
+    blockTag: String
   ) async throws -> NativeScanResult {
     let outcomes = try await boundedConcurrentMap(tokens, maxConcurrent: 4) { token in
       do {
         if let tokenAsset = try await scanErc20(
-          address: address, chain: chain, token: token, prices: prices)
+          address: address, chain: chain, token: token, prices: prices, blockTag: blockTag)
         {
           return TokenScanOutcome(asset: tokenAsset)
         }
@@ -171,7 +172,19 @@ extension NativeScanner {
     responses: [EvmTokenBatchResponse],
     prices: [String: PricePoint]
   ) -> NativeScanResult {
-    let responsesById = Dictionary(grouping: responses, by: \.id).compactMapValues(\.first)
+    let groupedResponses = Dictionary(grouping: responses, by: \.id)
+    var responsesById: [Int: EvmTokenBatchResponse] = [:]
+    var identicalDuplicateCount = 0
+    var conflictingResponseIds = Set<Int>()
+    for (id, candidates) in groupedResponses {
+      guard let first = candidates.first else { continue }
+      if candidates.dropFirst().allSatisfy({ Self.equivalentEvmBatchResponse($0, first) }) {
+        responsesById[id] = first
+        identicalDuplicateCount += candidates.count - 1
+      } else {
+        conflictingResponseIds.insert(id)
+      }
+    }
     var assets: [TrackedAsset] = []
     var failedTokens: [String] = []
 
@@ -181,6 +194,10 @@ extension NativeScanner {
         continue
       }
       if response.error != nil {
+        failedTokens.append(token.symbol)
+        continue
+      }
+      guard response.jsonrpc == "2.0" else {
         failedTokens.append(token.symbol)
         continue
       }
@@ -202,45 +219,69 @@ extension NativeScanner {
       assets.append(tokenAsset)
     }
 
-    let warnings =
-      failedTokens.isEmpty
-      ? []
-      : [
+    var warnings: [String] = []
+    if identicalDuplicateCount > 0 {
+      warnings.append(
+        identicalDuplicateCount == 1
+          ? "The EVM RPC repeated one identical token response; the duplicate was skipped."
+          : "The EVM RPC repeated \(identicalDuplicateCount) identical token responses; the duplicates were skipped."
+      )
+    }
+    let conflictingTokenCount = conflictingResponseIds.filter {
+      $0 >= 1 && $0 <= tokens.count
+    }.count
+    if conflictingTokenCount > 0 {
+      warnings.append(
+        conflictingTokenCount == 1
+          ? "The EVM RPC returned conflicting responses for one token request; every conflicting version was skipped."
+          : "The EVM RPC returned conflicting responses for \(conflictingTokenCount) token requests; every conflicting version was skipped."
+      )
+    }
+    if !failedTokens.isEmpty {
+      warnings.append(
         "ERC-20 token balance checks failed for \(Self.formattedSymbols(failedTokens)); token balances may be incomplete."
-      ]
+      )
+    }
     return NativeScanResult(assets: assets, warnings: warnings)
   }
 
+  private static func equivalentEvmBatchResponse(
+    _ lhs: EvmTokenBatchResponse,
+    _ rhs: EvmTokenBatchResponse
+  ) -> Bool {
+    lhs.id == rhs.id
+      && lhs.jsonrpc == rhs.jsonrpc
+      && lhs.result == rhs.result
+      && (lhs.error == nil) == (rhs.error == nil)
+      && lhs.error?.code == rhs.error?.code
+      && lhs.error?.message == rhs.error?.message
+  }
+
   func scanErc20(
-    address: String, chain: ChainConfig, token: TokenConfig, prices: [String: PricePoint]
+    address: String,
+    chain: ChainConfig,
+    token: TokenConfig,
+    prices: [String: PricePoint],
+    blockTag: String
   ) async throws -> TrackedAsset? {
-    struct Response: Decodable {
-      var result: String?
-      var error: RPCError?
-      struct RPCError: Decodable { var message: String? }
-    }
     guard let rpc = chain.rpcUrl else { return nil }
     let response = try await http.post(
       rpc,
       body: JSONRPCRequest(
+        id: 1,
         method: "eth_call",
         params: [
           .object([
             "to": .string(token.address),
             "data": .string(Self.erc20BalanceOfData(address)),
           ]),
-          .string("latest"),
+          .string(blockTag),
         ]
       ),
-      as: Response.self
+      as: EvmSingleResponse.self
     )
-    if let message = response.error?.message {
-      throw NSError(domain: "EVMToken", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
-    }
-    guard let rawResult = response.result else {
-      throw Self.messageError(
-        domain: "EVMToken", message: "Token balance lookup returned an empty result.")
-    }
+    let rawResult = try Self.validatedEvmResult(
+      response, expectedID: 1, operation: "Token balance lookup")
     guard let amount = Self.hexQuantityToDouble(rawResult, decimals: token.decimals) else {
       throw Self.messageError(
         domain: "EVMToken", message: "Token balance lookup returned an invalid hex quantity.")
@@ -253,6 +294,48 @@ extension NativeScanner {
   public static func erc20BalanceOfData(_ owner: String) -> String {
     let normalized = owner.replacingOccurrences(of: "0x", with: "").lowercased()
     return "0x70a08231\(String(repeating: "0", count: max(0, 64 - normalized.count)))\(normalized)"
+  }
+
+  func resolveEvmBlockTag(rpc: URL) async throws -> String {
+    let response = try await http.post(
+      rpc,
+      body: JSONRPCRequest(id: 1, method: "eth_blockNumber", params: []),
+      as: EvmSingleResponse.self
+    )
+    let rawResult = try Self.validatedEvmResult(
+      response, expectedID: 1, operation: "Snapshot block lookup")
+    guard let blockTag = Self.canonicalEvmBlockTag(rawResult) else {
+      throw Self.messageError(
+        domain: "EVM", message: "Snapshot block lookup returned an invalid hex quantity.")
+    }
+    return blockTag
+  }
+
+  private static func validatedEvmResult(
+    _ response: EvmSingleResponse,
+    expectedID: Int,
+    operation: String
+  ) throws -> String {
+    guard response.jsonrpc == "2.0", response.id == expectedID else {
+      throw messageError(
+        domain: "EVM", message: "\(operation) returned a mismatched JSON-RPC response.")
+    }
+    if let error = response.error {
+      throw rpcError(domain: "EVM", error: error, fallback: "\(operation) failed.")
+    }
+    guard let result = response.result else {
+      throw messageError(domain: "EVM", message: "\(operation) returned an empty result.")
+    }
+    return result
+  }
+
+  public static func canonicalEvmBlockTag(_ value: String) -> String? {
+    guard
+      value.range(of: #"^0x(?:0|[1-9a-fA-F][0-9a-fA-F]*)$"#, options: .regularExpression)
+        != nil,
+      UInt64(value.dropFirst(2), radix: 16) != nil
+    else { return nil }
+    return value.lowercased()
   }
 
   public static func hexQuantityToDouble(_ value: String, decimals: Int) -> Double? {

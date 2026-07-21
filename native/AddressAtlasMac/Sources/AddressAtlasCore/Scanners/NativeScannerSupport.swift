@@ -188,8 +188,8 @@ extension NativeScanner {
   }
 
   static func displayAddress(_ address: String) -> String {
-    guard address.count > 32 else { return address }
-    return "\(address.prefix(16))...\(address.suffix(8))"
+    guard address.count > 12 else { return "saved wallet" }
+    return "\(address.prefix(6))...\(address.suffix(4))"
   }
 
   static func rpcError(domain: String, error: JSONRPCError, fallback: String) -> NSError {

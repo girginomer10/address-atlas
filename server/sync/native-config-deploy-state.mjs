@@ -19,6 +19,10 @@ import { basename, dirname, isAbsolute, join, parse, resolve, sep } from "node:p
 const MINIMUM_CONFIG_VERSION = 5;
 const MAXIMUM_CONFIG_VERSION = 2_000_000_000;
 const MAXIMUM_INPUT_BYTES = 1_000_000;
+// Operators and GitHub runners can differ slightly, but a policy timestamp is
+// evidence of an already-authored policy, not a scheduler. Five minutes keeps
+// ordinary clock skew safe without letting a typo create a years-long high-water.
+const MAXIMUM_FUTURE_SKEW_MS = 5 * 60 * 1_000;
 const STATE_KEYS = [
   "schemaVersion",
   "version",
@@ -99,6 +103,9 @@ function validateConfig(value) {
   if (!isExactUtcTimestamp(value.updatedAt)) {
     throw new StateError("Native config timestamp is invalid.");
   }
+  if (!timestampIsWithinFutureSkew(Date.parse(value.updatedAt))) {
+    throw new StateError("Native config timestamp is implausibly in the future.");
+  }
   if (!boundedInteger(value.refreshAfterSeconds, 300, 86_400)) {
     throw new StateError("Native config refresh interval is invalid.");
   }
@@ -156,6 +163,12 @@ function isExactUtcTimestamp(value) {
     && parsed.getUTCHours() === Number(match[4])
     && parsed.getUTCMinutes() === Number(match[5])
     && parsed.getUTCSeconds() === Number(match[6]);
+}
+
+function timestampIsWithinFutureSkew(epochMs) {
+  return Number.isSafeInteger(epochMs)
+    && epochMs >= 0
+    && epochMs <= Date.now() + MAXIMUM_FUTURE_SKEW_MS;
 }
 
 function isAllowedEndpoint(value, bundledValue, exactPath) {
@@ -349,6 +362,9 @@ function validateState(value) {
     || !/^sha256:[0-9a-f]{64}$/.test(value.imageId)
   ) {
     throw new StateError("Deployment state is invalid.", 66);
+  }
+  if (!timestampIsWithinFutureSkew(value.updatedAtEpochMs)) {
+    throw new StateError("Deployment state timestamp is implausibly in the future.", 66);
   }
   return value;
 }

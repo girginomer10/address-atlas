@@ -12,12 +12,19 @@ public enum EncryptedSQLiteVaultStoreError: Error, Equatable, LocalizedError {
   case missingDocument
   case invalidRow
   case staleDocument
+  case pendingUploadExists
+  case pendingUploadMissing
+  case pendingUploadMismatch
 
   public var errorDescription: String? {
     switch self {
     case .staleDocument:
       return
         "The local vault changed in another Address Atlas process. Reopen the app before saving again."
+    case .pendingUploadExists:
+      return "Another encrypted vault upload is already pending recovery."
+    case .pendingUploadMissing, .pendingUploadMismatch:
+      return "The encrypted upload recovery record changed unexpectedly."
     default:
       return nil
     }
@@ -25,9 +32,22 @@ public enum EncryptedSQLiteVaultStoreError: Error, Equatable, LocalizedError {
 }
 
 public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
+  private struct PreparedDocument {
+    var document: VaultDocument
+    var envelopeBytes: Data
+    var timestamp: String
+  }
+
+  private static let pendingUploadRowId = "vault-upload"
+  private static let pendingUploadKeyId = "local-sync-operation-v1"
+  private static let pendingUploadAuthenticatedData = Data(
+    "address-atlas:pending-vault-upload:v1".utf8
+  )
+
   private let path: URL
   private let crypto: VaultCrypto
   private let key: SymmetricKey
+  private let syncOperationKey: SymmetricKey
   private let operationLock = NSLock()
   /// Revision observed by this store instance. Zero represents an observed
   /// empty table; nil means the caller has not loaded through this instance.
@@ -41,6 +61,7 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
     self.path = path
     self.crypto = crypto
     self.key = try crypto.deriveKey(from: vaultKey, purpose: .localDatabase)
+    self.syncOperationKey = try crypto.deriveKey(from: vaultKey, purpose: .syncOperation)
   }
 
   public func initialize() throws {
@@ -61,6 +82,16 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
         envelope_json BLOB NOT NULL,
         updated_at TEXT NOT NULL,
         revision INTEGER NOT NULL DEFAULT 1
+      );
+      """,
+      db: db
+    )
+    try exec(
+      """
+      CREATE TABLE IF NOT EXISTS encrypted_pending_sync_operations (
+        id TEXT PRIMARY KEY NOT NULL,
+        envelope_json BLOB NOT NULL,
+        updated_at TEXT NOT NULL
       );
       """,
       db: db
@@ -94,6 +125,41 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
         AND NEW.revision != OLD.revision + 1
       BEGIN
         SELECT RAISE(ABORT, 'vault revision must advance with envelope update');
+      END;
+      """,
+      db: db
+    )
+    // Once an exact remote upload can be in flight, no process may mutate the
+    // primary document outside the atomic completion transaction. These
+    // database-level guards also stop older app processes that know nothing
+    // about the in-memory pending flag.
+    try exec(
+      """
+      CREATE TRIGGER IF NOT EXISTS encrypted_vault_documents_pending_insert_guard
+      BEFORE INSERT ON encrypted_vault_documents
+      WHEN EXISTS (
+        SELECT 1 FROM encrypted_pending_sync_operations WHERE id = 'vault-upload'
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'vault upload recovery is pending');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS encrypted_vault_documents_pending_update_guard
+      BEFORE UPDATE ON encrypted_vault_documents
+      WHEN EXISTS (
+        SELECT 1 FROM encrypted_pending_sync_operations WHERE id = 'vault-upload'
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'vault upload recovery is pending');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS encrypted_vault_documents_pending_delete_guard
+      BEFORE DELETE ON encrypted_vault_documents
+      WHEN EXISTS (
+        SELECT 1 FROM encrypted_pending_sync_operations WHERE id = 'vault-upload'
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'vault upload recovery is pending');
       END;
       """,
       db: db
@@ -152,6 +218,217 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
     operationLock.lock()
     defer { operationLock.unlock() }
     try initializeLocked()
+    let prepared = try prepareDocument(document)
+    let db = try openDatabase()
+    defer { sqlite3_close(db) }
+    let storedRevision = try persistPreparedDocument(prepared, db: db)
+    expectedRevision = storedRevision
+    expectedEnvelopeBytes = prepared.envelopeBytes
+    return prepared.document
+  }
+
+  /// Insert a durable upload intent before the first PUT. Existing intent is
+  /// never overwritten: two processes must reconcile the same operation rather
+  /// than silently replacing one exact snapshot with another.
+  public func savePendingVaultUpload(_ upload: PendingVaultUpload) throws {
+    operationLock.lock()
+    defer { operationLock.unlock() }
+    try initializeLocked()
+    let canonical = try canonicalPendingUpload(upload)
+    let envelope = try crypto.sealJSON(
+      canonical,
+      with: syncOperationKey,
+      keyId: Self.pendingUploadKeyId,
+      schemaVersion: PendingVaultUpload.currentSchemaVersion,
+      authenticatedData: Self.pendingUploadAuthenticatedData
+    )
+    let encoded = try JSONEncoder.addressAtlas.encode(envelope)
+    let db = try openDatabase()
+    defer { sqlite3_close(db) }
+    try beginImmediate(db)
+    var committed = false
+    defer {
+      if !committed { rollback(db) }
+    }
+    try validateCurrentDocumentBaseline(db)
+    if let existing = try loadPendingVaultUpload(db: db) {
+      guard existing == canonical else {
+        throw EncryptedSQLiteVaultStoreError.pendingUploadExists
+      }
+      try commit(db)
+      committed = true
+      return
+    }
+
+    let sql = """
+      INSERT INTO encrypted_pending_sync_operations (id, envelope_json, updated_at)
+      VALUES (?, ?, ?);
+      """
+    var statement: OpaquePointer?
+    guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+      throw EncryptedSQLiteVaultStoreError.prepareFailed(errorMessage(db))
+    }
+    defer { sqlite3_finalize(statement) }
+    guard
+      sqlite3_bind_text(
+        statement, 1, Self.pendingUploadRowId, -1, sqliteTransientDestructor
+      ) == SQLITE_OK
+    else {
+      throw EncryptedSQLiteVaultStoreError.bindFailed(errorMessage(db))
+    }
+    try bind(encoded, to: statement, index: 2, db: db)
+    let timestamp = ISO8601DateFormatter().string(from: canonical.createdAt)
+    guard sqlite3_bind_text(statement, 3, timestamp, -1, sqliteTransientDestructor) == SQLITE_OK
+    else {
+      throw EncryptedSQLiteVaultStoreError.bindFailed(errorMessage(db))
+    }
+    guard sqlite3_step(statement) == SQLITE_DONE else {
+      throw EncryptedSQLiteVaultStoreError.stepFailed(errorMessage(db))
+    }
+    try commit(db)
+    committed = true
+  }
+
+  public func loadPendingVaultUpload() throws -> PendingVaultUpload? {
+    operationLock.lock()
+    defer { operationLock.unlock() }
+    try initializeLocked()
+    let db = try openDatabase()
+    defer { sqlite3_close(db) }
+    return try loadPendingVaultUpload(db: db)
+  }
+
+  /// Explicitly abandon replay while preserving the primary local document.
+  /// Callers must obtain user confirmation; this only removes the operation
+  /// lock and never downloads, uploads, or replaces vault content.
+  @discardableResult
+  public func abandonPendingVaultUpload(
+    _ expectedUpload: PendingVaultUpload
+  ) throws -> VaultDocument {
+    operationLock.lock()
+    defer { operationLock.unlock() }
+    try initializeLocked()
+    let db = try openDatabase()
+    defer { sqlite3_close(db) }
+    try beginImmediate(db)
+    var committed = false
+    defer {
+      if !committed { rollback(db) }
+    }
+    try validateCurrentDocumentBaseline(db)
+    guard let pending = try loadPendingVaultUpload(db: db), pending == expectedUpload else {
+      throw EncryptedSQLiteVaultStoreError.pendingUploadMismatch
+    }
+    var uncertainDocument = try documentAtExpectedBaseline()
+    uncertainDocument.syncState.lastSyncedContentChecksum = nil
+    uncertainDocument.syncState.remoteOutcomeUncertain = true
+    let prepared = try prepareDocument(uncertainDocument)
+    try deletePendingVaultUpload(db: db)
+    let storedRevision = try persistPreparedDocument(prepared, db: db)
+    try commit(db)
+    committed = true
+    expectedRevision = storedRevision
+    expectedEnvelopeBytes = prepared.envelopeBytes
+    return prepared.document
+  }
+
+  /// Remove an intent only when the caller proves no PUT has started. Unlike
+  /// user abandonment after an ambiguous network outcome, this does not mark
+  /// the remote baseline uncertain because there was no remote side effect.
+  public func cancelPendingVaultUploadBeforeUpload(
+    _ expectedUpload: PendingVaultUpload
+  ) throws {
+    operationLock.lock()
+    defer { operationLock.unlock() }
+    try initializeLocked()
+    let db = try openDatabase()
+    defer { sqlite3_close(db) }
+    try beginImmediate(db)
+    var committed = false
+    defer {
+      if !committed { rollback(db) }
+    }
+    try validateCurrentDocumentBaseline(db)
+    guard let pending = try loadPendingVaultUpload(db: db), pending == expectedUpload else {
+      throw EncryptedSQLiteVaultStoreError.pendingUploadMismatch
+    }
+    try deletePendingVaultUpload(db: db)
+    try commit(db)
+    committed = true
+  }
+
+  /// Commit the exact post-upload candidate and consume its intent in one
+  /// SQLite transaction. The document CAS and intent identity checks make a
+  /// competing-process write fail without deleting either recovery artifact.
+  @discardableResult
+  public func completePendingVaultUpload(
+    _ expectedUpload: PendingVaultUpload,
+    localSessionToken: String? = nil
+  ) throws -> VaultDocument {
+    operationLock.lock()
+    defer { operationLock.unlock() }
+    try initializeLocked()
+    let db = try openDatabase()
+    defer { sqlite3_close(db) }
+    try beginImmediate(db)
+    var committed = false
+    defer {
+      if !committed { rollback(db) }
+    }
+    guard let pending = try loadPendingVaultUpload(db: db) else {
+      throw EncryptedSQLiteVaultStoreError.pendingUploadMissing
+    }
+    guard pending == expectedUpload else {
+      throw EncryptedSQLiteVaultStoreError.pendingUploadMismatch
+    }
+    try validateCurrentDocumentBaseline(db)
+    var completionDocument = pending.postCommitDocument
+    if let localSessionToken {
+      completionDocument.syncState.sessionToken = localSessionToken
+    }
+    let prepared = try prepareDocument(completionDocument)
+    try deletePendingVaultUpload(db: db)
+    // Deleting first intentionally opens the trigger gate only inside this
+    // transaction. A CAS failure rolls the delete back and preserves recovery.
+    let storedRevision = try persistPreparedDocument(prepared, db: db)
+    try commit(db)
+    committed = true
+    expectedRevision = storedRevision
+    expectedEnvelopeBytes = prepared.envelopeBytes
+    return prepared.document
+  }
+
+  public func rawStoredPendingVaultUploadEnvelopeBytes() throws -> Data? {
+    operationLock.lock()
+    defer { operationLock.unlock() }
+    try initializeLocked()
+    let db = try openDatabase()
+    defer { sqlite3_close(db) }
+    return try pendingUploadEnvelopeBytes(db: db)
+  }
+
+  public func rawStoredEnvelopeBytes() throws -> Data? {
+    operationLock.lock()
+    defer { operationLock.unlock() }
+    try initializeLocked()
+    let db = try openDatabase()
+    defer { sqlite3_close(db) }
+    let sql = "SELECT envelope_json FROM encrypted_vault_documents WHERE id = 'primary' LIMIT 1;"
+    var statement: OpaquePointer?
+    guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+      throw EncryptedSQLiteVaultStoreError.prepareFailed(errorMessage(db))
+    }
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_step(statement) == SQLITE_ROW else {
+      return nil
+    }
+    guard let blob = sqlite3_column_blob(statement, 0) else {
+      throw EncryptedSQLiteVaultStoreError.invalidRow
+    }
+    return Data(bytes: blob, count: Int(sqlite3_column_bytes(statement, 0)))
+  }
+
+  private func prepareDocument(_ document: VaultDocument) throws -> PreparedDocument {
     var next = document
     // JSONEncoder.addressAtlas persists ISO-8601 dates at whole-second
     // precision. Canonicalize before writing so the returned updatedAt value
@@ -163,33 +440,54 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
       keyId: "local-db",
       schemaVersion: next.schemaVersion
     )
-    // ISO-8601 encoding canonicalizes every nested Date to whole seconds, not
-    // only the root timestamp. Return the exact decoded plaintext represented
-    // by the durable envelope so in-memory revision checks never compare a
-    // subtly different document after a successful save.
-    let canonicalPersistedDocument = try crypto.openJSON(
+    // Canonicalize every nested Date as well as the root timestamp.
+    let canonicalDocument = try crypto.openJSON(
       VaultDocument.self,
       envelope: envelope,
       with: key
     )
-    let encoded = try JSONEncoder.addressAtlas.encode(envelope)
+    return PreparedDocument(
+      document: canonicalDocument,
+      envelopeBytes: try JSONEncoder.addressAtlas.encode(envelope),
+      timestamp: ISO8601DateFormatter().string(from: canonicalDocument.updatedAt)
+    )
+  }
 
-    let db = try openDatabase()
-    defer { sqlite3_close(db) }
+  private func documentAtExpectedBaseline() throws -> VaultDocument {
+    guard let expectedRevision else {
+      throw EncryptedSQLiteVaultStoreError.staleDocument
+    }
+    if expectedRevision == 0 {
+      guard expectedEnvelopeBytes == nil else {
+        throw EncryptedSQLiteVaultStoreError.staleDocument
+      }
+      return VaultDocument()
+    }
+    guard let expectedEnvelopeBytes else {
+      throw EncryptedSQLiteVaultStoreError.staleDocument
+    }
+    let envelope = try JSONDecoder.addressAtlas.decode(
+      EncryptedVaultEnvelope.self,
+      from: expectedEnvelopeBytes
+    )
+    return try crypto.openJSON(VaultDocument.self, envelope: envelope, with: key)
+  }
+
+  private func persistPreparedDocument(
+    _ prepared: PreparedDocument,
+    db: OpaquePointer
+  ) throws -> Int {
     let revision: Int
     if let expectedRevision {
       revision = expectedRevision
     } else {
       let current = try currentRevision(db)
-      // Adopting an existing row's latest revision without first loading its
-      // contents would make an unrelated whole-document value look current.
-      // Allow direct saves only for a genuinely empty store.
+      // Never adopt a document that this store instance did not load.
       guard current == 0 else {
         throw EncryptedSQLiteVaultStoreError.staleDocument
       }
       revision = current
     }
-
     let sql =
       revision == 0
       ? """
@@ -212,16 +510,11 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
       throw EncryptedSQLiteVaultStoreError.prepareFailed(errorMessage(db))
     }
     defer { sqlite3_finalize(statement) }
-
-    let bindDataStatus = encoded.withUnsafeBytes { buffer in
-      sqlite3_bind_blob(
-        statement, 1, buffer.baseAddress, Int32(encoded.count), sqliteTransientDestructor)
-    }
-    guard bindDataStatus == SQLITE_OK else {
-      throw EncryptedSQLiteVaultStoreError.bindFailed(errorMessage(db))
-    }
-    let timestamp = ISO8601DateFormatter().string(from: next.updatedAt)
-    guard sqlite3_bind_text(statement, 2, timestamp, -1, sqliteTransientDestructor) == SQLITE_OK
+    try bind(prepared.envelopeBytes, to: statement, index: 1, db: db)
+    guard
+      sqlite3_bind_text(
+        statement, 2, prepared.timestamp, -1, sqliteTransientDestructor
+      ) == SQLITE_OK
     else {
       throw EncryptedSQLiteVaultStoreError.bindFailed(errorMessage(db))
     }
@@ -234,14 +527,7 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
       guard let expectedEnvelopeBytes else {
         throw EncryptedSQLiteVaultStoreError.staleDocument
       }
-      let bindExpectedStatus = expectedEnvelopeBytes.withUnsafeBytes { buffer in
-        sqlite3_bind_blob(
-          statement, 4, buffer.baseAddress, Int32(expectedEnvelopeBytes.count),
-          sqliteTransientDestructor)
-      }
-      guard bindExpectedStatus == SQLITE_OK else {
-        throw EncryptedSQLiteVaultStoreError.bindFailed(errorMessage(db))
-      }
+      try bind(expectedEnvelopeBytes, to: statement, index: 4, db: db)
     }
     let status = sqlite3_step(statement)
     if status == SQLITE_DONE {
@@ -251,36 +537,119 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
       throw EncryptedSQLiteVaultStoreError.stepFailed(errorMessage(db))
     }
     let storedRevision = sqlite3_column_int64(statement, 0)
-    guard storedRevision >= 1,
+    guard
+      storedRevision >= 1,
       storedRevision <= Int64(Int.max),
       sqlite3_step(statement) == SQLITE_DONE
     else {
       throw EncryptedSQLiteVaultStoreError.stepFailed(errorMessage(db))
     }
-    expectedRevision = Int(storedRevision)
-    expectedEnvelopeBytes = encoded
-    return canonicalPersistedDocument
+    return Int(storedRevision)
   }
 
-  public func rawStoredEnvelopeBytes() throws -> Data? {
-    operationLock.lock()
-    defer { operationLock.unlock() }
-    try initializeLocked()
-    let db = try openDatabase()
-    defer { sqlite3_close(db) }
-    let sql = "SELECT envelope_json FROM encrypted_vault_documents WHERE id = 'primary' LIMIT 1;"
+  private func canonicalPendingUpload(
+    _ upload: PendingVaultUpload
+  ) throws -> PendingVaultUpload {
+    let encoded = try JSONEncoder.addressAtlas.encode(upload)
+    return try JSONDecoder.addressAtlas.decode(PendingVaultUpload.self, from: encoded)
+  }
+
+  private func loadPendingVaultUpload(db: OpaquePointer) throws -> PendingVaultUpload? {
+    guard let data = try pendingUploadEnvelopeBytes(db: db) else { return nil }
+    let envelope = try JSONDecoder.addressAtlas.decode(EncryptedVaultEnvelope.self, from: data)
+    guard
+      envelope.schemaVersion == PendingVaultUpload.currentSchemaVersion,
+      envelope.cryptoVersion == 2,
+      envelope.keyId == Self.pendingUploadKeyId
+    else {
+      throw EncryptedSQLiteVaultStoreError.invalidRow
+    }
+    return try crypto.openJSON(
+      PendingVaultUpload.self,
+      envelope: envelope,
+      with: syncOperationKey,
+      authenticatedData: Self.pendingUploadAuthenticatedData
+    )
+  }
+
+  private func pendingUploadEnvelopeBytes(db: OpaquePointer) throws -> Data? {
+    let sql =
+      "SELECT envelope_json FROM encrypted_pending_sync_operations WHERE id = ? LIMIT 1;"
     var statement: OpaquePointer?
     guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
       throw EncryptedSQLiteVaultStoreError.prepareFailed(errorMessage(db))
     }
     defer { sqlite3_finalize(statement) }
-    guard sqlite3_step(statement) == SQLITE_ROW else {
-      return nil
+    guard
+      sqlite3_bind_text(
+        statement, 1, Self.pendingUploadRowId, -1, sqliteTransientDestructor
+      ) == SQLITE_OK
+    else {
+      throw EncryptedSQLiteVaultStoreError.bindFailed(errorMessage(db))
     }
-    guard let blob = sqlite3_column_blob(statement, 0) else {
+    let status = sqlite3_step(statement)
+    if status == SQLITE_DONE { return nil }
+    guard status == SQLITE_ROW, let blob = sqlite3_column_blob(statement, 0) else {
       throw EncryptedSQLiteVaultStoreError.invalidRow
     }
     return Data(bytes: blob, count: Int(sqlite3_column_bytes(statement, 0)))
+  }
+
+  private func deletePendingVaultUpload(db: OpaquePointer) throws {
+    var statement: OpaquePointer?
+    guard
+      sqlite3_prepare_v2(
+        db,
+        "DELETE FROM encrypted_pending_sync_operations WHERE id = ?;",
+        -1,
+        &statement,
+        nil
+      ) == SQLITE_OK
+    else {
+      throw EncryptedSQLiteVaultStoreError.prepareFailed(errorMessage(db))
+    }
+    defer { sqlite3_finalize(statement) }
+    guard
+      sqlite3_bind_text(
+        statement, 1, Self.pendingUploadRowId, -1, sqliteTransientDestructor
+      ) == SQLITE_OK,
+      sqlite3_step(statement) == SQLITE_DONE,
+      sqlite3_changes(db) == 1
+    else {
+      throw EncryptedSQLiteVaultStoreError.pendingUploadMismatch
+    }
+  }
+
+  private func bind(
+    _ data: Data,
+    to statement: OpaquePointer?,
+    index: Int32,
+    db: OpaquePointer
+  ) throws {
+    let status = data.withUnsafeBytes { buffer in
+      sqlite3_bind_blob(
+        statement,
+        index,
+        buffer.baseAddress,
+        Int32(data.count),
+        sqliteTransientDestructor
+      )
+    }
+    guard status == SQLITE_OK else {
+      throw EncryptedSQLiteVaultStoreError.bindFailed(errorMessage(db))
+    }
+  }
+
+  private func beginImmediate(_ db: OpaquePointer) throws {
+    try exec("BEGIN IMMEDIATE TRANSACTION;", db: db)
+  }
+
+  private func commit(_ db: OpaquePointer) throws {
+    try exec("COMMIT;", db: db)
+  }
+
+  private func rollback(_ db: OpaquePointer) {
+    _ = sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
   }
 
   private func openDatabase() throws -> OpaquePointer {
@@ -342,6 +711,41 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
       default:
         throw EncryptedSQLiteVaultStoreError.stepFailed(errorMessage(db))
       }
+    }
+  }
+
+  private func validateCurrentDocumentBaseline(_ db: OpaquePointer) throws {
+    guard let expectedRevision else {
+      throw EncryptedSQLiteVaultStoreError.staleDocument
+    }
+    let sql =
+      "SELECT envelope_json, revision FROM encrypted_vault_documents WHERE id = 'primary' LIMIT 1;"
+    var statement: OpaquePointer?
+    guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+      throw EncryptedSQLiteVaultStoreError.prepareFailed(errorMessage(db))
+    }
+    defer { sqlite3_finalize(statement) }
+    let status = sqlite3_step(statement)
+    if expectedRevision == 0 {
+      guard status == SQLITE_DONE, expectedEnvelopeBytes == nil else {
+        throw EncryptedSQLiteVaultStoreError.staleDocument
+      }
+      return
+    }
+    guard
+      status == SQLITE_ROW,
+      let blob = sqlite3_column_blob(statement, 0),
+      sqlite3_column_int64(statement, 1) == Int64(expectedRevision),
+      let expectedEnvelopeBytes
+    else {
+      throw EncryptedSQLiteVaultStoreError.staleDocument
+    }
+    let currentEnvelope = Data(
+      bytes: blob,
+      count: Int(sqlite3_column_bytes(statement, 0))
+    )
+    guard currentEnvelope == expectedEnvelopeBytes else {
+      throw EncryptedSQLiteVaultStoreError.staleDocument
     }
   }
 

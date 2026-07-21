@@ -14,6 +14,10 @@ import { clientKey, rateLimitMany } from "@/lib/sync/rate-limit";
 import { RegistrationDisabledError } from "@/lib/sync/registration";
 import { readLimitedJSON, RequestBodyError } from "@/lib/sync/request";
 import { TokenValidationError } from "@/lib/sync/tokens";
+import {
+  acquirePasskeyBodyConcurrency,
+  PASSKEY_BODY_DEADLINE_MS
+} from "../body-concurrency";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -35,7 +39,22 @@ export async function POST(request: NextRequest) {
       return rateLimitedResponse(diagnostics);
     }
 
-    const { value } = await readLimitedJSON(request, 128_000);
+    const bodyPermit = acquirePasskeyBodyConcurrency(client);
+    if (!bodyPermit) {
+      recordSecurityEvent("auth.rate_limited", diagnostics, {
+        status: 429,
+        reason: "auth_body_concurrency_limit"
+      });
+      return rateLimitedResponse(diagnostics);
+    }
+    let value: unknown;
+    try {
+      ({ value } = await readLimitedJSON(request, 128_000, PASSKEY_BODY_DEADLINE_MS));
+    } finally {
+      // Do not hold a scarce body-reader slot while verification touches the
+      // authenticator library and durable state.
+      bodyPermit();
+    }
     const input = parsePasskeyVerifyInput(value);
     mode = input.mode;
     const rules = [

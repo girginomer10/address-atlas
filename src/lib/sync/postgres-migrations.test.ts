@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { SYNC_MIGRATIONS } from "./postgres-migrations";
-import { SYNC_COLUMN_CONTRACT, SYNC_TABLES } from "./postgres-schema-model";
+import {
+  SYNC_COLUMN_CONTRACT,
+  SYNC_TABLES,
+  SYNC_TABLES_BY_MIGRATION_VERSION
+} from "./postgres-schema-model";
 
 describe("immutable sync migration contract", () => {
   it("keeps ordered migration identities and checksums stable", () => {
@@ -37,5 +41,15 @@ describe("immutable sync migration contract", () => {
     expect(migrationSQL).not.toMatch(/\bDROP\s+(?:TABLE|SCHEMA)\b/i);
     expect(new Set(SYNC_MIGRATIONS.map((migration) => migration.checksum)).size)
       .toBe(SYNC_MIGRATIONS.length);
+  });
+
+  it("maps every durable migration version to its exact table surface", () => {
+    expect(SYNC_TABLES_BY_MIGRATION_VERSION).toHaveLength(SYNC_MIGRATIONS.length + 1);
+    expect(SYNC_TABLES_BY_MIGRATION_VERSION[0]).toBeNull();
+    expect(SYNC_TABLES_BY_MIGRATION_VERSION[1]).not.toContain("vault_snapshots");
+    expect(SYNC_TABLES_BY_MIGRATION_VERSION[1]).not.toContain("account_deletion_receipts");
+    expect(SYNC_TABLES_BY_MIGRATION_VERSION[2]).toContain("vault_snapshots");
+    expect(SYNC_TABLES_BY_MIGRATION_VERSION[2]).not.toContain("account_deletion_receipts");
+    expect(SYNC_TABLES_BY_MIGRATION_VERSION[SYNC_MIGRATIONS.length]).toEqual(SYNC_TABLES);
   });
 });

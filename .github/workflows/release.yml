@@ -8,6 +8,7 @@ on:
 permissions:
   actions: read
   attestations: read
+  checks: read
   contents: write
 
 concurrency:
@@ -69,6 +70,7 @@ jobs:
           bash Tests/build-mac-app-version-tests.sh
           bash Tests/notarize-mac-app-tests.sh
           swift test
+          swift test -Xswiftc -strict-concurrency=complete -Xswiftc -warnings-as-errors
           swift test --sanitize=thread
 
   macos-release:
@@ -77,6 +79,11 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 90
     environment: release
+    permissions:
+      actions: read
+      attestations: read
+      checks: read
+      contents: write
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
       RELEASE_TAG: ${{ github.ref_name }}
@@ -278,6 +285,19 @@ jobs:
             echo "Private vulnerability reporting is disabled even though SECURITY.md directs reporters to it." >&2
             exit 1
           }
+          if ! GH_TOKEN="$RELEASE_ADMIN_TOKEN" gh api "${api_header[@]}" \
+              "repos/$GITHUB_REPOSITORY/vulnerability-alerts" >/dev/null; then
+            echo "Repository vulnerability alerts are disabled or could not be proven enabled." >&2
+            exit 1
+          fi
+          GH_TOKEN="$RELEASE_ADMIN_TOKEN" gh api "${api_header[@]}" \
+            "repos/$GITHUB_REPOSITORY/automated-security-fixes" \
+            > "$api_dir/automated-security-fixes.json"
+          jq -e '.enabled == true and .paused == false' \
+            "$api_dir/automated-security-fixes.json" >/dev/null || {
+            echo "Automated security fixes must be enabled and unpaused." >&2
+            exit 1
+          }
 
           GH_TOKEN="$RELEASE_ADMIN_TOKEN" gh api "${api_header[@]}" \
             "repos/$GITHUB_REPOSITORY/actions/permissions" \
@@ -312,6 +332,172 @@ jobs:
             exit 1
           }
 
+          # Bind branch-protection status checks to the GitHub App that actually
+          # produced the four successful jobs in the exact CI run for this tag.
+          # A positive integration ID alone is not identity: another installed
+          # app could otherwise publish the same context names.
+          required_checks_json="$(jq -cn '[
+            "Repository secret-artifact hygiene",
+            "Web and sync server",
+            "Native macOS package",
+            "Deployment configuration"
+          ]')"
+          gh api "${api_header[@]}" --method GET \
+            -f "head_sha=$tag_commit" \
+            -f event=push \
+            -F per_page=100 \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+            > "$api_dir/ci-runs.json"
+          if ! ci_run_record="$(jq -cer --arg sha "$tag_commit" '
+              [
+                .workflow_runs[]?
+                | select(
+                    .head_sha == $sha
+                    and .event == "push"
+                    and (.id | type == "number" and . > 0)
+                    and (.run_attempt | type == "number" and . > 0)
+                  )
+              ]
+              | sort_by([.id, .run_attempt])
+              | last
+              | select(
+                  type == "object"
+                  and .status == "completed"
+                  and .conclusion == "success"
+                )
+            ' "$api_dir/ci-runs.json")"; then
+            echo "The exact tagged commit has no successful completed CI push run." >&2
+            exit 1
+          fi
+          ci_run_id="$(jq -er '.id' <<< "$ci_run_record")"
+          ci_run_attempt="$(jq -er '.run_attempt' <<< "$ci_run_record")"
+          [[ "$ci_run_id" =~ ^[1-9][0-9]*$ \
+              && "$ci_run_attempt" =~ ^[1-9][0-9]*$ ]] || {
+            echo "GitHub returned a malformed CI run identity." >&2
+            exit 1
+          }
+          gh api "${api_header[@]}" --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$ci_run_id/attempts/$ci_run_attempt/jobs?per_page=100" \
+            > "$api_dir/ci-jobs.json"
+          jq -e \
+            --arg sha "$tag_commit" \
+            --argjson run_id "$ci_run_id" \
+            --argjson required_checks "$required_checks_json" '
+              [ .[].jobs[]? ] as $jobs
+              | all(
+                  $required_checks[];
+                  . as $required
+                  | [ $jobs[] | select(.name == $required) ] as $matching
+                  | ($matching | length) == 1
+                    and $matching[0].run_id == $run_id
+                    and $matching[0].head_sha == $sha
+                    and $matching[0].status == "completed"
+                    and $matching[0].conclusion == "success"
+                    and ($matching[0].check_run_url | type == "string")
+                )
+            ' "$api_dir/ci-jobs.json" >/dev/null || {
+            echo "The selected CI run does not contain exactly the four required successful jobs." >&2
+            exit 1
+          }
+          jq -r --argjson required_checks "$required_checks_json" '
+            .[] | .jobs[]?
+            | . as $job
+            | select(($required_checks | index($job.name)) != null)
+            | [ .name, .check_run_url ]
+            | @tsv
+          ' "$api_dir/ci-jobs.json" > "$api_dir/ci-check-run-jobs.tsv"
+          cut -f2 "$api_dir/ci-check-run-jobs.tsv" \
+            > "$api_dir/ci-check-run-urls.txt"
+          validated_check_run_endpoint() {
+            local check_run_url="$1"
+            local check_run_prefix="${GITHUB_API_URL%/}/repos/$GITHUB_REPOSITORY/check-runs/"
+            local check_run_id
+            [[ "$check_run_url" != *$'\n'* \
+                && "$check_run_url" == "$check_run_prefix"* ]] || return 1
+            check_run_id="${check_run_url#"$check_run_prefix"}"
+            [[ "$check_run_id" =~ ^[1-9][0-9]*$ ]] || return 1
+            printf 'repos/%s/check-runs/%s\n' \
+              "$GITHUB_REPOSITORY" "$check_run_id"
+          }
+          : > "$api_dir/ci-check-runs.ndjson"
+          : > "$api_dir/ci-check-run-bindings.txt"
+          while IFS=$'\t' read -r check_name check_run_url; do
+            if ! check_run_endpoint="$(validated_check_run_endpoint "$check_run_url")"; then
+              echo "A required CI job returned a malformed or out-of-repository check-run URL." >&2
+              exit 1
+            fi
+            check_run_id="${check_run_endpoint##*/}"
+            check_run_response="$api_dir/ci-check-run-${check_run_id}.json"
+            gh api "${api_header[@]}" \
+              "$check_run_endpoint" \
+              > "$check_run_response"
+            jq -e \
+              --arg expected_name "$check_name" \
+              --arg sha "$tag_commit" \
+              --argjson expected_id "$check_run_id" '
+                .id == $expected_id
+                and .name == $expected_name
+                and .head_sha == $sha
+                and .status == "completed"
+                and .conclusion == "success"
+                and (.app.id | type == "number" and . > 0)
+              ' "$check_run_response" >/dev/null || {
+              echo "A required CI job does not resolve to its exact successful check run." >&2
+              exit 1
+            }
+            cat "$check_run_response" >> "$api_dir/ci-check-runs.ndjson"
+            printf '\n' >> "$api_dir/ci-check-runs.ndjson"
+            printf '%s|%s\n' "$check_run_id" "$check_run_url" \
+              >> "$api_dir/ci-check-run-bindings.txt"
+          done < "$api_dir/ci-check-run-jobs.tsv"
+          LC_ALL=C sort -t '|' -k1,1n "$api_dir/ci-check-run-bindings.txt" \
+            > "$api_dir/ci-check-run-bindings.sorted.txt"
+          [[ "$(wc -l < "$api_dir/ci-check-run-bindings.sorted.txt" | tr -d '[:space:]')" == "4" \
+              && "$(cut -d '|' -f1 "$api_dir/ci-check-run-bindings.sorted.txt" | sort -u | wc -l | tr -d '[:space:]')" == "4" \
+              && "$(cut -d '|' -f2 "$api_dir/ci-check-run-bindings.sorted.txt" | sort -u | wc -l | tr -d '[:space:]')" == "4" ]] || {
+            echo "The required CI jobs do not identify four distinct check runs." >&2
+            exit 1
+          }
+          ci_check_run_ids="$(cut -d '|' -f1 \
+            "$api_dir/ci-check-run-bindings.sorted.txt" | paste -sd, -)"
+          ci_check_run_urls="$(cut -d '|' -f2 \
+            "$api_dir/ci-check-run-bindings.sorted.txt" | paste -sd, -)"
+          jq -s '.' "$api_dir/ci-check-runs.ndjson" \
+            > "$api_dir/ci-check-runs.json"
+          if ! ci_integration_id="$(jq -er \
+              --arg sha "$tag_commit" \
+              --argjson required_checks "$required_checks_json" '
+                . as $check_runs
+                | if (
+                  ($check_runs | length) == ($required_checks | length)
+                  and all(
+                    $required_checks[];
+                    . as $required
+                    | [ $check_runs[] | select(.name == $required) ]
+                    | length == 1
+                  )
+                  and all(
+                    $check_runs[];
+                    (.id | type == "number" and . > 0)
+                    and .head_sha == $sha
+                    and .status == "completed"
+                    and .conclusion == "success"
+                    and (.app.id | type == "number" and . > 0)
+                  )
+                  and ([ $check_runs[].app.id ] | unique | length == 1)
+                )
+                then [ $check_runs[].app.id ] | unique | .[0]
+                else empty
+                end
+              ' "$api_dir/ci-check-runs.json")"; then
+            echo "The required CI checks do not share one verifiable GitHub App integration." >&2
+            exit 1
+          fi
+          [[ "$ci_integration_id" =~ ^[1-9][0-9]*$ ]] || {
+            echo "The observed CI check integration ID is malformed." >&2
+            exit 1
+          }
+
           # Resolve every ruleset in full; the list endpoint omits rule details.
           # Require one complete active main policy and one complete active v* tag
           # policy rather than inferring protection from a name or partial rules.
@@ -333,7 +519,7 @@ jobs:
             printf '\n' >> "$api_dir/rulesets.ndjson"
           done < <(jq -r '.[][]? | .id' "$api_dir/ruleset-list.json")
           jq -s '.' "$api_dir/rulesets.ndjson" > "$api_dir/rulesets.json"
-          jq -e '
+          jq -e --argjson ci_integration_id "$ci_integration_id" '
             def explicit_ref($target; $include):
               .target == $target
               and .enforcement == "active"
@@ -342,7 +528,7 @@ jobs:
               and (.conditions.ref_name.include | index($include)) != null;
             def has_rule($type):
               any(.rules[]?; .type == $type);
-            def strong_main($required_checks):
+            def strong_main($required_checks; $ci_integration_id):
               (explicit_ref("branch"; "~DEFAULT_BRANCH") or explicit_ref("branch"; "refs/heads/main"))
               and has_rule("deletion")
               and has_rule("non_fast_forward")
@@ -361,15 +547,16 @@ jobs:
                 and .parameters.strict_required_status_checks_policy == true
                 and .parameters.do_not_enforce_on_create != true
                 and (
-                  [
-                    .parameters.required_status_checks[]?
-                    | select(.integration_id | type == "number" and . > 0)
-                    | .context
-                  ] as $configured
+                  .parameters.required_status_checks as $configured
                   | all(
                       $required_checks[];
                       . as $required
-                      | ($configured | index($required)) != null
+                      | [
+                          $configured[]?
+                          | select(.context == $required)
+                        ] as $matching
+                      | ($matching | length) == 1
+                        and $matching[0].integration_id == $ci_integration_id
                     )
                 )
               );
@@ -384,7 +571,7 @@ jobs:
               "Native macOS package",
               "Deployment configuration"
             ] as $required_checks
-            | any(.[]; strong_main($required_checks))
+            | any(.[]; strong_main($required_checks; $ci_integration_id))
               and any(.[]; strong_release_tags)
           ' "$api_dir/rulesets.json" >/dev/null || {
             echo "Active main and v* rulesets do not meet the release governance contract." >&2
@@ -404,30 +591,14 @@ jobs:
             exit 1
           }
 
-          # Publication is allowed only after the complete CI workflow has
-          # already passed for the exact commit carried by this tag.
-          gh api "${api_header[@]}" --method GET \
-            -f "head_sha=$tag_commit" \
-            -f event=push \
-            -F per_page=100 \
-            "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
-            > "$api_dir/ci-runs.json"
-          jq -e --arg sha "$tag_commit" '
-            any(
-              .workflow_runs[]?;
-              .head_sha == $sha
-              and .event == "push"
-              and .status == "completed"
-              and .conclusion == "success"
-            )
-          ' "$api_dir/ci-runs.json" >/dev/null || {
-            echo "The exact tagged commit has no successful completed CI push run." >&2
-            exit 1
-          }
-
           echo "app_version=$app_version" >> "$GITHUB_OUTPUT"
           echo "bundled_config_version=$bundled_config_version" >> "$GITHUB_OUTPUT"
           echo "source_commit=$tag_commit" >> "$GITHUB_OUTPUT"
+          echo "ci_run_id=$ci_run_id" >> "$GITHUB_OUTPUT"
+          echo "ci_run_attempt=$ci_run_attempt" >> "$GITHUB_OUTPUT"
+          echo "ci_integration_id=$ci_integration_id" >> "$GITHUB_OUTPUT"
+          echo "ci_check_run_ids=$ci_check_run_ids" >> "$GITHUB_OUTPUT"
+          echo "ci_check_run_urls=$ci_check_run_urls" >> "$GITHUB_OUTPUT"
 
       - name: Bind the client release to the live production config
         id: production-config
@@ -465,6 +636,7 @@ jobs:
           NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
           EXPECTED_DEVELOPER_TEAM_ID: ${{ secrets.APPLE_DEVELOPER_TEAM_ID }}
+          ADDRESS_ATLAS_NOTARY_TIMEOUT: 30m
         run: |
           set -Eeuo pipefail
           umask 077
@@ -578,6 +750,13 @@ jobs:
           plutil -lint "$app_path/Contents/Info.plist"
           bundle_identifier="$(plutil -extract CFBundleIdentifier raw "$app_path/Contents/Info.plist")"
           test "$bundle_identifier" = "com.addressatlas.mac"
+          display_name="$(plutil -extract CFBundleDisplayName raw "$app_path/Contents/Info.plist")"
+          test "$display_name" = "Address Atlas"
+          icon_file="$(plutil -extract CFBundleIconFile raw "$app_path/Contents/Info.plist")"
+          test "$icon_file" = "AppIcon.icns"
+          test -s "$app_path/Contents/Resources/$icon_file"
+          category="$(plutil -extract LSApplicationCategoryType raw "$app_path/Contents/Info.plist")"
+          test "$category" = "public.app-category.finance"
           bundle_version="$(plutil -extract CFBundleShortVersionString raw "$app_path/Contents/Info.plist")"
           test "$bundle_version" = "${{ steps.release.outputs.app_version }}"
           architectures="$(lipo -archs "$app_path/Contents/MacOS/Address Atlas")"
@@ -684,6 +863,11 @@ jobs:
           SOURCE_COMMIT: ${{ steps.release.outputs.source_commit }}
           APP_VERSION: ${{ steps.release.outputs.app_version }}
           BUNDLED_CONFIG_VERSION: ${{ steps.release.outputs.bundled_config_version }}
+          CI_RUN_ID: ${{ steps.release.outputs.ci_run_id }}
+          CI_RUN_ATTEMPT: ${{ steps.release.outputs.ci_run_attempt }}
+          CI_INTEGRATION_ID: ${{ steps.release.outputs.ci_integration_id }}
+          CI_CHECK_RUN_IDS: ${{ steps.release.outputs.ci_check_run_ids }}
+          CI_CHECK_RUN_URLS: ${{ steps.release.outputs.ci_check_run_urls }}
           EXPECTED_PRODUCTION_CONFIG_BINDING: ${{ steps.production-config.outputs.binding }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_ADMIN_TOKEN: ${{ secrets.RELEASE_ADMIN_READ_TOKEN }}
@@ -691,6 +875,16 @@ jobs:
           set -Eeuo pipefail
           umask 077
           : "${RELEASE_ADMIN_TOKEN:?Missing release-environment Administration-read token.}"
+          [[ "$CI_RUN_ID" =~ ^[1-9][0-9]*$ \
+              && "$CI_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ \
+              && "$CI_INTEGRATION_ID" =~ ^[1-9][0-9]*$ \
+              && "$CI_CHECK_RUN_IDS" =~ ^[1-9][0-9]*(,[1-9][0-9]*){3}$ \
+              && "$CI_CHECK_RUN_URLS" != *$'\n'* \
+              && "$CI_CHECK_RUN_URLS" != *$'\r'* \
+              && "${#CI_CHECK_RUN_URLS}" -le 2048 ]] || {
+            echo "The preflight CI identity binding is malformed." >&2
+            exit 1
+          }
           for command in curl gh jq openssl shasum; do
             command -v "$command" >/dev/null 2>&1 || {
               echo "Required publication command is missing: $command" >&2
@@ -822,6 +1016,14 @@ jobs:
             jq -e '.enabled == true' \
               "$state_dir/private-vulnerability-reporting-final.json" >/dev/null || return 1
             GH_TOKEN="$RELEASE_ADMIN_TOKEN" gh api "${api_header[@]}" \
+              "repos/$GITHUB_REPOSITORY/vulnerability-alerts" \
+              >/dev/null 2>&1 || return 1
+            GH_TOKEN="$RELEASE_ADMIN_TOKEN" gh api "${api_header[@]}" \
+              "repos/$GITHUB_REPOSITORY/automated-security-fixes" \
+              > "$state_dir/automated-security-fixes-final.json" 2>/dev/null || return 1
+            jq -e '.enabled == true and .paused == false' \
+              "$state_dir/automated-security-fixes-final.json" >/dev/null || return 1
+            GH_TOKEN="$RELEASE_ADMIN_TOKEN" gh api "${api_header[@]}" \
               "repos/$GITHUB_REPOSITORY/actions/permissions" \
               > "$state_dir/actions-permissions-final.json" 2>/dev/null || return 1
             jq -e '
@@ -857,7 +1059,7 @@ jobs:
             done < <(jq -r '.[][]? | .id' "$state_dir/ruleset-list-final.json")
             jq -s '.' "$state_dir/rulesets-final.ndjson" \
               > "$state_dir/rulesets-final.json" || return 1
-            jq -e '
+            jq -e --argjson ci_integration_id "$CI_INTEGRATION_ID" '
               def explicit_ref($target; $include):
                 .target == $target
                 and .enforcement == "active"
@@ -866,7 +1068,7 @@ jobs:
                 and (.conditions.ref_name.include | index($include)) != null;
               def has_rule($type):
                 any(.rules[]?; .type == $type);
-              def strong_main($required_checks):
+              def strong_main($required_checks; $ci_integration_id):
                 (explicit_ref("branch"; "~DEFAULT_BRANCH") or explicit_ref("branch"; "refs/heads/main"))
                 and has_rule("deletion")
                 and has_rule("non_fast_forward")
@@ -885,15 +1087,16 @@ jobs:
                   and .parameters.strict_required_status_checks_policy == true
                   and .parameters.do_not_enforce_on_create != true
                   and (
-                    [
-                      .parameters.required_status_checks[]?
-                      | select(.integration_id | type == "number" and . > 0)
-                      | .context
-                    ] as $configured
+                    .parameters.required_status_checks as $configured
                     | all(
                         $required_checks[];
                         . as $required
-                        | ($configured | index($required)) != null
+                        | [
+                            $configured[]?
+                            | select(.context == $required)
+                          ] as $matching
+                        | ($matching | length) == 1
+                          and $matching[0].integration_id == $ci_integration_id
                       )
                   )
                 );
@@ -908,9 +1111,193 @@ jobs:
                 "Native macOS package",
                 "Deployment configuration"
               ] as $required_checks
-              | any(.[]; strong_main($required_checks))
+              | any(.[]; strong_main($required_checks; $ci_integration_id))
                 and any(.[]; strong_release_tags)
             ' "$state_dir/rulesets-final.json" >/dev/null
+          }
+
+          validated_check_run_endpoint() {
+            local check_run_url="$1"
+            local check_run_prefix="${GITHUB_API_URL%/}/repos/$GITHUB_REPOSITORY/check-runs/"
+            local check_run_id
+            [[ "$check_run_url" != *$'\n'* \
+                && "$check_run_url" == "$check_run_prefix"* ]] || return 1
+            check_run_id="${check_run_url#"$check_run_prefix"}"
+            [[ "$check_run_id" =~ ^[1-9][0-9]*$ ]] || return 1
+            printf 'repos/%s/check-runs/%s\n' \
+              "$GITHUB_REPOSITORY" "$check_run_id"
+          }
+
+          selected_ci_run_matches_preflight() {
+            local ci_run_record="$1"
+            jq -e \
+              --arg sha "$SOURCE_COMMIT" \
+              --argjson expected_id "$CI_RUN_ID" \
+              --argjson expected_attempt "$CI_RUN_ATTEMPT" '
+                .id == $expected_id
+                and .run_attempt == $expected_attempt
+                and .head_sha == $sha
+                and .event == "push"
+                and .status == "completed"
+                and .conclusion == "success"
+              ' <<< "$ci_run_record" >/dev/null
+          }
+
+          latest_ci_run_matches_preflight() {
+            local response_path="$1"
+            local ci_run_record
+            gh api "${api_header[@]}" --method GET \
+              -f "head_sha=$SOURCE_COMMIT" \
+              -f event=push \
+              -F per_page=100 \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+              > "$response_path" 2>/dev/null || return 1
+            ci_run_record="$(jq -cer --arg sha "$SOURCE_COMMIT" '
+              [
+                .workflow_runs[]?
+                | select(
+                    .head_sha == $sha
+                    and .event == "push"
+                    and (.id | type == "number" and . > 0)
+                    and (.run_attempt | type == "number" and . > 0)
+                  )
+              ]
+              | sort_by([.id, .run_attempt])
+              | last
+              | select(
+                  type == "object"
+                  and .status == "completed"
+                  and .conclusion == "success"
+                )
+            ' "$response_path")" || return 1
+            selected_ci_run_matches_preflight "$ci_run_record"
+          }
+
+          ci_check_run_set_matches_preflight() {
+            local observed_ids="$1"
+            local observed_urls="$2"
+            [[ "$observed_ids" == "$CI_CHECK_RUN_IDS" \
+                && "$observed_urls" == "$CI_CHECK_RUN_URLS" ]]
+          }
+
+          release_ci_is_intact() {
+            local required_checks_json
+            local check_name check_run_url check_run_endpoint check_run_id
+            local check_run_response observed_ids observed_urls observed_integration_id
+            required_checks_json="$(jq -cn '[
+              "Repository secret-artifact hygiene",
+              "Web and sync server",
+              "Native macOS package",
+              "Deployment configuration"
+            ]')" || return 1
+
+            latest_ci_run_matches_preflight \
+              "$state_dir/ci-runs-final.json" || return 1
+
+            gh api "${api_header[@]}" --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN_ID/attempts/$CI_RUN_ATTEMPT/jobs?per_page=100" \
+              > "$state_dir/ci-jobs-final.json" 2>/dev/null || return 1
+            jq -e \
+              --arg sha "$SOURCE_COMMIT" \
+              --argjson run_id "$CI_RUN_ID" \
+              --argjson required_checks "$required_checks_json" '
+                [ .[].jobs[]? ] as $jobs
+                | all(
+                    $required_checks[];
+                    . as $required
+                    | [ $jobs[] | select(.name == $required) ] as $matching
+                    | ($matching | length) == 1
+                      and $matching[0].run_id == $run_id
+                      and $matching[0].head_sha == $sha
+                      and $matching[0].status == "completed"
+                      and $matching[0].conclusion == "success"
+                      and ($matching[0].check_run_url | type == "string")
+                  )
+              ' "$state_dir/ci-jobs-final.json" >/dev/null || return 1
+            jq -r --argjson required_checks "$required_checks_json" '
+              .[] | .jobs[]?
+              | . as $job
+              | select(($required_checks | index($job.name)) != null)
+              | [ .name, .check_run_url ]
+              | @tsv
+            ' "$state_dir/ci-jobs-final.json" \
+              > "$state_dir/ci-check-run-jobs-final.tsv" || return 1
+
+            : > "$state_dir/ci-check-runs-final.ndjson" || return 1
+            : > "$state_dir/ci-check-run-bindings-final.txt" || return 1
+            while IFS=$'\t' read -r check_name check_run_url; do
+              check_run_endpoint="$(validated_check_run_endpoint "$check_run_url")" \
+                || return 1
+              check_run_id="${check_run_endpoint##*/}"
+              check_run_response="$state_dir/ci-check-run-final-${check_run_id}.json"
+              gh api "${api_header[@]}" "$check_run_endpoint" \
+                > "$check_run_response" 2>/dev/null || return 1
+              jq -e \
+                --arg expected_name "$check_name" \
+                --arg sha "$SOURCE_COMMIT" \
+                --argjson expected_id "$check_run_id" \
+                --argjson expected_app "$CI_INTEGRATION_ID" '
+                  .id == $expected_id
+                  and .name == $expected_name
+                  and .head_sha == $sha
+                  and .status == "completed"
+                  and .conclusion == "success"
+                  and .app.id == $expected_app
+                ' "$check_run_response" >/dev/null || return 1
+              cat "$check_run_response" \
+                >> "$state_dir/ci-check-runs-final.ndjson" || return 1
+              printf '\n' >> "$state_dir/ci-check-runs-final.ndjson" || return 1
+              printf '%s|%s\n' "$check_run_id" "$check_run_url" \
+                >> "$state_dir/ci-check-run-bindings-final.txt" || return 1
+            done < "$state_dir/ci-check-run-jobs-final.tsv"
+            LC_ALL=C sort -t '|' -k1,1n \
+              "$state_dir/ci-check-run-bindings-final.txt" \
+              > "$state_dir/ci-check-run-bindings-final.sorted.txt" || return 1
+            [[ "$(wc -l < "$state_dir/ci-check-run-bindings-final.sorted.txt" | tr -d '[:space:]')" == "4" \
+                && "$(cut -d '|' -f1 "$state_dir/ci-check-run-bindings-final.sorted.txt" | sort -u | wc -l | tr -d '[:space:]')" == "4" \
+                && "$(cut -d '|' -f2 "$state_dir/ci-check-run-bindings-final.sorted.txt" | sort -u | wc -l | tr -d '[:space:]')" == "4" ]] || return 1
+            observed_ids="$(cut -d '|' -f1 \
+              "$state_dir/ci-check-run-bindings-final.sorted.txt" | paste -sd, -)" \
+              || return 1
+            observed_urls="$(cut -d '|' -f2 \
+              "$state_dir/ci-check-run-bindings-final.sorted.txt" | paste -sd, -)" \
+              || return 1
+            ci_check_run_set_matches_preflight \
+              "$observed_ids" "$observed_urls" || return 1
+
+            jq -s '.' "$state_dir/ci-check-runs-final.ndjson" \
+              > "$state_dir/ci-check-runs-final.json" || return 1
+            observed_integration_id="$(jq -er \
+              --arg sha "$SOURCE_COMMIT" \
+              --argjson required_checks "$required_checks_json" '
+                . as $check_runs
+                | if (
+                  ($check_runs | length) == ($required_checks | length)
+                  and all(
+                    $required_checks[];
+                    . as $required
+                    | [ $check_runs[] | select(.name == $required) ]
+                    | length == 1
+                  )
+                  and all(
+                    $check_runs[];
+                    (.id | type == "number" and . > 0)
+                    and .head_sha == $sha
+                    and .status == "completed"
+                    and .conclusion == "success"
+                    and (.app.id | type == "number" and . > 0)
+                  )
+                  and ([ $check_runs[].app.id ] | unique | length == 1)
+                )
+                then [ $check_runs[].app.id ] | unique | .[0]
+                else empty
+                end
+              ' "$state_dir/ci-check-runs-final.json")" || return 1
+            [[ "$observed_integration_id" == "$CI_INTEGRATION_ID" ]] || return 1
+            # Close the validation window itself: a rerun started while the
+            # exact jobs/checks were being fetched must also stop publication.
+            latest_ci_run_matches_preflight \
+              "$state_dir/ci-runs-final-confirm.json"
           }
 
           remote_assets_are_exact() {
@@ -1120,7 +1507,7 @@ jobs:
             exit 1
           }
           release_governance_is_intact || {
-            echo "Protected environment, immutable release, security-reporting, Actions, or ruleset governance changed during the build; refusing publication." >&2
+            echo "Protected environment, immutable release, security reporting/scanning/automated fixes, Actions, or ruleset governance changed during the build; refusing publication." >&2
             exit 1
           }
           git fetch --force --no-tags origin \
@@ -1148,6 +1535,10 @@ jobs:
             exit 1
           fi
           verify_production_config_binding prepublish
+          release_ci_is_intact || {
+            echo "The exact preflight CI run/check identity changed or is no longer provable; refusing publication." >&2
+            exit 1
+          }
           jq -n '{ draft: false, prerelease: false, make_latest: "legacy" }' \
             > "$state_dir/publish-release.json"
           if ! gh api "${api_header[@]}" --method PATCH \

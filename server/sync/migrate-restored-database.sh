@@ -18,6 +18,10 @@ owner_password="${POSTGRES_PASSWORD:-}"
 
 case "$container" in ''|*[!A-Za-z0-9_.-]*) echo 'Restore PostgreSQL container name is invalid.' >&2; exit 65 ;; esac
 case "$database" in ''|*[!A-Za-z0-9_]*) echo 'Restore database name is invalid.' >&2; exit 65 ;; esac
+case "$database" in
+  atlas_drill_?*|atlas_restore_?*|atlas_bootstrap_?*) ;;
+  *) echo 'Restore database name is outside the isolated migration contract.' >&2; exit 65 ;;
+esac
 case "$source_head:$current_head" in
   *[!0-9:]*|:*|*:) echo 'Restore migration heads are invalid.' >&2; exit 65 ;;
 esac
@@ -66,7 +70,7 @@ case "$image_digest" in *[!0-9a-f]*) echo 'Restore image ID is malformed.' >&2; 
   exit 69
 }
 
-database_url="postgresql://address_atlas:${owner_password}@127.0.0.1:5432/${database}?options=-csearch_path%3Dpublic%2Cpg_catalog"
+database_url="postgresql://address_atlas:${owner_password}@127.0.0.1:5432/${database}"
 SYNC_SCHEMA_DATABASE_URL="$database_url"
 export SYNC_SCHEMA_DATABASE_URL
 exec "$docker_bin" run --rm \
@@ -77,6 +81,7 @@ exec "$docker_bin" run --rm \
   --security-opt no-new-privileges:true \
   --env NODE_ENV=production \
   --env SYNC_SCHEMA_MODE=bootstrap \
+  --env ADDRESS_ATLAS_RESTORE_MIGRATION=1 \
   --env SYNC_SCHEMA_DATABASE_URL \
   --env SYNC_DB_CONNECT_TIMEOUT_MS=5000 \
   --env SYNC_DB_IDLE_TIMEOUT_MS=30000 \
