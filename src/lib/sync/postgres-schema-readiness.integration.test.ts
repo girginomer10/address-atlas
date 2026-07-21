@@ -21,6 +21,10 @@ import {
 } from "./storage-ledger-integrity";
 
 const maybeDescribe = process.env.TEST_SYNC_DATABASE_URL ? describe : describe.skip;
+// This single adversarial matrix deliberately performs dozens of full catalog
+// readiness scans plus role/ACL mutations. Keep a finite per-test ceiling, but
+// do not inherit Vitest's 5s unit-test default on slower shared CI runners.
+const RUNTIME_ROLE_CATALOG_MATRIX_TIMEOUT_MS = 20_000;
 
 maybeDescribe("diagnostic Postgres runtime readiness", () => {
   let previousDatabaseURL: string | undefined;
@@ -664,7 +668,7 @@ maybeDescribe("diagnostic Postgres runtime readiness", () => {
         }
       }
     });
-  });
+  }, RUNTIME_ROLE_CATALOG_MATRIX_TIMEOUT_MS);
 
   async function withIsolatedDatabase(
     run: (database: string, isolatedDatabaseURL: string) => Promise<void>
