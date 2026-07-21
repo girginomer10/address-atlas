@@ -11,8 +11,9 @@ extension NativeScanner {
     source: AssetSource = .native
   ) -> [TrackedAsset] {
     guard amount.isFinite, amount > 0 else { return [] }
-    let price = prices[chain.coinGeckoId] ?? PricePoint(usd: 0)
-    let unitPrice = price.usd.isFinite && price.usd >= 0 ? price.usd : 0
+    let price = prices[chain.coinGeckoId]
+    let hasKnownPrice = price.map { $0.usd.isFinite && $0.usd >= 0 } == true
+    let unitPrice = hasKnownPrice ? price?.usd ?? 0 : 0
     let valueUsd = FiniteValueMath.multiplyingNonnegative(amount, unitPrice)
     return [
       TrackedAsset(
@@ -26,7 +27,10 @@ extension NativeScanner {
         amount: amount,
         priceUsd: unitPrice,
         valueUsd: valueUsd ?? 0,
-        change24h: FiniteValueMath.finiteOptional(price.usd24hChange),
+        pricingStatus: hasKnownPrice
+          ? (valueUsd == nil ? .valuationUnavailable : .priced)
+          : .unpriced,
+        change24h: FiniteValueMath.finiteOptional(price?.usd24hChange),
         explorerUrl: chain.explorerURL(for: address).absoluteString,
         source: source
       )
@@ -43,8 +47,9 @@ extension NativeScanner {
   ) -> TrackedAsset? {
     guard amount.isFinite, amount > 0 else { return nil }
     let price = token.coinGeckoId.flatMap { prices[$0] }
-    let rawPrice = price?.usd ?? token.priceUsd ?? 0
-    let priceUsd = rawPrice.isFinite && rawPrice >= 0 ? rawPrice : 0
+    let candidatePrice = price?.usd ?? token.priceUsd
+    let hasKnownPrice = candidatePrice.map { $0.isFinite && $0 >= 0 } == true
+    let priceUsd = hasKnownPrice ? candidatePrice ?? 0 : 0
     let valueUsd = FiniteValueMath.multiplyingNonnegative(amount, priceUsd)
     return TrackedAsset(
       id: "\(address)-\(chain.id)-\(token.symbol)-\(token.address)",
@@ -57,6 +62,9 @@ extension NativeScanner {
       amount: amount,
       priceUsd: priceUsd,
       valueUsd: valueUsd ?? 0,
+      pricingStatus: hasKnownPrice
+        ? (valueUsd == nil ? .valuationUnavailable : .priced)
+        : .unpriced,
       change24h: FiniteValueMath.finiteOptional(price?.usd24hChange),
       explorerUrl: chain.explorerURL(for: address).absoluteString,
       source: source
@@ -112,7 +120,19 @@ extension NativeScanner {
       }
       let symbol = token.symbol.trimmingCharacters(in: .whitespacesAndNewlines)
       let name = token.name.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !symbol.isEmpty, symbol.count <= 32, !name.isEmpty, name.count <= 128 else {
+      guard !symbol.isEmpty,
+        VaultTextLimits.contains(
+          symbol,
+          maximumCharacters: VaultTextLimits.tokenSymbolCharacters,
+          maximumUTF8Bytes: VaultTextLimits.tokenSymbolUTF8Bytes
+        ),
+        !name.isEmpty,
+        VaultTextLimits.contains(
+          name,
+          maximumCharacters: VaultTextLimits.tokenNameCharacters,
+          maximumUTF8Bytes: VaultTextLimits.tokenNameUTF8Bytes
+        )
+      else {
         warnings.append("Custom token \(label) has an invalid symbol or name and was skipped.")
         continue
       }

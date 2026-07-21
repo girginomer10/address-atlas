@@ -208,6 +208,42 @@ services:
       - no-new-privileges:true
     logging: *default-logging
 
+  # Explicit maintenance-only path for an atomic three-role credential
+  # rotation. Current A credentials arrive from the locked old environment;
+  # desired B credentials arrive from the reviewed .env.production.next file.
+  db-rotate:
+    profiles: ["admin"]
+    image: postgres:16.14-alpine3.24@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    restart: "no"
+    environment:
+      ADDRESS_ATLAS_DATABASE_ROLE_MODE: "${ADDRESS_ATLAS_ROTATION_ROLE_MODE:-rotate}"
+      POSTGRES_OWNER_CURRENT_PASSWORD: "${ADDRESS_ATLAS_ROTATE_CURRENT_OWNER_PASSWORD:-rotation-not-requested}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
+      POSTGRES_ADMIN_CURRENT_PASSWORD: "${ADDRESS_ATLAS_ROTATE_CURRENT_ADMIN_PASSWORD:-rotation-not-requested}"
+      POSTGRES_ADMIN_PASSWORD: "${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD is required}"
+      POSTGRES_RUNTIME_CURRENT_PASSWORD: "${ADDRESS_ATLAS_ROTATE_CURRENT_RUNTIME_PASSWORD:-rotation-not-requested}"
+      POSTGRES_RUNTIME_PASSWORD: "${POSTGRES_RUNTIME_PASSWORD:?POSTGRES_RUNTIME_PASSWORD is required}"
+    volumes:
+      - ./provision-runtime-role.sh:/opt/address-atlas/provision-runtime-role.sh:ro
+    command: ["/bin/sh", "/opt/address-atlas/provision-runtime-role.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    cap_drop:
+      - ALL
+    pids_limit: 64
+    mem_limit: "${ADDRESS_ATLAS_DB_ADMIN_MEMORY_LIMIT:-256m}"
+    mem_reservation: "${ADDRESS_ATLAS_DB_ADMIN_MEMORY_RESERVATION:-64m}"
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+
   postgres:
     image: postgres:16.14-alpine3.24@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     restart: unless-stopped

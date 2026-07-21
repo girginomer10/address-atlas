@@ -114,6 +114,32 @@ private actor SolanaRequestStartProbe {
 }
 
 extension NativeScannerTokenTests {
+  func testSolanaWrongGenesisHashStopsBeforeAnyBalanceRequest() async {
+    let http = StubHTTPClient(automaticallyServesNetworkIdentity: false) { request in
+      XCTAssertEqual(requestedSolanaMethod(in: request), "getGenesisHash")
+      return (
+        Data(#"{"jsonrpc":"2.0","id":0,"result":"GH7ome3EiwEr7tu9JuTh2dpYWBJK3z69Xm1ZE3MEE6JC"}"#.utf8),
+        httpResponse(for: request)
+      )
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: StaticPriceProvider(values: [:])
+    )
+
+    do {
+      _ = try await scanner.scanSolana(
+        address: SolanaTokenFixture.owner,
+        chain: ChainRegistry.solana,
+        tokens: [],
+        prices: [:]
+      )
+      XCTFail("Expected wrong Solana cluster rejection")
+    } catch {
+      XCTAssertTrue(error.localizedDescription.contains("wrong network identity"))
+    }
+  }
+
   func testSolanaNativeBalanceAcceptsFullUInt64LamportRange() async throws {
     let http = StubHTTPClient { request in
       XCTAssertEqual(requestedSolanaMethod(in: request), "getBalance")

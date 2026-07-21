@@ -11,11 +11,14 @@ import { STORAGE_RECONCILIATION_VERSION } from "./postgres-migrations";
 import { getSyncPool } from "./postgres-pool";
 
 const VALID_AUDIT_INTERVAL_MS = 5 * 60_000;
+const MAX_VALID_AUDIT_AGE_MS = 10 * 60_000;
 const FAILED_AUDIT_RETRY_MS = 60_000;
 
 let auditInFlight: Promise<void> | null = null;
 let nextAuditAt = 0;
-let lastAuditState: "unknown" | "valid" | "invalid" = "unknown";
+export type StorageLedgerAuditState = "pending" | "valid" | "invalid" | "unavailable";
+let lastAuditState: StorageLedgerAuditState = "pending";
+let lastSuccessfulAuditAt: number | null = null;
 
 function ledgerError() {
   return new OperationalError(
@@ -30,19 +33,20 @@ function ledgerError() {
  * execution. A repeatable-read snapshot compares the ledger and durable rows
  * without holding the singleton write lock through the table scan. A confirmed
  * drift persists a write-blocking marker; a concurrent writer instead causes a
- * serialization retry, and transient failures leave the last known marker
- * unchanged so reads and authentication stay available.
+ * serialization retry. Pending or unavailable audits fail closed for health
+ * and vault writes while reads and authentication stay available.
  */
 export function scheduleStorageLedgerIntegrityAudit(
   diagnostics: RequestDiagnostics = generatedDiagnostics("storage-ledger-audit")
 ) {
   if (auditInFlight || performance.now() < nextAuditAt) return false;
 
+  const previousAuditState = lastAuditState;
   const attempt = checkStorageLedgerIntegrity();
   auditInFlight = attempt;
   void attempt.then(() => {
     nextAuditAt = performance.now() + VALID_AUDIT_INTERVAL_MS;
-    if (lastAuditState === "invalid") {
+    if (previousAuditState === "invalid" || previousAuditState === "unavailable") {
       recordSecurityEvent("storage.ledger_integrity_restored", diagnostics, {
         status: 200,
         reason: "exact_ledger_audit_passed",
@@ -50,11 +54,12 @@ export function scheduleStorageLedgerIntegrityAudit(
       });
     }
     lastAuditState = "valid";
+    lastSuccessfulAuditAt = performance.now();
   }, (error: unknown) => {
     nextAuditAt = performance.now() + FAILED_AUDIT_RETRY_MS;
     const errorCode = operationalErrorCode(error, "database_query_failed");
     if (errorCode === "storage_ledger_invalid") {
-      if (lastAuditState !== "invalid") {
+      if (previousAuditState !== "invalid") {
         recordSecurityEvent("storage.ledger_drift_detected", diagnostics, {
           status: 503,
           reason: "vault_writes_blocked",
@@ -70,12 +75,27 @@ export function scheduleStorageLedgerIntegrityAudit(
         errorCode,
         severity: "error"
       });
-      lastAuditState = "unknown";
+      lastAuditState = "unavailable";
     }
   }).finally(() => {
     if (auditInFlight === attempt) auditInFlight = null;
   });
   return true;
+}
+
+export function getStorageLedgerAuditState() {
+  if (
+    lastAuditState === "valid"
+    && (lastSuccessfulAuditAt === null
+      || performance.now() - lastSuccessfulAuditAt > MAX_VALID_AUDIT_AGE_MS)
+  ) {
+    return "unavailable" as const;
+  }
+  return lastAuditState;
+}
+
+export function assertStorageLedgerAuditReady() {
+  if (getStorageLedgerAuditState() !== "valid") throw ledgerError();
 }
 
 /**
@@ -166,5 +186,12 @@ async function rollbackQuietly(client: PoolClient) {
 export function resetStorageLedgerIntegrityForTests() {
   auditInFlight = null;
   nextAuditAt = 0;
-  lastAuditState = "unknown";
+  lastAuditState = "pending";
+  lastSuccessfulAuditAt = null;
+}
+
+export function setStorageLedgerAuditStateForTests(state: StorageLedgerAuditState) {
+  lastAuditState = state;
+  lastSuccessfulAuditAt = state === "valid" ? performance.now() : null;
+  nextAuditAt = performance.now() + VALID_AUDIT_INTERVAL_MS;
 }

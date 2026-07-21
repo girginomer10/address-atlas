@@ -46,11 +46,31 @@ public struct PendingVaultUpload: Codable, Equatable, Sendable {
   }
 }
 
+/// Non-secret identity for an opaque journal row that could not be safely
+/// decoded or authenticated. The encrypted bytes remain untouched in SQLite;
+/// this fingerprint only protects an explicit discard from racing replacement.
+public struct QuarantinedPendingVaultUpload: Codable, Equatable, Sendable {
+  public var encryptedRowSHA256: String
+  public var encryptedByteCount: Int
+
+  public init(encryptedRowSHA256: String, encryptedByteCount: Int) {
+    self.encryptedRowSHA256 = encryptedRowSHA256
+    self.encryptedByteCount = encryptedByteCount
+  }
+}
+
+public enum PendingVaultUploadInspection: Equatable, Sendable {
+  case none
+  case pending(PendingVaultUpload, QuarantinedPendingVaultUpload)
+  case quarantined(QuarantinedPendingVaultUpload)
+}
+
 public enum PendingVaultUploadError: Error, Equatable, LocalizedError, Sendable {
   case invalidOperation
   case operationAlreadyPending
   case operationMissing
   case operationMismatch
+  case quarantinedOperation
   case localDocumentChanged
   case remoteConflict
 
@@ -64,6 +84,8 @@ public enum PendingVaultUploadError: Error, Equatable, LocalizedError, Sendable 
       "The pending upload recovery record is missing. The local vault was not changed."
     case .operationMismatch:
       "The pending upload recovery record changed unexpectedly. The local vault was not changed."
+    case .quarantinedOperation:
+      "The encrypted upload recovery record is damaged and has been quarantined. The primary local vault remains available read-only."
     case .localDocumentChanged:
       "The local vault changed while an upload was pending. Recovery stopped without overwriting it."
     case .remoteConflict:

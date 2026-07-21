@@ -9,17 +9,12 @@ case "$mode" in
   bootstrap)
     exec "$script_dir/bootstrap-database-roles.sh"
     ;;
-  steady|restore|drill) ;;
+  steady|restore|drill|rotate|verify-rotation) ;;
   *)
-    echo 'ADDRESS_ATLAS_DATABASE_ROLE_MODE must be bootstrap, steady, restore, or drill.' >&2
+    echo 'ADDRESS_ATLAS_DATABASE_ROLE_MODE must be bootstrap, steady, restore, drill, rotate, or verify-rotation.' >&2
     exit 64
     ;;
 esac
-
-# Steady mode never reads or falls back to POSTGRES_PASSWORD. A bad admin
-# credential must stop the deployment even when an owner secret is present in
-# the environment.
-unset POSTGRES_PASSWORD PGPASSWORD
 
 database_host="${PGHOST:-postgres}"
 database_port="${PGPORT:-5432}"
@@ -28,6 +23,28 @@ psql_bin="${PSQL_BIN:-psql}"
 admin_password="${POSTGRES_ADMIN_PASSWORD:-}"
 admin_current_password="${POSTGRES_ADMIN_CURRENT_PASSWORD:-$admin_password}"
 runtime_password="${POSTGRES_RUNTIME_PASSWORD:-}"
+runtime_current_password="$runtime_password"
+owner_password=''
+owner_current_password=''
+
+# Steady/restore/drill never read or fall back to the owner credential. A bad
+# admin credential must stop the deployment even when an owner secret is
+# present in the environment. Rotation is the sole reviewed path that consumes
+# both the old and new owner credentials.
+if [ "$mode" = rotate ] || [ "$mode" = verify-rotation ]; then
+  # Rotation must have a finite authentication, lock, and statement envelope
+  # even if the host or database becomes unhealthy mid-maintenance. These
+  # hard-coded values deliberately override inherited libpq settings.
+  PGCONNECT_TIMEOUT=5
+  PGOPTIONS='-c statement_timeout=60000 -c lock_timeout=10000'
+  export PGCONNECT_TIMEOUT PGOPTIONS
+  runtime_current_password="${POSTGRES_RUNTIME_CURRENT_PASSWORD:-}"
+  owner_password="${POSTGRES_PASSWORD:-}"
+  owner_current_password="${POSTGRES_OWNER_CURRENT_PASSWORD:-}"
+else
+  unset POSTGRES_PASSWORD POSTGRES_OWNER_CURRENT_PASSWORD
+fi
+unset PGPASSWORD
 
 case "$database_name" in
   ''|*[!A-Za-z0-9_]* )
@@ -57,9 +74,263 @@ validate_new_password() {
 
 validate_new_password POSTGRES_ADMIN_PASSWORD "$admin_password"
 validate_new_password POSTGRES_RUNTIME_PASSWORD "$runtime_password"
-if [ "$admin_current_password" != "$admin_password" ]; then
+if [ "$mode" != rotate ] && [ "$mode" != verify-rotation ] \
+    && [ "$admin_current_password" != "$admin_password" ]; then
   echo 'Steady deployment does not rotate database credentials; use a separately reviewed maintenance procedure.' >&2
   exit 65
+fi
+
+authenticate_exact_role() {
+  auth_role="$1"
+  auth_password="$2"
+  if ! auth_identity="$({
+    PGPASSWORD="$auth_password" "$psql_bin" \
+      --host "$database_host" --port "$database_port" \
+      --username "$auth_role" --dbname "$database_name" \
+      --no-psqlrc --tuples-only --no-align --set ON_ERROR_STOP=1 \
+      --command 'SELECT current_user;' 2>/dev/null
+  })" || [ "$auth_identity" != "$auth_role" ]; then
+    return 1
+  fi
+}
+
+assert_old_password_rejected() {
+  rejected_role="$1"
+  desired_password="$2"
+  rejected_password="$3"
+  authenticate_exact_role "$rejected_role" "$desired_password" || return 2
+  if PGPASSWORD="$rejected_password" "$psql_bin" \
+    --host "$database_host" --port "$database_port" \
+    --username "$rejected_role" --dbname "$database_name" \
+    --no-psqlrc --tuples-only --no-align --set ON_ERROR_STOP=1 \
+    --command 'SELECT current_user;' >/dev/null 2>&1; then
+    return 1
+  fi
+  # A failed old-password connection counts only while the new credential can
+  # connect immediately on both sides of it. An outage must never masquerade as
+  # proof that the old password was revoked.
+  authenticate_exact_role "$rejected_role" "$desired_password"
+}
+
+terminate_and_verify_protected_sessions() {
+  termination_password="$1"
+  if ! termination_failures="$({
+    PGPASSWORD="$termination_password" "$psql_bin" \
+      --host "$database_host" --port "$database_port" \
+      --username address_atlas_admin --dbname "$database_name" \
+      --no-psqlrc --tuples-only --no-align --set ON_ERROR_STOP=1 \
+      --command "WITH targets AS MATERIALIZED (
+          SELECT pid
+          FROM pg_catalog.pg_stat_activity
+          WHERE usename IN ('address_atlas', 'address_atlas_admin', 'address_atlas_runtime')
+            AND pid <> pg_catalog.pg_backend_pid()
+        ), terminated AS MATERIALIZED (
+          SELECT pid, pg_catalog.pg_terminate_backend(pid, 5000) AS stopped
+          FROM targets
+        )
+        SELECT pg_catalog.count(*) FROM terminated WHERE NOT stopped;" 2>/dev/null
+  })" || [ "$termination_failures" != 0 ]; then
+    return 1
+  fi
+  # pg_stat_activity is snapshot-backed within a statement. Reconnect for the
+  # absence proof so the second observation cannot reuse the pre-termination
+  # activity snapshot from the terminating query.
+  if ! remaining_sessions="$({
+    PGPASSWORD="$termination_password" "$psql_bin" \
+      --host "$database_host" --port "$database_port" \
+      --username address_atlas_admin --dbname "$database_name" \
+      --no-psqlrc --tuples-only --no-align --set ON_ERROR_STOP=1 \
+      --command "SELECT pg_catalog.count(*)
+        FROM pg_catalog.pg_stat_activity
+        WHERE usename IN ('address_atlas', 'address_atlas_admin', 'address_atlas_runtime')
+          AND pid <> pg_catalog.pg_backend_pid();" 2>/dev/null
+  })" || [ "$remaining_sessions" != 0 ]; then
+    return 1
+  fi
+}
+
+if [ "$mode" = rotate ] || [ "$mode" = verify-rotation ]; then
+  validate_new_password POSTGRES_PASSWORD "$owner_password"
+  validate_new_password POSTGRES_OWNER_CURRENT_PASSWORD "$owner_current_password"
+  validate_new_password POSTGRES_ADMIN_CURRENT_PASSWORD "$admin_current_password"
+  validate_new_password POSTGRES_RUNTIME_CURRENT_PASSWORD "$runtime_current_password"
+
+  unique_credential_count="$({
+    printf '%s\n' \
+      "$owner_current_password" "$admin_current_password" "$runtime_current_password" \
+      "$owner_password" "$admin_password" "$runtime_password"
+  } | LC_ALL=C sort -u | wc -l | tr -d '[:space:]')"
+  if [ "$unique_credential_count" != 6 ]; then
+    echo 'Current and desired protected-role credentials must be six distinct values.' >&2
+    exit 65
+  fi
+
+  if [ "$mode" = rotate ]; then
+    authenticate_exact_role address_atlas "$owner_current_password" || {
+      echo 'ROLE_ROTATION_FAILED stage=current-owner-auth' >&2
+      exit 65
+    }
+    authenticate_exact_role address_atlas_admin "$admin_current_password" || {
+      echo 'ROLE_ROTATION_FAILED stage=current-admin-auth' >&2
+      exit 65
+    }
+    authenticate_exact_role address_atlas_runtime "$runtime_current_password" || {
+      echo 'ROLE_ROTATION_FAILED stage=current-runtime-auth' >&2
+      exit 65
+    }
+
+    export PGPASSWORD="$admin_current_password"
+    if ! {
+    cat <<'SQL'
+\set ON_ERROR_STOP on
+SET SESSION log_error_verbosity = 'terse';
+SET SESSION log_parameter_max_length_on_error = 0;
+SET SESSION debug_print_parse = off;
+SET SESSION debug_print_rewritten = off;
+SET SESSION debug_print_plan = off;
+SET SESSION pgaudit.log_statement = off;
+SET SESSION pgaudit.log_parameter = off;
+SET SESSION pg_stat_statements.track = 'none';
+SET SESSION pg_stat_statements.track_utility = off;
+SET SESSION pg_stat_statements.track_planning = off;
+DO $rotation_logging$
+BEGIN
+  IF pg_catalog.current_setting('log_error_verbosity') <> 'terse'
+     OR pg_catalog.current_setting('log_parameter_max_length_on_error') <> '0'
+     OR pg_catalog.current_setting('debug_print_parse') <> 'off'
+     OR pg_catalog.current_setting('debug_print_rewritten') <> 'off'
+     OR pg_catalog.current_setting('debug_print_plan') <> 'off'
+     OR pg_catalog.current_setting('pgaudit.log_statement') <> 'off'
+     OR pg_catalog.current_setting('pgaudit.log_parameter') <> 'off'
+     OR pg_catalog.current_setting('pg_stat_statements.track') <> 'none'
+     OR pg_catalog.current_setting('pg_stat_statements.track_utility') <> 'off'
+     OR pg_catalog.current_setting('pg_stat_statements.track_planning') <> 'off' THEN
+    RAISE EXCEPTION 'rotation logging redaction could not be enabled';
+  END IF;
+  IF pg_catalog.current_setting('auto_explain.log_min_duration', true) IS NOT NULL THEN
+    PERFORM pg_catalog.set_config('auto_explain.log_min_duration', '-1', false);
+    IF pg_catalog.current_setting('auto_explain.log_min_duration') <> '-1' THEN
+      RAISE EXCEPTION 'rotation automatic explain logging could not be disabled';
+    END IF;
+  END IF;
+END
+$rotation_logging$;
+BEGIN;
+SET LOCAL password_encryption = 'scram-sha-256';
+CREATE TEMP TABLE address_atlas_rotation_secrets (
+  role_name text PRIMARY KEY CHECK (
+    role_name IN ('address_atlas', 'address_atlas_admin', 'address_atlas_runtime')
+  ),
+  secret_value text NOT NULL
+) ON COMMIT DROP;
+COPY pg_temp.address_atlas_rotation_secrets (role_name, secret_value) FROM STDIN;
+SQL
+    printf 'address_atlas\t%s\n' "$owner_password"
+    printf 'address_atlas_admin\t%s\n' "$admin_password"
+    printf 'address_atlas_runtime\t%s\n' "$runtime_password"
+    printf '\\.\n'
+    cat <<'SQL'
+DO $rotate$
+DECLARE
+  role_row record;
+  desired_password text;
+BEGIN
+  IF current_user <> 'address_atlas_admin' THEN
+    RAISE EXCEPTION 'credential rotation must authenticate as address_atlas_admin';
+  END IF;
+  FOR role_row IN
+    SELECT * FROM pg_catalog.pg_roles
+    WHERE rolname IN ('address_atlas', 'address_atlas_admin', 'address_atlas_runtime')
+  LOOP
+    IF NOT role_row.rolcanlogin OR role_row.rolcreatedb OR role_row.rolreplication
+       OR role_row.rolbypassrls OR role_row.rolinherit OR role_row.rolconnlimit <> -1
+       OR role_row.rolconfig IS NOT NULL
+       OR (role_row.rolname = 'address_atlas_admin'
+           AND (NOT role_row.rolsuper OR NOT role_row.rolcreaterole))
+       OR (role_row.rolname <> 'address_atlas_admin'
+           AND (role_row.rolsuper OR role_row.rolcreaterole)) THEN
+      RAISE EXCEPTION 'protected role attributes are outside the rotation contract';
+    END IF;
+  END LOOP;
+  IF (SELECT pg_catalog.count(*) FROM pg_catalog.pg_roles
+      WHERE rolname IN ('address_atlas', 'address_atlas_admin', 'address_atlas_runtime')) <> 3
+     OR EXISTS (
+       SELECT 1 FROM pg_catalog.pg_auth_members AS edge
+       JOIN pg_catalog.pg_roles AS granted ON granted.oid = edge.roleid
+       JOIN pg_catalog.pg_roles AS member ON member.oid = edge.member
+       WHERE granted.rolname IN ('address_atlas', 'address_atlas_admin', 'address_atlas_runtime')
+          OR member.rolname IN ('address_atlas', 'address_atlas_admin', 'address_atlas_runtime')
+     ) THEN
+    RAISE EXCEPTION 'protected role set is outside the rotation contract';
+  END IF;
+
+  FOR role_row IN
+    SELECT role_name FROM pg_temp.address_atlas_rotation_secrets ORDER BY role_name
+  LOOP
+    SELECT secret_value INTO STRICT desired_password
+    FROM pg_temp.address_atlas_rotation_secrets
+    WHERE role_name = role_row.role_name;
+    IF role_row.role_name = 'address_atlas_admin' THEN
+      EXECUTE pg_catalog.format(
+        'ALTER ROLE address_atlas_admin WITH LOGIN SUPERUSER NOCREATEDB CREATEROLE '
+        'NOREPLICATION NOBYPASSRLS NOINHERIT CONNECTION LIMIT -1 PASSWORD %L VALID UNTIL %L',
+        desired_password, 'infinity'
+      );
+    ELSE
+      EXECUTE pg_catalog.format(
+        'ALTER ROLE %I WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE '
+        'NOREPLICATION NOBYPASSRLS NOINHERIT CONNECTION LIMIT -1 PASSWORD %L VALID UNTIL %L',
+        role_row.role_name, desired_password, 'infinity'
+      );
+    END IF;
+  END LOOP;
+EXCEPTION
+  WHEN OTHERS THEN
+    RAISE EXCEPTION USING MESSAGE = 'sanitized atomic credential rotation failed', ERRCODE = '55000';
+END
+$rotate$;
+ALTER ROLE address_atlas RESET ALL;
+ALTER ROLE address_atlas_admin RESET ALL;
+ALTER ROLE address_atlas_runtime RESET ALL;
+SELECT pg_catalog.format('ALTER ROLE address_atlas IN DATABASE %I RESET ALL', current_database()) \gexec
+SELECT pg_catalog.format('ALTER ROLE address_atlas_admin IN DATABASE %I RESET ALL', current_database()) \gexec
+SELECT pg_catalog.format('ALTER ROLE address_atlas_runtime IN DATABASE %I RESET ALL', current_database()) \gexec
+COMMIT;
+SQL
+    } | "$psql_bin" \
+      --host "$database_host" --port "$database_port" \
+      --username address_atlas_admin --dbname "$database_name" \
+      --no-psqlrc --quiet 2>/dev/null; then
+      echo 'ROLE_ROTATION_FAILED stage=atomic-database-transaction' >&2
+      exit 74
+    fi
+    unset PGPASSWORD
+  fi
+
+  authenticate_exact_role address_atlas "$owner_password" \
+    && authenticate_exact_role address_atlas_admin "$admin_password" \
+    && authenticate_exact_role address_atlas_runtime "$runtime_password" || {
+      echo 'ROLE_ROTATION_FAILED stage=new-credential-verification' >&2
+      exit 74
+    }
+  terminate_and_verify_protected_sessions "$admin_password" || {
+    echo 'ROLE_ROTATION_FAILED stage=protected-session-termination' >&2
+    exit 74
+  }
+  assert_old_password_rejected address_atlas "$owner_password" "$owner_current_password" \
+    && assert_old_password_rejected address_atlas_admin "$admin_password" "$admin_current_password" \
+    && assert_old_password_rejected address_atlas_runtime "$runtime_password" "$runtime_current_password" || {
+      echo 'ROLE_ROTATION_FAILED stage=old-credential-rejection' >&2
+      exit 74
+    }
+  unset POSTGRES_OWNER_CURRENT_PASSWORD POSTGRES_ADMIN_CURRENT_PASSWORD \
+    POSTGRES_RUNTIME_CURRENT_PASSWORD
+  if [ "$mode" = rotate ]; then
+    echo 'Atomically rotated and verified owner, admin, and runtime database credentials.'
+  else
+    echo 'Verified the desired database credentials are active and all prior credentials are rejected.'
+  fi
+  exit 0
 fi
 
 # Prove the desired runtime credential already works before the administrative

@@ -51,6 +51,13 @@ extension NativeScanner {
     var error: JSONRPCError?
   }
 
+  private struct SolanaGenesisResponse: Decodable, Sendable {
+    var jsonrpc: String?
+    var id: Int?
+    var result: String?
+    var error: JSONRPCError?
+  }
+
   private enum SolanaSnapshotComponent: Hashable, Sendable {
     case native
     case tokenProgram(String)
@@ -92,9 +99,22 @@ extension NativeScanner {
     address: String,
     chain: ChainConfig,
     tokens: [TokenConfig],
-    prices: [String: PricePoint]
+    prices: [String: PricePoint],
+    networkIdentityProofs: ChainNetworkValueCache<Void>? = nil
   ) async throws -> NativeScanResult {
     guard let rpc = chain.rpcUrl else { return NativeScanResult() }
+    guard case .solanaGenesisHash(let expectedGenesisHash) = chain.networkIdentity else {
+      throw Self.messageError(
+        domain: "Solana", message: "Solana network identity is missing.")
+    }
+    let proofCache = networkIdentityProofs ?? ChainNetworkValueCache<Void>()
+    try await proofCache.prove(
+      chainID: chain.id,
+      endpoint: rpc,
+      identity: chain.networkIdentity
+    ) {
+      try await validateSolanaNetwork(rpc: rpc, expectedGenesisHash: expectedGenesisHash)
+    }
     var assets: [TrackedAsset] = []
     var warnings: [String] = []
     var initialNative: SolanaNativeSnapshot?
@@ -156,6 +176,26 @@ extension NativeScanner {
     warnings.append(contentsOf: splScan.warnings)
 
     return NativeScanResult(assets: assets, warnings: warnings)
+  }
+
+  private func validateSolanaNetwork(rpc: URL, expectedGenesisHash: String) async throws {
+    let response = try await http.post(
+      rpc,
+      body: JSONRPCRequest(id: 0, method: "getGenesisHash", params: []),
+      as: SolanaGenesisResponse.self
+    )
+    guard response.jsonrpc == "2.0", response.id == 0 else {
+      throw Self.messageError(
+        domain: "Solana", message: "Genesis-hash lookup returned a mismatched response.")
+    }
+    if let error = response.error {
+      throw Self.rpcError(
+        domain: "Solana", error: error, fallback: "Genesis-hash lookup failed.")
+    }
+    guard response.result == expectedGenesisHash else {
+      throw Self.messageError(
+        domain: "Solana", message: "RPC endpoint returned the wrong network identity.")
+    }
   }
 
   func fetchSolanaTokenBalances(

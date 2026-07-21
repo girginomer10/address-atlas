@@ -105,6 +105,79 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertTrue(state.notice.contains("could not be verified automatically"))
   }
 
+  func testRemovingExchangeCredentialAtomicallyConsumesRollbackAndMarksRemoteCleanup()
+    async throws
+  {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let accountId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    let connectionId = UUID()
+    let encryptedCredentials = try ExchangeCredentialVault().seal(
+      ExchangeCredentials(apiKey: "key", secret: "secret"),
+      vaultKey: fixture.vaultKey,
+      connectionId: connectionId
+    )
+    var document = VaultDocument(
+      exchangeConnections: [
+        ExchangeConnectionRecord(
+          id: connectionId,
+          provider: .binance,
+          label: "Binance",
+          encryptedCredentials: encryptedCredentials
+        )
+      ],
+      syncState: SyncState(
+        accountId: accountId,
+        serverURL: "https://sync.example",
+        sessionToken: testSessionToken(accountId: accountId)
+      )
+    )
+    let codec = VaultSyncCodec()
+    let snapshot = try codec.seal(
+      document: document,
+      vaultKey: fixture.vaultKey,
+      version: 1,
+      accountId: accountId
+    )
+    try codec.markSynced(document: &document, snapshot: snapshot)
+    let persisted = try fixture.store.saveReturningPersistedDocument(document)
+    _ = try fixture.store.saveRollbackCheckpoint(persisted)
+    let state = AppState(
+      testStore: fixture.store,
+      document: persisted,
+      testVaultKey: fixture.vaultKey
+    )
+
+    XCTAssertTrue(state.hasVaultRollbackCheckpoint)
+    await state.removeExchangeConnection(id: connectionId)
+
+    XCTAssertTrue(state.document.exchangeConnections.isEmpty)
+    XCTAssertTrue(state.document.syncState.pendingExchangeCredentialCleanup)
+    XCTAssertTrue(state.hasUnsyncedLocalChanges)
+    XCTAssertFalse(state.hasVaultRollbackCheckpoint)
+    XCTAssertTrue(state.notice.contains("last remote snapshot may still contain"))
+    XCTAssertFalse(try fixture.store.containsRollbackCheckpoint())
+    let reloaded = try fixture.store.load()
+    XCTAssertTrue(reloaded.exchangeConnections.isEmpty)
+    XCTAssertTrue(reloaded.syncState.pendingExchangeCredentialCleanup)
+
+    let replacement = try codec.seal(
+      document: reloaded,
+      vaultKey: fixture.vaultKey,
+      version: 2,
+      accountId: accountId
+    )
+    let remoteCopy = try codec.open(
+      snapshot: replacement,
+      vaultKey: fixture.vaultKey,
+      expectedAccountId: accountId
+    ).document
+    XCTAssertFalse(remoteCopy.syncState.pendingExchangeCredentialCleanup)
+    var completed = reloaded
+    try codec.markSynced(document: &completed, snapshot: replacement)
+    XCTAssertFalse(completed.syncState.pendingExchangeCredentialCleanup)
+  }
+
   func testUnsupportedAppVersionStopsScanBeforeAnyProviderRequest() async throws {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -206,6 +279,11 @@ extension AppStateNetworkBoundaryTests {
     )
     let http = RecordingHTTPStub { request in
       switch request.url?.host {
+      case "blockstream.info" where request.url?.path.hasSuffix("/block-height/0") == true:
+        return stubJSONResponse(
+          request,
+          "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
+        )
       case "blockstream.info":
         return stubJSONResponse(
           request,
@@ -259,6 +337,11 @@ extension AppStateNetworkBoundaryTests {
     )
     let http = RecordingHTTPStub { request in
       switch request.url?.host {
+      case "blockstream.info" where request.url?.path.hasSuffix("/block-height/0") == true:
+        return stubJSONResponse(
+          request,
+          "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
+        )
       case "blockstream.info":
         return stubJSONResponse(
           request,
@@ -292,11 +375,18 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertEqual(state.error, "")
     XCTAssertTrue(state.notice.hasPrefix("Snapshot saved"))
     let run = try XCTUnwrap(state.document.scanRuns.first)
-    let bitcoin = try XCTUnwrap(run.holdings.first(where: { $0.symbol == "BTC" }))
+    let holdingSummary = run.holdings.map { "\($0.chainId):\($0.symbol)" }
+    let bitcoin = try XCTUnwrap(
+      run.holdings.first(where: { $0.symbol == "BTC" }),
+      "warnings=\(run.warnings); holdings=\(holdingSummary); requests=\(http.requests.compactMap { $0.url?.absoluteString })"
+    )
     XCTAssertEqual(bitcoin.amount, 1)
     XCTAssertEqual(bitcoin.valueUsd, 100_000, accuracy: 0.000_001)
     XCTAssertEqual(bitcoin.walletLabel, "Cold Storage")
-    let usdc = try XCTUnwrap(run.holdings.first(where: { $0.symbol == "USDC" }))
+    let usdc = try XCTUnwrap(
+      run.holdings.first(where: { $0.symbol == "USDC" }),
+      "warnings=\(run.warnings); connectionError=\(state.document.exchangeConnections.first?.lastError ?? "nil"); requests=\(http.requests.compactMap { $0.url?.absoluteString })"
+    )
     XCTAssertEqual(usdc.amount, 5, accuracy: 0.000_001)
     XCTAssertEqual(usdc.valueUsd, 5, accuracy: 0.000_001)
     XCTAssertEqual(run.totalUsd, 100_005, accuracy: 0.001)

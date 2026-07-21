@@ -383,6 +383,18 @@ public struct JSONHTTPClient: Sendable {
     return (try JSONDecoder.addressAtlas.decode(T.self, from: data), response)
   }
 
+  func getRawResponse(
+    _ url: URL,
+    headers: [String: String] = [:]
+  ) async throws -> (data: Data, response: HTTPURLResponse) {
+    var request = URLRequest(url: url)
+    request.timeoutInterval = 30
+    for (field, value) in headers {
+      request.setValue(value, forHTTPHeaderField: field)
+    }
+    return try await send(request)
+  }
+
   public func post<T: Decodable, B: Encodable>(_ url: URL, body: B, as type: T.Type = T.self)
     async throws -> T
   {

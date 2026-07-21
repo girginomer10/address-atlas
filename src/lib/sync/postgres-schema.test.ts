@@ -4,10 +4,13 @@ const mocks = vi.hoisted(() => ({
   migrationLedgerExists: vi.fn(),
   assertAppliedMigrationHistory: vi.fn(),
   assertKnownUnversionedSchema: vi.fn(),
+  assertPasskeyCredentialStoragePolicies: vi.fn(),
+  assertPasskeyStoredValueStorageSafety: vi.fn(),
   assertSyncSchemaReady: vi.fn(),
   assertSyncSchemaVersionReady: vi.fn(),
   assertVaultEnvelopeStoragePolicy: vi.fn(),
   assertVaultStoredValueStorageSafety: vi.fn(),
+  getPasskeyCredentialStoragePolicies: vi.fn(),
   getVaultEnvelopeStoragePolicy: vi.fn()
 }));
 
@@ -15,10 +18,13 @@ vi.mock("./postgres-readiness", () => ({
   migrationLedgerExists: mocks.migrationLedgerExists,
   assertAppliedMigrationHistory: mocks.assertAppliedMigrationHistory,
   assertKnownUnversionedSchema: mocks.assertKnownUnversionedSchema,
+  assertPasskeyCredentialStoragePolicies: mocks.assertPasskeyCredentialStoragePolicies,
+  assertPasskeyStoredValueStorageSafety: mocks.assertPasskeyStoredValueStorageSafety,
   assertSyncSchemaReady: mocks.assertSyncSchemaReady,
   assertSyncSchemaVersionReady: mocks.assertSyncSchemaVersionReady,
   assertVaultEnvelopeStoragePolicy: mocks.assertVaultEnvelopeStoragePolicy,
   assertVaultStoredValueStorageSafety: mocks.assertVaultStoredValueStorageSafety,
+  getPasskeyCredentialStoragePolicies: mocks.getPasskeyCredentialStoragePolicies,
   getVaultEnvelopeStoragePolicy: mocks.getVaultEnvelopeStoragePolicy
 }));
 
@@ -41,8 +47,14 @@ describe("versioned schema migration executor", () => {
     mocks.assertKnownUnversionedSchema.mockResolvedValue("empty");
     mocks.assertSyncSchemaReady.mockResolvedValue(undefined);
     mocks.assertSyncSchemaVersionReady.mockResolvedValue(undefined);
+    mocks.assertPasskeyCredentialStoragePolicies.mockResolvedValue(undefined);
+    mocks.assertPasskeyStoredValueStorageSafety.mockResolvedValue(undefined);
     mocks.assertVaultEnvelopeStoragePolicy.mockResolvedValue(undefined);
     mocks.assertVaultStoredValueStorageSafety.mockResolvedValue(undefined);
+    mocks.getPasskeyCredentialStoragePolicies.mockResolvedValue({
+      id: "x",
+      publicKeyBase64url: "x"
+    });
     mocks.getVaultEnvelopeStoragePolicy.mockResolvedValue("x");
     query.mockImplementation(async (sql: string) => {
       if (sql.includes("SELECT reconciled_contract_version")) {
@@ -69,8 +81,16 @@ describe("versioned schema migration executor", () => {
     expect(mocks.assertKnownUnversionedSchema).toHaveBeenCalledOnce();
     expect(mocks.assertSyncSchemaVersionReady.mock.calls.map(([, version]) => version))
       .toEqual([1, 1, 2, 2, 3, 3, 3]);
+    expect(mocks.assertPasskeyCredentialStoragePolicies).toHaveBeenCalledOnce();
+    expect(mocks.assertPasskeyStoredValueStorageSafety).toHaveBeenCalledOnce();
     expect(mocks.assertVaultEnvelopeStoragePolicy).toHaveBeenCalledOnce();
     expect(mocks.assertVaultStoredValueStorageSafety).toHaveBeenCalledOnce();
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).includes("ALTER TABLE passkey_credentials ALTER COLUMN id SET STORAGE EXTERNAL")
+    )).toBe(true);
+    expect(query.mock.calls.some(([sql]) => String(sql).includes(
+      "ALTER TABLE passkey_credentials ALTER COLUMN public_key_base64url SET STORAGE EXTERNAL"
+    ))).toBe(true);
     expect(mocks.assertSyncSchemaReady).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledWith();
   });
@@ -78,6 +98,10 @@ describe("versioned schema migration executor", () => {
   it("uses an authoritative complete ledger without replaying DDL", async () => {
     mocks.migrationLedgerExists.mockResolvedValue(true);
     mocks.assertAppliedMigrationHistory.mockResolvedValue(SYNC_MIGRATIONS.length);
+    mocks.getPasskeyCredentialStoragePolicies.mockResolvedValue({
+      id: "e",
+      publicKeyBase64url: "e"
+    });
     mocks.getVaultEnvelopeStoragePolicy.mockResolvedValue("e");
     query.mockImplementation(async (sql: string) => {
       if (sql.includes("SELECT reconciled_contract_version")) {
@@ -96,6 +120,9 @@ describe("versioned schema migration executor", () => {
     expect(query.mock.calls.filter(([sql]) => sql === "BEGIN")).toHaveLength(2);
     expect(query.mock.calls.some(([sql]) =>
       String(sql).includes("ALTER TABLE vault_snapshots ALTER COLUMN envelope SET STORAGE EXTERNAL")
+    )).toBe(false);
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).includes("ALTER TABLE passkey_credentials ALTER COLUMN")
     )).toBe(false);
     expect(mocks.assertKnownUnversionedSchema).not.toHaveBeenCalled();
     const reconciliations = query.mock.calls.filter(([sql]) =>

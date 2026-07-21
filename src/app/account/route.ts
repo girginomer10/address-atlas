@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { AuthenticationDatabaseCapacityError } from "@/lib/sync/auth-database-concurrency";
 import {
   diagnosticHeaders,
   recordSecurityEvent,
@@ -54,7 +55,8 @@ export async function DELETE(request: NextRequest) {
     const deletion = await deleteBearerAccount(
       request.headers.get("authorization"),
       idempotencyKeyDigest,
-      request.headers.get("x-address-atlas-confirm") === "delete-account"
+      request.headers.get("x-address-atlas-confirm") === "delete-account",
+      client
     );
     recordSecurityEvent("account.deleted", diagnostics, {
       status: 200,
@@ -67,27 +69,40 @@ export async function DELETE(request: NextRequest) {
     );
   } catch (error) {
     const confirmationFailure = error instanceof AccountDeletionConfirmationError;
+    const capacityFailure = error instanceof AuthenticationDatabaseCapacityError;
     const authenticationFailure = error instanceof TokenValidationError;
+    const status = confirmationFailure
+      ? 400
+      : capacityFailure ? 429 : authenticationFailure ? 401 : 500;
     recordSecurityEvent(
-      authenticationFailure ? "session.rejected" : "account.deletion_rejected",
+      capacityFailure
+        ? "auth.rate_limited"
+        : authenticationFailure ? "session.rejected" : "account.deletion_rejected",
       diagnostics,
       {
-        status: confirmationFailure ? 400 : authenticationFailure ? 401 : 500,
+        status,
         reason: confirmationFailure
           ? "confirmation_required"
-          : authenticationFailure ? "invalid_session" : "internal_error",
-        severity: confirmationFailure || authenticationFailure ? "warn" : "error"
+          : capacityFailure
+            ? "account_deletion_database_concurrency_limit"
+            : authenticationFailure ? "invalid_session" : "internal_error",
+        severity: status >= 500 ? "error" : "warn"
       }
     );
     return NextResponse.json(
       {
         error: confirmationFailure
           ? "Account deletion confirmation is required."
-          : authenticationFailure ? "Authentication required." : "Account could not be deleted."
+          : capacityFailure
+            ? "Too many requests."
+            : authenticationFailure ? "Authentication required." : "Account could not be deleted."
       },
       {
-        status: confirmationFailure ? 400 : authenticationFailure ? 401 : 500,
-        headers: diagnosticHeaders(diagnostics, { "cache-control": "no-store" })
+        status,
+        headers: diagnosticHeaders(diagnostics, {
+          "cache-control": "no-store",
+          ...(capacityFailure ? { "retry-after": "1" } : {})
+        })
       }
     );
   }

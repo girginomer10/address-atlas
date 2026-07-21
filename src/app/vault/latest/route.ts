@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { AuthenticationDatabaseCapacityError } from "@/lib/sync/auth-database-concurrency";
 import {
   assertEnvelopeChecksum,
   assertNoPlaintextLeak,
@@ -63,7 +64,10 @@ export async function GET(request: NextRequest) {
     // revoked-but-still-signed tokens. Live authentication then gates the
     // distinct account/global quota below, so rejected public traffic cannot
     // consume authenticated account capacity.
-    const session = await authenticateBearerSession(request.headers.get("authorization"));
+    const session = await authenticateBearerSession(
+      request.headers.get("authorization"),
+      client
+    );
     if (!rateLimitMany([
       { key: "vault-get:global", limit: 3_000, windowMs: 60_000 },
       { key: `vault-get:account:${session.userId}`, limit: 120, windowMs: 60_000 }
@@ -152,6 +156,13 @@ export async function GET(request: NextRequest) {
     releaseConcurrency = undefined;
     return response;
   } catch (error) {
+    if (error instanceof AuthenticationDatabaseCapacityError) {
+      recordSecurityEvent("auth.rate_limited", diagnostics, {
+        status: 429,
+        reason: "vault_read_auth_database_concurrency_limit"
+      });
+      return rateLimitedResponse(diagnostics, 1);
+    }
     const authenticationFailure = error instanceof TokenValidationError || error instanceof VaultAccountMissingError;
     recordSecurityEvent(authenticationFailure ? "session.rejected" : "vault.load_failed", diagnostics, {
       status: authenticationFailure ? 401 : 500,
@@ -302,7 +313,10 @@ export async function PUT(request: NextRequest) {
     // Authenticate before reading any body bytes. Once authenticated, read and
     // durably charge ingress before applying content-type, JSON, validation,
     // replay, conflict, or in-memory rate-limit semantics.
-    const session = await authenticateBearerSession(request.headers.get("authorization"));
+    const session = await authenticateBearerSession(
+      request.headers.get("authorization"),
+      client
+    );
     const concurrencyPermit = acquireConcurrencyMany([
       { key: "vault-put-active:global", limit: 8 },
       { key: `vault-put-active:client:${client}`, limit: 2 },
@@ -364,6 +378,8 @@ export async function PUT(request: NextRequest) {
           "cache-control": "no-store",
           ...(error instanceof VaultQuotaError
             ? { "retry-after": String(secondsUntilNextUTCDay()) }
+            : error instanceof AuthenticationDatabaseCapacityError
+              ? { "retry-after": "1" }
             : error instanceof VaultStorageIntegrityError
               ? { "retry-after": "60" }
             : {})
@@ -404,6 +420,7 @@ function validateUploadedSnapshot(input: unknown): RemoteVaultSnapshot {
 }
 
 function vaultErrorStatus(error: unknown) {
+  if (error instanceof AuthenticationDatabaseCapacityError) return 429;
   if (error instanceof TokenValidationError || error instanceof VaultAccountMissingError) return 401;
   if (error instanceof RequestBodyError) return error.status;
   if (error instanceof VaultValidationError) return 400;
@@ -415,6 +432,7 @@ function vaultErrorStatus(error: unknown) {
 }
 
 function vaultErrorMessage(error: unknown) {
+  if (error instanceof AuthenticationDatabaseCapacityError) return "Too many requests.";
   if (error instanceof TokenValidationError || error instanceof VaultAccountMissingError) {
     return "Authentication required.";
   }
@@ -436,7 +454,12 @@ function recordVaultFailure(
   status: number,
   diagnostics: ReturnType<typeof requestDiagnostics>
 ) {
-  if (error instanceof TokenValidationError || error instanceof VaultAccountMissingError) {
+  if (error instanceof AuthenticationDatabaseCapacityError) {
+    recordSecurityEvent("auth.rate_limited", diagnostics, {
+      status,
+      reason: "vault_write_auth_database_concurrency_limit"
+    });
+  } else if (error instanceof TokenValidationError || error instanceof VaultAccountMissingError) {
     recordSecurityEvent("session.rejected", diagnostics, {
       status,
       reason: "invalid_session"
@@ -478,12 +501,18 @@ function recordVaultFailure(
   }
 }
 
-function rateLimitedResponse(diagnostics: ReturnType<typeof requestDiagnostics>) {
+function rateLimitedResponse(
+  diagnostics: ReturnType<typeof requestDiagnostics>,
+  retryAfterSeconds = 60
+) {
   return NextResponse.json(
     { error: "Too many requests." },
     {
       status: 429,
-      headers: diagnosticHeaders(diagnostics, { "retry-after": "60", "cache-control": "no-store" })
+      headers: diagnosticHeaders(diagnostics, {
+        "retry-after": String(retryAfterSeconds),
+        "cache-control": "no-store"
+      })
     }
   );
 }

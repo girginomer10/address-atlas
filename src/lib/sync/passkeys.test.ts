@@ -268,7 +268,7 @@ describe("passkey account safety", () => {
     expect(mocks.createSessionGrant).not.toHaveBeenCalled();
   });
 
-  it("locks a credential through verification and updates its counter monotonically", async () => {
+  it("locks the parent account before the credential and updates its counter monotonically", async () => {
     mocks.readChallengeToken.mockReturnValue({
       mode: "authenticate",
       challenge: CHALLENGE,
@@ -296,12 +296,20 @@ describe("passkey account safety", () => {
     })).resolves.toEqual({ verified: true, userId: USER_ID, sessionToken: "session-token" });
 
     const statements = mocks.clientQuery.mock.calls.map(([sql]) => String(sql));
-    const selectIndex = statements.findIndex((sql) => sql.includes("FOR UPDATE"));
+    const ownerIndex = statements.findIndex((sql) => sql.includes("SELECT credential.user_id"));
+    const accountLockIndex = statements.findIndex((sql) => sql.includes("FOR KEY SHARE OF account"));
+    const credentialLockIndex = statements.findIndex((sql) => sql.includes("FOR UPDATE OF credential"));
     const verifyUpdateIndex = statements.findIndex((sql) => sql.includes("GREATEST(counter, $2)"));
     const commitIndex = statements.findIndex((sql) => sql === "COMMIT");
-    expect(selectIndex).toBeGreaterThan(-1);
-    expect(verifyUpdateIndex).toBeGreaterThan(selectIndex);
+    expect(ownerIndex).toBeGreaterThan(-1);
+    expect(accountLockIndex).toBeGreaterThan(ownerIndex);
+    expect(credentialLockIndex).toBeGreaterThan(accountLockIndex);
+    expect(verifyUpdateIndex).toBeGreaterThan(credentialLockIndex);
     expect(commitIndex).toBeGreaterThan(verifyUpdateIndex);
+    expect(mocks.clientQuery).toHaveBeenCalledWith(
+      expect.stringContaining("credential.user_id = $2"),
+      [CREDENTIAL_ID, USER_ID]
+    );
     expect(mocks.clientQuery).toHaveBeenCalledWith(
       expect.stringContaining("GREATEST(counter, $2)"),
       [CREDENTIAL_ID, 9]

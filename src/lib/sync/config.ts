@@ -1,5 +1,6 @@
 import { MAX_SNAPSHOT_REQUEST_BYTES } from "./envelope";
 import { OperationalError } from "./diagnostics";
+import { isIP } from "node:net";
 import { parse as parseDomain } from "tldts";
 
 export class SyncConfigurationError extends OperationalError {
@@ -146,7 +147,7 @@ export function getSyncDatabaseConfig(): SyncDatabaseConfig {
 
 /** Read the shared runtime-pool ceiling without parsing or exposing its URL. */
 export function getSyncDatabasePoolSize() {
-  // Public verification may use at most half the pool. Requiring two clients
+  // Public authentication may use at most half the pool. Requiring two clients
   // keeps at least one slot available for readiness, vault, and account work.
   return boundedIntegerFromEnv("SYNC_DB_POOL_SIZE", 10, 2, 50);
 }
@@ -190,10 +191,12 @@ function parseDatabaseConfig(connectionString: string, sourceName: string): Sync
     let decodedUsername: string;
     let decodedPassword: string;
     let decodedDatabase: string;
+    let decodedHostname: string;
     try {
       decodedUsername = decodeURIComponent(databaseURL.username);
       decodedPassword = decodeURIComponent(databaseURL.password);
       decodedDatabase = decodeURIComponent(databaseURL.pathname.slice(1));
+      decodedHostname = decodeURIComponent(databaseURL.hostname);
     } catch {
       throw new SyncConfigurationError(`${sourceName} contains invalid credential or database encoding.`);
     }
@@ -247,6 +250,20 @@ function parseDatabaseConfig(connectionString: string, sourceName: string): Sync
         `${sourceName} must include sslmode=verify-full whenever PostgreSQL TLS parameters are present.`
       );
     }
+    const explicitLocalEndpoint = isExplicitPlaintextDatabaseEndpoint(
+      decodedHostname,
+      databaseURL.port
+    );
+    if (!explicitLocalEndpoint && isDatabaseIPLiteral(decodedHostname)) {
+      throw new SyncConfigurationError(
+        `${sourceName} must use a DNS hostname, not a remote IP literal, so PostgreSQL server identity is verified.`
+      );
+    }
+    if (!seenParameters.has("sslmode") && !explicitLocalEndpoint) {
+      throw new SyncConfigurationError(
+        `${sourceName} must use sslmode=verify-full for a remote production PostgreSQL endpoint.`
+      );
+    }
   }
 
   const statementTimeoutMs = boundedIntegerFromEnv("SYNC_DB_STATEMENT_TIMEOUT_MS", 10_000, 500, 120_000);
@@ -265,6 +282,21 @@ function parseDatabaseConfig(connectionString: string, sourceName: string): Sync
     statementTimeoutMs,
     queryTimeoutMs
   };
+}
+
+function isExplicitPlaintextDatabaseEndpoint(hostname: string, port: string) {
+  if (["postgres", "localhost", "127.0.0.1", "[::1]"].includes(hostname)) return true;
+  return !port
+    && hostname.startsWith("/")
+    && hostname.length <= 1_024
+    && !/[\u0000-\u001f\u007f\\]/.test(hostname);
+}
+
+function isDatabaseIPLiteral(hostname: string) {
+  const candidate = hostname.startsWith("[") && hostname.endsWith("]")
+    ? hostname.slice(1, -1)
+    : hostname;
+  return isIP(candidate) !== 0;
 }
 
 export function getSyncLimitConfig(): SyncLimitConfig {

@@ -10,10 +10,11 @@ private let syncAccountC = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 
 final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
   func testDecodingSyncStateNormalizesValidUUIDAndClearsMalformedCredentialState() throws {
+    let validToken = testSessionToken(accountId: syncAccountA)
     let valid = SyncState(
       accountId: syncAccountA.uppercased(),
       serverURL: "https://sync.example",
-      sessionToken: "valid-token",
+      sessionToken: validToken,
       latestRemoteVersion: 7,
       lastSyncedAt: Date(timeIntervalSince1970: 100),
       lastChecksum: "snapshot",
@@ -24,7 +25,7 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
       from: JSONEncoder.addressAtlas.encode(valid)
     )
     XCTAssertEqual(decodedValid.accountId, syncAccountA)
-    XCTAssertEqual(decodedValid.sessionToken, "valid-token")
+    XCTAssertEqual(decodedValid.sessionToken, validToken)
     XCTAssertEqual(decodedValid.latestRemoteVersion, 7)
 
     let malformed = SyncState(
@@ -167,7 +168,9 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
     let vaultKey = try VaultCrypto().generateVaultKey()
     let accountId = syncAccountA
 
-    for warningLength in [0, 1, 2, 3, 31, 512] {
+    for warningLength in [1, 2, 3, 31, 160] {
+      let warning = String(repeating: "x ", count: warningLength)
+        .trimmingCharacters(in: .whitespaces)
       let document = VaultDocument(
         scanRuns: [
           ScanRunRecord(
@@ -175,7 +178,7 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
             totalUsd: 0,
             inputCount: 0,
             holdings: [],
-            warnings: [String(repeating: "x", count: warningLength)]
+            warnings: [warning]
           )
         ],
         syncState: SyncState(
@@ -210,20 +213,27 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
     let codec = VaultSyncCodec()
     let vaultKey = try VaultCrypto().generateVaultKey()
     let accountId = syncAccountB
-    var document = VaultDocument(syncState: SyncState(accountId: accountId))
+    var predecessor = SyncState(accountId: accountId)
+    predecessor.markSynced(
+      version: 99,
+      snapshotChecksum: String(repeating: "a", count: 64),
+      contentChecksum: String(repeating: "b", count: 64),
+      at: Date(timeIntervalSince1970: 1_699_999_000)
+    )
+    var document = VaultDocument(syncState: predecessor)
     let beforeMark = try codec.encodedSnapshotByteCount(
       document: document,
       accountId: accountId
     )
     let projectedAfterMark = try codec.projectedPostSyncSnapshotByteCount(
       document: document,
-      version: 7,
+      version: 100,
       accountId: accountId
     )
     let snapshot = try codec.seal(
       document: document,
       vaultKey: vaultKey,
-      version: 7,
+      version: 100,
       accountId: accountId
     )
 
@@ -268,14 +278,13 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
         accountId: syncAccountC
       )
     ) { error in
+      // Semantic validation is intentionally earlier than encryption: a single
+      // multi-megabyte warning is not a supported vault graph even though the
+      // wire-size projection can still measure it deterministically.
       XCTAssertEqual(
-        error as? VaultSyncSnapshotTooLargeError,
-        VaultSyncSnapshotTooLargeError(
-          actualByteCount: actual,
-          maximumByteCount: VaultSyncCodec.maximumSnapshotByteCount
-        )
+        error as? VaultDocumentSemanticError,
+        VaultDocumentSemanticError(field: "scanRuns[0].warnings[0]")
       )
-      XCTAssertTrue(error.localizedDescription.contains("\(actual) bytes"))
     }
   }
 
@@ -330,8 +339,15 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
     let vaultKey = try crypto.generateVaultKey()
     let codec = VaultSyncCodec(crypto: crypto)
     let accountId = syncAccountA
+    var predecessor = SyncState(accountId: accountId)
+    predecessor.markSynced(
+      version: 6,
+      snapshotChecksum: String(repeating: "c", count: 64),
+      contentChecksum: String(repeating: "d", count: 64),
+      at: Date(timeIntervalSince1970: 1_700_000_000)
+    )
     let snapshot = try codec.seal(
-      document: VaultDocument(syncState: SyncState(accountId: accountId)),
+      document: VaultDocument(syncState: predecessor),
       vaultKey: vaultKey,
       version: 7,
       accountId: accountId
@@ -350,6 +366,22 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
       try codec.open(snapshot: relabeled, vaultKey: vaultKey, expectedAccountId: accountId)
     ) { error in
       XCTAssertEqual(error as? VaultCryptoError, .authenticationFailed)
+    }
+  }
+
+  func testSealRejectsAVersionGapBeforeProducingUnopenableCiphertext() throws {
+    let codec = VaultSyncCodec()
+    let vaultKey = try VaultCrypto().generateVaultKey()
+
+    XCTAssertThrowsError(
+      try codec.seal(
+        document: VaultDocument(),
+        vaultKey: vaultKey,
+        version: 2,
+        accountId: syncAccountA
+      )
+    ) { error in
+      XCTAssertEqual(error as? VaultSyncCodecError, .legacyMetadataMismatch)
     }
   }
 
@@ -376,8 +408,19 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
     let accountId = syncAccountC
     let document = VaultDocument(
       schemaVersion: 1,
-      wallets: [WalletRecord(label: "Legacy", address: "0x123", chainKind: .evm)],
-      syncState: SyncState(accountId: accountId, latestRemoteVersion: 4)
+      wallets: [
+        WalletRecord(
+          label: "Legacy",
+          address: "0x0000000000000000000000000000000000000123",
+          chainKind: .evm
+        )
+      ],
+      syncState: SyncState(
+        accountId: accountId,
+        latestRemoteVersion: 4,
+        lastSyncedAt: Date(timeIntervalSince1970: 1_700_000_000),
+        lastChecksum: String(repeating: "e", count: 64)
+      )
     )
     let key = try crypto.deriveKey(from: vaultKey, purpose: .syncBlob)
     let envelope = try crypto.sealJSON(document, with: key, keyId: "sync-v1", schemaVersion: 1)
@@ -433,15 +476,23 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
       expectedAccountId: syncAccountA
     )
     XCTAssertNil(opened.document.syncState.accountDeletionIdempotencyKey)
-    document.wallets.append(WalletRecord(label: "New", address: "0xabc", chainKind: .evm))
+    document.wallets.append(
+      WalletRecord(
+        label: "New",
+        address: "0x0000000000000000000000000000000000000abc",
+        chainKind: .evm
+      )
+    )
     XCTAssertTrue(try codec.hasLocalChanges(in: document))
   }
 
   func testChangingServerOrAccountClearsTokenAndRemoteBaseline() {
+    let tokenA = testSessionToken(accountId: syncAccountA)
+    let tokenB = testSessionToken(accountId: syncAccountB)
     var state = SyncState(
       accountId: syncAccountA,
       serverURL: "https://sync-a.example",
-      sessionToken: "token-a",
+      sessionToken: tokenA,
       latestRemoteVersion: 9,
       lastChecksum: "snapshot-a",
       lastSyncedContentChecksum: "content-a",
@@ -459,9 +510,9 @@ final class VaultSyncAuthenticatedMetadataTests: XCTestCase {
     XCTAssertNil(state.accountDeletionIdempotencyKey)
 
     XCTAssertTrue(
-      state.connect(accountId: syncAccountB, serverURL: state.serverURL, sessionToken: "token-b"))
+      state.connect(accountId: syncAccountB, serverURL: state.serverURL, sessionToken: tokenB))
     XCTAssertEqual(state.accountId, syncAccountB)
-    XCTAssertEqual(state.sessionToken, "token-b")
+    XCTAssertEqual(state.sessionToken, tokenB)
     XCTAssertEqual(state.latestRemoteVersion, 0)
 
     state.latestRemoteVersion = 4

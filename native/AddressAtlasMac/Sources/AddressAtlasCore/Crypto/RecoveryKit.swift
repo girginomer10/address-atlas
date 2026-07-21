@@ -58,6 +58,32 @@ public struct RecoveryKitExport: Equatable, Sendable {
 public struct RecoveryKitCodec: Sendable {
   public init() {}
 
+  /// The recovery code is returned only after the encrypted recovery document
+  /// has crossed every file and directory durability barrier. A visible file
+  /// from a failed late barrier is deliberately not accompanied by its code.
+  public func export(vaultKey: Data, to destination: URL) throws -> String {
+    try export(
+      vaultKey: vaultKey,
+      to: destination,
+      publicationOperations: .production
+    )
+  }
+
+  func export(
+    vaultKey: Data,
+    to destination: URL,
+    publicationOperations: AtomicFilePublicationOperations
+  ) throws -> String {
+    let output = try create(vaultKey: vaultKey)
+    let data = try JSONEncoder.addressAtlas.encode(output.document)
+    try AtomicFilePublisher.publish(
+      data,
+      to: destination,
+      operations: publicationOperations
+    )
+    return output.recoveryCode
+  }
+
   public func create(vaultKey: Data) throws -> RecoveryKitExport {
     guard vaultKey.count == VaultCrypto.vaultKeyByteCount else {
       throw RecoveryKitError.invalidVaultKey

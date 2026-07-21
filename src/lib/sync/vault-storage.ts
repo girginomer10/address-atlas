@@ -4,6 +4,10 @@ import { OperationalError } from "./diagnostics";
 import type { RemoteVaultSnapshot } from "./envelope";
 import { getSyncPool } from "./postgres";
 import { STORAGE_RECONCILIATION_VERSION } from "./postgres-migrations";
+import {
+  getStorageLedgerAuditState,
+  scheduleStorageLedgerIntegrityAudit
+} from "./storage-ledger-integrity";
 
 export class VaultConflictError extends Error {
   constructor() {
@@ -75,6 +79,7 @@ export interface VaultIngressAdmission {
  * account/global concurrency permits and are all charged after they are read.
  */
 export async function assertVaultIngressCapacity(userId: string): Promise<VaultIngressAdmission> {
+  assertProcessStorageLedgerWriteReady();
   const client = await getSyncPool().connect();
   let discardClient = false;
   let transactionOpen = false;
@@ -241,6 +246,7 @@ export async function saveVaultSnapshot(
   userId: string,
   snapshot: RemoteVaultSnapshot
 ): Promise<VaultSaveResult> {
+  assertProcessStorageLedgerWriteReady();
   const client = await getSyncPool().connect();
   let discardClient = false;
   let transactionOpen = false;
@@ -337,6 +343,11 @@ async function chargeGlobalStorageCapacity(client: PoolClient, byteDelta: number
   if (charged.rowCount !== 0) return;
   await assertStorageLedgerWriteReady(client);
   throw new VaultStorageCapacityError();
+}
+
+function assertProcessStorageLedgerWriteReady() {
+  scheduleStorageLedgerIntegrityAudit();
+  if (getStorageLedgerAuditState() !== "valid") throw new VaultStorageIntegrityError();
 }
 
 async function assertStorageLedgerWriteReady(client: PoolClient) {

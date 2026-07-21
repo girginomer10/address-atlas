@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { AuthenticationDatabaseCapacityError } from "@/lib/sync/auth-database-concurrency";
 import {
   diagnosticHeaders,
   recordSecurityEvent,
@@ -34,7 +35,7 @@ export async function DELETE(request: NextRequest) {
     );
   }
   try {
-    await revokeBearerSession(request.headers.get("authorization"));
+    await revokeBearerSession(request.headers.get("authorization"), client);
     recordSecurityEvent("session.revoked", diagnostics, {
       status: 200,
       reason: "self_service",
@@ -45,17 +46,28 @@ export async function DELETE(request: NextRequest) {
       { headers: diagnosticHeaders(diagnostics, { "cache-control": "no-store" }) }
     );
   } catch (error) {
+    const capacityFailure = error instanceof AuthenticationDatabaseCapacityError;
     const authenticationFailure = error instanceof TokenValidationError;
-    recordSecurityEvent("session.rejected", diagnostics, {
-      status: authenticationFailure ? 401 : 500,
-      reason: authenticationFailure ? "invalid_session" : "internal_error",
-      severity: authenticationFailure ? "warn" : "error"
+    const status = capacityFailure ? 429 : authenticationFailure ? 401 : 500;
+    recordSecurityEvent(capacityFailure ? "auth.rate_limited" : "session.rejected", diagnostics, {
+      status,
+      reason: capacityFailure
+        ? "session_revocation_database_concurrency_limit"
+        : authenticationFailure ? "invalid_session" : "internal_error",
+      severity: status >= 500 ? "error" : "warn"
     });
     return NextResponse.json(
-      { error: authenticationFailure ? "Authentication required." : "Session could not be revoked." },
       {
-        status: authenticationFailure ? 401 : 500,
-        headers: diagnosticHeaders(diagnostics, { "cache-control": "no-store" })
+        error: capacityFailure
+          ? "Too many requests."
+          : authenticationFailure ? "Authentication required." : "Session could not be revoked."
+      },
+      {
+        status,
+        headers: diagnosticHeaders(diagnostics, {
+          "cache-control": "no-store",
+          ...(capacityFailure ? { "retry-after": "1" } : {})
+        })
       }
     );
   }

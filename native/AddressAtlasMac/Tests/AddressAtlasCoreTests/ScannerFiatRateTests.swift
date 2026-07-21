@@ -79,6 +79,7 @@ final class ScannerFiatRateTests: XCTestCase {
     XCTAssertEqual(holding.amount, 1e308)
     XCTAssertEqual(holding.priceUsd, 1e308)
     XCTAssertEqual(holding.valueUsd, 0)
+    XCTAssertEqual(holding.pricingStatus, .valuationUnavailable)
     XCTAssertNil(holding.change24h)
     XCTAssertTrue(holding.valueUsd.isFinite)
     XCTAssertTrue(valuationOverflow.warnings.contains { $0.contains("USD valuation exceeded") })
@@ -155,6 +156,14 @@ final class ScannerFiatRateTests: XCTestCase {
     XCTAssertEqual(result.holdings.count, 2)
     XCTAssertEqual(result.holdings.first(where: { $0.symbol == "BTC" })?.valueUsd, 50_000)
     XCTAssertEqual(result.holdings.first(where: { $0.symbol == "EUR" })?.valueUsd, 0)
+    XCTAssertEqual(
+      result.holdings.first(where: { $0.symbol == "BTC" })?.pricingStatus,
+      .priced
+    )
+    XCTAssertEqual(
+      result.holdings.first(where: { $0.symbol == "EUR" })?.pricingStatus,
+      .unpriced
+    )
     XCTAssertTrue(
       result.warnings.contains(where: { $0.contains("Fiat-to-USD rates") && $0.contains("EUR") }))
   }

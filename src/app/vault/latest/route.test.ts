@@ -51,6 +51,7 @@ vi.mock("@/lib/sync/vault-storage", async (importOriginal) => ({
 }));
 
 import { GET, HEAD, PUT } from "./route";
+import { AuthenticationDatabaseCapacityError } from "@/lib/sync/auth-database-concurrency";
 import { TokenValidationError } from "@/lib/sync/tokens";
 import {
   VaultConflictError,
@@ -820,6 +821,37 @@ describe("vault latest route", () => {
       { key: "vault-put-preflight:global", limit: 300, windowMs: 60_000 },
       { key: "vault-put-preflight:client:client", limit: 10, windowMs: 60_000 }
     ]);
+    expect(mocks.chargeVaultIngress).not.toHaveBeenCalled();
+    expect(mocks.saveVaultSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("returns a short retry when read authentication database capacity is saturated", async () => {
+    mocks.authenticateBearerSession.mockRejectedValueOnce(
+      new AuthenticationDatabaseCapacityError()
+    );
+
+    const response = await GET(new NextRequest("http://localhost/vault/latest", {
+      headers: { authorization: "Bearer token" }
+    }));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("1");
+    expect(await response.json()).toEqual({ error: "Too many requests." });
+    expect(mocks.authenticateBearerSession).toHaveBeenCalledWith("Bearer token", "client");
+    expect(mocks.dbQuery).not.toHaveBeenCalled();
+  });
+
+  it("returns a short retry before reading an upload when auth capacity is saturated", async () => {
+    mocks.authenticateBearerSession.mockRejectedValueOnce(
+      new AuthenticationDatabaseCapacityError()
+    );
+
+    const response = await PUT(request(snapshot()));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("1");
+    expect(await response.json()).toEqual({ error: "Too many requests." });
+    expect(mocks.authenticateBearerSession).toHaveBeenCalledWith("Bearer token", "client");
     expect(mocks.chargeVaultIngress).not.toHaveBeenCalled();
     expect(mocks.saveVaultSnapshot).not.toHaveBeenCalled();
   });

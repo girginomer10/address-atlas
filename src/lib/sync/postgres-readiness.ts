@@ -165,6 +165,7 @@ export async function assertSyncSchemaReady(
     throw schemaError(`migration version ${appliedVersion} has no schema contract`);
   }
   await assertSchemaSurface(database, tableNames, runtimeIdentity, appliedVersion);
+  if (appliedVersion >= 1) await assertPasskeyCredentialStoragePolicies(database);
   if (appliedVersion >= 2) await assertVaultEnvelopeStoragePolicy(database);
   await assertStorageState(database, options.allowStorageReconciliationPending === true);
 }
@@ -394,7 +395,8 @@ async function assertSchemaSurface(
   for (const expected of expectedConstraints) {
     const actual = actualConstraints.get(`${expected.table}.${expected.name}`);
     const expectedValidated = expected.validatedInVersion === undefined
-      || expected.validatedInVersion <= appliedVersion;
+      || (expected.validatedInVersion !== null
+        && expected.validatedInVersion <= appliedVersion);
     if (!actual
         || actual.constraint_type !== expected.type
         || !sameOrderedValues(actual.columns, expected.columns)
@@ -872,6 +874,76 @@ export async function assertVaultStoredValueStorageSafety(database: Queryable) {
   if (result.rows.length !== 1
       || result.rows[0]?.unsafe_stored_value_exists !== false) {
     throw schemaError("stored vault variable-width data is not projection-safe");
+  }
+}
+
+interface PasskeyCredentialStoragePolicies {
+  readonly id: string;
+  readonly publicKeyBase64url: string;
+}
+
+/**
+ * Authentication deliberately checks pg_column_compression() before selecting
+ * either variable-width credential value. Keeping both columns EXTERNAL makes
+ * that guard stable even for the largest credential IDs and RSA COSE keys.
+ */
+export async function getPasskeyCredentialStoragePolicies(
+  database: Queryable
+): Promise<PasskeyCredentialStoragePolicies | null> {
+  const result = await database.query<{
+    column_name: string;
+    storage_policy: string;
+  }>(
+    `SELECT attribute.attname AS column_name,
+            attribute.attstorage::text AS storage_policy
+     FROM pg_catalog.pg_class AS relation
+     JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+     JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = relation.oid
+     WHERE namespace.nspname = current_schema()
+       AND relation.relname = 'passkey_credentials'
+       AND relation.relkind = 'r'
+       AND attribute.attname = ANY($1::text[])
+       AND attribute.attnum > 0
+       AND NOT attribute.attisdropped
+     ORDER BY attribute.attname`,
+    [["id", "public_key_base64url"]]
+  );
+  if (result.rows.length !== 2) return null;
+
+  const policies = new Map(result.rows.map((row) => [row.column_name, row.storage_policy]));
+  const id = policies.get("id");
+  const publicKeyBase64url = policies.get("public_key_base64url");
+  return policies.size === 2 && id && publicKeyBase64url
+    ? { id, publicKeyBase64url }
+    : null;
+}
+
+export async function assertPasskeyCredentialStoragePolicies(database: Queryable) {
+  const policies = await getPasskeyCredentialStoragePolicies(database);
+  if (policies?.id !== "e" || policies.publicKeyBase64url !== "e") {
+    throw schemaError("passkey credential storage policies are not externally uncompressed");
+  }
+}
+
+/**
+ * SET STORAGE affects future writes only. Fail owner bootstrap if a restored
+ * database still contains a compressed credential value: the guarded auth
+ * projection would intentionally reject that row, making the account
+ * unrecoverable. This query returns metadata only and never projects either
+ * credential value to node-postgres.
+ */
+export async function assertPasskeyStoredValueStorageSafety(database: Queryable) {
+  const result = await database.query<{ unsafe_stored_value_exists: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1
+       FROM passkey_credentials AS credential
+       WHERE pg_catalog.pg_column_compression(credential.id) IS NOT NULL
+          OR pg_catalog.pg_column_compression(credential.public_key_base64url) IS NOT NULL
+     ) AS unsafe_stored_value_exists`
+  );
+  if (result.rows.length !== 1
+      || result.rows[0]?.unsafe_stored_value_exists !== false) {
+    throw schemaError("stored passkey variable-width data is not projection-safe");
   }
 }
 

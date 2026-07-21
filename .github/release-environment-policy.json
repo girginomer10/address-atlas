@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "environment": "release",
+  "administratorsCanBypass": false,
+  "reviewers": [
+    {
+      "type": "User",
+      "id": 67194558
+    }
+  ]
+}

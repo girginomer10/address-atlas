@@ -3,7 +3,7 @@ title: L6 data boundaries must bind identity, snapshot, durability, and release 
 date: 2026-07-21
 status: active
 tags: [bugfix, macos, sync, postgres, release, solana, xrpl, evm, passkeys, webauthn, cose, sqlite, exchange, kraken, cosmos, tron, accessibility]
-related_files: [native/AddressAtlasMac/Sources/AddressAtlasCore/Sync/PendingVaultUpload.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Sync/EndpointConfigTrustStore.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Storage/EncryptedSQLiteVaultStore.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/ExchangeAmount.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/KrakenNonce.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerSolana.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerXRP.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerBitcoinEVM.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerCosmos.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerTron.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/AppStateTermination.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/AppStateAccountLifecycle.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/AppStateEndpointConfiguration.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/AppStateVaultSync.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/ExchangeSyncViews.swift, src/lib/sync/postgres-readiness.ts, src/lib/sync/postgres-schema.ts, src/lib/sync/postgres-search-path.ts, src/lib/sync/restore-readiness.ts, src/lib/sync/stored-vault-row.ts, src/lib/sync/stored-passkey-credential.ts, src/lib/sync/passkey-credential-integrity.ts, src/lib/sync/storage-ledger-integrity.ts, src/lib/sync/rate-limit.ts, src/lib/sync/postgres-migrations/index.ts, src/lib/sync/postgres-migrations/004-vault-envelope-storage-bound.ts, src/app/auth/passkey/body-concurrency.ts, src/app/auth/passkey/verification-concurrency.ts, src/app/auth/native/NativePasskeyBridge.tsx, src/app/vault/latest/route.ts, server/sync/Dockerfile, server/sync/manage-prod.sh, server/sync/postgres-backup.sh, .github/workflows/release.yml]
+related_files: [native/AddressAtlasMac/Sources/AddressAtlasCore/Sync/PendingVaultUpload.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Sync/EndpointConfigTrustStore.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Storage/EncryptedSQLiteVaultStore.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Storage/DamagedVaultRecovery.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Storage/VaultFileAccessLock.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/ChainNetworkIdentityProofCache.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/Exporters.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/PrivacySafeDiagnostics.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/ExchangeAmount.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/KrakenNonce.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerSolana.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerXRP.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerBitcoinEVM.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerCosmos.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerTron.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/AppStateTermination.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/AppStateAccountLifecycle.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/AppStateEndpointConfiguration.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/AppStateVaultSync.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/ExchangeSyncViews.swift, src/lib/sync/postgres-readiness.ts, src/lib/sync/postgres-schema.ts, src/lib/sync/postgres-search-path.ts, src/lib/sync/restore-readiness.ts, src/lib/sync/stored-vault-row.ts, src/lib/sync/stored-passkey-credential.ts, src/lib/sync/passkey-credential-integrity.ts, src/lib/sync/storage-ledger-integrity.ts, src/lib/sync/rate-limit.ts, src/lib/sync/auth-database-concurrency.ts, src/lib/sync/authentication-lock-order.ts, src/lib/sync/postgres-migrations/index.ts, src/lib/sync/postgres-migrations/004-vault-envelope-storage-bound.ts, src/lib/sync/postgres-migrations/005-passkey-storage-policy.ts, src/app/auth/passkey/body-concurrency.ts, src/app/auth/passkey/verification-concurrency.ts, src/app/auth/native/NativePasskeyBridge.tsx, src/app/vault/latest/route.ts, scripts/check-secret-artifacts.py, server/sync/Dockerfile, server/sync/manage-prod.sh, server/sync/service-control.sh, server/sync/postgres-backup.sh, .github/workflows/release.yml]
 ---
 
 ## Durable invariants
@@ -178,6 +178,48 @@ related_files: [native/AddressAtlasMac/Sources/AddressAtlasCore/Sync/PendingVaul
 - A native-auth return page must be inert before hydration. Use an explicit
   button instead of implicit form submission, preserve callback/state in the
   URL, and expose bounded actionable status through semantic busy/live regions.
+- Support output is an explicit privacy boundary. Diagnostics may contain only
+  closed enum codes, coarse buckets, and bounded state flags; never preserve raw
+  errors, labels, addresses, URLs, provider payloads, or credentials. Default
+  CSV/JSON sharing must use one redacted DTO that excludes identifiers, exact
+  values, history, settings, and sync authority. Full identifying exports need
+  a separate, explicit disclosure and must never be described as anonymous.
+- Damaged SQLite recovery is an inode-replacing maintenance transaction. Every
+  normal vault store retains a shared process lease; quarantine/replacement
+  requires a nonblocking exclusive lease, a byte-verified crash-durable copy,
+  identity rechecks, full file and parent-directory barriers, and release of the
+  exclusive lease before reopening the published clean store. Package metadata
+  should also prohibit multiple app instances, but the file lease remains the
+  authoritative cross-process safety boundary.
+- A same-key asynchronous cache needs producer identity as well as waiter
+  identity. Removing a last-waiter entry and starting a new generation must not
+  let the canceled old producer publish into the replacement. Likewise, a vault
+  download must revalidate the bearer at the final adoption boundary; if it
+  expired during transfer/decryption, preserve local content and require fresh
+  authentication before creating rollback or pending state.
+- All public authentication work shares one database-capacity budget reserved
+  below the pool ceiling. Validate token/shape/HMAC before acquiring that
+  budget, and retain client/session/code-specific limits inside it. Transactions
+  that touch account-owned rows must use one global parent-before-child lock
+  order (`users` before credentials or grants), matching account deletion's
+  cascade order; unlocked owner discovery must be revalidated after both locks.
+- Logical guarded reads and physical PostgreSQL storage policy are one contract.
+  If compressed values are rejected before detoast, convergence and the prepared
+  migration must set those bounded credential columns to `STORAGE EXTERNAL`,
+  readiness must assert it, and existing compressed rows must block cutover.
+  Keep metadata-only expand migrations bounded; do not hide an unbounded
+  `VALIDATE CONSTRAINT` scan inside a normal deploy transaction.
+- Secret scanning cannot treat NUL as proof that a tracked file is harmless.
+  Scan bounded mixed/binary bytes through a one-to-one ASCII-preserving view so
+  credential signatures remain detectable, while retaining filename, size,
+  symlink, allowlist-digest, and aggregate limits.
+- An emergency stop is terminal only if it serializes with every legal service
+  mutation. Publish and fsync a private durable stop fence, stop immediately,
+  acquire a short cutover lock shared by every production `start`, `up`,
+  `create`, and `run`, stop again, then verify no fixed-project container is
+  running before success. Keep the fence until an exact confirmed clear under
+  the normal operation lock. Never auto-delete an unbound stale cutover lock;
+  fail closed and require explicit PID/start/Docker-state recovery.
 - Release evidence is an identity set, not a green context label. Bind the exact
   source SHA, workflow run ID, attempt, required job names, check-run IDs/URLs,
   and producing GitHub App; re-fetch and compare them immediately before
@@ -186,15 +228,20 @@ related_files: [native/AddressAtlasMac/Sources/AddressAtlasCore/Sync/PendingVaul
 
 ## Verification baseline
 
-- Web and database suite: 50 files and 562 tests passed twice against disposable
-  PostgreSQL 16, including one shuffled run; no tests were skipped. TypeScript,
-  production build, and dependency audit passed; operations passed 58/58.
-- Native suite: 399 tests passed with 2 opt-in live tests skipped under strict
-  concurrency and warnings-as-errors. Thread Sanitizer passed all 399 tests
-  with one additional documented nested-process skip and no race report.
-- Notary credential, timeout, rejection, and universal-architecture harness
-  passed 11/11. A release product compiled successfully; public signing and
-  notarization remain external credential gates.
+- Web and database suite: 56 files and 648 tests passed against disposable
+  PostgreSQL 16 with no skips. TypeScript, the production build, and both full
+  and production-only dependency audits passed with zero vulnerabilities.
+- Native suite: 484 tests passed with 2 opt-in live tests skipped under normal
+  and strict concurrency plus warnings-as-errors. Thread Sanitizer passed the
+  same 484-test suite with one additional documented process-harness skip and no
+  race report.
+- Operations passed 62/62, frontend recovery 6/6, credential rotation 19/19,
+  and systemd contracts 2/2. Secret-scanner self-tests passed 22/22 and the
+  repository scan was clean; ruleset/release-environment fixtures passed 5/5
+  and 10/10. The real pinned Caddy image accepted the production config.
+- The current app and DMG rebuilt successfully as universal arm64+x86_64; the
+  ad-hoc hardened-runtime signature, single-instance metadata, and DMG checksum
+  verified. Public Developer ID signing and notarization remain external gates.
 
 ## External boundary
 

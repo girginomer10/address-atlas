@@ -22,5 +22,29 @@ export async function register() {
       });
       throw error;
     }
+    const diagnosticsModule = await import("@/lib/sync/diagnostics");
+    try {
+      const { checkSyncSchemaReadiness, ensureSyncSchema } = await import("@/lib/sync/postgres");
+      const { scheduleStorageLedgerIntegrityAudit } = await import(
+        "@/lib/sync/storage-ledger-integrity"
+      );
+      await ensureSyncSchema();
+      await checkSyncSchemaReadiness();
+      scheduleStorageLedgerIntegrityAudit(
+        diagnosticsModule.generatedDiagnostics("instrumentation.storage-ledger-audit")
+      );
+    } catch (error) {
+      diagnosticsModule.recordSecurityEvent(
+        "health.not_ready",
+        diagnosticsModule.generatedDiagnostics("instrumentation.register"),
+        {
+          status: 503,
+          reason: "startup_database_not_ready",
+          errorCode: diagnosticsModule.operationalErrorCode(error, "database_query_failed"),
+          severity: "error"
+        }
+      );
+      throw error;
+    }
   }
 }

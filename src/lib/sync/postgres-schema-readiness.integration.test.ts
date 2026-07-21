@@ -192,6 +192,40 @@ maybeDescribe("diagnostic Postgres runtime readiness", () => {
     });
   });
 
+  it("reports passkey storage-policy drift and owner bootstrap converges it", async () => {
+    await withIsolatedSchema(async () => {
+      await ensureSyncSchema();
+      await getSyncPool().query(
+        `ALTER TABLE passkey_credentials
+           ALTER COLUMN id SET STORAGE EXTENDED,
+           ALTER COLUMN public_key_base64url SET STORAGE EXTENDED`
+      );
+
+      await expect(checkSyncSchemaReadiness()).rejects.toThrow(
+        /passkey credential storage policies/i
+      );
+
+      await closeSyncPoolForTests();
+      await expect(ensureSyncSchema()).resolves.toBeUndefined();
+      const policies = await getSyncPool().query<{
+        column_name: string;
+        storage_policy: string;
+      }>(
+        `SELECT attribute.attname AS column_name,
+                attribute.attstorage::text AS storage_policy
+         FROM pg_catalog.pg_attribute AS attribute
+         WHERE attribute.attrelid = 'passkey_credentials'::pg_catalog.regclass
+           AND attribute.attname = ANY($1::pg_catalog.text[])
+         ORDER BY attribute.attname`,
+        [["id", "public_key_base64url"]]
+      );
+      expect(policies.rows).toEqual([
+        { column_name: "id", storage_policy: "e" },
+        { column_name: "public_key_base64url", storage_policy: "e" }
+      ]);
+    });
+  });
+
   it("keeps validate-only startup read-only on an empty schema", async () => {
     await withIsolatedSchema(async () => {
       process.env.SYNC_SCHEMA_MODE = "validate";
@@ -321,6 +355,11 @@ maybeDescribe("diagnostic Postgres runtime readiness", () => {
       await expect(checkSyncSchemaReadiness()).rejects.toThrow(/column passkey_credentials\.id/i);
       await getSyncPool().query(
         "ALTER TABLE passkey_credentials ALTER COLUMN id TYPE pg_catalog.text COLLATE pg_catalog.\"default\""
+      );
+      // ALTER TYPE restores PostgreSQL's default EXTENDED policy; restore the
+      // independent authentication-read invariant before checking readiness.
+      await getSyncPool().query(
+        "ALTER TABLE passkey_credentials ALTER COLUMN id SET STORAGE EXTERNAL"
       );
 
       const quotedSchema = `"${schema}"`;

@@ -6,6 +6,11 @@ SCRIPT="$ROOT/build-mac-app.sh"
 TEMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TEMP_ROOT"' EXIT
 
+grep -A1 '<key>LSMultipleInstancesProhibited</key>' "$SCRIPT" | grep -q '<true/>' || {
+  echo "The packaged app must prohibit multiple Launch Services instances" >&2
+  exit 1
+}
+
 assert_version() {
   local expected="$1"
   local actual

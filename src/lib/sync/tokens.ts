@@ -1,4 +1,4 @@
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { base64urlDecode, base64urlEncode } from "./base64url";
 import { getSyncSessionSecret } from "./config";
 
@@ -16,7 +16,16 @@ export interface SessionToken {
   expiresAt: number;
 }
 
-type TokenPurpose = "challenge" | "session";
+export interface NativeAuthorizationCode {
+  userId: string;
+  sessionId: string;
+  issuedAt: number;
+  codeChallenge: string;
+  nonce: string;
+  expiresAt: number;
+}
+
+type TokenPurpose = "challenge" | "session" | "native-authorization";
 
 export class TokenValidationError extends Error {
   constructor(message = "Invalid or expired token.") {
@@ -29,6 +38,8 @@ const TOKEN_VERSION = "v1";
 const TOKEN_CONTEXT = "address-atlas-sync";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export const SESSION_TTL_MS = 1000 * 60 * 60 * 12;
+export const NATIVE_AUTHORIZATION_CODE_TTL_MS = 2 * 60_000;
+const CANONICAL_32_BYTE_BASE64URL_RE = /^[A-Za-z0-9_-]{43}$/;
 
 function secret() {
   return getSyncSessionSecret();
@@ -110,14 +121,14 @@ export function issueSessionToken(userId: string, sessionId: string = randomUUID
   });
 }
 
-export function readBearerToken(header: string | null) {
-  const match = header?.match(/^Bearer\s+(.+)$/i);
-  if (!match || match[1].length > 4_096) throw new TokenValidationError();
-  const parsed = verifyToken<SessionToken>("session", match[1]);
+export function readSessionToken(token: string) {
+  if (!token || token.length > 4_096) throw new TokenValidationError();
+  const parsed = verifyToken<SessionToken>("session", token);
   if (
     !UUID_RE.test(parsed.userId)
     || !UUID_RE.test(parsed.sessionId)
     || !Number.isSafeInteger(parsed.issuedAt)
+    || !Number.isSafeInteger(parsed.expiresAt)
     || parsed.issuedAt > Date.now() + 30_000
     || parsed.expiresAt <= parsed.issuedAt
     || parsed.expiresAt - parsed.issuedAt > SESSION_TTL_MS
@@ -125,4 +136,65 @@ export function readBearerToken(header: string | null) {
     throw new TokenValidationError();
   }
   return parsed;
+}
+
+export function readBearerToken(header: string | null) {
+  const match = header?.match(/^Bearer\s+(.+)$/i);
+  if (!match) throw new TokenValidationError();
+  return readSessionToken(match[1]);
+}
+
+export function issueNativeAuthorizationCode(
+  session: SessionToken,
+  codeChallenge: string,
+  issuedAt = Date.now()
+) {
+  if (!isCanonical32ByteBase64url(codeChallenge)) {
+    throw new Error("Invalid native authorization code challenge.");
+  }
+  if (!Number.isSafeInteger(issuedAt) || issuedAt < 0) {
+    throw new Error("Invalid native authorization issue time.");
+  }
+  if (session.expiresAt <= issuedAt) {
+    throw new Error("Cannot authorize an expired session grant.");
+  }
+  return signToken<NativeAuthorizationCode>("native-authorization", {
+    userId: session.userId,
+    sessionId: session.sessionId,
+    issuedAt: session.issuedAt,
+    codeChallenge,
+    nonce: base64urlEncode(randomBytes(32)),
+    expiresAt: Math.min(issuedAt + NATIVE_AUTHORIZATION_CODE_TTL_MS, session.expiresAt)
+  });
+}
+
+export function readNativeAuthorizationCode(code: string) {
+  if (!code || code.length > 4_096) throw new TokenValidationError();
+  const parsed = verifyToken<NativeAuthorizationCode>("native-authorization", code);
+  if (
+    !UUID_RE.test(parsed.userId)
+    || !UUID_RE.test(parsed.sessionId)
+    || !Number.isSafeInteger(parsed.issuedAt)
+    || !Number.isSafeInteger(parsed.expiresAt)
+    || parsed.issuedAt < 0
+    || parsed.issuedAt > Date.now() + 30_000
+    || !isCanonical32ByteBase64url(parsed.codeChallenge)
+    || !isCanonical32ByteBase64url(parsed.nonce)
+    || parsed.expiresAt <= parsed.issuedAt
+    || parsed.expiresAt > parsed.issuedAt + SESSION_TTL_MS
+    || parsed.expiresAt - Date.now() > NATIVE_AUTHORIZATION_CODE_TTL_MS + 30_000
+  ) {
+    throw new TokenValidationError();
+  }
+  return parsed;
+}
+
+export function isCanonical32ByteBase64url(value: unknown): value is string {
+  if (typeof value !== "string" || !CANONICAL_32_BYTE_BASE64URL_RE.test(value)) return false;
+  try {
+    const decoded = base64urlDecode(value);
+    return decoded.byteLength === 32 && base64urlEncode(decoded) === value;
+  } catch {
+    return false;
+  }
 }

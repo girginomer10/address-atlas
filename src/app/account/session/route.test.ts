@@ -16,6 +16,7 @@ vi.mock("@/lib/sync/rate-limit", () => ({
 }));
 
 import { DELETE } from "./route";
+import { AuthenticationDatabaseCapacityError } from "@/lib/sync/auth-database-concurrency";
 import { TokenValidationError } from "@/lib/sync/tokens";
 
 describe("targeted session revocation", () => {
@@ -37,7 +38,7 @@ describe("targeted session revocation", () => {
     expect(response.headers.get("x-request-id")).toMatch(/^[0-9a-f-]{36}$/);
     expect(response.headers.get("x-request-id")).not.toBe("session_req-1234");
     expect(await response.json()).toEqual({ ok: true });
-    expect(mocks.revokeBearerSession).toHaveBeenCalledWith("Bearer token");
+    expect(mocks.revokeBearerSession).toHaveBeenCalledWith("Bearer token", "test-client");
     expect(mocks.rateLimitMany).toHaveBeenCalledWith([
       { key: "session-revoke:global", limit: 300, windowMs: 60_000 },
       { key: "session-revoke:client:test-client", limit: 10, windowMs: 60_000 }
@@ -67,5 +68,17 @@ describe("targeted session revocation", () => {
     }));
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({ error: "Authentication required." });
+  });
+
+  it("rejects database-saturated revocations without queueing", async () => {
+    mocks.revokeBearerSession.mockRejectedValue(new AuthenticationDatabaseCapacityError());
+    const response = await DELETE(new NextRequest("https://sync.example/account/session", {
+      method: "DELETE",
+      headers: { authorization: "Bearer token" }
+    }));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("1");
+    expect(await response.json()).toEqual({ error: "Too many requests." });
   });
 });

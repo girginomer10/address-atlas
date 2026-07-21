@@ -20,29 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Reject tracked private-key and release-secret artifacts
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          violations=()
-          while IFS= read -r -d '' tracked_path; do
-            normalized="${tracked_path,,}"
-            case "$normalized" in
-              authkey_*.p8|*/authkey_*.p8|*.agekey|*.dump.age|*.dump.age.*|*.atlas-recovery|*.keychain|*.keychain-db|*.mobileprovision|*.cer|*.p12|*.pfx|*.pem|*.key)
-                violations+=("$tracked_path")
-                ;;
-            esac
-          done < <(git ls-files -z)
-          if (( ${#violations[@]} > 0 )); then
-            printf 'Tracked private artifact: %s\n' "${violations[@]}" >&2
-            exit 1
-          fi
-          private_material_files="$(git grep -I -l -E \
-            -e '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|AGE-SECRET-KEY-1[A-Z0-9]{40,}' \
-            -- . || true)"
-          if [[ -n "$private_material_files" ]]; then
-            printf 'Tracked file contains private-key material: %s\n' "$private_material_files" >&2
-            exit 1
-          fi
+        run: python3 scripts/check-secret-artifacts.py
+      - name: Prove credential canaries and exact fixture allowlisting
+        run: bash scripts/check-secret-artifacts-tests.sh
 
   web:
     name: Web and sync server
@@ -982,9 +962,12 @@ jobs:
         env:
           TMPDIR: ${{ runner.temp }}
         run: |
-          bash -n server/sync/manage-prod.sh server/sync/postgres-backup.sh server/sync/monitor-sync.sh server/sync/database-role-tests.sh
+          bash -n server/sync/manage-prod.sh server/sync/frontend-recovery.sh server/sync/frontend-recovery-tests.sh server/sync/credential-rotation-tests.sh server/sync/systemd-contract-tests.sh server/sync/postgres-backup.sh server/sync/monitor-sync.sh server/sync/database-role-tests.sh scripts/check-release-environment-governance-tests.sh
+          node --check server/sync/credential-rotation-state.mjs
           sh -n server/sync/provision-runtime-role.sh server/sync/bootstrap-database-roles.sh server/sync/migrate-restored-database.sh server/sync/provision-restored-database.sh
-          bash server/sync/ops-script-tests.sh
+          bash scripts/check-ruleset-governance-tests.sh
+          bash scripts/check-release-environment-governance-tests.sh
+          npm run ops:test
       - name: Validate Compose configuration and volume preflight
         run: bash server/sync/manage-prod.sh config
       - name: Validate Caddy configuration

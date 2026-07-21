@@ -33,23 +33,39 @@ describe("immutable sync migration contract", () => {
       ]);
   });
 
-  it("ships the next immutable schema head one release before activation", () => {
+  it("ships a contiguous immutable future-head batch before activation", () => {
     expect(PREPARED_SYNC_MIGRATIONS.map(({ version, name, checksum, prepared }) => ({
       version,
       name,
       checksum,
       prepared
-    }))).toEqual([{
-      version: 4,
-      name: "vault-envelope-storage-bound",
-      checksum: "6de6b790dd0c185d9a6193c399edb34d209c774a67d090f133d34a35ad8dbfa5",
-      prepared: true
-    }]);
+    }))).toEqual([
+      {
+        version: 4,
+        name: "vault-envelope-storage-bound",
+        checksum: "6de6b790dd0c185d9a6193c399edb34d209c774a67d090f133d34a35ad8dbfa5",
+        prepared: true
+      },
+      {
+        version: 5,
+        name: "passkey-storage-policy",
+        checksum: "0c0798b7629c5aa1dcb63bea3ac763cecfb790aafc727848f4593887f892fa8c",
+        prepared: true
+      }
+    ]);
     expect(PREPARED_SYNC_MIGRATIONS[0]?.statements).toHaveLength(2);
     expect(PREPARED_SYNC_MIGRATIONS[0]?.statements[0]).toMatch(/DO .*storage_policy/s);
     expect(PREPARED_SYNC_MIGRATIONS[0]?.statements[0]).toMatch(/attstorage.*<>.*'e'/s);
     expect(PREPARED_SYNC_MIGRATIONS[0]?.statements[0]).toMatch(/EXECUTE.*ALTER TABLE/s);
     expect(PREPARED_SYNC_MIGRATIONS[0]?.statements.join("\n"))
+      .not.toMatch(/VALIDATE\s+CONSTRAINT/i);
+    expect(PREPARED_SYNC_MIGRATIONS[1]?.statements).toHaveLength(1);
+    expect(PREPARED_SYNC_MIGRATIONS[1]?.statements[0])
+      .toMatch(/passkey_credentials[\s\S]*id[\s\S]*public_key_base64url/i);
+    expect(PREPARED_SYNC_MIGRATIONS[1]?.statements[0]).toMatch(/attstorage.*<>.*'e'/s);
+    expect(PREPARED_SYNC_MIGRATIONS[1]?.statements[0])
+      .toMatch(/ALTER TABLE[\s\S]*SET STORAGE EXTERNAL/i);
+    expect(PREPARED_SYNC_MIGRATIONS[1]?.statements.join("\n"))
       .not.toMatch(/VALIDATE\s+CONSTRAINT/i);
     expect(SYNC_MIGRATIONS).toHaveLength(3);
   });
@@ -85,7 +101,8 @@ describe("immutable sync migration contract", () => {
       "f691f22e3dfa04c237e2bbe6485e6f1acf97e0f71046f01601898280adf0ff5b",
       "a5e1e1bc789daadbb5e13d86227c80413764ef2547832cb8bbfdc917330ef99d",
       "47ad43aa7438c5c8969f7c01162bb73eab8d51066abef482a03fed86a7890ee3",
-      "ceb0b725a162b5be512bf35e63ecaf178aa67e7c1335e2807a116f2ef7f65dfe"
+      "ceb0b725a162b5be512bf35e63ecaf178aa67e7c1335e2807a116f2ef7f65dfe",
+      "c101eabfc6cdf4252a5a58ac3320958818243e62375d12c4ff864499551cff39"
     ]);
   });
 });

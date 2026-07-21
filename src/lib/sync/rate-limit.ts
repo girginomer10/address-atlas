@@ -26,6 +26,11 @@ export interface ConcurrencyLimitRule {
   limit: number;
 }
 
+declare const requestClientKeyBrand: unique symbol;
+export type RequestClientKey = string & {
+  readonly [requestClientKeyBrand]: true;
+};
+
 /**
  * Applies all limits atomically: a rejected request does not consume any of the
  * other buckets. New keys fail closed when the bounded map is saturated.
@@ -173,10 +178,19 @@ function sweepExpired(now: number) {
  * only published peer and explicitly sets X-Forwarded-For to the client IP
  * (header_up in the Caddyfile), so client-supplied values never reach here.
  */
-export function clientKey(request: Request): string {
+export function clientKey(request: Request): RequestClientKey {
   const forwarded = request.headers.get("x-forwarded-for");
-  if (forwarded) return boundedKey(forwarded.split(",")[0]!.trim());
-  return "unknown";
+  if (forwarded) return normalizeRequestClientKey(forwarded.split(",")[0]!.trim());
+  return normalizeRequestClientKey(undefined);
+}
+
+/**
+ * Produce the client-identity type required by bearer/replay database
+ * admission. Runtime normalization makes omitted values share a fail-closed
+ * bucket and hashes oversized input before it enters a limiter key.
+ */
+export function normalizeRequestClientKey(value: unknown): RequestClientKey {
+  return boundedKey(typeof value === "string" ? value : "") as RequestClientKey;
 }
 
 function boundedKey(value: string) {

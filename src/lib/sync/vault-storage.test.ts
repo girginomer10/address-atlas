@@ -11,6 +11,7 @@ vi.mock("./postgres", () => ({
 }));
 
 import type { RemoteVaultSnapshot } from "./envelope";
+import { setStorageLedgerAuditStateForTests } from "./storage-ledger-integrity";
 import {
   assertVaultIngressCapacity,
   chargeVaultIngress,
@@ -42,8 +43,22 @@ const SNAPSHOT: RemoteVaultSnapshot = {
 describe("vault storage abuse controls", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setStorageLedgerAuditStateForTests("valid");
     mocks.connect.mockResolvedValue({ query: mocks.query, release: mocks.release });
   });
+
+  it.each(["pending", "unavailable"] as const)(
+    "blocks vault write admission while the process ledger audit is %s",
+    async (state) => {
+      setStorageLedgerAuditStateForTests(state);
+
+      await expect(assertVaultIngressCapacity(USER_ID))
+        .rejects.toBeInstanceOf(VaultStorageIntegrityError);
+      await expect(saveVaultSnapshot(USER_ID, SNAPSHOT))
+        .rejects.toBeInstanceOf(VaultStorageIntegrityError);
+      expect(mocks.connect).not.toHaveBeenCalled();
+    }
+  );
 
   it("rejects an invalid ingress charge before opening a transaction", async () => {
     await expect(chargeVaultIngress(USER_ID, 0)).rejects.toBeInstanceOf(VaultQuotaError);

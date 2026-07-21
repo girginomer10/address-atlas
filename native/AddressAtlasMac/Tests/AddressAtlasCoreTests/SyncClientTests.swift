@@ -7,11 +7,12 @@ import XCTest
 
 final class SyncClientTests: XCTestCase {
   func testSyncClientRevokesOnlyCurrentSessionWithAuthenticatedDelete() async throws {
+    let token = testSessionToken(accountId: "11111111-1111-4111-8111-111111111111")
     let http = StubHTTPClient { request in
       XCTAssertEqual(request.url?.absoluteString, "https://sync.example/account/session")
       XCTAssertEqual(request.httpMethod, "DELETE")
       XCTAssertEqual(request.value(forHTTPHeaderField: "accept"), "application/json")
-      XCTAssertEqual(request.value(forHTTPHeaderField: "authorization"), "Bearer current-session")
+      XCTAssertEqual(request.value(forHTTPHeaderField: "authorization"), "Bearer \(token)")
       XCTAssertNil(request.value(forHTTPHeaderField: "x-address-atlas-confirm"))
       XCTAssertNil(request.httpBody)
       return (Data(#"{"ok":true}"#.utf8), httpResponse(for: request))
@@ -20,17 +21,18 @@ final class SyncClientTests: XCTestCase {
       baseURL: URL(string: "https://sync.example")!,
       http: http
     )
-    await client.setBearerToken("current-session")
+    await client.setBearerToken(token)
 
     try await client.revokeCurrentSession()
   }
 
   func testSyncClientDeletesAccountWithFixedConfirmationHeader() async throws {
     let operationKey = Base64URL.encode(Data(repeating: 7, count: 32))
+    let token = testSessionToken(accountId: "11111111-1111-4111-8111-111111111111")
     let http = StubHTTPClient { request in
       XCTAssertEqual(request.url?.absoluteString, "https://sync.example/account")
       XCTAssertEqual(request.httpMethod, "DELETE")
-      XCTAssertEqual(request.value(forHTTPHeaderField: "authorization"), "Bearer delete-session")
+      XCTAssertEqual(request.value(forHTTPHeaderField: "authorization"), "Bearer \(token)")
       XCTAssertEqual(
         request.value(forHTTPHeaderField: "x-address-atlas-confirm"),
         "delete-account"
@@ -43,7 +45,7 @@ final class SyncClientTests: XCTestCase {
       baseURL: URL(string: "https://sync.example")!,
       http: http
     )
-    await client.setBearerToken("delete-session")
+    await client.setBearerToken(token)
 
     try await client.deleteAccount(idempotencyKey: operationKey)
   }
@@ -107,7 +109,9 @@ final class SyncClientTests: XCTestCase {
       http: falseAcknowledgementHTTP
     )
 
-    await client.setBearerToken("current-session")
+    await client.setBearerToken(
+      testSessionToken(accountId: "11111111-1111-4111-8111-111111111111")
+    )
     do {
       try await client.revokeCurrentSession()
       XCTFail("Expected a false server acknowledgement to fail closed.")
@@ -224,15 +228,16 @@ final class SyncClientTests: XCTestCase {
   }
 
   func testSyncClientSurfacesExpiredSession() async throws {
+    let token = testSessionToken(accountId: "11111111-1111-4111-8111-111111111111")
     let http = StubHTTPClient { request in
-      XCTAssertEqual(request.value(forHTTPHeaderField: "authorization"), "Bearer expired")
+      XCTAssertEqual(request.value(forHTTPHeaderField: "authorization"), "Bearer \(token)")
       let json = """
         { "error": "Token expired." }
         """
       return (Data(json.utf8), httpResponse(for: request, statusCode: 401))
     }
     let client = ZeroKnowledgeSyncClient(baseURL: URL(string: "https://sync.example")!, http: http)
-    await client.setBearerToken("expired")
+    await client.setBearerToken(token)
 
     do {
       _ = try await client.latestVault()
@@ -272,6 +277,7 @@ final class SyncClientTests: XCTestCase {
   }
 
   func testSyncClientSurfacesStaleUploadConflict() async throws {
+    let token = testSessionToken(accountId: "11111111-1111-4111-8111-111111111111")
     let http = StubHTTPClient { request in
       XCTAssertEqual(request.httpMethod, "PUT")
       let json = """
@@ -291,7 +297,7 @@ final class SyncClientTests: XCTestCase {
       checksum: String(repeating: "b", count: 64)
     )
     let client = ZeroKnowledgeSyncClient(baseURL: URL(string: "https://sync.example")!, http: http)
-    await client.setBearerToken("current")
+    await client.setBearerToken(token)
 
     do {
       try await client.upload(snapshot: snapshot)

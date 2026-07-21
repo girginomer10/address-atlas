@@ -60,12 +60,13 @@ extension AppStateNetworkBoundaryTests {
   func testTerminationFreezeRejectsQueuedVaultTransferBeforeRemoteReadOrWrite() async throws {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let accountId = "89898989-8989-4989-8989-898989898989"
     var document = VaultDocument()
     XCTAssertTrue(
       document.syncState.connect(
-        accountId: "89898989-8989-4989-8989-898989898989",
+        accountId: accountId,
         serverURL: "https://sync.example",
-        sessionToken: "termination-admission-token"
+        sessionToken: testSessionToken(accountId: accountId)
       ))
     let persisted = try fixture.store.saveReturningPersistedDocument(document)
     let serverURL = try XCTUnwrap(AppState.validatedSyncURL(persisted.syncState.serverURL))
@@ -159,10 +160,11 @@ extension AppStateNetworkBoundaryTests {
     let persisted = try fixture.store.saveReturningPersistedDocument(
       VaultDocument(wallets: [wallet])
     )
+    let accountId = "91919191-9191-4919-8919-919191919191"
     let authenticator = StubPasskeyAuthenticator(
       session: PasskeyWebSession(
-        userId: "91919191-9191-4919-8919-919191919191",
-        sessionToken: "passkey-draft-token",
+        userId: accountId,
+        sessionToken: testSessionToken(accountId: accountId),
         serverURL: "https://sync.example"
       )
     )
@@ -192,12 +194,13 @@ extension AppStateNetworkBoundaryTests {
       address: "0x0000000000000000000000000000000000000002",
       chainKind: .evm
     )
+    let accountId = "92929292-9292-4929-8929-929292929292"
     var document = VaultDocument(wallets: [wallet])
     XCTAssertTrue(
       document.syncState.connect(
-        accountId: "92929292-9292-4929-8929-929292929292",
+        accountId: accountId,
         serverURL: "https://sync.example",
-        sessionToken: "revoke-draft-token"
+        sessionToken: testSessionToken(accountId: accountId)
       ))
     let persisted = try fixture.store.saveReturningPersistedDocument(document)
     let serverURL = try XCTUnwrap(AppState.validatedSyncURL(persisted.syncState.serverURL))
@@ -230,18 +233,23 @@ extension AppStateNetworkBoundaryTests {
       chainKind: .evm
     )
     var document = VaultDocument(wallets: [wallet])
+    let originalSessionToken = testSessionToken(accountId: accountID)
+    let freshSessionToken = testSessionToken(
+      accountId: accountID,
+      sessionId: "93939393-9393-4939-8939-939393939394"
+    )
     XCTAssertTrue(
       document.syncState.connect(
         accountId: accountID,
         serverURL: "https://sync.example",
-        sessionToken: "delete-draft-token"
+        sessionToken: originalSessionToken
       ))
     let persisted = try fixture.store.saveReturningPersistedDocument(document)
     let serverURL = try XCTUnwrap(AppState.validatedSyncURL(persisted.syncState.serverURL))
     let authenticator = StubPasskeyAuthenticator(
       session: PasskeyWebSession(
         userId: accountID,
-        sessionToken: "fresh-delete-draft-token",
+        sessionToken: freshSessionToken,
         serverURL: "https://sync.example"
       )
     )

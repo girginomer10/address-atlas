@@ -8,10 +8,13 @@ import {
 import {
   assertAppliedMigrationHistory,
   assertKnownUnversionedSchema,
+  assertPasskeyCredentialStoragePolicies,
+  assertPasskeyStoredValueStorageSafety,
   assertSyncSchemaReady,
   assertSyncSchemaVersionReady,
   assertVaultEnvelopeStoragePolicy,
   assertVaultStoredValueStorageSafety,
+  getPasskeyCredentialStoragePolicies,
   getVaultEnvelopeStoragePolicy,
   migrationLedgerExists
 } from "./postgres-readiness";
@@ -51,7 +54,7 @@ export async function initializeSyncSchema(targetPool: Pool) {
     }
 
     const durableVersion = Math.max(appliedCount, LATEST_SYNC_MIGRATION_VERSION);
-    await convergeVaultEnvelopeStoragePolicy(client, durableVersion);
+    await convergeProjectionSafeStoragePolicies(client, durableVersion);
     await reconcileStorageUsageIfNeeded(client, durableVersion);
     await assertSyncSchemaReady(client, { verifyRuntimePrivileges: false });
   } catch (error) {
@@ -72,31 +75,44 @@ export async function initializeSyncSchema(targetPool: Pool) {
 }
 
 /**
- * Metadata-only expand step for the prepared v4 bound. PostgreSQL does not
- * rewrite existing values for SET STORAGE, and the v3 application ignores this
- * catalog attribute, so the currently serving N-1 image remains compatible.
- * New writes become uncompressed immediately; reads additionally reject any
- * legacy compressed value before detoasting it.
+ * Metadata-only expand step for the prepared v4/v5 bounds. PostgreSQL does not
+ * rewrite existing values for SET STORAGE, and the v3 application ignores
+ * these catalog attributes, so the currently serving N-1 image remains
+ * compatible. New writes become uncompressed immediately; guarded reads
+ * additionally reject any legacy compressed value before detoasting it.
  */
-async function convergeVaultEnvelopeStoragePolicy(
+async function convergeProjectionSafeStoragePolicies(
   client: PoolClient,
   appliedVersion: number
 ) {
-  if (appliedVersion < 2) return;
+  if (appliedVersion < 1) return;
   await client.query("BEGIN");
   await assertSyncSchemaVersionReady(client, appliedVersion);
-  if (await getVaultEnvelopeStoragePolicy(client) !== "e") {
+  const passkeyPolicies = await getPasskeyCredentialStoragePolicies(client);
+  if (passkeyPolicies?.id !== "e") {
+    await client.query(
+      "ALTER TABLE passkey_credentials ALTER COLUMN id SET STORAGE EXTERNAL"
+    );
+  }
+  if (passkeyPolicies?.publicKeyBase64url !== "e") {
+    await client.query(
+      "ALTER TABLE passkey_credentials ALTER COLUMN public_key_base64url SET STORAGE EXTERNAL"
+    );
+  }
+  await assertPasskeyCredentialStoragePolicies(client);
+  if (appliedVersion >= 2 && await getVaultEnvelopeStoragePolicy(client) !== "e") {
     await client.query(
       "ALTER TABLE vault_snapshots ALTER COLUMN envelope SET STORAGE EXTERNAL"
     );
   }
-  await assertVaultEnvelopeStoragePolicy(client);
+  if (appliedVersion >= 2) await assertVaultEnvelopeStoragePolicy(client);
   await client.query("COMMIT");
 
   // Keep the expand-only catalog convergence even when legacy rows need
   // operator repair. The still-serving N-1 binary tolerates this attribute,
   // and every subsequent write is now uncompressed while cutover stays blocked.
-  await assertVaultStoredValueStorageSafety(client);
+  await assertPasskeyStoredValueStorageSafety(client);
+  if (appliedVersion >= 2) await assertVaultStoredValueStorageSafety(client);
 }
 
 async function applyUnversionedBaseline(client: PoolClient) {

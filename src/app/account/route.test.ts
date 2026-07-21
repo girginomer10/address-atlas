@@ -18,6 +18,7 @@ vi.mock("@/lib/sync/rate-limit", () => ({
 }));
 
 import { DELETE } from "./route";
+import { AuthenticationDatabaseCapacityError } from "@/lib/sync/auth-database-concurrency";
 import { TokenValidationError } from "@/lib/sync/tokens";
 import { AccountDeletionConfirmationError } from "@/lib/sync/sessions";
 
@@ -49,7 +50,12 @@ describe("self-service account deletion", () => {
       headers: { authorization: "Bearer token", "idempotency-key": idempotencyKey }
     }));
     expect(response.status).toBe(400);
-    expect(mocks.deleteBearerAccount).toHaveBeenCalledWith("Bearer token", expectedDigest, false);
+    expect(mocks.deleteBearerAccount).toHaveBeenCalledWith(
+      "Bearer token",
+      expectedDigest,
+      false,
+      "test-client"
+    );
   });
 
   it("rejects a missing or non-canonical idempotency key before authentication", async () => {
@@ -106,7 +112,12 @@ describe("self-service account deletion", () => {
     expect(response.headers.get("x-request-id")).toMatch(/^[0-9a-f-]{36}$/);
     expect(response.headers.get("x-request-id")).not.toBe("delete_req-1234");
     expect(await response.json()).toEqual({ ok: true });
-    expect(mocks.deleteBearerAccount).toHaveBeenCalledWith("Bearer token", expectedDigest, true);
+    expect(mocks.deleteBearerAccount).toHaveBeenCalledWith(
+      "Bearer token",
+      expectedDigest,
+      true,
+      "test-client"
+    );
     expect(JSON.stringify([
       ...vi.mocked(console.info).mock.calls,
       ...vi.mocked(console.warn).mock.calls,
@@ -122,7 +133,12 @@ describe("self-service account deletion", () => {
     }));
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true });
-    expect(mocks.deleteBearerAccount).toHaveBeenCalledWith(null, expectedDigest, false);
+    expect(mocks.deleteBearerAccount).toHaveBeenCalledWith(
+      null,
+      expectedDigest,
+      false,
+      "test-client"
+    );
     expect(JSON.stringify(vi.mocked(console.info).mock.calls)).toContain("idempotent_replay");
     expect(JSON.stringify(vi.mocked(console.info).mock.calls)).not.toContain(idempotencyKey);
   });
@@ -139,5 +155,39 @@ describe("self-service account deletion", () => {
     }));
     expect(response.status).toBe(401);
     expect(JSON.stringify(await response.json())).not.toContain("secret-material");
+  });
+
+  it("maps saturated live authentication to a short retry", async () => {
+    mocks.deleteBearerAccount.mockRejectedValue(new AuthenticationDatabaseCapacityError());
+    const response = await DELETE(new NextRequest("https://sync.example/account", {
+      method: "DELETE",
+      headers: {
+        authorization: "Bearer token",
+        "idempotency-key": idempotencyKey,
+        "x-address-atlas-confirm": "delete-account"
+      }
+    }));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("1");
+    expect(await response.json()).toEqual({ error: "Too many requests." });
+  });
+
+  it("maps saturated durable-replay lookup to a short retry", async () => {
+    mocks.deleteBearerAccount.mockRejectedValue(new AuthenticationDatabaseCapacityError());
+    const response = await DELETE(new NextRequest("https://sync.example/account", {
+      method: "DELETE",
+      headers: { "idempotency-key": idempotencyKey }
+    }));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("1");
+    expect(await response.json()).toEqual({ error: "Too many requests." });
+    expect(mocks.deleteBearerAccount).toHaveBeenCalledWith(
+      null,
+      expectedDigest,
+      false,
+      "test-client"
+    );
   });
 });

@@ -1,6 +1,7 @@
-import { acquireConcurrencyMany } from "@/lib/sync/rate-limit";
+import { acquireAuthenticationDatabaseConcurrency } from "@/lib/sync/auth-database-concurrency";
 
 const CLIENT_ACTIVE_VERIFICATION_LIMIT = 2;
+const CLIENT_ACTIVE_NATIVE_EXCHANGE_LIMIT = 2;
 
 /**
  * Bound the phase that can hold a PostgreSQL client and credential row lock.
@@ -13,13 +14,29 @@ export function acquirePasskeyVerificationConcurrency(
   credentialId: string,
   poolSize: number
 ) {
-  if (!Number.isSafeInteger(poolSize) || poolSize < 2) {
-    throw new Error("Passkey verification requires a database pool with reserved capacity.");
-  }
-  const globalLimit = Math.floor(poolSize / 2);
-  return acquireConcurrencyMany([
-    { key: "auth-verify-active:global", limit: globalLimit },
+  return acquireAuthenticationDatabaseConcurrency(poolSize, [
     { key: `auth-verify-active:client:${client}`, limit: CLIENT_ACTIVE_VERIFICATION_LIMIT },
     { key: `auth-verify-active:credential:${credentialId}`, limit: 1 }
+  ]);
+}
+
+/**
+ * Bound native authorization-code exchanges before they can queue for a pool
+ * client. The global key is deliberately shared with passkey verification so
+ * all public authentication database work together consumes at most half of
+ * the runtime pool. A per-code permit rejects parallel replay attempts before
+ * PostgreSQL row/transaction work begins.
+ */
+export function acquireNativeAuthorizationExchangeConcurrency(
+  client: string,
+  consumptionKey: string,
+  poolSize: number
+) {
+  return acquireAuthenticationDatabaseConcurrency(poolSize, [
+    {
+      key: `auth-native-exchange-active:client:${client}`,
+      limit: CLIENT_ACTIVE_NATIVE_EXCHANGE_LIMIT
+    },
+    { key: `auth-native-exchange-active:code:${consumptionKey}`, limit: 1 }
   ]);
 }

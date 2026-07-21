@@ -74,7 +74,7 @@ final class ExchangeAmountPrecisionTests: XCTestCase {
     XCTAssertEqual(holding.exactAmount, canonical)
     XCTAssertEqual(holding.canonicalAmount, canonical)
     XCTAssertEqual(holding.displayedAmount, canonical)
-    XCTAssertTrue(AddressAtlasExporter.csv(for: [holding]).contains(",\(canonical),1.0,"))
+    XCTAssertTrue(try AddressAtlasExporter.csv(for: [holding]).contains(",\(canonical),1.0,"))
 
     let encoded = try JSONEncoder().encode(holding)
     let decoded = try JSONDecoder().decode(TrackedAsset.self, from: encoded)
@@ -115,7 +115,8 @@ final class ExchangeAmountPrecisionTests: XCTestCase {
 
     object["exactAmount"] = "1"
     let inconsistent = try JSONSerialization.data(withJSONObject: object)
-    let repaired = try JSONDecoder().decode(TrackedAsset.self, from: inconsistent)
-    XCTAssertEqual(repaired.exactAmount, "9007199254740992")
+    XCTAssertThrowsError(try JSONDecoder().decode(TrackedAsset.self, from: inconsistent)) {
+      XCTAssertTrue($0 is DecodingError)
+    }
   }
 }

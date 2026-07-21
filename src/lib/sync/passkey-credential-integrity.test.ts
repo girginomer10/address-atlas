@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import type { Pool } from "pg";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { base64urlEncode } from "./base64url";
@@ -28,33 +29,46 @@ describe("bounded restored-passkey integrity scan", () => {
     connect: vi.fn(async () => ({ query, release }))
   } as unknown as Pool;
 
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+  });
 
-  it("validates cursor pages and commits only after the full scan", async () => {
-    let fetchCount = 0;
+  it("validates indexed keyset pages and commits only after the full scan", async () => {
+    let pageCount = 0;
+    const progress = vi.fn();
     query.mockImplementation(async (sql: string) => {
       if (sql.includes("credentialless_user_exists")) {
         return { rows: [{ credentialless_user_exists: false }] };
       }
-      if (sql.startsWith("FETCH FORWARD")) {
-        fetchCount += 1;
-        return { rows: fetchCount === 1 ? [storedRow()] : [] };
+      if (sql.includes("ORDER BY credential.id")) {
+        pageCount += 1;
+        return { rows: pageCount === 1 ? [{ ...storedRow(), scan_key: storedRow().id }] : [] };
       }
       return { rows: [] };
     });
 
-    await expect(assertStoredPasskeyCredentialIntegrity(pool)).resolves.toBeUndefined();
+    await expect(assertStoredPasskeyCredentialIntegrity(pool, { onProgress: progress }))
+      .resolves.toBeUndefined();
 
     const statements = query.mock.calls.map(([sql]) => String(sql));
-    expect(statements[0]).toBe("BEGIN TRANSACTION READ ONLY");
+    expect(statements[0]).toBe("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
     expect(statements[1]).toContain("credentialless_user_exists");
-    expect(statements[2]).toContain("DECLARE address_atlas_passkey_integrity");
+    expect(statements[2]).toContain(
+      "WHEN credential_safety.stored_row_valid THEN credential.id"
+    );
     expect(statements[2]).toContain("pg_column_compression(credential.public_key_base64url)");
-    expect(statements[2]).toContain("ORDER BY credential.ctid");
-    expect(statements[2]).not.toContain("ORDER BY credential.id");
-    expect(statements.filter((sql) => sql.startsWith("FETCH FORWARD 32"))).toHaveLength(2);
-    expect(statements.at(-2)).toBe("CLOSE address_atlas_passkey_integrity");
+    expect(statements[2]).not.toContain("WHERE credential.id >");
+    expect(statements[2]).toContain("ORDER BY credential.id");
+    expect(query.mock.calls[2]?.[1]).toEqual([2_048]);
+    expect(query.mock.calls[3]?.[1]).toEqual([storedRow().id, 2_048]);
+    expect(statements[3]).toContain("WHERE credential.id > $1::text");
     expect(statements.at(-1)).toBe("COMMIT");
+    expect(progress).toHaveBeenLastCalledWith({
+      rowsScanned: 1,
+      pagesScanned: 1,
+      done: true
+    });
     expect(release).toHaveBeenCalledWith();
   });
 
@@ -63,10 +77,11 @@ describe("bounded restored-passkey integrity scan", () => {
       if (sql.includes("credentialless_user_exists")) {
         return { rows: [{ credentialless_user_exists: false }] };
       }
-      if (sql.startsWith("FETCH FORWARD")) {
+      if (sql.includes("ORDER BY credential.id")) {
         return {
           rows: [{
             ...storedRow(),
+            scan_key: null,
             id: null,
             public_key_base64url: null,
             stored_row_valid: false
@@ -93,7 +108,7 @@ describe("bounded restored-passkey integrity scan", () => {
       .rejects.toBeInstanceOf(StoredPasskeyCredentialIntegrityError);
 
     const statements = query.mock.calls.map(([sql]) => String(sql));
-    expect(statements.some((sql) => sql.startsWith("DECLARE"))).toBe(false);
+    expect(statements.some((sql) => sql.includes("ORDER BY credential.id"))).toBe(false);
     expect(statements).toContain("ROLLBACK");
   });
 
@@ -113,5 +128,43 @@ describe("bounded restored-passkey integrity scan", () => {
       message: "Stored passkey integrity scan could not connect to PostgreSQL."
     });
     expect(JSON.stringify(failure)).not.toContain("secret");
+  });
+
+  it("rolls back when the finite recovery deadline expires between keyset pages", async () => {
+    let monotonicNow = 1_000;
+    vi.spyOn(performance, "now").mockImplementation(() => monotonicNow);
+    query.mockImplementation(async (sql: string) => {
+      if (sql.includes("credentialless_user_exists")) {
+        return { rows: [{ credentialless_user_exists: false }] };
+      }
+      if (sql.includes("ORDER BY credential.id")) {
+        monotonicNow += 11;
+        return { rows: [{ ...storedRow(), scan_key: storedRow().id }] };
+      }
+      return { rows: [] };
+    });
+
+    await expect(assertStoredPasskeyCredentialIntegrity(pool, { deadlineMs: 10 }))
+      .rejects.toMatchObject({ operationalCode: "database_query_failed" });
+    expect(query).toHaveBeenCalledWith("ROLLBACK");
+  });
+
+  it("inherits an already-consumed recovery deadline before starting its phase", async () => {
+    vi.spyOn(performance, "now").mockReturnValue(1_011);
+
+    await expect(assertStoredPasskeyCredentialIntegrity(pool, { deadlineAt: 1_010 }))
+      .rejects.toMatchObject({ operationalCode: "database_query_failed" });
+
+    expect(pool.connect).not.toHaveBeenCalled();
+  });
+
+  it("rejects an absolute deadline that could bypass the recovery RTO ceiling", async () => {
+    vi.spyOn(performance, "now").mockReturnValue(1_000);
+
+    await expect(assertStoredPasskeyCredentialIntegrity(pool, {
+      deadlineAt: 1_000 + 30 * 60_000 + 1
+    })).rejects.toThrow("Restore integrity deadline is invalid.");
+
+    expect(pool.connect).not.toHaveBeenCalled();
   });
 });

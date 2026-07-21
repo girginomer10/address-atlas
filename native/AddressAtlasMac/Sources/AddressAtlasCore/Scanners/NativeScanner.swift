@@ -35,6 +35,11 @@ public struct NativeScanner: Sendable {
   public func scan(addresses input: String, customTokens: [CustomTokenRecord] = []) async throws
     -> ScanRunRecord
   {
+    // Network identity is proved once per endpoint within this workflow, never
+    // for the scanner lifetime. Re-proving on the next scan detects endpoint
+    // drift and lets a transient proof outage recover without restarting.
+    let scanNetworkIdentityProofs = ChainNetworkValueCache<Void>()
+    let scanCosmosSnapshotAnchors = ChainNetworkValueCache<Int64>()
     let workflowStartedAt = ProcessInfo.processInfo.systemUptime
     let parsedInput = AddressDetection.parseWithMetadata(input)
     let addresses = parsedInput.addresses.filter(AddressDetection.isSafePublicAddress)
@@ -129,7 +134,9 @@ public struct NativeScanner: Sendable {
                   address: job.address,
                   chain: job.chain,
                   prices: resolvedPrices,
-                  registries: registries
+                  registries: registries,
+                  networkIdentityProofs: scanNetworkIdentityProofs,
+                  cosmosSnapshotAnchors: scanCosmosSnapshotAnchors
                 )
               }
               outcome = ChainScanOutcome(
@@ -173,7 +180,7 @@ public struct NativeScanner: Sendable {
       })
     let unpricedSymbols =
       assets
-      .filter { $0.amount > 0 && $0.priceUsd == 0 && $0.source != .issued }
+      .filter { $0.amount > 0 && $0.pricingStatus == .unpriced && $0.source != .issued }
       .map(\.symbol)
     if !priceRequestFailed, !unpricedSymbols.isEmpty {
       warnings.append(
@@ -182,7 +189,8 @@ public struct NativeScanner: Sendable {
     }
 
     let valuationOverflowSymbols = assets.compactMap { asset -> String? in
-      guard asset.amount > 0, asset.priceUsd > 0,
+      guard asset.amount > 0, asset.pricingStatus == .valuationUnavailable,
+        asset.priceUsd > 0,
         FiniteValueMath.multiplyingNonnegative(asset.amount, asset.priceUsd) == nil
       else { return nil }
       return asset.symbol
@@ -208,37 +216,57 @@ public struct NativeScanner: Sendable {
     address: String,
     chain: ChainConfig,
     prices: [String: PricePoint],
-    registries: TokenRegistries
+    registries: TokenRegistries,
+    networkIdentityProofs: ChainNetworkValueCache<Void>,
+    cosmosSnapshotAnchors: ChainNetworkValueCache<Int64>
   ) async throws -> NativeScanResult {
     switch chain.family {
     case .bitcoin:
       return NativeScanResult(
-        assets: try await scanBitcoin(address: address, chain: chain, prices: prices))
+        assets: try await scanBitcoin(
+          address: address,
+          chain: chain,
+          prices: prices,
+          networkIdentityProofs: networkIdentityProofs
+        ))
     case .evm:
       return try await scanEVM(
         address: address,
         chain: chain,
         tokens: registries.evm[chain.id] ?? [],
-        prices: prices
+        prices: prices,
+        networkIdentityProofs: networkIdentityProofs
       )
     case .solana:
       return try await scanSolana(
         address: address,
         chain: chain,
         tokens: registries.spl[chain.id] ?? [],
-        prices: prices
+        prices: prices,
+        networkIdentityProofs: networkIdentityProofs
       )
     case .cosmos:
-      return try await scanCosmos(address: address, chain: chain, prices: prices)
+      return try await scanCosmos(
+        address: address,
+        chain: chain,
+        prices: prices,
+        snapshotAnchors: cosmosSnapshotAnchors
+      )
     case .tron:
       return try await scanTron(
         address: address,
         chain: chain,
         tokens: registries.trc20[chain.id] ?? [],
-        prices: prices
+        prices: prices,
+        networkIdentityProofs: networkIdentityProofs
       )
     case .xrp:
-      return try await scanXRP(address: address, chain: chain, prices: prices)
+      return try await scanXRP(
+        address: address,
+        chain: chain,
+        prices: prices,
+        networkIdentityProofs: networkIdentityProofs
+      )
     case .exchange:
       return NativeScanResult()
     }

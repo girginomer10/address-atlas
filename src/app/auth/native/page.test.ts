@@ -6,16 +6,23 @@ import NativeAuthPage from "./page";
 
 const CALLBACK = "address-atlas://sync-auth";
 const STATE = "11111111-1111-4111-8111-111111111111";
+const CODE_CHALLENGE = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 describe("native passkey mode binding", () => {
   it("shows only registration controls for a registration request", () => {
     const html = renderToStaticMarkup(createElement(NativePasskeyBridge, {
       callback: CALLBACK,
       state: STATE,
+      codeChallenge: CODE_CHALLENGE,
+      codeChallengeMethod: "S256",
       mode: "register"
     }));
     expect(html).toContain("Create passkey");
     expect(html).toContain("Account label");
+    expect(html).toContain('autoComplete="nickname"');
+    expect(html).toContain("stores opaque encrypted snapshots with limited sync metadata");
+    expect(html).toContain("never receives vault plaintext or key material");
+    expect(html).not.toContain("server receives account auth only");
     expect(html).not.toContain("<form");
     expect(html).toContain('aria-busy="false"');
     expect(html).toContain('aria-labelledby="passkey-heading"');
@@ -28,6 +35,8 @@ describe("native passkey mode binding", () => {
     const html = renderToStaticMarkup(createElement(NativePasskeyBridge, {
       callback: CALLBACK,
       state: STATE,
+      codeChallenge: CODE_CHALLENGE,
+      codeChallengeMethod: "S256",
       mode: "authenticate"
     }));
     expect(html).toContain("Sign in");
@@ -37,7 +46,13 @@ describe("native passkey mode binding", () => {
 
   it("rejects missing/invalid mode and callback authority", async () => {
     const page = await NativeAuthPage({
-      searchParams: Promise.resolve({ mode: "delete", callback: CALLBACK, state: STATE })
+      searchParams: Promise.resolve({
+        mode: "delete",
+        callback: CALLBACK,
+        state: STATE,
+        code_challenge: CODE_CHALLENGE,
+        code_challenge_method: "S256"
+      })
     });
     const bridge = page.props.children;
     expect(bridge.props.mode).toBeNull();
@@ -45,6 +60,8 @@ describe("native passkey mode binding", () => {
     const invalidModeHTML = renderToStaticMarkup(createElement(NativePasskeyBridge, {
       callback: CALLBACK,
       state: STATE,
+      codeChallenge: CODE_CHALLENGE,
+      codeChallengeMethod: "S256",
       mode: null
     }));
     expect(invalidModeHTML).toContain('role="alert"');
@@ -55,6 +72,8 @@ describe("native passkey mode binding", () => {
     const html = renderToStaticMarkup(createElement(NativePasskeyBridge, {
       callback: "address-atlas://attacker",
       state: STATE,
+      codeChallenge: CODE_CHALLENGE,
+      codeChallengeMethod: "S256",
       mode: "authenticate"
     }));
     expect(html).toContain("disabled");
@@ -71,6 +90,8 @@ describe("native passkey mode binding", () => {
     const html = renderToStaticMarkup(createElement(NativePasskeyBridge, {
       callback,
       state: STATE,
+      codeChallenge: CODE_CHALLENGE,
+      codeChallengeMethod: "S256",
       mode: "authenticate"
     }));
 
@@ -83,7 +104,9 @@ describe("native passkey mode binding", () => {
       searchParams: Promise.resolve({
         mode: ["authenticate", "register"],
         callback: [CALLBACK, "address-atlas://attacker"],
-        state: [STATE, STATE]
+        state: [STATE, STATE],
+        code_challenge: [CODE_CHALLENGE, CODE_CHALLENGE],
+        code_challenge_method: ["S256", "plain"]
       })
     });
     const bridge = page.props.children;
@@ -91,5 +114,24 @@ describe("native passkey mode binding", () => {
     expect(bridge.props.mode).toBeNull();
     expect(bridge.props.callback).toBe("");
     expect(bridge.props.state).toBe("");
+    expect(bridge.props.codeChallenge).toBe("");
+    expect(bridge.props.codeChallengeMethod).toBe("");
+  });
+
+  it.each([
+    ["", "S256"],
+    ["not-canonical", "S256"],
+    [CODE_CHALLENGE, "plain"]
+  ])("rejects an invalid PKCE binding: %s / %s", (codeChallenge, codeChallengeMethod) => {
+    const html = renderToStaticMarkup(createElement(NativePasskeyBridge, {
+      callback: CALLBACK,
+      state: STATE,
+      codeChallenge,
+      codeChallengeMethod,
+      mode: "authenticate"
+    }));
+
+    expect(html).toContain("disabled");
+    expect(html).toContain("Open this page from Address Atlas Mac.");
   });
 });

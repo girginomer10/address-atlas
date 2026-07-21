@@ -243,9 +243,9 @@ public enum ExchangeBalanceNormalizer {
       let symbol = entry.symbol
       let amount = entry.approximateAmount
       let coinId = coinGeckoIds[symbol]
-      let price = pricePoint(
+      let pricing = pricePoint(
         symbol: symbol, coinId: coinId, prices: prices, fiatUsdRates: fiatUsdRates)
-      let unitPrice = price.usd.isFinite && price.usd >= 0 ? price.usd : 0
+      let unitPrice = pricing.point.usd
       let valueUsd = FiniteValueMath.multiplyingNonnegative(amount, unitPrice)
       if valueUsd == nil { valuationOverflowSymbols.append(symbol) }
       holdings.append(
@@ -261,7 +261,10 @@ public enum ExchangeBalanceNormalizer {
           exactAmount: entry.exactAmount?.canonicalString,
           priceUsd: unitPrice,
           valueUsd: valueUsd ?? 0,
-          change24h: FiniteValueMath.finiteOptional(price.usd24hChange),
+          pricingStatus: pricing.isKnown
+            ? (valueUsd == nil ? .valuationUnavailable : .priced)
+            : .unpriced,
+          change24h: FiniteValueMath.finiteOptional(pricing.point.usd24hChange),
           explorerUrl: "",
           source: .exchange,
           walletLabel: label,
@@ -411,23 +414,26 @@ public enum ExchangeBalanceNormalizer {
     coinId: String?,
     prices: [String: PricePoint],
     fiatUsdRates: [String: Double]
-  ) -> PricePoint {
-    if symbol == "USD" { return PricePoint(usd: 1, usd24hChange: 0) }
+  ) -> (point: PricePoint, isKnown: Bool) {
+    if symbol == "USD" { return (PricePoint(usd: 1, usd24hChange: 0), true) }
     if fiatSymbols.contains(symbol), let rate = fiatUsdRates[symbol], rate.isFinite, rate > 0 {
-      return PricePoint(usd: rate)
+      return (PricePoint(usd: rate), true)
     }
     if let coinId, let price = prices[coinId], price.usd.isFinite, price.usd >= 0 {
-      return PricePoint(
-        usd: price.usd,
-        usd24hChange: FiniteValueMath.finiteOptional(price.usd24hChange)
+      return (
+        PricePoint(
+          usd: price.usd,
+          usd24hChange: FiniteValueMath.finiteOptional(price.usd24hChange)
+        ),
+        true
       )
     }
     // A live CoinGecko price always wins above. Only when it is missing (the
     // symbol was omitted from the response or the request failed) may a USD
     // stablecoin fall back to exactly $1.00 instead of rendering a real
     // balance as $0. Every other symbol without a price stays visibly unpriced.
-    if usdStableSymbols.contains(symbol) { return PricePoint(usd: 1) }
-    return PricePoint(usd: 0)
+    if usdStableSymbols.contains(symbol) { return (PricePoint(usd: 1), true) }
+    return (PricePoint(usd: 0), false)
   }
 
   static func formattedSymbols(_ symbols: [String]) -> String {

@@ -3,6 +3,9 @@ import { CORE_SCHEMA_MIGRATION } from "./001-core-schema";
 import { VAULT_ACCOUNTING_MIGRATION } from "./002-vault-accounting";
 import { ACCOUNT_DELETION_RECEIPTS_MIGRATION } from "./003-account-deletion-receipts";
 import { VAULT_ENVELOPE_STORAGE_BOUND_MIGRATION } from "./004-vault-envelope-storage-bound";
+import {
+  PASSKEY_STORAGE_POLICY_MIGRATION
+} from "./005-passkey-storage-policy";
 
 export type { PreparedSyncMigration, SyncMigration } from "./types";
 
@@ -13,12 +16,14 @@ export const SYNC_MIGRATIONS = Object.freeze([
 ]);
 
 /**
- * Immutable next-head contracts accepted by this binary but not applied by it.
- * This one-release preparation window is what makes the current image a real
- * N-1 rollback target after the next schema release.
+ * Immutable contiguous future-head contracts accepted by this binary but not
+ * applied by it. The next release may activate this prepared batch in order;
+ * knowing the full resulting chain makes the current image a real N-1 rollback
+ * target after that release.
  */
 export const PREPARED_SYNC_MIGRATIONS = Object.freeze([
-  VAULT_ENVELOPE_STORAGE_BOUND_MIGRATION
+  VAULT_ENVELOPE_STORAGE_BOUND_MIGRATION,
+  PASSKEY_STORAGE_POLICY_MIGRATION
 ]);
 
 export const KNOWN_SYNC_MIGRATIONS = Object.freeze([

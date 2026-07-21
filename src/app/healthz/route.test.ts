@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   getNativeEndpointConfig: vi.fn(),
   ensureSyncSchema: vi.fn(),
   checkSyncSchemaReadiness: vi.fn(),
+  assertStorageLedgerAuditReady: vi.fn(),
   scheduleStorageLedgerIntegrityAudit: vi.fn(),
   resetStorageLedgerIntegrityForTests: vi.fn()
 }));
@@ -24,6 +25,7 @@ vi.mock("@/lib/sync/postgres", () => ({
 }));
 
 vi.mock("@/lib/sync/storage-ledger-integrity", () => ({
+  assertStorageLedgerAuditReady: mocks.assertStorageLedgerAuditReady,
   scheduleStorageLedgerIntegrityAudit: mocks.scheduleStorageLedgerIntegrityAudit,
   resetStorageLedgerIntegrityForTests: mocks.resetStorageLedgerIntegrityForTests
 }));
@@ -45,6 +47,7 @@ describe("sync readiness", () => {
     mocks.ensureSyncSchema.mockResolvedValue(undefined);
     mocks.checkSyncSchemaReadiness.mockResolvedValue(undefined);
     mocks.scheduleStorageLedgerIntegrityAudit.mockReturnValue(true);
+    mocks.assertStorageLedgerAuditReady.mockReturnValue(undefined);
   });
 
   it("reports ready only after schema and database checks succeed", async () => {
@@ -93,6 +96,32 @@ describe("sync readiness", () => {
     expect(JSON.stringify(record)).not.toContain("vault_snapshots is missing");
   });
 
+  it("invalidates a positive schema cache immediately when the ledger audit fails", async () => {
+    const first = await GET();
+    mocks.assertStorageLedgerAuditReady.mockImplementationOnce(() => {
+      throw Object.assign(new Error("ledger became unavailable"), {
+        operationalCode: "storage_ledger_invalid"
+      });
+    });
+
+    const second = await GET();
+    const third = await GET();
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(503);
+    expect(third.status).toBe(503);
+    expect(mocks.ensureSyncSchema).toHaveBeenCalledOnce();
+    expect(mocks.checkSyncSchemaReadiness).toHaveBeenCalledOnce();
+    expect(mocks.scheduleStorageLedgerIntegrityAudit).toHaveBeenCalledTimes(2);
+    expect(mocks.assertStorageLedgerAuditReady).toHaveBeenCalledTimes(2);
+    expect(console.error).toHaveBeenCalledOnce();
+    expect(JSON.parse(String(vi.mocked(console.error).mock.calls[0]?.[0])))
+      .toMatchObject({
+        event: "health.not_ready",
+        errorCode: "storage_ledger_invalid"
+      });
+  });
+
   it("caches a failed readiness audit for one second before retrying", async () => {
     mocks.checkSyncSchemaReadiness.mockRejectedValueOnce(new Error("database unavailable"));
     const first = await GET();
@@ -116,6 +145,28 @@ describe("sync readiness", () => {
     expect(mocks.scheduleStorageLedgerIntegrityAudit).toHaveBeenCalledOnce();
     expect(console.error).not.toHaveBeenCalled();
   });
+
+  it.each(["pending", "unavailable"])(
+    "reports 503 while the storage ledger audit is %s",
+    async () => {
+      mocks.assertStorageLedgerAuditReady.mockImplementationOnce(() => {
+        throw Object.assign(new Error("ledger audit not ready"), {
+          operationalCode: "storage_ledger_invalid"
+        });
+      });
+
+      const response = await GET();
+
+      expect(response.status).toBe(503);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(mocks.scheduleStorageLedgerIntegrityAudit).toHaveBeenCalledOnce();
+      const record = JSON.parse(String(vi.mocked(console.error).mock.calls[0]?.[0]));
+      expect(record).toMatchObject({
+        event: "health.not_ready",
+        errorCode: "storage_ledger_invalid"
+      });
+    }
+  );
 
   it("caches ensureSyncSchema failures and retries the whole pipeline after expiry", async () => {
     mocks.ensureSyncSchema.mockRejectedValueOnce(

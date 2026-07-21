@@ -23,6 +23,7 @@
     "sync:restore:drill": "bash server/sync/manage-prod.sh restore-drill",
     "sync:restore:production": "bash server/sync/manage-prod.sh restore",
     "sync:restore:bootstrap": "bash server/sync/manage-prod.sh bootstrap-restore",
+    "sync:credentials:rotate": "bash server/sync/manage-prod.sh rotate-database-credentials",
     "sync:monitor": "bash server/sync/monitor-sync.sh",
     "memory:init": "python3 scripts/repo-memory.py init",
     "memory:add": "python3 scripts/repo-memory.py add",
@@ -36,7 +37,8 @@
     "native:dmg": "cd native/AddressAtlasMac && ./build-dmg.sh",
     "native:notarize": "cd native/AddressAtlasMac && ./notarize-mac-app.sh",
     "release:doctor": "./scripts/release-doctor.sh",
-    "ops:test": "bash server/sync/ops-script-tests.sh",
+    "release:governance:test": "bash scripts/check-ruleset-governance-tests.sh && bash scripts/check-release-environment-governance-tests.sh",
+    "ops:test": "bash server/sync/ops-script-tests.sh && bash server/sync/frontend-recovery-tests.sh && bash server/sync/credential-rotation-tests.sh && bash server/sync/systemd-contract-tests.sh",
     "test": "vitest run"
   },
   "keywords": [

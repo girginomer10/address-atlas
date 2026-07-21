@@ -79,7 +79,11 @@ final class VaultSyncKeyRecoveryTests: XCTestCase {
       path: vaultURL, vaultKey: vaultKey, crypto: crypto)
     try databaseStore.save(
       VaultDocument(wallets: [
-        WalletRecord(label: "Recovered from file", address: "0xabc", chainKind: .evm)
+        WalletRecord(
+          label: "Recovered from file",
+          address: "0x0000000000000000000000000000000000000abc",
+          chainKind: .evm
+        )
       ]))
     let kit = try RecoveryKitCodec().create(vaultKey: vaultKey)
     let encodedKit = try JSONEncoder.addressAtlas.encode(kit.document)
@@ -109,7 +113,13 @@ final class VaultSyncKeyRecoveryTests: XCTestCase {
     let oldKeychainKey = try crypto.generateVaultKey()
     let store = try EncryptedSQLiteVaultStore(path: vaultURL, vaultKey: correctKey, crypto: crypto)
     try store.save(
-      VaultDocument(wallets: [WalletRecord(label: "Recovered", address: "0xabc", chainKind: .evm)]))
+      VaultDocument(wallets: [
+        WalletRecord(
+          label: "Recovered",
+          address: "0x0000000000000000000000000000000000000abc",
+          chainKind: .evm
+        )
+      ]))
     let kit = try RecoveryKitCodec().create(vaultKey: correctKey)
     let keyStore = InMemoryVaultKeyStore(key: oldKeychainKey)
 
@@ -136,7 +146,13 @@ final class VaultSyncKeyRecoveryTests: XCTestCase {
     let existingKeychainKey = try crypto.generateVaultKey()
     let store = try EncryptedSQLiteVaultStore(path: vaultURL, vaultKey: databaseKey, crypto: crypto)
     try store.save(
-      VaultDocument(wallets: [WalletRecord(label: "Protected", address: "0xabc", chainKind: .evm)]))
+      VaultDocument(wallets: [
+        WalletRecord(
+          label: "Protected",
+          address: "0x0000000000000000000000000000000000000abc",
+          chainKind: .evm
+        )
+      ]))
     let keyStore = InMemoryVaultKeyStore(key: existingKeychainKey)
 
     XCTAssertThrowsError(

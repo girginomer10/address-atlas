@@ -88,6 +88,11 @@ fi
 
 ops_shell_scripts=(
   server/sync/manage-prod.sh
+  server/sync/frontend-recovery.sh
+  server/sync/frontend-recovery-tests.sh
+  server/sync/credential-rotation-tests.sh
+  scripts/check-ruleset-governance-tests.sh
+  server/sync/systemd-contract-tests.sh
   server/sync/postgres-backup.sh
   server/sync/monitor-sync.sh
 )

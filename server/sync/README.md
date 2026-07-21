@@ -145,9 +145,10 @@ In production, boot-time configuration validation runs via
 `SYNC_SESSION_SECRET`, `PASSKEY_*`, or database configuration instead of
 serving requests with invalid settings.
 
-Generate `SYNC_SESSION_SECRET` with at least 32 random bytes. Generate two
-independent URL-safe PostgreSQL passwords with `openssl rand -hex 32`:
+Generate `SYNC_SESSION_SECRET` with at least 32 random bytes. Generate three
+mutually distinct URL-safe PostgreSQL passwords with `openssl rand -hex 32`.
 `POSTGRES_PASSWORD`/`SYNC_SCHEMA_DATABASE_URL` belong to the schema owner, while
+`POSTGRES_ADMIN_PASSWORD` belongs only to the isolated cluster administrator and
 `POSTGRES_RUNTIME_PASSWORD`/`SYNC_DATABASE_URL` belong to
 `address_atlas_runtime`. The owner URL is never passed to the long-running web
 container. `PASSKEY_ORIGIN` is derived as `https://ADDRESS_ATLAS_DOMAIN`;

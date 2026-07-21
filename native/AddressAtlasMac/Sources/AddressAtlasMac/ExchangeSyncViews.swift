@@ -200,7 +200,9 @@ struct ExchangeRow: View {
       }
       Button("Cancel", role: .cancel) {}
     } message: {
-      Text("The encrypted API credentials for this connection will be removed from the vault.")
+      Text(
+        "The encrypted API credentials will be removed from this Mac and from its automatic rollback point. A previously uploaded encrypted snapshot may still contain them until you upload the replacement vault."
+      )
     }
     .disabled(state.vaultEditsDisabled)
   }
@@ -239,12 +241,14 @@ struct SyncView: View {
   @State private var confirmingAccountDisconnect = false
   @State private var confirmingLocalAccountDisconnect = false
   @State private var confirmingStopUploadRecovery = false
+  @State private var confirmingDiscardQuarantinedUpload = false
   @State private var confirmingRollbackRestore = false
   @State private var pendingDownloadServerURL: URL?
   @State private var pendingRevocationServerURL: URL?
   @State private var pendingDeletionServerURL: URL?
   @State private var pendingDisconnectServerURL: URL?
   @State private var pendingLocalDisconnectServerURL: URL?
+  @State private var sessionEvaluationDate = Date()
 
   private var hasValidServerInput: Bool {
     AppState.validatedSyncURL(serverURL) != nil
@@ -253,7 +257,7 @@ struct SyncView: View {
   private var hasActiveSyncSession: Bool {
     boundActionServerURL != nil
       && state.document.syncState.accountId != nil
-      && !state.document.syncState.sessionToken.isEmpty
+      && state.hasUsableSyncSession(at: sessionEvaluationDate)
   }
 
   private var hasConnectedSyncAccount: Bool {
@@ -288,8 +292,8 @@ struct SyncView: View {
       title: "Encrypted Sync",
       subtitle:
         "Only opaque encrypted vault snapshots are uploaded. The server never receives decryptable key material.",
-      statTitle: "Remote version",
-      statValue: "\(state.document.syncState.latestRemoteVersion)"
+      statTitle: "Last confirmed remote version",
+      statValue: AppState.remoteVersionStatus(state.document.syncState)
     ) {
       Surface {
         VStack(alignment: .leading, spacing: 14) {
@@ -399,7 +403,9 @@ struct SyncView: View {
             )
             Button {
               guard let target = boundActionServerURL else { return }
-              if state.hasUnsyncedLocalChanges || state.hasPendingWalletLabelDrafts {
+              if state.hasUnsyncedLocalChanges || state.hasPendingWalletLabelDrafts
+                || state.document.syncState.remoteOutcomeUncertain
+              {
                 pendingDownloadServerURL = target
                 confirmingDiscardDownload = true
               } else {
@@ -419,20 +425,30 @@ struct SyncView: View {
                 || state.hasPendingAccountDeletion || !hasActiveSyncSession
             )
             if state.syncPersistencePending {
-              Button {
-                Task { await state.retryPendingSyncPersistence() }
-              } label: {
-                SyncActionLabel(
-                  idleTitle: state.pendingVaultUpload == nil
-                    ? "Retry local save"
-                    : "Retry upload recovery",
-                  systemImage: "arrow.clockwise",
-                  activity: pendingRetryActivity,
-                  activeActivity: state.syncActivity
-                )
+              if state.quarantinedPendingVaultUpload != nil {
+                Button(role: .destructive) {
+                  confirmingDiscardQuarantinedUpload = true
+                } label: {
+                  Label("Discard damaged recovery record", systemImage: "exclamationmark.shield")
+                }
+                .buttonStyle(AtlasSecondaryButtonStyle())
+                .disabled(state.syncing || state.scanning || state.isUnlocking)
+              } else {
+                Button {
+                  Task { await state.retryPendingSyncPersistence() }
+                } label: {
+                  SyncActionLabel(
+                    idleTitle: state.pendingVaultUpload == nil
+                      ? "Retry local save"
+                      : "Retry upload recovery",
+                    systemImage: "arrow.clockwise",
+                    activity: pendingRetryActivity,
+                    activeActivity: state.syncActivity
+                  )
+                }
+                .buttonStyle(AtlasSecondaryButtonStyle())
+                .disabled(state.syncing || state.scanning || state.isUnlocking)
               }
-              .buttonStyle(AtlasSecondaryButtonStyle())
-              .disabled(state.syncing || state.scanning || state.isUnlocking)
               if state.pendingVaultUpload != nil {
                 Button(role: .destructive) {
                   confirmingStopUploadRecovery = true
@@ -460,7 +476,7 @@ struct SyncView: View {
             ("Account", state.document.syncState.accountId ?? "not connected"),
             (
               "Session",
-              state.document.syncState.sessionToken.isEmpty ? "sign in required" : "active"
+              state.syncSessionStatus(at: sessionEvaluationDate)
             ),
             (
               "Account deletion",
@@ -473,27 +489,43 @@ struct SyncView: View {
             (
               "Local changes",
               state.syncPersistencePending
-                ? state.pendingVaultUpload == nil
+                ? state.quarantinedPendingVaultUpload != nil
+                  ? "recovery record quarantined; read-only"
+                  : state.pendingVaultUpload == nil
                   ? "remote synced; local save pending"
                   : state.pendingVaultUploadHasRemoteConflict
                     ? "upload recovery conflict"
                     : "upload recovery pending"
-                : state.hasUnsyncedLocalChanges || state.hasPendingWalletLabelDrafts
-                  ? "not uploaded"
+                : state.document.syncState.remoteOutcomeUncertain
+                  ? "remote outcome unknown; reconcile required"
+                  : state.document.syncState.pendingExchangeCredentialCleanup
+                    ? "remote credential cleanup pending"
+                  : state.hasUnsyncedLocalChanges || state.hasPendingWalletLabelDrafts
+                  ? "local changes not confirmed remotely"
                   : "synced"
             ),
             (
               "Local persistence",
-              state.pendingVaultUpload != nil
+              state.quarantinedPendingVaultUpload != nil
+                ? "primary vault protected; damaged journal quarantined"
+                : state.pendingVaultUpload != nil
                 ? "full local vault protected"
                 : state.syncPersistencePending ? "retry required" : "saved"
             ),
             (
-              "Last synced",
-              state.document.syncState.lastSyncedAt?.formatted(date: .abbreviated, time: .shortened)
-                ?? "never"
+              "Exchange credential cleanup",
+              state.document.syncState.pendingExchangeCredentialCleanup
+                ? "remote replacement upload required"
+                : "no pending remote cleanup"
             ),
-            ("Checksum", state.document.syncState.lastChecksum ?? "none"),
+            (
+              "Last confirmed sync",
+              AppState.lastConfirmedSyncStatus(state.document.syncState)
+            ),
+            (
+              "Last confirmed checksum",
+              AppState.lastConfirmedChecksumStatus(state.document.syncState)
+            ),
           ])
         }
       }
@@ -505,7 +537,7 @@ struct SyncView: View {
             meta: state.hasVaultRollbackCheckpoint ? "Ready to restore" : "No restore point"
           )
           Text(
-            "Before a remote download replaces local data, Address Atlas automatically saves the previous vault content and credentials as an encrypted rollback point. Restoring it keeps the current sync account and remote baseline, replaces the remaining local content, and consumes that point. CSV and JSON exports are redacted reports—not backups—and cannot restore credentials or serve as rollback points."
+            "Before a remote download replaces local data, Address Atlas automatically saves the previous vault content and credentials as an encrypted rollback point. Restoring it keeps the current sync account and remote baseline, replaces the remaining local content, and consumes that point. Portfolio exports omit credentials but include identifying addresses, labels, balances, and history; they are not backups and cannot serve as rollback points."
           )
           .font(.callout)
           .foregroundStyle(AtlasTheme.ink2)
@@ -549,7 +581,7 @@ struct SyncView: View {
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
             .disabled(
-              state.vaultEditsDisabled || state.document.syncState.sessionToken.isEmpty
+              state.vaultEditsDisabled || !state.hasUsableSyncSession(at: sessionEvaluationDate)
                 || boundActionServerURL == nil
             )
             Button(role: .destructive) {
@@ -600,10 +632,31 @@ struct SyncView: View {
       }
     }
     .onAppear {
+      sessionEvaluationDate = Date()
       serverURL = state.document.syncState.serverURL
       Task {
         await state.refreshEndpointConfig(silent: true)
       }
+    }
+    .task {
+      while !Task.isCancelled {
+        try? await Task.sleep(for: .seconds(30))
+        sessionEvaluationDate = Date()
+      }
+    }
+    .confirmationDialog(
+      "Discard the damaged encrypted upload recovery record?",
+      isPresented: $confirmingDiscardQuarantinedUpload,
+      titleVisibility: .visible
+    ) {
+      Button("Discard only the damaged recovery record", role: .destructive) {
+        Task { await state.discardQuarantinedPendingVaultUpload() }
+      }
+      Button("Keep vault read-only", role: .cancel) {}
+    } message: {
+      Text(
+        "Your full local vault will be kept. Only the exact quarantined upload journal row will be removed. Because its interrupted remote result cannot be recovered, Address Atlas will mark the remote outcome unknown and require reconciliation before a later destructive download."
+      )
     }
     .confirmationDialog(
       "Restore the previous encrypted local content?",
@@ -683,15 +736,21 @@ struct SyncView: View {
       Button("Continue recovery", role: .cancel) {}
     } message: {
       Text(
-        "The full local vault will be kept, but the server may already contain the interrupted upload. CSV and JSON exports are redacted reports, not backups. If a later remote download replaces this vault, Address Atlas will first create an automatic encrypted rollback point."
+        "The full local vault will be kept, but the server may already contain the interrupted upload. Portfolio exports omit credentials but include identifying addresses, labels, balances, and history; they are not backups. If a later remote download replaces this vault, Address Atlas will first create an automatic encrypted rollback point."
       )
     }
     .confirmationDialog(
-      "Discard local changes and download from \(pendingDownloadServerURL?.absoluteString ?? persistedServerOrigin)?",
+      state.document.syncState.remoteOutcomeUncertain
+        ? "Reconcile the unknown remote upload outcome by downloading from \(pendingDownloadServerURL?.absoluteString ?? persistedServerOrigin)?"
+        : "Discard local changes and download from \(pendingDownloadServerURL?.absoluteString ?? persistedServerOrigin)?",
       isPresented: $confirmingDiscardDownload,
       titleVisibility: .visible
     ) {
-      Button("Discard local changes", role: .destructive) {
+      Button(
+        state.document.syncState.remoteOutcomeUncertain
+          ? "Download and reconcile unknown outcome" : "Discard local changes",
+        role: .destructive
+      ) {
         guard let target = pendingDownloadServerURL else { return }
         Task {
           await state.downloadEncryptedVault(
@@ -703,7 +762,9 @@ struct SyncView: View {
       Button("Cancel", role: .cancel) {}
     } message: {
       Text(
-        "This replaces the local vault with the latest authenticated remote snapshot from \(pendingDownloadServerURL?.absoluteString ?? persistedServerOrigin). Address Atlas first saves the current local content and credentials as an automatic encrypted rollback point; a later restore keeps the downloaded sync account and remote baseline. CSV and JSON exports are redacted reports, not backups. Upload anything you need on the server before continuing."
+        state.document.syncState.remoteOutcomeUncertain
+          ? "The last upload response was not confirmed, so the server may contain either the old or new encrypted vault. This downloads the latest authenticated snapshot to reconcile that uncertainty and replaces local content only after saving an automatic encrypted rollback point. Review the remote result carefully."
+          : "This replaces the local vault with the latest authenticated remote snapshot from \(pendingDownloadServerURL?.absoluteString ?? persistedServerOrigin). Address Atlas first saves the current local content and credentials as an automatic encrypted rollback point; a later restore keeps the downloaded sync account and remote baseline. Portfolio exports omit credentials but include identifying addresses, labels, balances, and history; they are not backups. Upload anything you need on the server before continuing."
       )
     }
     .confirmationDialog(
@@ -740,27 +801,40 @@ struct SyncView: View {
 }
 
 enum ExportPayload: Sendable {
+  case shareSafeCSV(VaultDocument)
+  case shareSafeJSON(VaultDocument)
   case csv([TrackedAsset])
   case json(VaultDocument)
 
   var suggestedName: String {
     switch self {
-    case .csv: "address-atlas-holdings-report.csv"
-    case .json: "address-atlas-redacted-report.json"
+    case .shareSafeCSV: "address-atlas-share-safer-summary.csv"
+    case .shareSafeJSON: "address-atlas-share-safer-summary.json"
+    case .csv: "address-atlas-full-identifying-holdings-report.csv"
+    case .json: "address-atlas-full-identifying-portfolio-report.json"
     }
   }
 
   var contentType: UTType {
     switch self {
-    case .csv: .commaSeparatedText
-    case .json: .json
+    case .shareSafeCSV, .csv: .commaSeparatedText
+    case .shareSafeJSON, .json: .json
     }
   }
 
   var displayName: String {
     switch self {
-    case .csv: "CSV report"
-    case .json: "JSON report"
+    case .shareSafeCSV: "Share-safer CSV summary"
+    case .shareSafeJSON: "Share-safer JSON summary"
+    case .csv: "Full identifying CSV report"
+    case .json: "Full identifying JSON report"
+    }
+  }
+
+  var isShareSafer: Bool {
+    switch self {
+    case .shareSafeCSV, .shareSafeJSON: true
+    case .csv, .json: false
     }
   }
 }
@@ -770,8 +844,12 @@ enum ExportPipeline {
 
   nonisolated static func data(for payload: ExportPayload) throws -> Data {
     switch payload {
+    case .shareSafeCSV(let document):
+      return Data(try AddressAtlasExporter.shareSafeCSV(for: document).utf8)
+    case .shareSafeJSON(let document):
+      return try AddressAtlasExporter.shareSafeJSON(for: document)
     case .csv(let assets):
-      return Data(AddressAtlasExporter.csv(for: assets).utf8)
+      return Data(try AddressAtlasExporter.csv(for: assets).utf8)
     case .json(let document):
       return try AddressAtlasExporter.json(for: document)
     }
@@ -803,46 +881,103 @@ enum ExportPipeline {
 }
 
 struct ExportView: View {
+  static let shareSaferExplanation =
+    "It omits addresses, labels, symbols, names, record IDs, URLs, notes, history, timestamps, settings, credentials, sessions, and exact amounts, prices, and values. The latest holdings are grouped only by closed source categories and coarse ranges."
+  static let fullIdentifyingExplanation =
+    "Full exports are credential-free but identifying. CSV includes the latest addresses, labels, asset names, and exact balances. JSON also includes portfolio records, settings, timestamps, and scan history. They omit exchange credentials and sync authentication, and they are not backups."
+
   @EnvironmentObject private var state: AppState
   @State private var exportedPreview = ""
+  @State private var showFullIdentifyingExports = false
 
   var body: some View {
     Page(
       eyebrow: "Local reports",
       title: "Export",
       subtitle:
-        "Generate redacted CSV or JSON reports after unlock. They are not backups and cannot restore credentials or sync state; destructive sync downloads create an automatic encrypted rollback point first.",
+        "Use the share-safer summary for intentional sharing. Full identifying reports remain available behind an explicit disclosure.",
       statTitle: "Latest assets",
       statValue: "\(state.latestScan?.holdings.count ?? 0)"
     ) {
-      AdaptiveStack {
-        Button("Generate CSV report") {
-          guard let payload = csvPayloadIncludingDrafts() else { return }
-          generatePreview(for: payload)
-        }
-        .buttonStyle(AtlasSecondaryButtonStyle())
-        Button("Save CSV report") {
-          guard let payload = csvPayloadIncludingDrafts() else { return }
-          save(payload)
-        }
-        .buttonStyle(AtlasPrimaryButtonStyle())
-        Button("Generate JSON report") {
-          guard let payload = jsonPayloadIncludingDrafts() else { return }
-          generatePreview(for: payload)
-        }
-        .buttonStyle(AtlasSecondaryButtonStyle())
-        Button("Save JSON report") {
-          guard let payload = jsonPayloadIncludingDrafts() else { return }
-          save(payload)
-        }
-        .buttonStyle(AtlasSecondaryButtonStyle())
-        if state.isExportOperationInProgress {
-          ProgressView()
-            .controlSize(.small)
-            .accessibilityLabel("Preparing export")
+      Surface {
+        VStack(alignment: .leading, spacing: 14) {
+          SectionHeader(title: "Share-safer summary", meta: "Recommended · not anonymous")
+          Text(ShareSafePortfolioReport.privacyNotice)
+            .font(.body.weight(.semibold))
+            .foregroundStyle(AtlasTheme.ink)
+          Text(Self.shareSaferExplanation)
+            .font(.callout)
+            .foregroundStyle(AtlasTheme.ink2)
+          AdaptiveStack {
+            Button("Save share-safer CSV") {
+              save(.shareSafeCSV(state.document))
+            }
+            .buttonStyle(AtlasPrimaryButtonStyle())
+            Button("Preview share-safer CSV") {
+              generatePreview(for: .shareSafeCSV(state.document))
+            }
+            .buttonStyle(AtlasSecondaryButtonStyle())
+            Button("Save share-safer JSON") {
+              save(.shareSafeJSON(state.document))
+            }
+            .buttonStyle(AtlasSecondaryButtonStyle())
+            Button("Preview share-safer JSON") {
+              generatePreview(for: .shareSafeJSON(state.document))
+            }
+            .buttonStyle(AtlasSecondaryButtonStyle())
+          }
+          .disabled(state.isExportOperationInProgress)
+          if state.isExportOperationInProgress {
+            ProgressView()
+              .controlSize(.small)
+              .accessibilityLabel("Preparing export")
+          }
         }
       }
-      .disabled(state.isExportOperationInProgress)
+
+      Surface {
+        DisclosureGroup(isExpanded: $showFullIdentifyingExports) {
+          VStack(alignment: .leading, spacing: 14) {
+            Text(Self.fullIdentifyingExplanation)
+              .font(.callout)
+              .foregroundStyle(AtlasTheme.loss)
+            AdaptiveStack {
+              Button("Preview full identifying CSV") {
+                guard let payload = csvPayloadIncludingDrafts() else { return }
+                generatePreview(for: payload)
+              }
+              .buttonStyle(AtlasSecondaryButtonStyle())
+              Button("Save full identifying CSV") {
+                guard let payload = csvPayloadIncludingDrafts() else { return }
+                save(payload)
+              }
+              .buttonStyle(AtlasSecondaryButtonStyle())
+              Button("Preview full identifying JSON") {
+                guard let payload = jsonPayloadIncludingDrafts() else { return }
+                generatePreview(for: payload)
+              }
+              .buttonStyle(AtlasSecondaryButtonStyle())
+              Button("Save full identifying JSON") {
+                guard let payload = jsonPayloadIncludingDrafts() else { return }
+                save(payload)
+              }
+              .buttonStyle(AtlasSecondaryButtonStyle())
+            }
+            .disabled(state.isExportOperationInProgress)
+          }
+          .padding(.top, 12)
+        } label: {
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Full identifying exports")
+              .font(.headline)
+            Text("Secondary · disclose addresses, balances, and portfolio details")
+              .font(.caption)
+              .foregroundStyle(AtlasTheme.ink3)
+          }
+        }
+        .accessibilityIdentifier("full-identifying-export-disclosure")
+      }
+
       ExportPreview(exportedPreview: exportedPreview)
     }
   }
@@ -913,6 +1048,103 @@ struct ExportView: View {
   }
 }
 
+struct ExportPreviewRow: Identifiable, Equatable, Sendable {
+  let id: Int
+  let sourceLine: Int
+  let part: Int
+  let partCount: Int
+  let content: String
+
+  var locationLabel: String {
+    if partCount == 1 {
+      return "Line \(sourceLine)"
+    }
+    return "Line \(sourceLine), part \(part) of \(partCount)"
+  }
+
+  var visibleContent: String { content.isEmpty ? " " : content }
+  var accessibilityValue: String { content.isEmpty ? "Empty line" : content }
+  var accessibilityIdentifier: String { "export-preview-row-\(id)" }
+}
+
+struct ExportPreviewAccessibilityModel: Equatable, Sendable {
+  static let maximumNodeValueByteCount = 512
+  static let maximumNavigableRowCount = 2_048
+  static let maximumSummaryByteCount = 256
+
+  let rows: [ExportPreviewRow]
+  let sourceLineCount: Int
+  let sourceByteCount: Int
+  let didOmitContent: Bool
+
+  init(text: String) {
+    let splitLines = text.split(separator: "\n", omittingEmptySubsequences: false)
+    let sourceLines = splitLines.isEmpty ? [text[...]] : splitLines
+    var generatedRows: [ExportPreviewRow] = []
+    generatedRows.reserveCapacity(min(sourceLines.count, Self.maximumNavigableRowCount))
+
+    rowGeneration: for (lineIndex, sourceLine) in sourceLines.enumerated() {
+      let chunks = Self.boundedUTF8Chunks(String(sourceLine))
+      for (chunkIndex, chunk) in chunks.enumerated() {
+        guard generatedRows.count < Self.maximumNavigableRowCount else {
+          break rowGeneration
+        }
+        generatedRows.append(
+          ExportPreviewRow(
+            id: generatedRows.count + 1,
+            sourceLine: lineIndex + 1,
+            part: chunkIndex + 1,
+            partCount: chunks.count,
+            content: chunk
+          )
+        )
+      }
+    }
+
+    rows = generatedRows
+    sourceLineCount = sourceLines.count
+    sourceByteCount = text.utf8.count
+    didOmitContent = generatedRows.last?.sourceLine != sourceLines.count
+      || generatedRows.last?.part != generatedRows.last?.partCount
+  }
+
+  var spokenSummary: String {
+    if didOmitContent {
+      return
+        "Read-only export preview. Showing the first \(rows.count) navigable rows from \(sourceLineCount) lines. Save the report to inspect all content."
+    }
+    return "Read-only export preview. \(sourceLineCount) lines in \(rows.count) navigable rows."
+  }
+
+  var accessibilitySummaryLabel: String { "Preview summary: \(spokenSummary)" }
+
+  static let navigationHint =
+    "Navigate the table by row. Long source lines are split into numbered parts."
+
+  private static func boundedUTF8Chunks(_ text: String) -> [String] {
+    guard !text.isEmpty else { return [""] }
+
+    let bytes = Array(text.utf8)
+    var chunks: [String] = []
+    var start = 0
+
+    while start < bytes.count {
+      var end = min(start + maximumNodeValueByteCount, bytes.count)
+      if end < bytes.count {
+        while end > start, bytes[end] & 0xC0 == 0x80 {
+          end -= 1
+        }
+      }
+      // A UTF-8 scalar is at most four bytes, well below the configured bound.
+      precondition(end > start)
+      chunks.append(String(decoding: bytes[start..<end], as: UTF8.self))
+      start = end
+    }
+
+    return chunks
+  }
+}
+
 struct ExportPreview: View {
   static let contentAccessibilityIdentifier = "export-preview-content"
 
@@ -920,27 +1152,43 @@ struct ExportPreview: View {
 
   var displayedText: String {
     exportedPreview.isEmpty
-      ? "Generate a redacted report to inspect a bounded, read-only preview."
+      ? "Preview the recommended share-safer summary here. It reduces direct exposure, but portfolio composition can still identify you; it is not anonymous."
       : exportedPreview
   }
 
-  var accessibilityContent: String { displayedText }
+  var accessibilityModel: ExportPreviewAccessibilityModel {
+    ExportPreviewAccessibilityModel(text: displayedText)
+  }
 
   var body: some View {
+    let model = accessibilityModel
+
     Surface {
       VStack(alignment: .leading, spacing: 10) {
-        AtlasLabel("Read-only redacted report preview")
+        AtlasLabel("Read-only export preview")
           .accessibilityAddTraits(.isHeader)
-        ScrollView([.vertical, .horizontal]) {
-          Text(displayedText)
-            .font(.caption.monospaced())
-            .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-            // The label is the generated content itself—not the section title—
-            // so VoiceOver can inspect the same bounded preview as sighted users.
-            .accessibilityLabel(accessibilityContent)
-            .accessibilityIdentifier(Self.contentAccessibilityIdentifier)
+        Text(model.spokenSummary)
+          .font(.caption)
+          .foregroundStyle(AtlasTheme.ink2)
+          .accessibilityLabel(model.accessibilitySummaryLabel)
+        Table(model.rows) {
+          TableColumn("Location") { row in
+            Text(row.locationLabel)
+              .font(.caption.monospacedDigit())
+              .accessibilityHidden(true)
+          }
+          TableColumn("Preview content") { row in
+            Text(row.visibleContent)
+              .font(.caption.monospaced())
+              .textSelection(.enabled)
+              .accessibilityLabel(row.locationLabel)
+              .accessibilityValue(row.accessibilityValue)
+              .accessibilityIdentifier(row.accessibilityIdentifier)
+          }
         }
+        .accessibilityLabel("Read-only export preview table")
+        .accessibilityHint(ExportPreviewAccessibilityModel.navigationHint)
+        .accessibilityIdentifier(Self.contentAccessibilityIdentifier)
         .frame(minHeight: 280, maxHeight: 520)
       }
       .accessibilityElement(children: .contain)
@@ -1062,6 +1310,10 @@ struct SettingsView: View {
             }
           }
         }
+      }
+
+      Surface {
+        PrivacySafeDiagnosticsControls()
       }
     }
   }

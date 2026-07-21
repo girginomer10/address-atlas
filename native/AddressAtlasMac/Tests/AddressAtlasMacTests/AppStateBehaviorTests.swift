@@ -57,7 +57,9 @@ final class AppStateBehaviorTests: XCTestCase {
     authenticator.complete(
       with: PasskeyWebSession(
         userId: "11111111-1111-4111-8111-111111111111",
-        sessionToken: "typed-activity-session",
+        sessionToken: testSessionToken(
+          accountId: "11111111-1111-4111-8111-111111111111"
+        ),
         serverURL: server.absoluteString
       )
     )
@@ -106,6 +108,12 @@ final class AppStateBehaviorTests: XCTestCase {
     XCTAssertTrue(state.persistentOperationGuidance?.contains("deletion") == true)
 
     state.document.syncState.accountDeletionIdempotencyKey = nil
+    state.document.syncState.remoteOutcomeUncertain = true
+    XCTAssertTrue(state.persistentOperationGuidance?.contains("may or may not") == true)
+    state.clearTransientMessagesForNavigation()
+    XCTAssertTrue(state.persistentOperationGuidance?.contains("reconcile") == true)
+
+    state.document.syncState.remoteOutcomeUncertain = false
     XCTAssertNil(state.persistentOperationGuidance)
   }
 
@@ -201,6 +209,7 @@ final class AppStateBehaviorTests: XCTestCase {
       scanRuns: [old, new, middle],
       syncState: SyncState(
         accountId: accountId,
+        serverURL: "https://sync.example",
         latestRemoteVersion: 3,
         lastSyncedAt: Date(timeIntervalSince1970: 99),
         lastChecksum: String(repeating: "a", count: 64)
@@ -269,7 +278,7 @@ final class AppStateBehaviorTests: XCTestCase {
     XCTAssertEqual(try verifier.load().scanRuns.map(\.id), runs.map(\.id))
   }
 
-  func testExhaustedOrMalformedRemoteVersionDoesNotBlockLocalSave() async throws {
+  func testExhaustedRemoteVersionSavesButMalformedVersionFailsClosed() async throws {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let state = AppState(
@@ -277,7 +286,10 @@ final class AppStateBehaviorTests: XCTestCase {
       document: VaultDocument(
         syncState: SyncState(
           accountId: "44444444-4444-4444-8444-444444444444",
-          latestRemoteVersion: 2_000_000_000
+          serverURL: "https://sync.example",
+          latestRemoteVersion: 2_000_000_000,
+          lastSyncedAt: Date(timeIntervalSince1970: 100),
+          lastChecksum: String(repeating: "a", count: 64)
         )
       )
     )
@@ -286,25 +298,26 @@ final class AppStateBehaviorTests: XCTestCase {
     XCTAssertTrue(firstSave)
     state.document.syncState.latestRemoteVersion = Int.max
     let secondSave = await state.save()
-    XCTAssertTrue(secondSave)
+    XCTAssertFalse(secondSave)
 
     let verifier = try EncryptedSQLiteVaultStore(
       path: fixture.database,
       vaultKey: fixture.vaultKey
     )
-    XCTAssertEqual(try verifier.load().syncState.latestRemoteVersion, Int.max)
+    XCTAssertEqual(try verifier.load().syncState.latestRemoteVersion, 2_000_000_000)
   }
 
   func testAuthenticationExpiryPersistsTokenClearingWithoutSyncPruning() async throws {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let run = scan(generatedAt: 100, warningLength: 2_000)
+    let accountId = "55555555-5555-4555-8555-555555555555"
     let document = VaultDocument(
       scanRuns: [run],
       syncState: SyncState(
-        accountId: "55555555-5555-4555-8555-555555555555",
+        accountId: accountId,
         serverURL: "https://sync.example",
-        sessionToken: "expired-token"
+        sessionToken: testExpiredSessionToken(accountId: accountId)
       )
     )
     let persisted = try fixture.store.saveReturningPersistedDocument(document)
@@ -349,7 +362,13 @@ final class AppStateBehaviorTests: XCTestCase {
     let accountId = "22222222-2222-4222-8222-222222222222"
     var baseline = VaultDocument(
       scanRuns: [scan(generatedAt: 100, warningLength: 20)],
-      syncState: SyncState(accountId: accountId, latestRemoteVersion: 1)
+      syncState: SyncState(
+        accountId: accountId,
+        serverURL: "https://sync.example",
+        latestRemoteVersion: 1,
+        lastSyncedAt: Date(timeIntervalSince1970: 100),
+        lastChecksum: String(repeating: "a", count: 64)
+      )
     )
     baseline.syncState.lastSyncedContentChecksum = try codec.contentChecksum(for: baseline)
     let persisted = try fixture.store.saveReturningPersistedDocument(baseline)
@@ -409,7 +428,7 @@ final class AppStateBehaviorTests: XCTestCase {
     let new = scan(generatedAt: 200, warningLength: 20)
     let initial = VaultDocument(
       scanRuns: [old, new],
-      syncState: SyncState(accountId: accountId)
+      syncState: SyncState(accountId: accountId, serverURL: "https://sync.example")
     )
     let persisted = try fixture.store.saveReturningPersistedDocument(initial)
     let currentFullSize = try codec.encodedSnapshotByteCount(
@@ -471,16 +490,24 @@ final class AppStateBehaviorTests: XCTestCase {
         holdings: [
           asset(id: "visible", priceUsd: 100, valueUsd: 100),
           asset(id: "dust", priceUsd: 0.5, valueUsd: 0.5),
+          asset(
+            id: "unpriced",
+            priceUsd: 0,
+            valueUsd: 0,
+            pricingStatus: .unpriced
+          ),
         ]
       )
     ]
     state.document.preferences.hideDust = true
     state.document.preferences.dustThreshold = 1
 
-    XCTAssertEqual(state.visibleLatestHoldings.map(\.id), ["visible"])
+    XCTAssertEqual(state.visibleLatestHoldings.map(\.id), ["visible", "unpriced"])
     XCTAssertEqual(state.latestTotalUsd, 100.50, accuracy: 0.000_001)
     XCTAssertEqual(state.hiddenDustHoldingCount, 1)
     XCTAssertEqual(state.hiddenDustValueUsd, 0.50, accuracy: 0.000_001)
+    XCTAssertEqual(state.unpricedHoldingCount, 1)
+    XCTAssertTrue(state.hasPartialValuation)
   }
 
   func testTopHoldingsSortByValidatedValueWithDeterministicTieBreaks() {
@@ -503,12 +530,40 @@ final class AppStateBehaviorTests: XCTestCase {
     )
   }
 
-  func testValueOnlyAssetRemainsVisibleWhenHidingUnpriced() {
+  func testExplicitPricingStatusDistinguishesKnownZeroFromUnknown() {
     let valueOnly = asset(id: "value-only", priceUsd: 0, valueUsd: 25)
-    let unpriced = asset(id: "unpriced", priceUsd: 0, valueUsd: 0)
+    let knownZero = asset(
+      id: "known-zero", priceUsd: 0, valueUsd: 0, pricingStatus: .priced)
+    let unpriced = asset(
+      id: "unpriced", priceUsd: 0, valueUsd: 0, pricingStatus: .unpriced)
 
     XCTAssertTrue(AppState.isPricedForDisplay(valueOnly))
+    XCTAssertTrue(AppState.isPricedForDisplay(knownZero))
     XCTAssertFalse(AppState.isPricedForDisplay(unpriced))
+  }
+
+  func testUncertainRemoteMetadataIsAlwaysQualifiedAsLastConfirmed() {
+    let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
+    let checksum = String(repeating: "a", count: 64)
+    var sync = SyncState(
+      accountId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      latestRemoteVersion: 7,
+      lastSyncedAt: timestamp,
+      lastChecksum: checksum,
+      remoteOutcomeUncertain: true
+    )
+
+    XCTAssertEqual(AppState.remoteVersionStatus(sync), "Unknown (last confirmed 7)")
+    XCTAssertTrue(AppState.lastConfirmedSyncStatus(sync).hasPrefix("Unknown (last confirmed "))
+    XCTAssertEqual(
+      AppState.lastConfirmedChecksumStatus(sync),
+      "Unknown (last confirmed \(checksum))"
+    )
+
+    sync.remoteOutcomeUncertain = false
+    XCTAssertEqual(AppState.remoteVersionStatus(sync), "7")
+    XCTAssertFalse(AppState.lastConfirmedSyncStatus(sync).hasPrefix("Unknown"))
+    XCTAssertEqual(AppState.lastConfirmedChecksumStatus(sync), checksum)
   }
 
   func testManualPriceRequiresPositiveAmountAndFiniteResult() {
@@ -717,12 +772,25 @@ final class AppStateBehaviorTests: XCTestCase {
     generatedAt: TimeInterval,
     warningLength: Int
   ) -> ScanRunRecord {
-    ScanRunRecord(
+    var remaining = warningLength
+    var index = 0
+    var warnings: [String] = []
+    while remaining > 0 {
+      let prefix = "warning \(index): "
+      let chunk = min(300, remaining)
+      let wordCount = max(1, (chunk - prefix.count + 1) / 2)
+      warnings.append(
+        prefix + Array(repeating: "x", count: wordCount).joined(separator: " ")
+      )
+      remaining -= chunk
+      index += 1
+    }
+    return ScanRunRecord(
       generatedAt: Date(timeIntervalSince1970: generatedAt),
       totalUsd: 0,
       inputCount: 0,
       holdings: [],
-      warnings: [String(repeating: "x", count: warningLength)]
+      warnings: warnings
     )
   }
 
@@ -746,7 +814,8 @@ final class AppStateBehaviorTests: XCTestCase {
     id: String,
     address: String = "0x0000000000000000000000000000000000000001",
     priceUsd: Double,
-    valueUsd: Double
+    valueUsd: Double,
+    pricingStatus: AssetPricingStatus? = nil
   ) -> TrackedAsset {
     TrackedAsset(
       id: id,
@@ -759,6 +828,7 @@ final class AppStateBehaviorTests: XCTestCase {
       amount: 1,
       priceUsd: priceUsd,
       valueUsd: valueUsd,
+      pricingStatus: pricingStatus,
       source: .native
     )
   }

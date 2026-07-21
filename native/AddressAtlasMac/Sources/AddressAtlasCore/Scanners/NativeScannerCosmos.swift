@@ -1,26 +1,39 @@
 import Foundation
 
 extension NativeScanner {
-  func scanCosmos(address: String, chain: ChainConfig, prices: [String: PricePoint])
+  func scanCosmos(
+    address: String,
+    chain: ChainConfig,
+    prices: [String: PricePoint],
+    snapshotAnchors: ChainNetworkValueCache<Int64>? = nil
+  )
     async throws -> NativeScanResult
   {
     guard let rest = chain.restUrl, let denom = chain.nativeDenom else { return NativeScanResult() }
+    guard case .cosmosChainID = chain.networkIdentity else {
+      throw Self.messageError(domain: "Cosmos", message: "Cosmos network identity is missing.")
+    }
     let liquidScan: CosmosBalanceScan
     do {
-      liquidScan = try await fetchCosmosBalances(rest: rest, address: address)
+      // Establish both immutable chain identity and the one snapshot height
+      // before accepting any balance. Every successful path is therefore
+      // network-bound; there is no optimistic unbound fast path.
+      let anchorCache = snapshotAnchors ?? ChainNetworkValueCache<Int64>()
+      let height = try await anchorCache.value(
+        chainID: chain.id,
+        endpoint: rest,
+        identity: chain.networkIdentity
+      ) {
+        try await fetchCosmosSnapshotHeight(rest: rest, chain: chain)
+      }
+      liquidScan = try await fetchCosmosBalances(
+        rest: rest, address: address, expectedHeight: height)
     } catch {
       try throwIfCancellation(error)
-      do {
-        let height = try await fetchCosmosSnapshotHeight(rest: rest, chain: chain)
-        liquidScan = try await fetchCosmosBalances(
-          rest: rest, address: address, expectedHeight: height)
-      } catch {
-        try throwIfCancellation(error)
-        return NativeScanResult(
-          warnings: [
-            "A height-bound Cosmos snapshot could not be established; liquid, staked, and reward balances were skipped."
-          ])
-      }
+      return NativeScanResult(
+        warnings: [
+          "A height-bound Cosmos snapshot could not be established; liquid, staked, and reward balances were skipped."
+        ])
     }
     guard let snapshotHeight = liquidScan.height else {
       return NativeScanResult(
@@ -312,7 +325,7 @@ extension NativeScanner {
       let heightText = header.height,
       let height = Int64(heightText),
       height > 0,
-      let expectedChainID = Self.cosmosChainID(for: chain.id),
+      case .cosmosChainID(let expectedChainID) = chain.networkIdentity,
       header.chainID == expectedChainID
     else {
       throw Self.messageError(
@@ -362,16 +375,6 @@ extension NativeScanner {
     guard let returned = try optionalCosmosHeight(from: response), returned == expected else {
       throw Self.messageError(
         domain: "Cosmos", message: "Cosmos response omitted or changed block height.")
-    }
-  }
-
-  private static func cosmosChainID(for chainID: String) -> String? {
-    switch chainID {
-    case "cosmoshub": "cosmoshub-4"
-    case "osmosis": "osmosis-1"
-    case "celestia": "celestia"
-    case "stride": "stride-1"
-    default: nil
     }
   }
 

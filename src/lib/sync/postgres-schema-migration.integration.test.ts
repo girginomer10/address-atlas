@@ -54,6 +54,22 @@ maybeDescribe("versioned Postgres schema migrations", () => {
            AND attribute.attname = 'envelope'`
       );
       expect(storage.rows[0]?.attstorage).toBe("e");
+      const passkeyStorage = await getSyncPool().query<{
+        column_name: string;
+        attstorage: string;
+      }>(
+        `SELECT attribute.attname AS column_name,
+                attribute.attstorage::text AS attstorage
+         FROM pg_catalog.pg_attribute AS attribute
+         WHERE attribute.attrelid = 'passkey_credentials'::pg_catalog.regclass
+           AND attribute.attname = ANY($1::pg_catalog.text[])
+         ORDER BY attribute.attname`,
+        [["id", "public_key_base64url"]]
+      );
+      expect(passkeyStorage.rows).toEqual([
+        { column_name: "id", attstorage: "e" },
+        { column_name: "public_key_base64url", attstorage: "e" }
+      ]);
     });
   });
 
@@ -133,6 +149,89 @@ maybeDescribe("versioned Postgres schema migrations", () => {
     });
   });
 
+  it("stages passkey storage idempotently and accepts the prepared v5 head", async () => {
+    await withIsolatedSchema(async () => {
+      await ensureSyncSchema();
+      const vaultBound = PREPARED_SYNC_MIGRATIONS[0]!;
+      const passkeyStorage = PREPARED_SYNC_MIGRATIONS[1]!;
+
+      for (const statement of vaultBound.statements) {
+        await getSyncPool().query(statement);
+      }
+      await getSyncPool().query(
+        `INSERT INTO sync_schema_migrations (version, name, checksum)
+         VALUES ($1, $2, $3)`,
+        [vaultBound.version, vaultBound.name, vaultBound.checksum]
+      );
+
+      // Bootstrap already converged both attributes. The future immutable
+      // migration must skip both ALTERs instead of waiting behind a reader.
+      const reader = await getSyncPool().connect();
+      const migrationRunner = await getSyncPool().connect();
+      try {
+        await reader.query("BEGIN");
+        await reader.query("LOCK TABLE passkey_credentials IN ACCESS SHARE MODE");
+        await migrationRunner.query("SET lock_timeout = '250ms'");
+        await expect(migrationRunner.query(passkeyStorage.statements[0]!))
+          .resolves.toBeDefined();
+      } finally {
+        await migrationRunner.query("RESET lock_timeout").catch(() => undefined);
+        migrationRunner.release();
+        await reader.query("ROLLBACK").catch(() => undefined);
+        reader.release();
+      }
+
+      // A skipped convergence still gets repaired, and the same statement can
+      // be run again without changing a compliant catalog.
+      await getSyncPool().query(
+        `ALTER TABLE passkey_credentials
+           ALTER COLUMN id SET STORAGE EXTENDED,
+           ALTER COLUMN public_key_base64url SET STORAGE EXTENDED`
+      );
+      await getSyncPool().query(passkeyStorage.statements[0]!);
+      await getSyncPool().query(passkeyStorage.statements[0]!);
+      const repaired = await getSyncPool().query<{
+        column_name: string;
+        storage_policy: string;
+      }>(
+        `SELECT attribute.attname AS column_name,
+                attribute.attstorage::text AS storage_policy
+         FROM pg_catalog.pg_attribute AS attribute
+         WHERE attribute.attrelid = 'passkey_credentials'::pg_catalog.regclass
+           AND attribute.attname = ANY($1::pg_catalog.text[])
+         ORDER BY attribute.attname`,
+        [["id", "public_key_base64url"]]
+      );
+      expect(repaired.rows).toEqual([
+        { column_name: "id", storage_policy: "e" },
+        { column_name: "public_key_base64url", storage_policy: "e" }
+      ]);
+
+      await getSyncPool().query(
+        `INSERT INTO sync_schema_migrations (version, name, checksum)
+         VALUES ($1, $2, $3)`,
+        [passkeyStorage.version, passkeyStorage.name, passkeyStorage.checksum]
+      );
+
+      await closeSyncPoolForTests();
+      await expect(ensureSyncSchema()).resolves.toBeUndefined();
+      await expect(checkSyncSchemaReadiness()).resolves.toBeUndefined();
+      const constraint = await getSyncPool().query<{ validated: boolean }>(
+        `SELECT constraint_row.convalidated AS validated
+         FROM pg_catalog.pg_constraint AS constraint_row
+         WHERE constraint_row.conrelid = 'vault_snapshots'::pg_catalog.regclass
+           AND constraint_row.conname = 'vault_snapshots_envelope_storage_bound_check'`
+      );
+      // Normal deployment never takes an unbounded historical vault scan.
+      // The NOT VALID constraint still enforces every write after v4.
+      expect(constraint.rows).toEqual([{ validated: false }]);
+      expect(await migrationRows()).toEqual([
+        ...SYNC_MIGRATIONS,
+        ...PREPARED_SYNC_MIGRATIONS
+      ].map(({ version, name, checksum }) => ({ version, name, checksum })));
+    });
+  });
+
   it("blocks cutover on legacy compressed vault data without rendering it", async () => {
     await withIsolatedSchema(async () => {
       await ensureSyncSchema();
@@ -182,6 +281,44 @@ maybeDescribe("versioned Postgres schema migrations", () => {
       }
 
       await getSyncPool().query("DELETE FROM vault_snapshots WHERE user_id = $1", [userId]);
+      await getSyncPool().query("DELETE FROM users WHERE id = $1", [userId]);
+      await closeSyncPoolForTests();
+      await expect(ensureSyncSchema()).resolves.toBeUndefined();
+    });
+  });
+
+  it("blocks cutover on a legacy compressed passkey value", async () => {
+    await withIsolatedSchema(async () => {
+      await ensureSyncSchema();
+      const userId = randomUUID();
+      const credentialId = Buffer.from(`legacy-passkey:${userId}`).toString("base64url");
+      await getSyncPool().query(
+        `ALTER TABLE passkey_credentials
+           ALTER COLUMN public_key_base64url SET STORAGE EXTENDED`
+      );
+      await getSyncPool().query("INSERT INTO users (id) VALUES ($1)", [userId]);
+      await getSyncPool().query(
+        `INSERT INTO passkey_credentials (id, user_id, public_key_base64url)
+         VALUES ($1, $2, pg_catalog.repeat('A', 4096))`,
+        [credentialId, userId]
+      );
+      const compression = await getSyncPool().query<{ compression: string | null }>(
+        `SELECT pg_catalog.pg_column_compression(public_key_base64url) AS compression
+         FROM passkey_credentials
+         WHERE id = $1`,
+        [credentialId]
+      );
+      expect(compression.rows[0]?.compression).not.toBeNull();
+
+      // Catalog convergence is expand-only and cannot make the existing row
+      // readable by the guarded authentication projection.
+      await getSyncPool().query(
+        `ALTER TABLE passkey_credentials
+           ALTER COLUMN public_key_base64url SET STORAGE EXTERNAL`
+      );
+      await closeSyncPoolForTests();
+      await expect(ensureSyncSchema()).rejects.toThrow(/projection-safe/i);
+
       await getSyncPool().query("DELETE FROM users WHERE id = $1", [userId]);
       await closeSyncPoolForTests();
       await expect(ensureSyncSchema()).resolves.toBeUndefined();
@@ -270,7 +407,11 @@ maybeDescribe("versioned Postgres schema migrations", () => {
       await getSyncPool().query(
         `INSERT INTO sync_schema_migrations (version, name, checksum)
          VALUES ($1, $2, $3)`,
-        [SYNC_MIGRATIONS.length + 2, "unsupported-release", "e".repeat(64)]
+        [
+          SYNC_MIGRATIONS.length + PREPARED_SYNC_MIGRATIONS.length + 1,
+          "unsupported-release",
+          "e".repeat(64)
+        ]
       );
       await closeSyncPoolForTests();
       await expect(ensureSyncSchema()).rejects.toThrow(/newer than this server supports/i);

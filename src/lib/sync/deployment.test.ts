@@ -44,7 +44,12 @@ describe("production sync deployment invariants", () => {
   beforeEach(() => {
     temporaryDirectory = realpathSync(mkdtempSync(join(tmpdir(), "address-atlas-deploy-")));
     hermeticEnvFile = join(temporaryDirectory, "production.env");
-    writeFileSync(hermeticEnvFile, "", { mode: 0o600 });
+    writeFileSync(hermeticEnvFile, [
+      "ADDRESS_ATLAS_DOMAIN=sync.test.invalid",
+      "ADDRESS_ATLAS_DATABASE_ROLE_MODE=steady",
+      "NATIVE_ENDPOINT_CONFIG_VERSION=5",
+      ""
+    ].join("\n"), { mode: 0o600 });
     fakeGit = join(temporaryDirectory, "git");
     writeFileSync(fakeGit, `#!/bin/sh
 case "$*" in
@@ -72,6 +77,8 @@ case "$*" in
       server/sync/provision-restored-database.sh \
       server/sync/provision-runtime-role.sh \
       server/sync/bootstrap-database-roles.sh \
+      server/sync/manage-prod.sh \
+      server/sync/credential-rotation-state.mjs \
       server/sync/native-config-deploy-state.mjs || exit $?
     exit 0
     ;;
@@ -292,9 +299,20 @@ if [ "$1" = "inspect" ]; then
         image='sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
         revision='0123456789abcdef0123456789abcdef01234567'
       fi
+      running=true
+      if [ -n "\${FAKE_DOCKER_FRONTEND_STOP_STATE:-}" ] \
+          && [ -f "$FAKE_DOCKER_FRONTEND_STOP_STATE" ] \
+          && grep -Fqx "$last_argument" "$FAKE_DOCKER_FRONTEND_STOP_STATE"; then
+        running=false
+      fi
       case "$*" in
+        *"com.docker.compose.project"*)
+          service=web
+          printf '%s' "$last_argument" | grep -q 'caddy' && service=caddy
+          printf '%s|address-atlas-sync|%s|%s|%s\n' \
+            "$running" "$service" "$image" "$revision"
+          ;;
         *"State.Running"*)
-          running=true
           [ "$last_argument" != "first-install-web" ] || running=false
           printf '%s|%s|%s\n' "$image" "$revision" "$running"
           ;;
@@ -335,8 +353,11 @@ if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
     *"com.addressatlas.sync.compatible-schema-head-4-sha256"*)
       printf '%s\n' "\${FAKE_DOCKER_PREVIOUS_SCHEMA_CHAIN:-ceb0b725a162b5be512bf35e63ecaf178aa67e7c1335e2807a116f2ef7f65dfe}"
       ;;
+    *"com.addressatlas.sync.compatible-schema-head-5-sha256"*)
+      printf '%s\n' "\${FAKE_DOCKER_PREVIOUS_SCHEMA_CHAIN:-c101eabfc6cdf4252a5a58ac3320958818243e62375d12c4ff864499551cff39}"
+      ;;
     *"com.addressatlas.sync.max-compatible-schema-head"*)
-      printf '%s\n' "\${FAKE_DOCKER_PREVIOUS_SCHEMA_HEAD:-4}"
+      printf '%s\n' "\${FAKE_DOCKER_PREVIOUS_SCHEMA_HEAD:-5}"
       ;;
     *"org.opencontainers.image.revision"*)
       printf '%s|%s\n' \
@@ -352,7 +373,23 @@ fi
 if [ "$1" = "tag" ] || [ "$1" = "image" ] || [ "$1" = "rm" ]; then
   exit 0
 fi
-if [ "$1" = "start" ] || [ "$1" = "stop" ]; then
+if [ "$1" = "stop" ]; then
+  if [ -n "\${FAKE_DOCKER_FRONTEND_STOP_STATE:-}" ]; then
+    : > "$FAKE_DOCKER_FRONTEND_STOP_STATE"
+    shift
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --time) shift 2; continue ;;
+        *) printf '%s\n' "$1" >> "$FAKE_DOCKER_FRONTEND_STOP_STATE" ;;
+      esac
+      shift
+    done
+  fi
+  exit 0
+fi
+if [ "$1" = "start" ]; then
+  [ -z "\${FAKE_DOCKER_FRONTEND_STOP_STATE:-}" ] \
+    || rm -f "$FAKE_DOCKER_FRONTEND_STOP_STATE"
   exit 0
 fi
 if [ "$1" = "ps" ]; then
@@ -377,7 +414,18 @@ if [ "$1" = "ps" ]; then
           else
             printf '%s\n' "\${FAKE_DOCKER_PREVIOUS_WEB_CONTAINERS:-}"
           fi
-        else printf '%s\n' "\${FAKE_DOCKER_WEB_CONTAINERS:-web-container}"; fi ;;
+        else
+          if [ -f "\${FAKE_DOCKER_RUNTIME_STATE:-/nonexistent}" ]; then
+            candidate=web-container
+          else
+            candidate="\${FAKE_DOCKER_WEB_CONTAINERS:-web-container}"
+          fi
+          if [ -z "\${FAKE_DOCKER_FRONTEND_STOP_STATE:-}" ] \
+              || [ ! -f "$FAKE_DOCKER_FRONTEND_STOP_STATE" ] \
+              || ! grep -Fqx "$candidate" "$FAKE_DOCKER_FRONTEND_STOP_STATE"; then
+            printf '%s\n' "$candidate"
+          fi
+        fi ;;
       caddy) printf '%s\n' "\${FAKE_DOCKER_CADDY_CONTAINERS:-}" ;;
     esac
     exit 0
@@ -409,6 +457,8 @@ if [ "$1" = "compose" ]; then
     *" up -d --no-build"*)
       [ -z "\${FAKE_DOCKER_RUNTIME_STATE:-}" ] \
         || printf '%s\n' "$ADDRESS_ATLAS_BUILD_REVISION" > "$FAKE_DOCKER_RUNTIME_STATE"
+      [ -z "\${FAKE_DOCKER_FRONTEND_STOP_STATE:-}" ] \
+        || rm -f "$FAKE_DOCKER_FRONTEND_STOP_STATE"
       ;;
   esac
   exit 0
@@ -502,13 +552,13 @@ exit 70
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
   });
 
-  it("accepts the exact prepared-head chain when the database is already ahead", () => {
+  it("accepts the exact contiguous prepared-head chain through database head 5", () => {
     writeNativeConfigReceipt();
     const result = spawnSync("bash", [manageScript, "up"], {
       encoding: "utf8",
       env: {
         ...baseEnvironment(),
-        FAKE_BACKUP_MIGRATION_HEAD: "4",
+        FAKE_BACKUP_MIGRATION_HEAD: "5",
         FAKE_DOCKER_PREVIOUS_WEB_CONTAINERS: "previous-web-container"
       }
     });
@@ -516,14 +566,14 @@ exit 70
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
   });
 
-  it("rejects a mismatched exact chain at the prepared database head", () => {
+  it("rejects a mismatched exact chain at prepared database head 5", () => {
     const dockerLog = join(temporaryDirectory, "docker.log");
     writeNativeConfigReceipt();
     const result = spawnSync("bash", [manageScript, "up"], {
       encoding: "utf8",
       env: {
         ...baseEnvironment(),
-        FAKE_BACKUP_MIGRATION_HEAD: "4",
+        FAKE_BACKUP_MIGRATION_HEAD: "5",
         FAKE_DOCKER_LOG: dockerLog,
         FAKE_DOCKER_PREVIOUS_SCHEMA_CHAIN: "f".repeat(64),
         FAKE_DOCKER_PREVIOUS_WEB_CONTAINERS: "previous-web-container"
@@ -531,26 +581,26 @@ exit 70
     });
 
     expect(result.status).toBe(67);
-    expect(result.stderr).toContain("required schema head 4");
+    expect(result.stderr).toContain("required schema head 5");
     const dockerCalls = readFileSync(dockerLog, "utf8");
     expect(dockerCalls).not.toContain(" build web");
     expect(dockerCalls).not.toContain(" run --rm --no-deps schema");
   });
 
-  it("rejects a rollback image whose maximum head is below the prepared database head", () => {
+  it("rejects a rollback image whose maximum head is below prepared database head 5", () => {
     writeNativeConfigReceipt();
     const result = spawnSync("bash", [manageScript, "up"], {
       encoding: "utf8",
       env: {
         ...baseEnvironment(),
-        FAKE_BACKUP_MIGRATION_HEAD: "4",
-        FAKE_DOCKER_PREVIOUS_SCHEMA_HEAD: "3",
+        FAKE_BACKUP_MIGRATION_HEAD: "5",
+        FAKE_DOCKER_PREVIOUS_SCHEMA_HEAD: "4",
         FAKE_DOCKER_PREVIOUS_WEB_CONTAINERS: "previous-web-container"
       }
     });
 
     expect(result.status).toBe(67);
-    expect(result.stderr).toContain("rollback requires head 4");
+    expect(result.stderr).toContain("rollback requires head 5");
   });
 
   it("allows a legacy unlabeled rollback image only at the already-active schema head", () => {
@@ -658,6 +708,9 @@ exit 70
     const offsiteHook = join(temporaryDirectory, "upload-backup-set");
     const adminPassword = "admin_from_production_env_4Rx8Lm2Qs7Vz9Tr5";
     writeFileSync(hermeticEnvFile, [
+      "ADDRESS_ATLAS_DOMAIN=sync.test.invalid",
+      "ADDRESS_ATLAS_DATABASE_ROLE_MODE=steady",
+      "NATIVE_ENDPOINT_CONFIG_VERSION=5",
       `ADDRESS_ATLAS_BACKUP_SIGNING_PRIVATE_KEY_FILE=${signingPrivate}`,
       `ADDRESS_ATLAS_BACKUP_SIGNATURE_PUBLIC_KEY_FILE=${signingPublic}`,
       "ADDRESS_ATLAS_BACKUP_OFFSITE_REQUIRED=true",
@@ -928,7 +981,12 @@ exit 70
 
   it("refuses to start while a legacy project mounts the selected Postgres volume", () => {
     const envFile = join(temporaryDirectory, "production.env");
-    writeFileSync(envFile, "", { mode: 0o600 });
+    writeFileSync(envFile, [
+      "ADDRESS_ATLAS_DOMAIN=sync.test.invalid",
+      "ADDRESS_ATLAS_DATABASE_ROLE_MODE=steady",
+      "NATIVE_ENDPOINT_CONFIG_VERSION=5",
+      ""
+    ].join("\n"), { mode: 0o600 });
     const result = spawnSync("bash", [manageScript, "up"], {
       encoding: "utf8",
       env: {
@@ -992,7 +1050,13 @@ exit 70
   it("pins the project name and permits only the expected current service mounts", () => {
     const envFile = join(temporaryDirectory, "production.env");
     const logFile = join(temporaryDirectory, "docker.log");
-    writeFileSync(envFile, "COMPOSE_PROJECT_NAME=foreign-project\n", { mode: 0o600 });
+    writeFileSync(envFile, [
+      "COMPOSE_PROJECT_NAME=foreign-project",
+      "ADDRESS_ATLAS_DOMAIN=sync.test.invalid",
+      "ADDRESS_ATLAS_DATABASE_ROLE_MODE=steady",
+      "NATIVE_ENDPOINT_CONFIG_VERSION=5",
+      ""
+    ].join("\n"), { mode: 0o600 });
 
     execFileSync("bash", [manageScript, "up"], {
       encoding: "utf8",
@@ -1025,6 +1089,7 @@ exit 70
   });
 
   it("uses the explicit one-time role bootstrap service without exposing an owner fallback to steady provisioning", () => {
+    setHermeticDatabaseRoleMode("bootstrap");
     const logFile = join(temporaryDirectory, "docker.log");
     const output = execFileSync("bash", [manageScript, "up"], {
       encoding: "utf8",
@@ -1044,6 +1109,7 @@ exit 70
   });
 
   it("completes a brand-new installation without fabricating a backup of empty state", () => {
+    setHermeticDatabaseRoleMode("bootstrap");
     const dockerLog = join(temporaryDirectory, "docker.log");
     const backupLog = join(temporaryDirectory, "backup.log");
     const result = spawnSync("bash", [manageScript, "up"], {
@@ -1077,6 +1143,7 @@ exit 70
   });
 
   it("uses the immutable tree for Compose and every native-config state operation", () => {
+    setHermeticDatabaseRoleMode("bootstrap");
     const dockerLog = join(temporaryDirectory, "docker.log");
     const nodeLog = join(temporaryDirectory, "node.log");
     const nodeWrapper = join(temporaryDirectory, "node");
@@ -1119,6 +1186,7 @@ exec "${process.execPath}" "$@"
   });
 
   it("rejects immutable-cache content, mode, and host-bind file-type drift", () => {
+    setHermeticDatabaseRoleMode("bootstrap");
     const initial = spawnSync("bash", [manageScript, "up"], {
       encoding: "utf8",
       env: {
@@ -1180,6 +1248,7 @@ exec "${process.execPath}" "$@"
   }, 15_000);
 
   it("resumes an interrupted first install from its exact recorded image after main advances", () => {
+    setHermeticDatabaseRoleMode("bootstrap");
     const dockerLog = join(temporaryDirectory, "docker.log");
     const backupLog = join(temporaryDirectory, "backup.log");
     const first = spawnSync("bash", [manageScript, "up"], {
@@ -1327,7 +1396,9 @@ exec "${process.execPath}" "$@"
         ADDRESS_ATLAS_ALLOW_PRODUCTION_RESTORE: "YES_I_UNDERSTAND_DATA_WILL_BE_REPLACED",
         FAKE_BACKUP_LOG: backupLog,
         FAKE_DOCKER_LOG: dockerLog,
-        FAKE_DOCKER_PREVIOUS_WEB_CONTAINERS: "previous-web-container"
+        FAKE_DOCKER_PREVIOUS_WEB_CONTAINERS: "previous-web-container",
+        FAKE_DOCKER_WEB_CONTAINERS: "previous-web-container",
+        FAKE_DOCKER_FRONTEND_STOP_STATE: join(temporaryDirectory, "frontend-stop-state")
       }
     });
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
@@ -1468,6 +1539,9 @@ exec "${process.execPath}" "$@"
     writeFileSync(join(backupDirectory, ".bootstrap-restore.state"), "durable-test-state\n", { mode: 0o600 });
     writeFileSync(backupPath, "opaque", { mode: 0o600 });
     writeFileSync(hermeticEnvFile, [
+      "ADDRESS_ATLAS_DOMAIN=sync.test.invalid",
+      "ADDRESS_ATLAS_DATABASE_ROLE_MODE=steady",
+      "NATIVE_ENDPOINT_CONFIG_VERSION=5",
       "ADDRESS_ATLAS_ALLOW_BOOTSTRAP_RESTORE=YES_I_UNDERSTAND_FRESH_CLUSTER_ONLY",
       "ADDRESS_ATLAS_ALLOW_BOOTSTRAP_LOCK_RECLAIM=YES_I_VERIFIED_STALE_OWNER",
       `ADDRESS_ATLAS_EXPECTED_BACKUP_SHA256=${"d".repeat(64)}`,
@@ -1706,6 +1780,16 @@ exec "${process.execPath}" "$@"
         ...extraEnvironment
       }
     }).trim();
+  }
+
+  function setHermeticDatabaseRoleMode(mode: "bootstrap" | "steady") {
+    const current = readFileSync(hermeticEnvFile, "utf8");
+    const updated = current.replace(
+      /^ADDRESS_ATLAS_DATABASE_ROLE_MODE=.*$/m,
+      `ADDRESS_ATLAS_DATABASE_ROLE_MODE=${mode}`
+    );
+    expect(updated).not.toBe(current);
+    writeFileSync(hermeticEnvFile, updated, { mode: 0o600 });
   }
 
   function baseEnvironment(): NodeJS.ProcessEnv {

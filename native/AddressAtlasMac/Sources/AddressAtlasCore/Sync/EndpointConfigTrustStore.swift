@@ -75,22 +75,34 @@ public actor EndpointConfigTrustStore: EndpointConfigTrustPersisting {
   }
 
   private static let maximumOrigins = 32
+  private static let maximumDocumentByteCount = 128_000
   private let fileURL: URL
+  private let regularFileSync: @Sendable (Int32) -> Bool
   private let postRenameDirectorySync: @Sendable (Int32) -> Bool
+  private let postOpenReadHook: @Sendable () -> Void
 
   public init(fileURL: URL) {
     self.fileURL = fileURL
-    self.postRenameDirectorySync = { descriptor in
-      Self.synchronizeDirectory(descriptor)
+    self.regularFileSync = { descriptor in
+      MacOSFileDurability.fullSynchronizeRegularFile(descriptor)
     }
+    self.postRenameDirectorySync = { descriptor in
+      MacOSFileDurability.synchronizeDirectory(descriptor)
+    }
+    self.postOpenReadHook = {}
   }
 
   init(
     fileURL: URL,
-    postRenameDirectorySync: @escaping @Sendable (Int32) -> Bool
+    regularFileSync: @escaping @Sendable (Int32) -> Bool =
+      { descriptor in MacOSFileDurability.fullSynchronizeRegularFile(descriptor) },
+    postRenameDirectorySync: @escaping @Sendable (Int32) -> Bool,
+    postOpenReadHook: @escaping @Sendable () -> Void = {}
   ) {
     self.fileURL = fileURL
+    self.regularFileSync = regularFileSync
     self.postRenameDirectorySync = postRenameDirectorySync
+    self.postOpenReadHook = postOpenReadHook
   }
 
   public func validate(
@@ -121,7 +133,7 @@ public actor EndpointConfigTrustStore: EndpointConfigTrustPersisting {
           // Visibility is not proof that the rename survived a crash. Always
           // re-run the directory barrier for an exact-record retry, including
           // after process relaunch when no in-memory uncertainty marker exists.
-          return try synchronizeCurrentDirectory()
+          return try synchronizeCurrentCommit()
         }
       } else {
         guard document.records.count < Self.maximumOrigins else {
@@ -194,24 +206,39 @@ public actor EndpointConfigTrustStore: EndpointConfigTrustPersisting {
   }
 
   private func load() throws -> Document {
-    guard FileManager.default.fileExists(atPath: fileURL.path) else {
-      return Document(schemaVersion: 1, records: [:])
-    }
     do {
-      var fileInfo = stat()
-      guard lstat(fileURL.path, &fileInfo) == 0,
-        (fileInfo.st_mode & S_IFMT) == S_IFREG,
-        fileInfo.st_uid == getuid(),
-        fileInfo.st_nlink == 1,
-        (fileInfo.st_mode & 0o077) == 0
+      let descriptor = Darwin.open(fileURL.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+      if descriptor < 0, errno == ENOENT {
+        return Document(schemaVersion: 1, records: [:])
+      }
+      guard descriptor >= 0 else {
+        throw EndpointConfigTrustStoreError.invalidStore
+      }
+      defer { Darwin.close(descriptor) }
+
+      var before = stat()
+      guard fstat(descriptor, &before) == 0,
+        Self.isSecureTrustFile(before),
+        before.st_size >= 0,
+        before.st_size <= Self.maximumDocumentByteCount
       else {
         throw EndpointConfigTrustStoreError.invalidStore
       }
-      let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
-      if let size = attributes[.size] as? NSNumber, size.intValue > 128_000 {
+      postOpenReadHook()
+      let data = try Self.readBounded(
+        descriptor,
+        maximumByteCount: Self.maximumDocumentByteCount
+      )
+      var after = stat()
+      var path = stat()
+      guard fstat(descriptor, &after) == 0,
+        Self.sameReadIdentity(before, after),
+        after.st_size == data.count,
+        lstat(fileURL.path, &path) == 0,
+        Self.samePublishedIdentity(after, path)
+      else {
         throw EndpointConfigTrustStoreError.invalidStore
       }
-      let data = try Data(contentsOf: fileURL, options: [.mappedIfSafe])
       let document = try JSONDecoder().decode(Document.self, from: data)
       guard document.schemaVersion == 1,
         document.records.count <= Self.maximumOrigins,
@@ -232,6 +259,52 @@ public actor EndpointConfigTrustStore: EndpointConfigTrustPersisting {
       throw error
     } catch {
       throw EndpointConfigTrustStoreError.invalidStore
+    }
+  }
+
+  private static func isSecureTrustFile(_ metadata: stat) -> Bool {
+    (metadata.st_mode & S_IFMT) == S_IFREG
+      && metadata.st_uid == getuid()
+      && metadata.st_nlink == 1
+      && (metadata.st_mode & 0o077) == 0
+  }
+
+  private static func sameReadIdentity(_ lhs: stat, _ rhs: stat) -> Bool {
+    isSecureTrustFile(rhs)
+      && lhs.st_dev == rhs.st_dev
+      && lhs.st_ino == rhs.st_ino
+      && lhs.st_uid == rhs.st_uid
+      && lhs.st_nlink == rhs.st_nlink
+      && lhs.st_mode == rhs.st_mode
+      && lhs.st_size == rhs.st_size
+      && lhs.st_mtimespec.tv_sec == rhs.st_mtimespec.tv_sec
+      && lhs.st_mtimespec.tv_nsec == rhs.st_mtimespec.tv_nsec
+      && lhs.st_ctimespec.tv_sec == rhs.st_ctimespec.tv_sec
+      && lhs.st_ctimespec.tv_nsec == rhs.st_ctimespec.tv_nsec
+  }
+
+  private static func samePublishedIdentity(_ descriptor: stat, _ path: stat) -> Bool {
+    isSecureTrustFile(path)
+      && descriptor.st_dev == path.st_dev
+      && descriptor.st_ino == path.st_ino
+      && descriptor.st_uid == path.st_uid
+      && descriptor.st_nlink == path.st_nlink
+      && descriptor.st_mode == path.st_mode
+  }
+
+  private static func readBounded(_ descriptor: Int32, maximumByteCount: Int) throws -> Data {
+    var data = Data()
+    data.reserveCapacity(min(maximumByteCount, 8_192))
+    var buffer = [UInt8](repeating: 0, count: 8_192)
+    while true {
+      let count = Darwin.read(descriptor, &buffer, buffer.count)
+      if count < 0, errno == EINTR { continue }
+      guard count >= 0 else { throw EndpointConfigTrustStoreError.invalidStore }
+      if count == 0 { return data }
+      guard data.count <= maximumByteCount - count else {
+        throw EndpointConfigTrustStoreError.invalidStore
+      }
+      data.append(buffer, count: count)
     }
   }
 
@@ -282,16 +355,20 @@ public actor EndpointConfigTrustStore: EndpointConfigTrustPersisting {
           written += count
         }
       }
-      guard Darwin.fsync(descriptor) == 0,
-        rename(temporaryURL.path, fileURL.path) == 0
+      guard let expectedIdentity = MacOSFileDurability.regularFileIdentity(descriptor),
+        regularFileSync(descriptor)
       else {
+        throw EndpointConfigTrustStoreError.unavailable
+      }
+      guard rename(temporaryURL.path, fileURL.path) == 0 else {
         throw EndpointConfigTrustStoreError.unavailable
       }
       shouldRemoveTemporary = false
       // rename(2) is the visibility commit point. The separate result prevents
       // callers from mistaking visibility for crash durability while also
       // avoiding the false claim that the already-published record rolled back.
-      return postRenameDirectorySync(directoryDescriptor)
+      return synchronizePublishedFile(expectedIdentity: expectedIdentity)
+        && postRenameDirectorySync(directoryDescriptor)
         ? .durable
         : .committedDurabilityUncertain
     } catch {
@@ -299,7 +376,7 @@ public actor EndpointConfigTrustStore: EndpointConfigTrustPersisting {
     }
   }
 
-  private func synchronizeCurrentDirectory() throws -> EndpointConfigTrustCommitOutcome {
+  private func synchronizeCurrentCommit() throws -> EndpointConfigTrustCommitOutcome {
     let directory = fileURL.deletingLastPathComponent()
     let descriptor = Darwin.open(
       directory.path,
@@ -307,17 +384,34 @@ public actor EndpointConfigTrustStore: EndpointConfigTrustPersisting {
     )
     guard descriptor >= 0 else { throw EndpointConfigTrustStoreError.unavailable }
     defer { Darwin.close(descriptor) }
-    return postRenameDirectorySync(descriptor)
+    return synchronizePublishedFile(expectedIdentity: nil)
+      && postRenameDirectorySync(descriptor)
       ? .durable
       : .committedDurabilityUncertain
   }
 
-  private static func synchronizeDirectory(_ descriptor: Int32) -> Bool {
-    while Darwin.fsync(descriptor) != 0 {
-      if errno == EINTR { continue }
-      return errno == EINVAL
-    }
-    return true
+  private func synchronizePublishedFile(
+    expectedIdentity: MacOSFileDurability.RegularFileIdentity?
+  ) -> Bool {
+    let descriptor = Darwin.open(fileURL.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+    guard descriptor >= 0 else { return false }
+    defer { Darwin.close(descriptor) }
+    guard let before = MacOSFileDurability.regularFileIdentity(descriptor),
+      expectedIdentity == nil || before == expectedIdentity,
+      regularFileSync(descriptor),
+      let after = MacOSFileDurability.regularFileIdentity(descriptor),
+      after == before
+    else { return false }
+
+    // Re-check the directory entry after the file barrier. A concurrent rename
+    // must not let us certify a now-unreachable inode as the published record.
+    var pathMetadata = stat()
+    guard lstat(fileURL.path, &pathMetadata) == 0 else { return false }
+    return pathMetadata.st_dev == after.device
+      && pathMetadata.st_ino == after.inode
+      && pathMetadata.st_uid == after.owner
+      && pathMetadata.st_nlink == after.linkCount
+      && pathMetadata.st_mode == after.mode
   }
 
   private static func digest(_ config: NativeEndpointConfig) throws -> String {

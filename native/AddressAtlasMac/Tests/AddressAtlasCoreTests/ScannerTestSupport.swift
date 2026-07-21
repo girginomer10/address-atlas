@@ -18,10 +18,79 @@ func krakenStateFixture(
 }
 
 struct ScannerHTTPStub: HTTPClient, @unchecked Sendable {
+  let automaticallyServesNetworkIdentity: Bool
   let handler: @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
 
+  init(
+    automaticallyServesNetworkIdentity: Bool = true,
+    handler: @escaping @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
+  ) {
+    self.automaticallyServesNetworkIdentity = automaticallyServesNetworkIdentity
+    self.handler = handler
+  }
+
   func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-    try await handler(request)
+    if automaticallyServesNetworkIdentity, let response = automaticIdentityResponse(request) {
+      return response
+    }
+    return try await handler(request)
+  }
+
+  private func automaticIdentityResponse(_ request: URLRequest) -> (Data, HTTPURLResponse)? {
+    let body = request.httpBody.map { String(decoding: $0, as: UTF8.self) } ?? ""
+    if body.contains("\"eth_chainId\"") {
+      let chainIDByHost = [
+        "ethereum-rpc.publicnode.com": "0x1",
+        "mainnet.base.org": "0x2105",
+        "arb1.arbitrum.io": "0xa4b1",
+        "mainnet.optimism.io": "0xa",
+        "polygon.drpc.org": "0x89",
+        "bsc-dataseed.binance.org": "0x38",
+        "api.avax.network": "0xa86a",
+        "rpc.gnosischain.com": "0x64",
+        "rpc.linea.build": "0xe708",
+        "rpc.mantle.xyz": "0x1388",
+        "rpc.scroll.io": "0x82750",
+        "mainnet.era.zksync.io": "0x144",
+      ]
+      let chainID = request.url?.host.flatMap { chainIDByHost[$0] } ?? "0x1"
+      return scannerResponse(request, "{\"jsonrpc\":\"2.0\",\"id\":0,\"result\":\"\(chainID)\"}")
+    }
+    if body.contains("\"getGenesisHash\"") {
+      return scannerResponse(
+        request,
+        #"{"jsonrpc":"2.0","id":0,"result":"5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d"}"#
+      )
+    }
+    if body.contains("\"server_info\"") {
+      return scannerResponse(request, #"{"result":{"info":{"network_id":0}}}"#)
+    }
+    if request.url?.path == "/wallet/getblockbynum" {
+      return scannerResponse(
+        request,
+        #"{"blockID":"00000000000000001ebf88508a03865c71d452e25f4d51194196a1d22b6653dc"}"#
+      )
+    }
+    if request.url?.path.hasSuffix("/block-height/0") == true {
+      return (
+        Data("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f".utf8),
+        scannerHTTPResponse(request, headerFields: ["content-type": "text/plain"])
+      )
+    }
+    if request.url?.path == "/cosmos/base/tendermint/v1beta1/blocks/latest" {
+      let chainIDByHost = [
+        "cosmos-api.polkachu.com": "cosmoshub-4",
+        "lcd.osmosis.zone": "osmosis-1",
+        "celestia-api.polkachu.com": "celestia",
+        "stride-api.polkachu.com": "stride-1",
+      ]
+      let chainID = request.url?.host.flatMap { chainIDByHost[$0] } ?? "cosmoshub-4"
+      return scannerResponse(
+        request,
+        "{\"block\":{\"header\":{\"chain_id\":\"\(chainID)\",\"height\":\"123\"}}}"
+      )
+    }
+    return nil
   }
 }
 

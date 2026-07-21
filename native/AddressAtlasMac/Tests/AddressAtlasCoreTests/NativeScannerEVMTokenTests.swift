@@ -6,6 +6,334 @@ import XCTest
 @testable import AddressAtlasCore
 
 extension NativeScannerTokenTests {
+  func testConcurrentSameChainJobsCoalesceOneNetworkIdentityProof() async throws {
+    let identityRequests = BatchRequestRecorder()
+    let http = StubHTTPClient(automaticallyServesNetworkIdentity: false) { request in
+      let body = request.httpBody.map { String(decoding: $0, as: UTF8.self) } ?? ""
+      if body.contains("\"eth_chainId\"") {
+        identityRequests.append(1)
+        Thread.sleep(forTimeInterval: 0.02)
+        return (
+          Data(#"{"jsonrpc":"2.0","id":0,"result":"0x1"}"#.utf8),
+          httpResponse(for: request)
+        )
+      }
+      if body.contains("\"eth_blockNumber\"") {
+        return (
+          Data(#"{"jsonrpc":"2.0","id":1,"result":"0xabc"}"#.utf8),
+          httpResponse(for: request)
+        )
+      }
+      if body.contains("\"eth_getBalance\"") {
+        return (
+          Data(#"{"jsonrpc":"2.0","id":2,"result":"0x0"}"#.utf8),
+          httpResponse(for: request)
+        )
+      }
+      XCTFail("Unexpected EVM request: \(body)")
+      return (Data("{}".utf8), httpResponse(for: request))
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: StaticPriceProvider(values: [:])
+    )
+    let workflowProofs = ChainNetworkValueCache<Void>()
+
+    try await withThrowingTaskGroup(of: Void.self) { group in
+      for index in 0..<12 {
+        group.addTask {
+          _ = try await scanner.scanEVM(
+            address: String(format: "0x%040x", index + 1),
+            chain: ChainRegistry.evmChains[0],
+            tokens: [],
+            prices: [:],
+            networkIdentityProofs: workflowProofs
+          )
+        }
+      }
+      try await group.waitForAll()
+    }
+
+    XCTAssertEqual(identityRequests.snapshot().count, 1)
+  }
+
+  func testRemoteEndpointOnWrongEvmNetworkFailsEveryJobClosedAndCachesFailure() async {
+    let identityRequests = BatchRequestRecorder()
+    let http = StubHTTPClient(automaticallyServesNetworkIdentity: false) { request in
+      let body = request.httpBody.map { String(decoding: $0, as: UTF8.self) } ?? ""
+      guard body.contains("\"eth_chainId\"") else {
+        XCTFail("No balance request may follow a wrong-network proof: \(body)")
+        return (Data("{}".utf8), httpResponse(for: request))
+      }
+      identityRequests.append(1)
+      return (
+        Data(#"{"jsonrpc":"2.0","id":0,"result":"0x5"}"#.utf8),
+        httpResponse(for: request)
+      )
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: StaticPriceProvider(values: [:])
+    )
+    let workflowProofs = ChainNetworkValueCache<Void>()
+    var configuredWrongNetwork = ChainRegistry.evmChains[0]
+    configuredWrongNetwork.rpcUrl = URL(string: "https://wrong-network.example/rpc")!
+    let remotelyMovedEthereum = configuredWrongNetwork
+
+    let failures = await withTaskGroup(of: Bool.self, returning: [Bool].self) { group in
+      for index in 0..<8 {
+        group.addTask {
+          do {
+            _ = try await scanner.scanEVM(
+              address: String(format: "0x%040x", index + 1),
+              chain: remotelyMovedEthereum,
+              tokens: [],
+              prices: [:],
+              networkIdentityProofs: workflowProofs
+            )
+            return false
+          } catch {
+            return error.localizedDescription.contains("wrong network identity")
+          }
+        }
+      }
+      return await group.reduce(into: []) { $0.append($1) }
+    }
+
+    XCTAssertTrue(failures.allSatisfy { $0 })
+    XCTAssertEqual(identityRequests.snapshot().count, 1)
+    XCTAssertEqual(remotelyMovedEthereum.networkIdentity, .evmChainID(1))
+  }
+
+  func testCancellingEveryIdentityWaiterPromptlyStopsProducerAndStartsNoBalanceCalls() async {
+    let probe = EvmIdentityCancellationProbe()
+    let http = ScannerHTTPStub(automaticallyServesNetworkIdentity: false) { request in
+      let body = request.httpBody.map { String(decoding: $0, as: UTF8.self) } ?? ""
+      if body.contains("\"eth_chainId\"") {
+        await probe.identityStarted()
+        try await Task.sleep(for: .seconds(60))
+        return (
+          Data(#"{"jsonrpc":"2.0","id":0,"result":"0x1"}"#.utf8),
+          scannerHTTPResponse(request)
+        )
+      }
+      await probe.balanceStarted()
+      return (Data("{}".utf8), scannerHTTPResponse(request))
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: StaticPriceProvider(values: [:])
+    )
+    let workflowProofs = ChainNetworkValueCache<Void>()
+    let first = Task {
+      try await scanner.scanEVM(
+        address: "0x0000000000000000000000000000000000000001",
+        chain: ChainRegistry.evmChains[0],
+        tokens: [],
+        prices: [:],
+        networkIdentityProofs: workflowProofs
+      )
+    }
+    let second = Task {
+      try await scanner.scanEVM(
+        address: "0x0000000000000000000000000000000000000002",
+        chain: ChainRegistry.evmChains[0],
+        tokens: [],
+        prices: [:],
+        networkIdentityProofs: workflowProofs
+      )
+    }
+    await probe.waitUntilIdentityStarted()
+    let startedAt = ContinuousClock.now
+    first.cancel()
+    second.cancel()
+
+    for task in [first, second] {
+      do {
+        _ = try await task.value
+        XCTFail("Expected every canceled shared-proof waiter to fail closed")
+      } catch {
+        XCTAssertTrue(error is CancellationError)
+      }
+    }
+    XCTAssertLessThan(ContinuousClock.now - startedAt, .seconds(1))
+    let balanceRequestCount = await probe.balanceRequestCount()
+    XCTAssertEqual(balanceRequestCount, 0)
+  }
+
+  func testSeparateEvmScanWorkflowsReproveIdentityAndRecoverAfterTransientFailure() async throws {
+    let identityRequests = BatchRequestRecorder()
+    let balanceRequests = BatchRequestRecorder()
+    let http = StubHTTPClient(automaticallyServesNetworkIdentity: false) { request in
+      let body = request.httpBody.map { String(decoding: $0, as: UTF8.self) } ?? ""
+      if body.contains("\"eth_chainId\"") {
+        identityRequests.append(1)
+        let chainID = identityRequests.snapshot().count == 1 ? "0x5" : "0x1"
+        return (
+          Data("{\"jsonrpc\":\"2.0\",\"id\":0,\"result\":\"\(chainID)\"}".utf8),
+          httpResponse(for: request)
+        )
+      }
+      if body.contains("\"eth_blockNumber\"") {
+        return (
+          Data(#"{"jsonrpc":"2.0","id":1,"result":"0xabc"}"#.utf8),
+          httpResponse(for: request)
+        )
+      }
+      if body.contains("\"eth_getBalance\"") {
+        balanceRequests.append(1)
+        return (
+          Data(#"{"jsonrpc":"2.0","id":2,"result":"0x0"}"#.utf8),
+          httpResponse(for: request)
+        )
+      }
+      XCTFail("Unexpected EVM request: \(body)")
+      return (Data("{}".utf8), httpResponse(for: request))
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: StaticPriceProvider(values: [:])
+    )
+    let address = "0x0000000000000000000000000000000000000001"
+    let ethereum = ChainRegistry.evmChains[0]
+
+    do {
+      _ = try await scanner.scanEVM(
+        address: address, chain: ethereum, tokens: [], prices: [:])
+      XCTFail("Expected the first workflow's wrong-network proof to fail")
+    } catch {
+      XCTAssertTrue(error.localizedDescription.contains("wrong network identity"))
+    }
+    _ = try await scanner.scanEVM(
+      address: address, chain: ethereum, tokens: [], prices: [:])
+
+    XCTAssertEqual(identityRequests.snapshot().count, 2)
+    XCTAssertEqual(balanceRequests.snapshot().count, 1)
+  }
+
+  func testCanceledWaiterCannotReturnSuccessWhenProducerFinishWinsActorRace() async {
+    for iteration in 0..<50 {
+      let cache = ChainNetworkValueCache<Int>()
+      let gate = IdentityFinishRaceGate()
+      let waiter = Task {
+        try await cache.value(
+          chainID: "ethereum",
+          endpoint: URL(string: "https://rpc.example/\(iteration)")!,
+          identity: .evmChainID(1)
+        ) {
+          await gate.waitForRelease()
+          return iteration
+        }
+      }
+      await gate.waitUntilStarted()
+      // Cancellation is immediate, but the cache's onCancel cleanup is actor
+      // work. Releasing now deliberately lets producer finish race that cleanup.
+      waiter.cancel()
+      await gate.release()
+      do {
+        _ = try await waiter.value
+        XCTFail("A canceled identity waiter must never observe producer success")
+      } catch {
+        XCTAssertTrue(error is CancellationError)
+      }
+    }
+  }
+
+  func testCancelingOneSharedIdentityWaiterDoesNotCancelItsSibling() async throws {
+    let cache = ChainNetworkValueCache<Int>()
+    let gate = IdentityFinishRaceGate()
+    let endpoint = URL(string: "https://rpc.example/shared-cancellation")!
+    let producerCalls = BatchRequestRecorder()
+
+    let canceled = Task {
+      try await cache.value(
+        chainID: "ethereum",
+        endpoint: endpoint,
+        identity: .evmChainID(1)
+      ) {
+        producerCalls.append(1)
+        await gate.waitForRelease()
+        return 42
+      }
+    }
+    await gate.waitUntilStarted()
+
+    let sibling = Task {
+      try await cache.value(
+        chainID: "ethereum",
+        endpoint: endpoint,
+        identity: .evmChainID(1)
+      ) {
+        producerCalls.append(1)
+        return -1
+      }
+    }
+    // Give the sibling's actor hop a chance to register behind the producer.
+    await Task.yield()
+    await Task.yield()
+    canceled.cancel()
+    await gate.release()
+
+    do {
+      _ = try await canceled.value
+      XCTFail("The canceled waiter must not observe shared producer success")
+    } catch {
+      XCTAssertTrue(error is CancellationError)
+    }
+    let siblingValue = try await sibling.value
+    XCTAssertEqual(siblingValue, 42)
+    XCTAssertEqual(producerCalls.snapshot().count, 1)
+  }
+
+  func testCanceledProducerCannotCompleteReplacementGenerationForSameKey() async throws {
+    let cache = ChainNetworkValueCache<Int>()
+    let endpoint = URL(string: "https://rpc.example/replacement-generation")!
+    let canceledGenerationGate = IdentityFinishRaceGate()
+    let replacementGenerationGate = IdentityFinishRaceGate()
+
+    let canceledGeneration = Task {
+      try await cache.value(
+        chainID: "ethereum",
+        endpoint: endpoint,
+        identity: .evmChainID(1)
+      ) {
+        // This deliberately ignores task cancellation so the detached producer
+        // can finish after its last waiter has already removed the old entry.
+        await canceledGenerationGate.waitForRelease()
+        return 111
+      }
+    }
+    await canceledGenerationGate.waitUntilStarted()
+    canceledGeneration.cancel()
+    do {
+      _ = try await canceledGeneration.value
+      XCTFail("The canceled generation's waiter must fail")
+    } catch {
+      XCTAssertTrue(error is CancellationError)
+    }
+
+    let replacementGeneration = Task {
+      try await cache.value(
+        chainID: "ethereum",
+        endpoint: endpoint,
+        identity: .evmChainID(1)
+      ) {
+        await replacementGenerationGate.waitForRelease()
+        return 222
+      }
+    }
+    await replacementGenerationGate.waitUntilStarted()
+
+    // Let the canceled producer finish while the replacement entry is live.
+    // Without a generation check, its late result consumes the new waiter.
+    await canceledGenerationGate.release()
+    try await Task.sleep(for: .milliseconds(50))
+    await replacementGenerationGate.release()
+
+    let replacementValue = try await replacementGeneration.value
+    XCTAssertEqual(replacementValue, 222)
+  }
+
   func testErc20BalanceOfDataPadsOwnerAddress() {
     let data = NativeScanner.erc20BalanceOfData("0x000000000000000000000000000000000000dEaD")
 
@@ -485,6 +813,55 @@ extension NativeScannerTokenTests {
     )
   }
 
+}
+
+private actor EvmIdentityCancellationProbe {
+  private var started = false
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+  private var balanceCalls = 0
+
+  func identityStarted() {
+    started = true
+    let pending = waiters
+    waiters.removeAll()
+    pending.forEach { $0.resume() }
+  }
+
+  func waitUntilIdentityStarted() async {
+    if started { return }
+    await withCheckedContinuation { waiters.append($0) }
+  }
+
+  func balanceStarted() { balanceCalls += 1 }
+  func balanceRequestCount() -> Int { balanceCalls }
+}
+
+private actor IdentityFinishRaceGate {
+  private var started = false
+  private var released = false
+  private var startWaiters: [CheckedContinuation<Void, Never>] = []
+  private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+  func waitForRelease() async {
+    started = true
+    let waiters = startWaiters
+    startWaiters.removeAll()
+    waiters.forEach { $0.resume() }
+    if released { return }
+    await withCheckedContinuation { releaseWaiters.append($0) }
+  }
+
+  func waitUntilStarted() async {
+    if started { return }
+    await withCheckedContinuation { startWaiters.append($0) }
+  }
+
+  func release() {
+    released = true
+    let waiters = releaseWaiters
+    releaseWaiters.removeAll()
+    waiters.forEach { $0.resume() }
+  }
 }
 
 private final class EvmRequestBodyRecorder: @unchecked Sendable {

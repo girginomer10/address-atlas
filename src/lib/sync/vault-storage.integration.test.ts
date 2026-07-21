@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import { types as pgTypes } from "pg";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET as getHealth, resetHealthReadinessForTests } from "@/app/healthz/route";
 import { GET as getLatestVault, PUT as putLatestVault } from "@/app/vault/latest/route";
 import { base64urlEncode } from "./base64url";
@@ -19,6 +19,7 @@ import {
 } from "./postgres";
 import { resetRateLimitsForTests } from "./rate-limit";
 import { issueSessionToken } from "./tokens";
+import { setStorageLedgerAuditStateForTests } from "./storage-ledger-integrity";
 import { assertStoredVaultIntegrity } from "./vault-integrity";
 import {
   assertVaultIngressCapacity,
@@ -48,6 +49,10 @@ maybeDescribe("encrypted vault Postgres storage and routes", () => {
     process.env.SYNC_DATABASE_URL = process.env.TEST_SYNC_DATABASE_URL;
     process.env.SYNC_SESSION_SECRET = "ci-only-public-session-secret-for-integration-tests";
     await ensureSyncSchema();
+  });
+
+  beforeEach(() => {
+    setStorageLedgerAuditStateForTests("valid");
   });
 
   afterEach(async () => {
@@ -253,14 +258,20 @@ maybeDescribe("encrypted vault Postgres storage and routes", () => {
     }
   });
 
-  it("reports healthy from the real health route against the real database", async () => {
+  it("reports healthy only after the initial real storage-ledger audit completes", async () => {
     resetHealthReadinessForTests();
 
-    const response = await getHealth();
+    const initial = await getHealth();
+    expect(initial.status).toBe(503);
 
-    expect(response.status).toBe(200);
-    expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(await response.json()).toEqual({ ok: true, service: "address-atlas-sync" });
+    let response: Response | undefined;
+    await vi.waitFor(async () => {
+      response = await getHealth();
+      expect(response.status).toBe(200);
+    }, { timeout: 3_000, interval: 100 });
+
+    expect(response!.headers.get("cache-control")).toBe("no-store");
+    expect(await response!.json()).toEqual({ ok: true, service: "address-atlas-sync" });
   });
 
   it("charges real request bytes for a rejected conflict without incrementing writes", async () => {

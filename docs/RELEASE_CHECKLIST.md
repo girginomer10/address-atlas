@@ -13,13 +13,31 @@ Public v1 must not ship unsigned or unnotarized. If no Developer ID Application 
   `APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD`,
   `APPLE_NOTARY_KEY_P8_BASE64`, `APPLE_NOTARY_KEY_ID`,
   `APPLE_NOTARY_ISSUER_ID`, `APPLE_DEVELOPER_TEAM_ID`, and a fine-grained
-  `RELEASE_ADMIN_READ_TOKEN` limited to repository Administration read. Add the
-  protected environment variable `ADDRESS_ATLAS_PRODUCTION_ORIGIN` with the
-  exact HTTPS sync origin used by the public app.
-- Protect that environment with required reviewers and a deployment-tag policy
-  limited to reviewed `v*` tags. Protect `main` and release-tag creation with a
+  `RELEASE_ADMIN_WRITE_TOKEN` limited to this repository's Administration
+  write permission. GitHub requires ruleset-write authority to return the
+  `bypass_actors` field; the workflow performs no settings mutation. Add the
+  protected environment variables `ADDRESS_ATLAS_PRODUCTION_ORIGIN` (the exact
+  HTTPS sync origin) and `ADDRESS_ATLAS_RULESET_BYPASS_ALLOWLIST_JSON`.
+- Set `ADDRESS_ATLAS_RULESET_BYPASS_ALLOWLIST_JSON` to the exact reviewed
+  actor/type/mode set, for example
+  `{"main":[],"releaseTags":[{"actor_id":123,"actor_type":"Integration","bypass_mode":"always"}]}`.
+  Replace the example actor with the repository's real release actor. Main may
+  contain only `pull_request` bypasses; an `always` bypass on main, a missing
+  API field, an unexpected actor, or a mode mismatch blocks publication.
+- Protect that environment with the exact reviewer policy committed in
+  `.github/release-environment-policy.json`: the sole required reviewer is the
+  GitHub user with immutable ID `67194558` (`girginomer10` at the time of this
+  review), self-review is prevented, and **Allow administrators to bypass
+  configured protection rules** is disabled. This is an external GitHub
+  environment setting, not something the workflow can establish. Before a
+  release, verify the live environment API reports `can_admins_bypass: false`;
+  a missing field, a renamed/replaced reviewer ID, an extra reviewer, or an
+  enabled administrator bypass is a release blocker. Keep the deployment-tag
+  policy limited to reviewed `v*` tags. Protect `main` and release-tag creation with a
   ruleset that requires the complete CI workflow, blocks force pushes/deletion,
-  and prevents direct unreviewed changes. Secrets are not safe merely because a
+  and prevents direct unreviewed changes. Keep exactly one active branch
+  ruleset and one active `v*` tag ruleset so the workflow can prove the complete
+  bypass surface. Secrets are not safe merely because a
   workflow contains shell preflight checks: the environment policy is the
   authorization boundary.
 - GitHub Release immutability enabled for `girginomer10/address-atlas`. The

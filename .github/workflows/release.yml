@@ -90,6 +90,7 @@ jobs:
       RELEASE_EVENT_SHA: ${{ github.event.after }}
       RELEASE_WORKFLOW_SHA: ${{ github.workflow_sha }}
       PRODUCTION_SYNC_ORIGIN: ${{ vars.ADDRESS_ATLAS_PRODUCTION_ORIGIN }}
+      RULESET_BYPASS_ALLOWLIST_JSON: ${{ vars.ADDRESS_ATLAS_RULESET_BYPASS_ALLOWLIST_JSON }}
       NATIVE_DIR: native/AddressAtlasMac
     steps:
       - name: Check out the exact release ref
@@ -112,11 +113,12 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_ADMIN_TOKEN: ${{ secrets.RELEASE_ADMIN_READ_TOKEN }}
+          RELEASE_ADMIN_TOKEN: ${{ secrets.RELEASE_ADMIN_WRITE_TOKEN }}
         run: |
           set -Eeuo pipefail
 
-          : "${RELEASE_ADMIN_TOKEN:?Missing release-environment Administration-read token.}"
+          : "${RELEASE_ADMIN_TOKEN:?Missing release-environment Administration-write token.}"
+          : "${RULESET_BYPASS_ALLOWLIST_JSON:?Missing exact ruleset bypass allowlist.}"
           for command in git gh jq; do
             command -v "$command" >/dev/null 2>&1 || {
               echo "Required release command is missing: $command" >&2
@@ -243,18 +245,11 @@ jobs:
           GH_TOKEN="$RELEASE_ADMIN_TOKEN" gh api "${api_header[@]}" \
             "repos/$GITHUB_REPOSITORY/environments/release" \
             > "$api_dir/environment.json"
-          jq -e '
-            .name == "release"
-            and .deployment_branch_policy.protected_branches == false
-            and .deployment_branch_policy.custom_branch_policies == true
-            and any(
-              .protection_rules[]?;
-              .type == "required_reviewers"
-              and .prevent_self_review == true
-              and (.reviewers | type == "array" and length > 0)
-            )
-          ' "$api_dir/environment.json" >/dev/null || {
-            echo "The release environment lacks the required reviewer/self-review/tag-policy protections." >&2
+          jq -e \
+            --slurpfile expected .github/release-environment-policy.json \
+            -f scripts/check-release-environment-governance.jq \
+            "$api_dir/environment.json" >/dev/null || {
+            echo "The release environment differs from the exact reviewer, self-review, administrator-bypass, or tag-policy contract." >&2
             exit 1
           }
           GH_TOKEN="$RELEASE_ADMIN_TOKEN" gh api "${api_header[@]}" --paginate --slurp \
@@ -501,9 +496,10 @@ jobs:
           # Resolve every ruleset in full; the list endpoint omits rule details.
           # Require one complete active main policy and one complete active v* tag
           # policy rather than inferring protection from a name or partial rules.
-          # GitHub withholds bypass_actors from read-only tokens, so that list is
-          # deliberately kept as a separate manual governance audit instead of
-          # granting this release token Administration-write access.
+          # GitHub exposes bypass_actors only to a token with ruleset-write
+          # authority. The protected environment supplies that narrowly scoped
+          # token plus the exact reviewed actor/type/mode allowlist; any omitted,
+          # additional, or main/always bypass fails closed.
           GH_TOKEN="$RELEASE_ADMIN_TOKEN" gh api "${api_header[@]}" --paginate --slurp \
             "repos/$GITHUB_REPOSITORY/rulesets?includes_parents=true&per_page=100" \
             > "$api_dir/ruleset-list.json"
@@ -519,61 +515,11 @@ jobs:
             printf '\n' >> "$api_dir/rulesets.ndjson"
           done < <(jq -r '.[][]? | .id' "$api_dir/ruleset-list.json")
           jq -s '.' "$api_dir/rulesets.ndjson" > "$api_dir/rulesets.json"
-          jq -e --argjson ci_integration_id "$ci_integration_id" '
-            def explicit_ref($target; $include):
-              .target == $target
-              and .enforcement == "active"
-              and (.conditions.ref_name.include | type == "array")
-              and (.conditions.ref_name.exclude | type == "array" and length == 0)
-              and (.conditions.ref_name.include | index($include)) != null;
-            def has_rule($type):
-              any(.rules[]?; .type == $type);
-            def strong_main($required_checks; $ci_integration_id):
-              (explicit_ref("branch"; "~DEFAULT_BRANCH") or explicit_ref("branch"; "refs/heads/main"))
-              and has_rule("deletion")
-              and has_rule("non_fast_forward")
-              and has_rule("required_linear_history")
-              and any(
-                .rules[]?;
-                .type == "pull_request"
-                and .parameters.dismiss_stale_reviews_on_push == true
-                and .parameters.require_last_push_approval == true
-                and .parameters.required_review_thread_resolution == true
-                and .parameters.required_approving_review_count >= 1
-              )
-              and any(
-                .rules[]?;
-                .type == "required_status_checks"
-                and .parameters.strict_required_status_checks_policy == true
-                and .parameters.do_not_enforce_on_create != true
-                and (
-                  .parameters.required_status_checks as $configured
-                  | all(
-                      $required_checks[];
-                      . as $required
-                      | [
-                          $configured[]?
-                          | select(.context == $required)
-                        ] as $matching
-                      | ($matching | length) == 1
-                        and $matching[0].integration_id == $ci_integration_id
-                    )
-                )
-              );
-            def strong_release_tags:
-              explicit_ref("tag"; "refs/tags/v*")
-              and has_rule("creation")
-              and has_rule("update")
-              and has_rule("deletion");
-            [
-              "Repository secret-artifact hygiene",
-              "Web and sync server",
-              "Native macOS package",
-              "Deployment configuration"
-            ] as $required_checks
-            | any(.[]; strong_main($required_checks; $ci_integration_id))
-              and any(.[]; strong_release_tags)
-          ' "$api_dir/rulesets.json" >/dev/null || {
+          jq -e \
+            --argjson ci_integration_id "$ci_integration_id" \
+            --argjson expected_bypass "$RULESET_BYPASS_ALLOWLIST_JSON" \
+            -f scripts/check-ruleset-governance.jq \
+            "$api_dir/rulesets.json" >/dev/null || {
             echo "Active main and v* rulesets do not meet the release governance contract." >&2
             exit 1
           }
@@ -870,11 +816,12 @@ jobs:
           CI_CHECK_RUN_URLS: ${{ steps.release.outputs.ci_check_run_urls }}
           EXPECTED_PRODUCTION_CONFIG_BINDING: ${{ steps.production-config.outputs.binding }}
           GH_TOKEN: ${{ github.token }}
-          RELEASE_ADMIN_TOKEN: ${{ secrets.RELEASE_ADMIN_READ_TOKEN }}
+          RELEASE_ADMIN_TOKEN: ${{ secrets.RELEASE_ADMIN_WRITE_TOKEN }}
         run: |
           set -Eeuo pipefail
           umask 077
-          : "${RELEASE_ADMIN_TOKEN:?Missing release-environment Administration-read token.}"
+          : "${RELEASE_ADMIN_TOKEN:?Missing release-environment Administration-write token.}"
+          : "${RULESET_BYPASS_ALLOWLIST_JSON:?Missing exact ruleset bypass allowlist.}"
           [[ "$CI_RUN_ID" =~ ^[1-9][0-9]*$ \
               && "$CI_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ \
               && "$CI_INTEGRATION_ID" =~ ^[1-9][0-9]*$ \
@@ -986,17 +933,10 @@ jobs:
             GH_TOKEN="$RELEASE_ADMIN_TOKEN" gh api "${api_header[@]}" \
               "repos/$GITHUB_REPOSITORY/environments/release" \
               > "$state_dir/environment-final.json" 2>/dev/null || return 1
-            jq -e '
-              .name == "release"
-              and .deployment_branch_policy.protected_branches == false
-              and .deployment_branch_policy.custom_branch_policies == true
-              and any(
-                .protection_rules[]?;
-                .type == "required_reviewers"
-                and .prevent_self_review == true
-                and (.reviewers | type == "array" and length > 0)
-              )
-            ' "$state_dir/environment-final.json" >/dev/null || return 1
+            jq -e \
+              --slurpfile expected .github/release-environment-policy.json \
+              -f scripts/check-release-environment-governance.jq \
+              "$state_dir/environment-final.json" >/dev/null || return 1
             GH_TOKEN="$RELEASE_ADMIN_TOKEN" gh api "${api_header[@]}" --paginate --slurp \
               "repos/$GITHUB_REPOSITORY/environments/release/deployment-branch-policies?per_page=100" \
               > "$state_dir/environment-policies-final.json" 2>/dev/null || return 1
@@ -1059,61 +999,11 @@ jobs:
             done < <(jq -r '.[][]? | .id' "$state_dir/ruleset-list-final.json")
             jq -s '.' "$state_dir/rulesets-final.ndjson" \
               > "$state_dir/rulesets-final.json" || return 1
-            jq -e --argjson ci_integration_id "$CI_INTEGRATION_ID" '
-              def explicit_ref($target; $include):
-                .target == $target
-                and .enforcement == "active"
-                and (.conditions.ref_name.include | type == "array")
-                and (.conditions.ref_name.exclude | type == "array" and length == 0)
-                and (.conditions.ref_name.include | index($include)) != null;
-              def has_rule($type):
-                any(.rules[]?; .type == $type);
-              def strong_main($required_checks; $ci_integration_id):
-                (explicit_ref("branch"; "~DEFAULT_BRANCH") or explicit_ref("branch"; "refs/heads/main"))
-                and has_rule("deletion")
-                and has_rule("non_fast_forward")
-                and has_rule("required_linear_history")
-                and any(
-                  .rules[]?;
-                  .type == "pull_request"
-                  and .parameters.dismiss_stale_reviews_on_push == true
-                  and .parameters.require_last_push_approval == true
-                  and .parameters.required_review_thread_resolution == true
-                  and .parameters.required_approving_review_count >= 1
-                )
-                and any(
-                  .rules[]?;
-                  .type == "required_status_checks"
-                  and .parameters.strict_required_status_checks_policy == true
-                  and .parameters.do_not_enforce_on_create != true
-                  and (
-                    .parameters.required_status_checks as $configured
-                    | all(
-                        $required_checks[];
-                        . as $required
-                        | [
-                            $configured[]?
-                            | select(.context == $required)
-                          ] as $matching
-                        | ($matching | length) == 1
-                          and $matching[0].integration_id == $ci_integration_id
-                      )
-                  )
-                );
-              def strong_release_tags:
-                explicit_ref("tag"; "refs/tags/v*")
-                and has_rule("creation")
-                and has_rule("update")
-                and has_rule("deletion");
-              [
-                "Repository secret-artifact hygiene",
-                "Web and sync server",
-                "Native macOS package",
-                "Deployment configuration"
-              ] as $required_checks
-              | any(.[]; strong_main($required_checks; $ci_integration_id))
-                and any(.[]; strong_release_tags)
-            ' "$state_dir/rulesets-final.json" >/dev/null
+            jq -e \
+              --argjson ci_integration_id "$CI_INTEGRATION_ID" \
+              --argjson expected_bypass "$RULESET_BYPASS_ALLOWLIST_JSON" \
+              -f scripts/check-ruleset-governance.jq \
+              "$state_dir/rulesets-final.json" >/dev/null
           }
 
           validated_check_run_endpoint() {

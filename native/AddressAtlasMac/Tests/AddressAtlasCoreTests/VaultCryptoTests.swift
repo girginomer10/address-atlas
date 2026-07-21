@@ -14,7 +14,12 @@ final class VaultCryptoTests: XCTestCase {
         label: "Vitalik", address: "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", chainKind: .evm)
     ])
 
-    let envelope = try crypto.sealJSON(document, with: key, keyId: "sync-v1")
+    let envelope = try crypto.sealJSON(
+      document,
+      with: key,
+      keyId: "sync-v2",
+      schemaVersion: VaultDocument.currentSchemaVersion
+    )
     let opened = try crypto.openJSON(VaultDocument.self, envelope: envelope, with: key)
 
     XCTAssertEqual(opened.wallets.first?.address, document.wallets.first?.address)
@@ -22,6 +27,56 @@ final class VaultCryptoTests: XCTestCase {
     let wrongKey = try crypto.deriveKey(from: crypto.generateVaultKey(), purpose: .syncBlob)
     XCTAssertThrowsError(
       try crypto.openJSON(VaultDocument.self, envelope: envelope, with: wrongKey))
+  }
+
+  func testAuthenticatedVaultDecodeBindsInnerSchemaToEnvelope() throws {
+    let key = try VaultCrypto().deriveKey(
+      from: Data(repeating: 0x44, count: VaultCrypto.vaultKeyByteCount),
+      purpose: .localDatabase
+    )
+    let crypto = VaultCrypto()
+    let currentDocument = VaultDocument()
+    var currentObject = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: JSONEncoder.addressAtlas.encode(currentDocument))
+        as? [String: Any]
+    )
+    currentObject.removeValue(forKey: "schemaVersion")
+    let missingCurrentSchema = try JSONSerialization.data(
+      withJSONObject: currentObject,
+      options: [.sortedKeys]
+    )
+    let invalidCurrentEnvelope = try crypto.seal(
+      missingCurrentSchema,
+      with: key,
+      keyId: "local-db",
+      schemaVersion: VaultDocument.currentSchemaVersion
+    )
+    XCTAssertThrowsError(
+      try crypto.openJSON(VaultDocument.self, envelope: invalidCurrentEnvelope, with: key)
+    )
+
+    let legacyPlaintext = Data(
+      #"{"wallets":[],"updatedAt":"2026-01-01T00:00:00Z"}"#.utf8
+    )
+    let legacyEnvelope = try crypto.seal(
+      legacyPlaintext,
+      with: key,
+      keyId: "local-db",
+      schemaVersion: 1
+    )
+    XCTAssertNoThrow(
+      try crypto.openJSON(VaultDocument.self, envelope: legacyEnvelope, with: key)
+    )
+
+    let mismatchedEnvelope = try crypto.seal(
+      JSONEncoder.addressAtlas.encode(currentDocument),
+      with: key,
+      keyId: "local-db",
+      schemaVersion: 1
+    )
+    XCTAssertThrowsError(
+      try crypto.openJSON(VaultDocument.self, envelope: mismatchedEnvelope, with: key)
+    )
   }
 
   func testEnvelopeNonceChangesForSamePlaintext() throws {

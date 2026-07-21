@@ -27,6 +27,16 @@ public enum ScanStatus: String, Codable, Sendable {
   case failed
 }
 
+/// Whether a holding's USD columns are measured values or intentionally
+/// unknown. Numeric zero cannot carry this distinction: a real quoted price
+/// may be exactly zero, while a missing quote was historically also encoded
+/// as zero.
+public enum AssetPricingStatus: String, Codable, Sendable {
+  case priced
+  case unpriced
+  case valuationUnavailable = "valuation_unavailable"
+}
+
 public enum ExchangeProvider: String, Codable, CaseIterable, Hashable, Sendable {
   case binance
   case coinbase
@@ -279,13 +289,67 @@ public enum SyncAccountIdentifier {
 /// an HTTP Authorization header. Bound their size to the server contract and
 /// accept only visible token characters so a compromised or malformed callback
 /// cannot persist control characters or an unbounded header value.
+public struct SyncSessionTokenClaims: Equatable, Sendable {
+  public var userId: String
+  public var sessionId: String
+  public var issuedAt: Int64
+  public var expiresAt: Int64
+}
+
 public enum SyncSessionToken {
   public static let maximumUTF8ByteCount = 4_096
+  public static let maximumLifetimeMilliseconds: Int64 = 12 * 60 * 60 * 1_000
+
+  private struct Payload: Decodable {
+    var userId: String
+    var sessionId: String
+    var issuedAt: Int64
+    var expiresAt: Int64
+  }
 
   public static func isValid(_ candidate: String) -> Bool {
+    claims(candidate) != nil
+  }
+
+  public static func isValid(_ candidate: String, forAccountId accountId: String) -> Bool {
+    guard let normalizedAccount = SyncAccountIdentifier.normalized(accountId),
+      let claims = claims(candidate)
+    else { return false }
+    return claims.userId == normalizedAccount
+  }
+
+  public static func isUsable(
+    _ candidate: String,
+    forAccountId accountId: String,
+    at date: Date = Date()
+  ) -> Bool {
+    guard let normalizedAccount = SyncAccountIdentifier.normalized(accountId),
+      let claims = claims(candidate), claims.userId == normalizedAccount
+    else {
+      return false
+    }
+    return isUsable(claims, at: date)
+  }
+
+  public static func isUsable(_ candidate: String, at date: Date = Date()) -> Bool {
+    guard let claims = claims(candidate) else { return false }
+    return isUsable(claims, at: date)
+  }
+
+  private static func isUsable(_ claims: SyncSessionTokenClaims, at date: Date) -> Bool {
+    let nowMilliseconds = Int64((date.timeIntervalSince1970 * 1_000).rounded(.down))
+    return claims.issuedAt <= nowMilliseconds + 30_000
+      && nowMilliseconds < claims.expiresAt
+  }
+
+  /// Parses the server's signed token envelope without claiming to verify its
+  /// HMAC (only the server has that secret). Exact shape and account binding
+  /// are still enforceable locally and prevent pairing an otherwise plausible
+  /// bearer for account B with account A's encrypted-vault identity.
+  public static func claims(_ candidate: String) -> SyncSessionTokenClaims? {
     let bytes = candidate.utf8
-    guard !bytes.isEmpty, bytes.count <= maximumUTF8ByteCount else { return false }
-    return bytes.allSatisfy { byte in
+    guard !bytes.isEmpty, bytes.count <= maximumUTF8ByteCount else { return nil }
+    guard bytes.allSatisfy({ byte in
       (48...57).contains(byte)
         || (65...90).contains(byte)
         || (97...122).contains(byte)
@@ -296,7 +360,31 @@ public enum SyncSessionToken {
         || byte == 61  // =
         || byte == 95  // _
         || byte == 126  // ~
-    }
+    }) else { return nil }
+    let parts = candidate.split(separator: ".", omittingEmptySubsequences: false)
+    guard parts.count == 4, parts[0] == "v1", parts[1] == "session" else { return nil }
+    let encodedPayload = String(parts[2])
+    let encodedSignature = String(parts[3])
+    guard let payloadData = try? Base64URL.decode(encodedPayload),
+      Base64URL.encode(payloadData) == encodedPayload,
+      let signature = try? Base64URL.decode(encodedSignature),
+      signature.count == 32,
+      Base64URL.encode(signature) == encodedSignature,
+      let object = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any],
+      Set(object.keys) == Set(["userId", "sessionId", "issuedAt", "expiresAt"]),
+      let payload = try? JSONDecoder().decode(Payload.self, from: payloadData),
+      let userId = SyncAccountIdentifier.normalized(payload.userId), userId == payload.userId,
+      let sessionId = SyncAccountIdentifier.normalized(payload.sessionId), sessionId == payload.sessionId,
+      payload.issuedAt >= 0,
+      payload.expiresAt > payload.issuedAt,
+      payload.expiresAt - payload.issuedAt <= maximumLifetimeMilliseconds
+    else { return nil }
+    return SyncSessionTokenClaims(
+      userId: userId,
+      sessionId: sessionId,
+      issuedAt: payload.issuedAt,
+      expiresAt: payload.expiresAt
+    )
   }
 }
 
@@ -385,6 +473,7 @@ public struct TrackedAsset: Codable, Identifiable, Hashable, Sendable {
   public private(set) var exactAmount: String?
   public var priceUsd: Double
   public var valueUsd: Double
+  public var pricingStatus: AssetPricingStatus
   public var change24h: Double?
   public var explorerUrl: String
   public var source: AssetSource {
@@ -414,6 +503,7 @@ public struct TrackedAsset: Codable, Identifiable, Hashable, Sendable {
     exactAmount: String? = nil,
     priceUsd: Double,
     valueUsd: Double,
+    pricingStatus: AssetPricingStatus? = nil,
     change24h: Double? = nil,
     explorerUrl: String = "",
     source: AssetSource,
@@ -437,6 +527,8 @@ public struct TrackedAsset: Codable, Identifiable, Hashable, Sendable {
     )
     self.priceUsd = priceUsd
     self.valueUsd = valueUsd
+    self.pricingStatus = pricingStatus
+      ?? ((priceUsd > 0 || valueUsd > 0) ? .priced : .unpriced)
     self.change24h = change24h
     self.explorerUrl = explorerUrl
     self.source = source
@@ -483,6 +575,7 @@ public struct TrackedAsset: Codable, Identifiable, Hashable, Sendable {
     case exactAmount
     case priceUsd
     case valueUsd
+    case pricingStatus
     case change24h
     case explorerUrl
     case source
@@ -504,6 +597,13 @@ public struct TrackedAsset: Codable, Identifiable, Hashable, Sendable {
     amount = try container.decode(Double.self, forKey: .amount)
     priceUsd = try container.decode(Double.self, forKey: .priceUsd)
     valueUsd = try container.decode(Double.self, forKey: .valueUsd)
+    // pricingStatus was introduced without changing the vault schema. Legacy
+    // rows can only recover the old display rule; every newly scanned row
+    // persists the explicit status and can distinguish known zero from unknown.
+    pricingStatus = try container.decodeIfPresent(
+      AssetPricingStatus.self,
+      forKey: .pricingStatus
+    ) ?? ((priceUsd > 0 || valueUsd > 0) ? .priced : .unpriced)
     change24h = try container.decodeIfPresent(Double.self, forKey: .change24h)
     explorerUrl = try container.decode(String.self, forKey: .explorerUrl)
     source = try container.decode(AssetSource.self, forKey: .source)
@@ -514,11 +614,39 @@ public struct TrackedAsset: Codable, Identifiable, Hashable, Sendable {
       ExchangeProvider.self,
       forKey: .exchangeProvider
     )
-    exactAmount = Self.validatedExactAmount(
-      try container.decodeIfPresent(String.self, forKey: .exactAmount),
-      approximateAmount: amount,
-      source: source
-    )
+    let encodedExactAmount = try container.decodeIfPresent(String.self, forKey: .exactAmount)
+    if source == .exchange {
+      if let encodedExactAmount {
+        guard
+          let validated = Self.validatedExactAmount(
+            encodedExactAmount,
+            approximateAmount: amount,
+            source: source
+          ),
+          validated == encodedExactAmount
+        else {
+          throw DecodingError.dataCorruptedError(
+            forKey: .exactAmount,
+            in: container,
+            debugDescription: "Exchange exactAmount is malformed or disagrees with amount."
+          )
+        }
+        exactAmount = validated
+      } else {
+        // exactAmount was added without a vault schema bump. Its absence is
+        // the one explicit v2 legacy case; derive a canonical representation.
+        exactAmount = Self.validatedExactAmount(nil, approximateAmount: amount, source: source)
+      }
+    } else {
+      guard encodedExactAmount == nil else {
+        throw DecodingError.dataCorruptedError(
+          forKey: .exactAmount,
+          in: container,
+          debugDescription: "Only exchange holdings may carry exactAmount."
+        )
+      }
+      exactAmount = nil
+    }
   }
 
   public func encode(to encoder: Encoder) throws {
@@ -534,6 +662,7 @@ public struct TrackedAsset: Codable, Identifiable, Hashable, Sendable {
     try container.encodeIfPresent(exactAmount, forKey: .exactAmount)
     try container.encode(priceUsd, forKey: .priceUsd)
     try container.encode(valueUsd, forKey: .valueUsd)
+    try container.encode(pricingStatus, forKey: .pricingStatus)
     try container.encodeIfPresent(change24h, forKey: .change24h)
     try container.encode(explorerUrl, forKey: .explorerUrl)
     try container.encode(source, forKey: .source)
@@ -583,6 +712,10 @@ public struct SyncState: Codable, Equatable, Sendable {
   /// stopped replay. It forces every subsequent download through the discard
   /// confirmation path, including for an otherwise empty vault.
   public var remoteOutcomeUncertain: Bool
+  /// Local-only reminder that a removed exchange credential may still exist
+  /// inside the last confirmed encrypted remote snapshot. A successful
+  /// replacement upload clears it; remote snapshots never contain it.
+  public var pendingExchangeCredentialCleanup: Bool
   /// Local-only operation identity for replay-safe remote account deletion.
   /// VaultSyncCodec strips it from encrypted server snapshots.
   public var accountDeletionIdempotencyKey: String?
@@ -596,6 +729,7 @@ public struct SyncState: Codable, Equatable, Sendable {
     case lastChecksum
     case lastSyncedContentChecksum
     case remoteOutcomeUncertain
+    case pendingExchangeCredentialCleanup
     case accountDeletionIdempotencyKey
   }
 
@@ -608,6 +742,7 @@ public struct SyncState: Codable, Equatable, Sendable {
     lastChecksum: String? = nil,
     lastSyncedContentChecksum: String? = nil,
     remoteOutcomeUncertain: Bool = false,
+    pendingExchangeCredentialCleanup: Bool = false,
     accountDeletionIdempotencyKey: String? = nil
   ) {
     self.accountId = accountId
@@ -618,6 +753,7 @@ public struct SyncState: Codable, Equatable, Sendable {
     self.lastChecksum = lastChecksum
     self.lastSyncedContentChecksum = lastSyncedContentChecksum
     self.remoteOutcomeUncertain = remoteOutcomeUncertain
+    self.pendingExchangeCredentialCleanup = pendingExchangeCredentialCleanup
     self.accountDeletionIdempotencyKey = AccountDeletionIdempotencyKey.normalized(
       accountDeletionIdempotencyKey
     )
@@ -639,6 +775,8 @@ public struct SyncState: Codable, Equatable, Sendable {
       String.self, forKey: .lastSyncedContentChecksum)
     remoteOutcomeUncertain =
       try container.decodeIfPresent(Bool.self, forKey: .remoteOutcomeUncertain) ?? false
+    pendingExchangeCredentialCleanup =
+      try container.decodeIfPresent(Bool.self, forKey: .pendingExchangeCredentialCleanup) ?? false
     accountDeletionIdempotencyKey = AccountDeletionIdempotencyKey.normalized(
       try container.decodeIfPresent(String.self, forKey: .accountDeletionIdempotencyKey)
     )
@@ -649,7 +787,9 @@ public struct SyncState: Codable, Equatable, Sendable {
       sessionToken = ""
       accountDeletionIdempotencyKey = nil
       clearRemoteTracking()
-    } else if !sessionToken.isEmpty, !SyncSessionToken.isValid(sessionToken) {
+    } else if !sessionToken.isEmpty,
+      !SyncSessionToken.isUsable(sessionToken, forAccountId: accountId!)
+    {
       // Preserve the authenticated remote baseline, but force a fresh sign-in
       // before any Authorization header is constructed.
       sessionToken = ""
@@ -671,9 +811,14 @@ public struct SyncState: Codable, Equatable, Sendable {
   /// Install credentials returned by passkey authentication. A different
   /// account or server starts with a clean remote baseline.
   @discardableResult
-  public mutating func connect(accountId: String, serverURL: String, sessionToken: String) -> Bool {
+  public mutating func connect(
+    accountId: String,
+    serverURL: String,
+    sessionToken: String,
+    at date: Date = Date()
+  ) -> Bool {
     guard let accountId = SyncAccountIdentifier.normalized(accountId),
-      SyncSessionToken.isValid(sessionToken)
+      SyncSessionToken.isUsable(sessionToken, forAccountId: accountId, at: date)
     else { return false }
     let nextServer = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
     if self.accountId != accountId || self.serverURL != nextServer {
@@ -692,6 +837,7 @@ public struct SyncState: Codable, Equatable, Sendable {
     lastChecksum = nil
     lastSyncedContentChecksum = nil
     remoteOutcomeUncertain = false
+    pendingExchangeCredentialCleanup = false
   }
 
   /// Forget only the bearer grant after the server has revoked this device's
@@ -722,7 +868,95 @@ public struct SyncState: Codable, Equatable, Sendable {
     lastChecksum = snapshotChecksum
     lastSyncedContentChecksum = contentChecksum
     remoteOutcomeUncertain = false
+    pendingExchangeCredentialCleanup = false
   }
+}
+
+private struct CurrentVaultSyncStatePayload: Decodable {
+  var accountId: String?
+  var serverURL: String
+  var sessionToken: String
+  var latestRemoteVersion: Int
+  var lastSyncedAt: Date?
+  var lastChecksum: String?
+  var lastSyncedContentChecksum: String?
+  var remoteOutcomeUncertain: Bool
+  var pendingExchangeCredentialCleanup: Bool
+  var accountDeletionIdempotencyKey: String?
+
+  private enum CodingKeys: String, CodingKey, CaseIterable {
+    case accountId
+    case serverURL
+    case sessionToken
+    case latestRemoteVersion
+    case lastSyncedAt
+    case lastChecksum
+    case lastSyncedContentChecksum
+    case remoteOutcomeUncertain
+    case pendingExchangeCredentialCleanup
+    case accountDeletionIdempotencyKey
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let requiredKeys: [CodingKeys] = [
+      .serverURL,
+      .sessionToken,
+      .latestRemoteVersion,
+      .remoteOutcomeUncertain,
+    ]
+    for key in requiredKeys where !container.contains(key) {
+      throw DecodingError.keyNotFound(
+        key,
+        DecodingError.Context(
+          codingPath: decoder.codingPath,
+          debugDescription: "Current vault sync state is missing \(key.stringValue)."
+        )
+      )
+    }
+    accountId = try container.decodeIfPresent(String.self, forKey: .accountId)
+    serverURL = try container.decode(String.self, forKey: .serverURL)
+    sessionToken = try container.decode(String.self, forKey: .sessionToken)
+    latestRemoteVersion = try container.decode(Int.self, forKey: .latestRemoteVersion)
+    lastSyncedAt = try container.decodeIfPresent(Date.self, forKey: .lastSyncedAt)
+    lastChecksum = try container.decodeIfPresent(String.self, forKey: .lastChecksum)
+    lastSyncedContentChecksum = try container.decodeIfPresent(
+      String.self,
+      forKey: .lastSyncedContentChecksum
+    )
+    remoteOutcomeUncertain = try container.decode(Bool.self, forKey: .remoteOutcomeUncertain)
+    pendingExchangeCredentialCleanup = try container.decodeIfPresent(
+      Bool.self,
+      forKey: .pendingExchangeCredentialCleanup
+    ) ?? false
+    accountDeletionIdempotencyKey = try container.decodeIfPresent(
+      String.self,
+      forKey: .accountDeletionIdempotencyKey
+    )
+  }
+
+  var value: SyncState {
+    var state = SyncState()
+    state.accountId = accountId
+    state.serverURL = serverURL
+    state.sessionToken = sessionToken
+    state.latestRemoteVersion = latestRemoteVersion
+    state.lastSyncedAt = lastSyncedAt
+    state.lastChecksum = lastChecksum
+    state.lastSyncedContentChecksum = lastSyncedContentChecksum
+    state.remoteOutcomeUncertain = remoteOutcomeUncertain
+    state.pendingExchangeCredentialCleanup = pendingExchangeCredentialCleanup
+    state.accountDeletionIdempotencyKey = accountDeletionIdempotencyKey
+    return state
+  }
+}
+
+enum VaultDocumentAuthenticatedDecodeError: Error, Equatable, Sendable {
+  case schemaEnvelopeMismatch(envelopeSchemaVersion: Int, documentSchemaVersion: Int?)
+}
+
+private struct VaultDocumentSchemaProbe: Decodable {
+  let schemaVersion: Int?
 }
 
 public struct VaultDocument: Codable, Equatable, Sendable {
@@ -772,6 +1006,36 @@ public struct VaultDocument: Codable, Equatable, Sendable {
     case updatedAt
   }
 
+  /// Decode authenticated plaintext only when its explicit inner schema agrees
+  /// with the authenticated envelope metadata. Schema-v1 is the sole legacy
+  /// exception: the original format predated the inner field, so a missing
+  /// value is unambiguously treated as v1. Current documents must always carry
+  /// an explicit current schema; otherwise a truncated v2 payload could be
+  /// silently interpreted through the permissive migration path.
+  static func decodeAuthenticatedPlaintext(
+    _ data: Data,
+    envelopeSchemaVersion: Int,
+    decoder: JSONDecoder = .addressAtlas
+  ) throws -> VaultDocument {
+    let probe = try JSONDecoder.addressAtlas.decode(VaultDocumentSchemaProbe.self, from: data)
+    let schemaMatchesEnvelope: Bool
+    switch envelopeSchemaVersion {
+    case 1:
+      schemaMatchesEnvelope = probe.schemaVersion == nil || probe.schemaVersion == 1
+    case Self.currentSchemaVersion:
+      schemaMatchesEnvelope = probe.schemaVersion == Self.currentSchemaVersion
+    default:
+      schemaMatchesEnvelope = false
+    }
+    guard schemaMatchesEnvelope else {
+      throw VaultDocumentAuthenticatedDecodeError.schemaEnvelopeMismatch(
+        envelopeSchemaVersion: envelopeSchemaVersion,
+        documentSchemaVersion: probe.schemaVersion
+      )
+    }
+    return try decoder.decode(VaultDocument.self, from: data)
+  }
+
   /// Migrate persisted schema-v1 documents in memory. Missing collections and
   /// sync fields receive conservative defaults; unknown future schemas fail
   /// closed instead of being partially interpreted.
@@ -787,18 +1051,37 @@ public struct VaultDocument: Codable, Equatable, Sendable {
     }
 
     schemaVersion = Self.currentSchemaVersion
-    preferences =
-      try container.decodeIfPresent(Preferences.self, forKey: .preferences) ?? Preferences()
-    wallets = try container.decodeIfPresent([WalletRecord].self, forKey: .wallets) ?? []
-    customTokens =
-      try container.decodeIfPresent([CustomTokenRecord].self, forKey: .customTokens) ?? []
-    manualHoldings =
-      try container.decodeIfPresent([ManualHoldingRecord].self, forKey: .manualHoldings) ?? []
-    exchangeConnections =
-      try container.decodeIfPresent([ExchangeConnectionRecord].self, forKey: .exchangeConnections)
-      ?? []
-    scanRuns = try container.decodeIfPresent([ScanRunRecord].self, forKey: .scanRuns) ?? []
-    syncState = try container.decodeIfPresent(SyncState.self, forKey: .syncState) ?? SyncState()
-    updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+    if storedSchemaVersion == Self.currentSchemaVersion {
+      preferences = try container.decode(Preferences.self, forKey: .preferences)
+      wallets = try container.decode([WalletRecord].self, forKey: .wallets)
+      customTokens = try container.decode([CustomTokenRecord].self, forKey: .customTokens)
+      manualHoldings = try container.decode([ManualHoldingRecord].self, forKey: .manualHoldings)
+      exchangeConnections = try container.decode(
+        [ExchangeConnectionRecord].self,
+        forKey: .exchangeConnections
+      )
+      scanRuns = try container.decode([ScanRunRecord].self, forKey: .scanRuns)
+      syncState = try container.decode(
+        CurrentVaultSyncStatePayload.self,
+        forKey: .syncState
+      ).value
+      updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+    } else {
+      preferences =
+        try container.decodeIfPresent(Preferences.self, forKey: .preferences) ?? Preferences()
+      wallets = try container.decodeIfPresent([WalletRecord].self, forKey: .wallets) ?? []
+      customTokens =
+        try container.decodeIfPresent([CustomTokenRecord].self, forKey: .customTokens) ?? []
+      manualHoldings =
+        try container.decodeIfPresent([ManualHoldingRecord].self, forKey: .manualHoldings) ?? []
+      exchangeConnections =
+        try container.decodeIfPresent(
+          [ExchangeConnectionRecord].self,
+          forKey: .exchangeConnections
+        ) ?? []
+      scanRuns = try container.decodeIfPresent([ScanRunRecord].self, forKey: .scanRuns) ?? []
+      syncState = try container.decodeIfPresent(SyncState.self, forKey: .syncState) ?? SyncState()
+      updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+    }
   }
 }

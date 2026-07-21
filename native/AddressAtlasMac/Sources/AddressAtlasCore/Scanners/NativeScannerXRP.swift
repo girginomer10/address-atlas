@@ -59,9 +59,26 @@ private struct XrpLedgerIdentity: Equatable, Sendable {
 }
 
 extension NativeScanner {
-  func scanXRP(address: String, chain: ChainConfig, prices: [String: PricePoint])
+  func scanXRP(
+    address: String,
+    chain: ChainConfig,
+    prices: [String: PricePoint],
+    networkIdentityProofs: ChainNetworkValueCache<Void>? = nil
+  )
     async throws -> NativeScanResult
   {
+    struct ServerInfoResponse: Decodable {
+      var result: Result?
+      struct Result: Decodable {
+        var info: Info?
+      }
+      struct Info: Decodable {
+        var networkID: UInt32?
+        enum CodingKeys: String, CodingKey {
+          case networkID = "network_id"
+        }
+      }
+    }
     struct Response: Decodable {
       var result: Result?
       struct Result: Decodable {
@@ -93,6 +110,25 @@ extension NativeScanner {
       }
     }
     guard let rpc = chain.rpcUrl else { return NativeScanResult() }
+    guard case .xrpNetworkID(let expectedNetworkID) = chain.networkIdentity else {
+      throw Self.messageError(domain: "XRP", message: "XRP network identity is missing.")
+    }
+    let proofCache = networkIdentityProofs ?? ChainNetworkValueCache<Void>()
+    try await proofCache.prove(
+      chainID: chain.id,
+      endpoint: rpc,
+      identity: chain.networkIdentity
+    ) {
+      let serverInfo = try await http.post(
+        rpc,
+        body: XRPRequest(method: "server_info", params: [[:]]),
+        as: ServerInfoResponse.self
+      )
+      guard serverInfo.result?.info?.networkID == expectedNetworkID else {
+        throw Self.messageError(
+          domain: "XRP", message: "XRP endpoint returned the wrong network identity.")
+      }
+    }
     let response = try await http.post(
       rpc,
       body: XRPRequest(

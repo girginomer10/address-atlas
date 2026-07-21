@@ -54,6 +54,7 @@ fi
 
 database_name=address_atlas_sync
 owner_password='OwnerBootstrapSecret_7Gm2Qv9Lx4Np8Yk6'
+owner_password_b='OwnerRotatedSecret_6Jn4Rv8Qx2Mc9Ts5'
 admin_password_a='AdminControlSecret_4Fx8Lm2Qs7Vz9Tr5'
 admin_password_b='AdminRotatedSecret_9Hw3Kp6Jx8Nc2Vm7'
 runtime_password_a='RuntimeServiceSecret_3Ld8Qw5Nz7Rx2Km9'
@@ -61,8 +62,15 @@ runtime_password_b='RuntimeRotatedSecret_8Jq2Vn6Gy4Ws9Pc3'
 wrong_admin_password='WrongAdminCredential_2Qx7Nv4Ls8Jm5Tk9'
 active_data_dir=''
 active_server_log=''
+sleep_session_pids=()
 
 cleanup() {
+  local pid
+  for pid in "${sleep_session_pids[@]:-}"; do
+    [[ -n "$pid" ]] || continue
+    kill "$pid" >/dev/null 2>&1 || true
+    wait "$pid" >/dev/null 2>&1 || true
+  done
   if [[ -n "$active_data_dir" && -f "${active_data_dir}/postmaster.pid" ]]; then
     "${postgres_bin_dir}/pg_ctl" -D "$active_data_dir" -m immediate -w stop >/dev/null 2>&1 || true
   fi
@@ -207,6 +215,7 @@ assert_secret_collectors_are_safe() {
   local secret
   for secret in \
       "$owner_password" "$owner_password_hex_for_test" \
+      "$owner_password_b" \
       "$admin_password_a" "$admin_password_b" \
       "$runtime_password_a" "$runtime_password_b" \
       "$wrong_admin_password"; do
@@ -294,6 +303,31 @@ provision_roles() {
     POSTGRES_PASSWORD="$owner_password" \
     POSTGRES_ADMIN_CURRENT_PASSWORD="$current_admin_password" \
     POSTGRES_ADMIN_PASSWORD="$desired_admin_password" \
+    POSTGRES_RUNTIME_PASSWORD="$desired_runtime_password" \
+    PSQL_BIN="${postgres_bin_dir}/psql" \
+    "$provision_script"
+}
+
+rotate_roles() {
+  local current_owner_password="$1"
+  local desired_owner_password="$2"
+  local current_admin_password="$3"
+  local desired_admin_password="$4"
+  local current_runtime_password="$5"
+  local desired_runtime_password="$6"
+  local rotation_mode="${7:-rotate}"
+  env \
+    ADDRESS_ATLAS_DATABASE_ROLE_MODE="$rotation_mode" \
+    PGCONNECT_TIMEOUT=999 \
+    PGOPTIONS='-c statement_timeout=1 -c lock_timeout=1' \
+    PGHOST=127.0.0.1 \
+    PGPORT="$test_port" \
+    POSTGRES_DB="$database_name" \
+    POSTGRES_OWNER_CURRENT_PASSWORD="$current_owner_password" \
+    POSTGRES_PASSWORD="$desired_owner_password" \
+    POSTGRES_ADMIN_CURRENT_PASSWORD="$current_admin_password" \
+    POSTGRES_ADMIN_PASSWORD="$desired_admin_password" \
+    POSTGRES_RUNTIME_CURRENT_PASSWORD="$current_runtime_password" \
     POSTGRES_RUNTIME_PASSWORD="$desired_runtime_password" \
     PSQL_BIN="${postgres_bin_dir}/psql" \
     "$provision_script"
@@ -734,6 +768,101 @@ bootstrap_schema
 assert_catalog_contract "$admin_password_a"
 assert_runtime_behavior "$runtime_password_a"
 assert_runtime_denials "$runtime_password_a"
+
+echo 'database-role-tests: explicit three-role credential rotation is atomic and reversible'
+attributes_before_rotation="$(protected_role_attributes "$admin_password_a")"
+rotation_validation_output="${test_root}/rotation-validation.stderr"
+if rotate_roles \
+    "$owner_password" "$owner_password_b" \
+    "$owner_password" "$admin_password_b" \
+    "$runtime_password_a" "$runtime_password_b" \
+    > /dev/null 2> "$rotation_validation_output"; then
+  echo 'Rotation accepted duplicate current credentials.' >&2
+  exit 1
+fi
+grep -F 'must be six distinct values' "$rotation_validation_output" >/dev/null
+if rotate_roles \
+    "$owner_password" "$owner_password_b" \
+    "$admin_password_a" "$admin_password_b" \
+    "$runtime_password_a" "$owner_password" \
+    > /dev/null 2> "$rotation_validation_output"; then
+  echo 'Rotation accepted reuse of a prior credential.' >&2
+  exit 1
+fi
+grep -F 'must be six distinct values' "$rotation_validation_output" >/dev/null
+enable_secret_capture_pressure all admin_psql "$admin_password_a"
+rotation_session_application=address-atlas-rotation-stale-session-test
+PGPASSWORD="$owner_password" PGAPPNAME="$rotation_session_application" \
+  "${postgres_bin_dir}/psql" -X -qAt \
+  -h 127.0.0.1 -p "$test_port" -U address_atlas -d "$database_name" \
+  -c 'SELECT pg_sleep(120)' >"${test_root}/owner-stale-session.log" 2>&1 &
+sleep_session_pids+=("$!")
+PGPASSWORD="$admin_password_a" PGAPPNAME="$rotation_session_application" \
+  "${postgres_bin_dir}/psql" -X -qAt \
+  -h 127.0.0.1 -p "$test_port" -U address_atlas_admin -d "$database_name" \
+  -c 'SELECT pg_sleep(120)' >"${test_root}/admin-stale-session.log" 2>&1 &
+sleep_session_pids+=("$!")
+PGPASSWORD="$runtime_password_a" PGAPPNAME="$rotation_session_application" \
+  "${postgres_bin_dir}/psql" -X -qAt \
+  -h 127.0.0.1 -p "$test_port" -U address_atlas_runtime -d "$database_name" \
+  -c 'SELECT pg_sleep(120)' >"${test_root}/runtime-stale-session.log" 2>&1 &
+sleep_session_pids+=("$!")
+rotation_sessions_ready=false
+for _ in {1..100}; do
+  if [[ "$(admin_psql "$admin_password_a" -Atc \
+      "SELECT count(*) FROM pg_catalog.pg_stat_activity WHERE application_name = '${rotation_session_application}'")" == 3 ]]; then
+    rotation_sessions_ready=true
+    break
+  fi
+  sleep 0.1
+done
+[[ "$rotation_sessions_ready" == true ]] || {
+  echo 'Protected-role stale sessions did not become ready for the rotation test.' >&2
+  exit 1
+}
+rotate_roles \
+  "$owner_password" "$owner_password_b" \
+  "$admin_password_a" "$admin_password_b" \
+  "$runtime_password_a" "$runtime_password_b"
+for stale_pid in "${sleep_session_pids[@]}"; do
+  if wait "$stale_pid"; then
+    echo 'Credential rotation left a pre-rotation protected-role session alive.' >&2
+    exit 1
+  fi
+done
+sleep_session_pids=()
+[[ "$(admin_psql "$admin_password_b" -Atc \
+    "SELECT count(*) FROM pg_catalog.pg_stat_activity WHERE application_name = '${rotation_session_application}'")" == 0 ]] || {
+  echo 'Credential rotation did not prove every protected-role stale session was terminated.' >&2
+  exit 1
+}
+rotate_roles \
+  "$owner_password" "$owner_password_b" \
+  "$admin_password_a" "$admin_password_b" \
+  "$runtime_password_a" "$runtime_password_b" verify-rotation
+expect_auth_failure address_atlas "$owner_password"
+expect_auth_failure address_atlas_admin "$admin_password_a"
+expect_auth_failure address_atlas_runtime "$runtime_password_a"
+PGPASSWORD="$owner_password_b" "${postgres_bin_dir}/psql" -X -qAt \
+  -h 127.0.0.1 -p "$test_port" -U address_atlas -d "$database_name" \
+  -c 'SELECT current_user' | grep -qx address_atlas
+assert_catalog_contract "$admin_password_b"
+assert_runtime_behavior "$runtime_password_b"
+assert_secret_collectors_are_safe credential_rotation admin_psql "$admin_password_b"
+disable_secret_capture_pressure admin_psql "$admin_password_b"
+[[ "$(protected_role_attributes "$admin_password_b")" == "$attributes_before_rotation" ]] || {
+  echo 'Credential rotation changed protected role attributes.' >&2
+  exit 1
+}
+rotate_roles \
+  "$owner_password_b" "$owner_password" \
+  "$admin_password_b" "$admin_password_a" \
+  "$runtime_password_b" "$runtime_password_a"
+expect_auth_failure address_atlas "$owner_password_b"
+expect_auth_failure address_atlas_admin "$admin_password_b"
+expect_auth_failure address_atlas_runtime "$runtime_password_b"
+assert_catalog_contract "$admin_password_a"
+assert_runtime_behavior "$runtime_password_a"
 
 echo 'database-role-tests: implicit credential rotation is refused and steady provisioning is idempotent'
 if provision_roles steady "$admin_password_a" "$admin_password_b" "$runtime_password_a" \

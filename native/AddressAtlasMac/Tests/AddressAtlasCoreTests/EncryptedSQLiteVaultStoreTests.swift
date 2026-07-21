@@ -6,6 +6,46 @@ import XCTest
 @testable import AddressAtlasCore
 
 final class EncryptedSQLiteVaultStoreTests: XCTestCase {
+  private let evmAddressOne = "0x0000000000000000000000000000000000000001"
+  private let evmAddressTwo = "0x0000000000000000000000000000000000000002"
+
+  func testEveryConnectionEnforcesAndReadsBackFullDurabilityPolicy() throws {
+    let tempDir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+    let store = try EncryptedSQLiteVaultStore(
+      path: tempDir.appending(path: "vault.sqlite"),
+      vaultKey: try VaultCrypto().generateVaultKey()
+    )
+
+    XCTAssertEqual(try store.durabilitySettingsForTesting(), .strict)
+  }
+
+  func testDurabilityReadbackMismatchFailsClosedBeforeSchemaOrSensitiveRows() throws {
+    let tempDir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+    let databaseURL = tempDir.appending(path: "vault.sqlite")
+    let store = try EncryptedSQLiteVaultStore(
+      path: databaseURL,
+      vaultKey: try VaultCrypto().generateVaultKey(),
+      crypto: VaultCrypto(),
+      maximumStoredEnvelopeByteCount: EncryptedSQLiteVaultStore.maximumStoredEnvelopeByteCount,
+      requiredDurabilitySettings: .init(
+        synchronous: 2,
+        fullfsync: 2,
+        checkpointFullfsync: 1
+      )
+    )
+
+    XCTAssertThrowsError(try store.initialize()) { error in
+      guard case EncryptedSQLiteVaultStoreError.durabilityUnavailable = error else {
+        return XCTFail("Expected durability readback failure, received \(error)")
+      }
+    }
+    XCTAssertEqual(try tableCount(in: databaseURL), 0)
+  }
+
   func testStorePersistsEncryptedDocumentWithoutPlaintextWalletLeak() throws {
     let tempDir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -38,18 +78,18 @@ final class EncryptedSQLiteVaultStoreTests: XCTestCase {
     let store = try EncryptedSQLiteVaultStore(path: databaseURL, vaultKey: vaultKey, crypto: crypto)
     _ = try store.load()
     var baseline = VaultDocument(wallets: [
-      WalletRecord(label: "Readable", address: "0x1", chainKind: .evm)
+      WalletRecord(label: "Readable", address: evmAddressOne, chainKind: .evm)
     ])
     baseline = try store.saveReturningPersistedDocument(baseline)
     let envelopeBeforeRejectedSave = try XCTUnwrap(store.rawStoredEnvelopeBytes())
 
-    let oversized = VaultDocument(wallets: [
+    let oversized = VaultDocument(wallets: (0..<20).map { index in
       WalletRecord(
-        label: String(repeating: "x", count: 4_096),
-        address: "0x2",
+        label: "Large fixture " + String(repeating: "x", count: 60),
+        address: String(format: "0x%040llx", index + 100),
         chainKind: .evm
       )
-    ])
+    })
     XCTAssertThrowsError(try store.save(oversized)) { error in
       XCTAssertNotNil(error as? VaultCryptoPlaintextTooLargeError)
     }
@@ -220,43 +260,49 @@ final class EncryptedSQLiteVaultStoreTests: XCTestCase {
     let vaultKey = try VaultCrypto().generateVaultKey()
     let store = try EncryptedSQLiteVaultStore(path: databaseURL, vaultKey: vaultKey)
     _ = try store.load()
-    let credentialMarker = "checkpoint-credential-ciphertext"
+    let credentialMarker = "checkpoint-credential-plaintext"
+    let connectionId = UUID()
+    let credentialEnvelope = try ExchangeCredentialVault().seal(
+      ExchangeCredentials(apiKey: credentialMarker, secret: "checkpoint-secret"),
+      vaultKey: vaultKey,
+      connectionId: connectionId
+    )
     let connection = ExchangeConnectionRecord(
+      id: connectionId,
       provider: .binance,
       label: "Local Binance",
-      encryptedCredentials: EncryptedVaultEnvelope(
-        keyId: "exchange-id",
-        nonce: Base64URL.encode(Data(repeating: 1, count: 12)),
-        ciphertext: credentialMarker,
-        checksum: String(repeating: "a", count: 64)
-      ),
+      encryptedCredentials: credentialEnvelope,
       credentialScopeAssurance: .verifiedReadOnly
     )
+    let originalAccountId = "11111111-1111-4111-8111-111111111111"
+    let originalSessionToken = testSessionToken(accountId: originalAccountId)
     var original = VaultDocument(
       wallets: [
-        WalletRecord(label: "Local Treasury", address: "0x1", chainKind: .evm)
+        WalletRecord(label: "Local Treasury", address: evmAddressOne, chainKind: .evm)
       ],
       exchangeConnections: [connection]
     )
     XCTAssertTrue(
       original.syncState.connect(
-        accountId: "11111111-1111-4111-8111-111111111111",
+        accountId: originalAccountId,
         serverURL: "https://sync.example",
-        sessionToken: "checkpoint-session-token"
+        sessionToken: originalSessionToken
       )
     )
     original = try store.saveReturningPersistedDocument(original)
 
     _ = try store.saveRollbackCheckpoint(original)
     XCTAssertTrue(try store.containsRollbackCheckpoint())
+    let currentAccountId = "22222222-2222-4222-8222-222222222222"
+    let currentSessionToken = testSessionToken(accountId: currentAccountId)
     var downloaded = VaultDocument(wallets: [
-      WalletRecord(label: "Remote Treasury", address: "0x2", chainKind: .evm)
+      WalletRecord(label: "Remote Treasury", address: evmAddressTwo, chainKind: .evm)
     ])
     XCTAssertTrue(
       downloaded.syncState.connect(
-        accountId: "22222222-2222-4222-8222-222222222222",
+        accountId: currentAccountId,
         serverURL: "https://other-sync.example",
-        sessionToken: "current-session-token"
+        sessionToken: currentSessionToken
       )
     )
     downloaded.syncState.markSynced(
@@ -275,14 +321,14 @@ final class EncryptedSQLiteVaultStoreTests: XCTestCase {
     XCTAssertEqual(restored.exchangeConnections.map(\.id), [connection.id])
     XCTAssertEqual(
       restored.exchangeConnections.first?.encryptedCredentials.ciphertext,
-      credentialMarker
+      credentialEnvelope.ciphertext
     )
     XCTAssertEqual(
       restored.exchangeConnections.first?.credentialScopeAssurance,
       .verifiedReadOnly
     )
     XCTAssertEqual(restored.syncState, downloaded.syncState)
-    XCTAssertEqual(restored.syncState.sessionToken, "current-session-token")
+    XCTAssertEqual(restored.syncState.sessionToken, currentSessionToken)
     XCTAssertEqual(restored.syncState.latestRemoteVersion, 7)
     XCTAssertEqual(restored.syncState.lastChecksum, String(repeating: "b", count: 64))
     XCTAssertTrue(try VaultSyncCodec().hasLocalChanges(in: restored))
@@ -305,7 +351,7 @@ final class EncryptedSQLiteVaultStoreTests: XCTestCase {
     _ = try currentStore.load()
     let original = try currentStore.saveReturningPersistedDocument(
       VaultDocument(wallets: [
-        WalletRecord(label: "Original", address: "0x1", chainKind: .evm)
+        WalletRecord(label: "Original", address: evmAddressOne, chainKind: .evm)
       ])
     )
     _ = try currentStore.saveRollbackCheckpoint(original)
@@ -314,7 +360,7 @@ final class EncryptedSQLiteVaultStoreTests: XCTestCase {
     _ = try staleStore.load()
     try currentStore.save(
       VaultDocument(wallets: [
-        WalletRecord(label: "Current", address: "0x2", chainKind: .evm)
+        WalletRecord(label: "Current", address: evmAddressTwo, chainKind: .evm)
       ])
     )
 
@@ -342,10 +388,12 @@ final class EncryptedSQLiteVaultStoreTests: XCTestCase {
     _ = try store.load()
 
     var document = VaultDocument(wallets: [
-      WalletRecord(label: "First", address: "0x1", chainKind: .evm)
+      WalletRecord(label: "First", address: evmAddressOne, chainKind: .evm)
     ])
     try store.save(document)
-    document.wallets.append(WalletRecord(label: "Second", address: "0x2", chainKind: .evm))
+    document.wallets.append(
+      WalletRecord(label: "Second", address: evmAddressTwo, chainKind: .evm)
+    )
     try store.save(document)
 
     let verifier = try EncryptedSQLiteVaultStore(path: databaseURL, vaultKey: vaultKey)
@@ -365,12 +413,12 @@ final class EncryptedSQLiteVaultStoreTests: XCTestCase {
 
     try firstProcess.save(
       VaultDocument(wallets: [
-        WalletRecord(label: "First process", address: "0x1", chainKind: .evm)
+        WalletRecord(label: "First process", address: evmAddressOne, chainKind: .evm)
       ]))
     XCTAssertThrowsError(
       try secondProcess.save(
         VaultDocument(wallets: [
-          WalletRecord(label: "Second process", address: "0x2", chainKind: .evm)
+          WalletRecord(label: "Second process", address: evmAddressTwo, chainKind: .evm)
         ]))
     ) { error in
       XCTAssertEqual(error as? EncryptedSQLiteVaultStoreError, .staleDocument)
@@ -389,14 +437,14 @@ final class EncryptedSQLiteVaultStoreTests: XCTestCase {
     let seededStore = try EncryptedSQLiteVaultStore(path: databaseURL, vaultKey: vaultKey)
     try seededStore.save(
       VaultDocument(wallets: [
-        WalletRecord(label: "Existing", address: "0x1", chainKind: .evm)
+        WalletRecord(label: "Existing", address: evmAddressOne, chainKind: .evm)
       ]))
 
     let unbasedStore = try EncryptedSQLiteVaultStore(path: databaseURL, vaultKey: vaultKey)
     XCTAssertThrowsError(
       try unbasedStore.save(
         VaultDocument(wallets: [
-          WalletRecord(label: "Blind overwrite", address: "0x2", chainKind: .evm)
+          WalletRecord(label: "Blind overwrite", address: evmAddressTwo, chainKind: .evm)
         ]))
     ) { error in
       XCTAssertEqual(error as? EncryptedSQLiteVaultStoreError, .staleDocument)
@@ -416,11 +464,11 @@ final class EncryptedSQLiteVaultStoreTests: XCTestCase {
     let currentProcess = try EncryptedSQLiteVaultStore(path: databaseURL, vaultKey: vaultKey)
     try currentProcess.save(
       VaultDocument(wallets: [
-        WalletRecord(label: "Current writer", address: "0x1", chainKind: .evm)
+        WalletRecord(label: "Current writer", address: evmAddressOne, chainKind: .evm)
       ]))
     let localKey = try crypto.deriveKey(from: vaultKey, purpose: .localDatabase)
     let legacyEnvelope = try crypto.sealJSON(
-      VaultDocument(wallets: [WalletRecord(label: "Legacy writer", address: "0x2", chainKind: .evm)]
+      VaultDocument(schemaVersion: 1, wallets: [WalletRecord(label: "Legacy writer", address: evmAddressTwo, chainKind: .evm)]
       ),
       with: localKey,
       keyId: "local-db"
@@ -446,7 +494,7 @@ final class EncryptedSQLiteVaultStoreTests: XCTestCase {
     let seededStore = try EncryptedSQLiteVaultStore(path: databaseURL, vaultKey: vaultKey)
     try seededStore.save(
       VaultDocument(wallets: [
-        WalletRecord(label: "Initial", address: "0x1", chainKind: .evm)
+        WalletRecord(label: "Initial", address: evmAddressOne, chainKind: .evm)
       ]))
 
     let currentProcess = try EncryptedSQLiteVaultStore(path: databaseURL, vaultKey: vaultKey)
@@ -454,7 +502,7 @@ final class EncryptedSQLiteVaultStoreTests: XCTestCase {
     try dropRevisionGuard(at: databaseURL)
     let localKey = try crypto.deriveKey(from: vaultKey, purpose: .localDatabase)
     let legacyEnvelope = try crypto.sealJSON(
-      VaultDocument(wallets: [WalletRecord(label: "Legacy writer", address: "0x2", chainKind: .evm)]
+      VaultDocument(schemaVersion: 1, wallets: [WalletRecord(label: "Legacy writer", address: evmAddressTwo, chainKind: .evm)]
       ),
       with: localKey,
       keyId: "local-db"
@@ -479,8 +527,8 @@ final class EncryptedSQLiteVaultStoreTests: XCTestCase {
     let crypto = VaultCrypto()
     let vaultKey = try crypto.generateVaultKey()
     let localKey = try crypto.deriveKey(from: vaultKey, purpose: .localDatabase)
-    let legacyDocument = VaultDocument(wallets: [
-      WalletRecord(label: "Legacy", address: "0x1", chainKind: .evm)
+    let legacyDocument = VaultDocument(schemaVersion: 1, wallets: [
+      WalletRecord(label: "Legacy", address: evmAddressOne, chainKind: .evm)
     ])
     let envelope = try crypto.sealJSON(legacyDocument, with: localKey, keyId: "local-db")
     try createLegacyVaultDatabase(
@@ -491,7 +539,9 @@ final class EncryptedSQLiteVaultStoreTests: XCTestCase {
     let migratedStore = try EncryptedSQLiteVaultStore(path: databaseURL, vaultKey: vaultKey)
     var migrated = try migratedStore.load()
     XCTAssertEqual(migrated.wallets.map(\.label), ["Legacy"])
-    migrated.wallets.append(WalletRecord(label: "After migration", address: "0x2", chainKind: .evm))
+    migrated.wallets.append(
+      WalletRecord(label: "After migration", address: evmAddressTwo, chainKind: .evm)
+    )
     try migratedStore.save(migrated)
 
     let verifier = try EncryptedSQLiteVaultStore(path: databaseURL, vaultKey: vaultKey)
@@ -513,16 +563,61 @@ final class EncryptedSQLiteVaultStoreTests: XCTestCase {
     XCTAssertEqual(loaded.postCommitDocument.wallets.map(\.label), ["Journal secret label"])
     XCTAssertFalse(rawText.contains("Journal secret label"))
     XCTAssertFalse(rawText.contains("0x00000000000000000000000000000000000000aa"))
-    XCTAssertFalse(rawText.contains("journal-session-secret"))
+    XCTAssertFalse(rawText.contains(fixture.document.syncState.sessionToken))
     XCTAssertFalse(rawText.contains(pending.accountId))
 
     var envelope = try JSONDecoder.addressAtlas.decode(EncryptedVaultEnvelope.self, from: raw)
     envelope.checksum = String(repeating: "0", count: 64)
+    let corruptedBytes = try JSONEncoder.addressAtlas.encode(envelope)
     try overwritePendingUploadEnvelope(
       at: fixture.database,
-      envelopeBytes: JSONEncoder.addressAtlas.encode(envelope)
+      envelopeBytes: corruptedBytes
     )
     XCTAssertThrowsError(try fixture.store.loadPendingVaultUpload())
+    guard case .quarantined(let identity) = try fixture.store.inspectPendingVaultUpload() else {
+      return XCTFail("Corrupt journal must enter explicit quarantine")
+    }
+    XCTAssertEqual(identity.encryptedByteCount, corruptedBytes.count)
+    XCTAssertEqual(try fixture.store.rawStoredPendingVaultUploadEnvelopeBytes(), corruptedBytes)
+    XCTAssertEqual(try fixture.store.load().wallets.map(\.label), ["Journal secret label"])
+    var blockedMutation = try fixture.store.load()
+    blockedMutation.preferences.hideDust.toggle()
+    XCTAssertThrowsError(try fixture.store.save(blockedMutation))
+    XCTAssertEqual(try fixture.store.rawStoredPendingVaultUploadEnvelopeBytes(), corruptedBytes)
+  }
+
+  func testQuarantinedPendingUploadRequiresExactExplicitDiscardAndKeepsPrimary() throws {
+    let fixture = try makeJournalFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    try fixture.store.savePendingVaultUpload(
+      makePendingUpload(document: fixture.document, vaultKey: fixture.vaultKey))
+    var envelope = try JSONDecoder.addressAtlas.decode(
+      EncryptedVaultEnvelope.self,
+      from: XCTUnwrap(fixture.store.rawStoredPendingVaultUploadEnvelopeBytes())
+    )
+    envelope.ciphertext.append("A")
+    let corruptedBytes = try JSONEncoder.addressAtlas.encode(envelope)
+    try overwritePendingUploadEnvelope(at: fixture.database, envelopeBytes: corruptedBytes)
+    guard case .quarantined(let identity) = try fixture.store.inspectPendingVaultUpload() else {
+      return XCTFail("Expected quarantine")
+    }
+
+    var wrongIdentity = identity
+    wrongIdentity.encryptedRowSHA256 = String(repeating: "0", count: 64)
+    XCTAssertThrowsError(try fixture.store.discardQuarantinedPendingVaultUpload(wrongIdentity)) {
+      thrown in
+      XCTAssertEqual(thrown as? EncryptedSQLiteVaultStoreError, .pendingUploadMismatch)
+    }
+    XCTAssertEqual(try fixture.store.rawStoredPendingVaultUploadEnvelopeBytes(), corruptedBytes)
+
+    let preserved = try fixture.store.discardQuarantinedPendingVaultUpload(identity)
+    XCTAssertEqual(preserved.wallets, fixture.document.wallets)
+    XCTAssertTrue(preserved.syncState.remoteOutcomeUncertain)
+    XCTAssertNil(preserved.syncState.lastSyncedContentChecksum)
+    XCTAssertNil(try fixture.store.rawStoredPendingVaultUploadEnvelopeBytes())
+    var editable = try fixture.store.load()
+    editable.preferences.hideDust.toggle()
+    XCTAssertNoThrow(try fixture.store.save(editable))
   }
 
   func testPendingUploadGuardsBlockWritersLoadedBeforeAndAfterStaging() throws {
@@ -576,14 +671,19 @@ final class EncryptedSQLiteVaultStoreTests: XCTestCase {
     try fixture.store.savePendingVaultUpload(pending)
     let storedPending = try XCTUnwrap(fixture.store.loadPendingVaultUpload())
 
+    let accountId = try XCTUnwrap(storedPending.postCommitDocument.syncState.accountId)
+    let freshSessionToken = testSessionToken(
+      accountId: accountId,
+      sessionId: "77777777-7777-4777-8777-777777777777"
+    )
     let completed = try fixture.store.completePendingVaultUpload(
       storedPending,
-      localSessionToken: "fresh-session-token"
+      localSessionToken: freshSessionToken
     )
 
     XCTAssertEqual(completed.syncState.latestRemoteVersion, storedPending.snapshot.version)
     XCTAssertEqual(completed.syncState.lastChecksum, storedPending.snapshot.checksum)
-    XCTAssertEqual(completed.syncState.sessionToken, "fresh-session-token")
+    XCTAssertEqual(completed.syncState.sessionToken, freshSessionToken)
     XCTAssertNil(try fixture.store.loadPendingVaultUpload())
     let verifier = try EncryptedSQLiteVaultStore(
       path: fixture.database,
@@ -610,6 +710,7 @@ final class EncryptedSQLiteVaultStoreTests: XCTestCase {
     let localKey = try crypto.deriveKey(from: fixture.vaultKey, purpose: .localDatabase)
     var competing = fixture.document
     competing.wallets[0].label = "Competing process"
+    competing.schemaVersion = 1
     let competingEnvelope = try crypto.sealJSON(
       competing,
       with: localKey,
@@ -677,8 +778,14 @@ final class EncryptedSQLiteVaultStoreTests: XCTestCase {
       document: fixture.document,
       vaultKey: fixture.vaultKey
     )
+    var versionTwoSource = fixture.document
+    versionTwoSource.syncState.markSynced(
+      version: 1,
+      snapshotChecksum: String(repeating: "d", count: 64),
+      contentChecksum: String(repeating: "e", count: 64)
+    )
     let versionTwo = try codec.seal(
-      document: fixture.document,
+      document: versionTwoSource,
       vaultKey: fixture.vaultKey,
       version: 2,
       accountId: accountId
@@ -748,6 +855,7 @@ final class EncryptedSQLiteVaultStoreTests: XCTestCase {
     let vaultKey = try VaultCrypto().generateVaultKey()
     let store = try EncryptedSQLiteVaultStore(path: database, vaultKey: vaultKey)
     _ = try store.load()
+    let accountId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
     var document = VaultDocument(wallets: [
       WalletRecord(
         label: "Journal secret label",
@@ -757,9 +865,9 @@ final class EncryptedSQLiteVaultStoreTests: XCTestCase {
     ])
     XCTAssertTrue(
       document.syncState.connect(
-        accountId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        accountId: accountId,
         serverURL: "https://sync.example",
-        sessionToken: "journal-session-secret"
+        sessionToken: testSessionToken(accountId: accountId)
       )
     )
     document = try store.saveReturningPersistedDocument(document)
@@ -874,5 +982,24 @@ final class EncryptedSQLiteVaultStoreTests: XCTestCase {
     guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else {
       throw EncryptedSQLiteVaultStoreError.stepFailed(String(cString: sqlite3_errmsg(db)))
     }
+  }
+
+  private func tableCount(in url: URL) throws -> Int32 {
+    var db: OpaquePointer?
+    guard sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
+      let db
+    else {
+      throw EncryptedSQLiteVaultStoreError.openFailed("Could not inspect test database.")
+    }
+    defer { sqlite3_close(db) }
+    var statement: OpaquePointer?
+    guard sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table';", -1, &statement, nil) == SQLITE_OK else {
+      throw EncryptedSQLiteVaultStoreError.prepareFailed(String(cString: sqlite3_errmsg(db)))
+    }
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_step(statement) == SQLITE_ROW else {
+      throw EncryptedSQLiteVaultStoreError.stepFailed(String(cString: sqlite3_errmsg(db)))
+    }
+    return sqlite3_column_int(statement, 0)
   }
 }

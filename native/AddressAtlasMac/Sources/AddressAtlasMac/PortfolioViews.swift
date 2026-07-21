@@ -47,9 +47,10 @@ struct PortfolioView: View {
   private var portfolioSummary: some View {
     VStack(alignment: .leading, spacing: 18) {
       TotalBlock(
-        total: state.latestTotalUsd,
+        total: state.latestKnownValueUsd,
         generatedAt: state.latestScan?.generatedAt,
-        assetCount: state.latestScan?.holdings.count ?? 0
+        assetCount: state.latestScan?.holdings.count ?? 0,
+        unpricedCount: state.unpricedHoldingCount
       )
       MetricStrip(items: [
         ("Wallets", "\(state.document.wallets.count)"),

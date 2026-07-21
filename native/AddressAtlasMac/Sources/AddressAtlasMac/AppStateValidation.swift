@@ -49,7 +49,24 @@ extension AppState {
   }
 
   static func isPricedForDisplay(_ asset: TrackedAsset) -> Bool {
-    asset.priceUsd > 0 || asset.valueUsd > 0
+    asset.pricingStatus == .priced
+  }
+
+  static func remoteVersionStatus(_ state: SyncState) -> String {
+    guard state.remoteOutcomeUncertain else { return "\(state.latestRemoteVersion)" }
+    return state.latestRemoteVersion > 0
+      ? "Unknown (last confirmed \(state.latestRemoteVersion))"
+      : "Unknown (no confirmed remote version)"
+  }
+
+  static func lastConfirmedSyncStatus(_ state: SyncState) -> String {
+    let confirmed = state.lastSyncedAt?.formatted(date: .abbreviated, time: .shortened) ?? "never"
+    return state.remoteOutcomeUncertain ? "Unknown (last confirmed \(confirmed))" : confirmed
+  }
+
+  static func lastConfirmedChecksumStatus(_ state: SyncState) -> String {
+    let confirmed = state.lastChecksum ?? "none"
+    return state.remoteOutcomeUncertain ? "Unknown (last confirmed \(confirmed))" : confirmed
   }
 
   static func derivedManualPrice(amount: Double, valueUsd: Double) -> Double? {
@@ -59,7 +76,9 @@ extension AppState {
   }
 
   static func validatedPortfolioTotal(_ holdings: [TrackedAsset]) -> Double? {
-    FiniteValueMath.sumNonnegative(holdings.map(\.valueUsd))
+    FiniteValueMath.sumNonnegative(
+      holdings.filter { $0.pricingStatus == .priced }.map(\.valueUsd)
+    )
   }
 
   private static let maximumOperatorMessageScalarCount = 320
@@ -117,7 +136,11 @@ extension AppState {
     let candidate = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
     let credentialVault = ExchangeCredentialVault(crypto: crypto)
     for connection in connections where connection.provider == provider {
-      let existing = try credentialVault.open(connection.encryptedCredentials, vaultKey: vaultKey)
+      let existing = try credentialVault.open(
+        connection.encryptedCredentials,
+        vaultKey: vaultKey,
+        connectionId: connection.id
+      )
       if existing.apiKey.trimmingCharacters(in: .whitespacesAndNewlines) == candidate {
         return true
       }

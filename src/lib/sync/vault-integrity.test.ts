@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import type { Pool } from "pg";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { base64urlEncode } from "./base64url";
@@ -9,6 +10,8 @@ import {
   type EncryptedVaultEnvelope
 } from "./envelope";
 import { assertStoredVaultIntegrity } from "./vault-integrity";
+
+const USER_ID = "11111111-1111-4111-8111-111111111111";
 
 function storedRow() {
   const nonce = Buffer.alloc(12, 7);
@@ -45,46 +48,60 @@ describe("bounded restored-vault integrity scan", () => {
   } as unknown as Pool;
 
   beforeEach(() => {
+    vi.restoreAllMocks();
     vi.clearAllMocks();
   });
 
-  it("validates cursor pages and commits only after the full scan", async () => {
-    let fetchCount = 0;
+  it("validates byte-bounded keyset pages and commits only after the full scan", async () => {
+    let pageCount = 0;
+    const progress = vi.fn();
     query.mockImplementation(async (sql: string) => {
-      if (sql.startsWith("FETCH FORWARD")) {
-        fetchCount += 1;
-        return { rowCount: fetchCount === 1 ? 1 : 0, rows: fetchCount === 1 ? [storedRow()] : [] };
+      if (sql.includes("WITH candidates AS MATERIALIZED")) {
+        pageCount += 1;
+        return {
+          rowCount: pageCount === 1 ? 1 : 0,
+          rows: pageCount === 1 ? [{ ...storedRow(), scan_key: USER_ID }] : []
+        };
       }
       return { rowCount: null, rows: [] };
     });
 
-    await expect(assertStoredVaultIntegrity(pool)).resolves.toBeUndefined();
+    await expect(assertStoredVaultIntegrity(pool, { onProgress: progress }))
+      .resolves.toBeUndefined();
 
     const statements = query.mock.calls.map(([sql]) => String(sql));
-    expect(statements[0]).toBe("BEGIN TRANSACTION READ ONLY");
-    expect(statements[1]).toContain("DECLARE address_atlas_vault_integrity");
-    expect(statements[1]).toContain("jsonb_typeof(vault.envelope) = 'object'");
-    expect(statements[1]).toContain("pg_column_compression(vault.envelope) IS NULL");
+    expect(statements[0]).toBe("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    expect(statements[1]).toContain("WITH candidates AS MATERIALIZED");
     expect(statements[1]).toContain("pg_column_size(vault.envelope)");
-    expect(statements[1]).toContain("pg_column_compression(vault.checksum) IS NULL");
-    expect(statements[1]).toContain("pg_column_size(vault.checksum)");
-    expect(statements[1]).toMatch(/CASE[\s\S]+pg_column_size\(vault\.envelope\)[\s\S]+THEN \([\s\S]+octet_length\(vault\.envelope::pg_catalog\.text\)/);
-    expect(statements[1]).toContain("octet_length(vault.envelope::pg_catalog.text)");
+    expect(statements[1]).toContain("cumulative_bytes <= $2 OR page_row = 1");
+    expect(statements[1]).not.toContain("WHERE vault.user_id >");
+    expect(statements[1]).toContain("jsonb_typeof(vault.envelope) = 'object'");
     expect(statements[1]).toContain("CASE WHEN safety.stored_row_valid THEN vault.envelope ELSE NULL END");
-    expect(statements[1]).toContain("CASE WHEN safety.stored_row_valid THEN vault.checksum ELSE NULL END");
-    expect(statements[1]).toContain("CASE WHEN safety.stored_row_valid THEN vault.updated_at ELSE NULL END");
-    expect(statements.filter((sql) => sql.startsWith("FETCH FORWARD 8"))).toHaveLength(2);
-    expect(statements.at(-2)).toBe("CLOSE address_atlas_vault_integrity");
+    expect(query.mock.calls[1]?.[1]).toEqual([1_024, 64 * 1024 * 1024]);
+    expect(query.mock.calls[2]?.[1]).toEqual([USER_ID, 1_024, 64 * 1024 * 1024]);
+    expect(statements[2]).toContain("WHERE vault.user_id > $1::uuid");
+    expect(statements[2]).toContain("cumulative_bytes <= $3 OR page_row = 1");
     expect(statements.at(-1)).toBe("COMMIT");
+    expect(progress).toHaveBeenNthCalledWith(1, {
+      rowsScanned: 1,
+      pagesScanned: 1,
+      done: false
+    });
+    expect(progress).toHaveBeenLastCalledWith({
+      rowsScanned: 1,
+      pagesScanned: 1,
+      done: true
+    });
     expect(release).toHaveBeenCalledWith();
   });
 
   it("fails on an explicit SQL sentinel without accepting raw unsafe fields", async () => {
     query.mockImplementation(async (sql: string) => {
-      if (sql.startsWith("FETCH FORWARD")) {
+      if (sql.includes("WITH candidates AS MATERIALIZED")) {
         return {
           rowCount: 1,
           rows: [{
+            scan_key: USER_ID,
             stored_row_valid: false,
             version: 1,
             byte_size: 1,
@@ -105,7 +122,9 @@ describe("bounded restored-vault integrity scan", () => {
   it("rolls back and rejects a corrupted restored row", async () => {
     const corrupt = { ...storedRow(), byte_size: storedRow().byte_size + 1 };
     query.mockImplementation(async (sql: string) => {
-      if (sql.startsWith("FETCH FORWARD")) return { rowCount: 1, rows: [corrupt] };
+      if (sql.includes("WITH candidates AS MATERIALIZED")) {
+        return { rowCount: 1, rows: [{ ...corrupt, scan_key: USER_ID }] };
+      }
       return { rowCount: null, rows: [] };
     });
 
@@ -120,7 +139,9 @@ describe("bounded restored-vault integrity scan", () => {
   it("rolls back when a restored timestamp is not finite", async () => {
     const corrupt = { ...storedRow(), updated_at: Number.POSITIVE_INFINITY };
     query.mockImplementation(async (sql: string) => {
-      if (sql.startsWith("FETCH FORWARD")) return { rowCount: 1, rows: [corrupt] };
+      if (sql.includes("WITH candidates AS MATERIALIZED")) {
+        return { rowCount: 1, rows: [{ ...corrupt, scan_key: USER_ID }] };
+      }
       return { rowCount: null, rows: [] };
     });
 
@@ -145,5 +166,30 @@ describe("bounded restored-vault integrity scan", () => {
       message: "Stored vault integrity scan could not connect to PostgreSQL."
     });
     expect(JSON.stringify(failure)).not.toContain("secret");
+  });
+
+  it("rolls back when the finite recovery deadline is exhausted between pages", async () => {
+    let monotonicNow = 1_000;
+    vi.spyOn(performance, "now").mockImplementation(() => monotonicNow);
+    query.mockImplementation(async (sql: string) => {
+      if (sql.includes("WITH candidates AS MATERIALIZED")) {
+        monotonicNow += 11;
+        return { rowCount: 1, rows: [{ ...storedRow(), scan_key: USER_ID }] };
+      }
+      return { rowCount: 1, rows: [] };
+    });
+
+    await expect(assertStoredVaultIntegrity(pool, { deadlineMs: 10 }))
+      .rejects.toMatchObject({ operationalCode: "database_query_failed" });
+    expect(query).toHaveBeenCalledWith("ROLLBACK");
+  });
+
+  it("rejects an absolute deadline that could bypass the recovery RTO ceiling", async () => {
+    vi.spyOn(performance, "now").mockReturnValue(1_000);
+
+    await expect(assertStoredVaultIntegrity(pool, { deadlineAt: 1_000 + 30 * 60_000 + 1 }))
+      .rejects.toThrow("Restore integrity deadline is invalid.");
+
+    expect(pool.connect).not.toHaveBeenCalled();
   });
 });

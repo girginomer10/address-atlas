@@ -290,6 +290,63 @@ describe("sync runtime configuration", () => {
     expect(() => getSyncDatabaseConfig()).toThrow(/forbidden or duplicate production URL parameter/i);
   });
 
+  it("requires authenticated TLS for every remote production database endpoint", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv(
+      "SYNC_DATABASE_URL",
+      "postgres://address_atlas_runtime:runtime-secret-value@db.internal:5432/address_atlas_sync"
+    );
+    expect(() => getSyncDatabaseConfig()).toThrow(/sslmode=verify-full.*remote production/i);
+
+    vi.stubEnv(
+      "SYNC_DATABASE_URL",
+      "postgres://address_atlas_runtime:runtime-secret-value@db.internal:5432/address_atlas_sync?sslmode=verify-full"
+    );
+    expect(getSyncDatabaseConfig().connectionString).toContain("sslmode=verify-full");
+  });
+
+  it.each([
+    "192.0.2.10",
+    "[2001:db8::10]"
+  ])("rejects a remote production IP literal even with verify-full: %s", (host) => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv(
+      "SYNC_DATABASE_URL",
+      `postgres://address_atlas_runtime:runtime-secret-value@${host}:5432/address_atlas_sync?sslmode=verify-full`
+    );
+
+    expect(() => getSyncDatabaseConfig()).toThrow(/DNS hostname.*remote IP literal/i);
+  });
+
+  it.each([
+    "postgres",
+    "localhost",
+    "127.0.0.1",
+    "[::1]",
+    "%2Fvar%2Frun%2Fpostgresql"
+  ])("permits an explicit local, container, or Unix-socket production endpoint without TLS: %s", (host) => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv(
+      "SYNC_DATABASE_URL",
+      `postgres://address_atlas_runtime:runtime-secret-value@${host}${host.startsWith("%") ? "" : ":5432"}/address_atlas_sync`
+    );
+
+    expect(getSyncDatabaseConfig().connectionString).toContain("address_atlas_sync");
+  });
+
+  it.each([
+    "127.0.0.1",
+    "[::1]"
+  ])("keeps the explicit local IP exception with verify-full: %s", (host) => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv(
+      "SYNC_DATABASE_URL",
+      `postgres://address_atlas_runtime:runtime-secret-value@${host}:5432/address_atlas_sync?sslmode=verify-full`
+    );
+
+    expect(getSyncDatabaseConfig().connectionString).toContain("sslmode=verify-full");
+  });
+
   it.each([
     "sslmode=disable",
     "sslmode=no-verify",

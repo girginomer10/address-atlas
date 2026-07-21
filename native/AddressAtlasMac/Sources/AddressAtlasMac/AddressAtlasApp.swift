@@ -87,7 +87,6 @@ struct RootView: View {
     }
     .background(AtlasTheme.paper)
     .foregroundStyle(AtlasTheme.ink)
-    .preferredColorScheme(.light)
     .tint(AtlasTheme.accent)
     .disabled(state.isTerminationInProgress)
     .task(id: autoRefreshTaskID) {
@@ -117,6 +116,7 @@ struct RootView: View {
 struct UnlockView: View {
   @EnvironmentObject private var state: AppState
   @State private var restoreCode = ""
+  @State private var confirmsDamagedVaultQuarantine = false
   @ScaledMetric(relativeTo: .largeTitle) private var titleSize: CGFloat = 58
 
   var body: some View {
@@ -148,6 +148,31 @@ struct UnlockView: View {
           }
           .buttonStyle(AtlasPrimaryButtonStyle())
           .disabled(state.isUnlocking)
+          if let recovery = state.damagedVaultRecoveryAvailability {
+            VStack(alignment: .leading, spacing: 10) {
+              AtlasLabel("Damaged local vault")
+              Text(
+                recovery == .validatedRollbackCheckpoint
+                  ? "A valid encrypted rollback point is available. Restoring it is the safest first choice and happens in one local database transaction."
+                  : "No valid rollback point could be proved. The damaged database can be copied to a private quarantine before a clean local vault is created."
+              )
+              .font(.callout)
+              .foregroundStyle(AtlasTheme.ink2)
+              if recovery == .validatedRollbackCheckpoint {
+                Button("Restore validated rollback point") {
+                  Task { await state.recoverDamagedVaultFromRollbackCheckpoint() }
+                }
+                .buttonStyle(AtlasPrimaryButtonStyle())
+                .disabled(state.isUnlocking)
+              }
+              Button("Quarantine damaged vault and start clean", role: .destructive) {
+                confirmsDamagedVaultQuarantine = true
+              }
+              .buttonStyle(AtlasSecondaryButtonStyle())
+              .disabled(state.isUnlocking)
+            }
+            .frame(maxWidth: 620, alignment: .leading)
+          }
           VStack(alignment: .leading, spacing: 9) {
             AtlasLabel("Lost Keychain access?")
             Text(
@@ -169,6 +194,8 @@ struct UnlockView: View {
             }
           }
           .frame(maxWidth: 620, alignment: .leading)
+          PrivacySafeDiagnosticsControls()
+            .frame(maxWidth: 620, alignment: .leading)
           Spacer(minLength: 22)
           StatusLine()
         }
@@ -191,6 +218,20 @@ struct UnlockView: View {
       }
     }
     .frame(minWidth: 800, minHeight: 560)
+    .confirmationDialog(
+      "Preserve damaged vault and start clean?",
+      isPresented: $confirmsDamagedVaultQuarantine,
+      titleVisibility: .visible
+    ) {
+      Button("Preserve in quarantine and start clean", role: .destructive) {
+        Task { await state.quarantineDamagedVaultAndStartClean() }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text(
+        "Address Atlas will first verify a crash-durable private copy of vault.sqlite and every present SQLite sidecar. Only then will it activate an empty local vault using the same Keychain key. Nothing will be downloaded automatically."
+      )
+    }
   }
 
   private func restoreRecoveryKit() {

@@ -9,11 +9,13 @@ extension AppStateNetworkBoundaryTests {
   func testLifecycleActionsRejectMismatchedExpectedServerBeforeHTTP() async throws {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let accountId = "10101010-1010-4010-8010-101010101010"
+    let sessionToken = testSessionToken(accountId: accountId)
     let document = VaultDocument(
       syncState: SyncState(
-        accountId: "10101010-1010-4010-8010-101010101010",
+        accountId: accountId,
         serverURL: "https://sync.example",
-        sessionToken: "origin-bound-session"
+        sessionToken: sessionToken
       )
     )
     let persisted = try fixture.store.saveReturningPersistedDocument(document)
@@ -31,11 +33,11 @@ extension AppStateNetworkBoundaryTests {
 
     await state.revokeCurrentSyncSession(expectedServerURL: otherServerURL)
     XCTAssertTrue(state.error.contains("selection changed"))
-    XCTAssertEqual(state.document.syncState.sessionToken, "origin-bound-session")
+    XCTAssertEqual(state.document.syncState.sessionToken, sessionToken)
 
     await state.deleteSyncAccount(expectedServerURL: otherServerURL)
     XCTAssertTrue(state.error.contains("selection changed"))
-    XCTAssertEqual(state.document.syncState.accountId, "10101010-1010-4010-8010-101010101010")
+    XCTAssertEqual(state.document.syncState.accountId, accountId)
     XCTAssertTrue(http.requests.isEmpty)
   }
 
@@ -43,13 +45,21 @@ extension AppStateNetworkBoundaryTests {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let accountId = "12121212-1212-4212-8212-121212121212"
+    let sessionToken = testSessionToken(accountId: accountId)
     let document = VaultDocument(
-      wallets: [WalletRecord(label: "Local", address: "0x123", chainKind: .evm)],
+      wallets: [
+        WalletRecord(
+          label: "Local",
+          address: "0x0000000000000000000000000000000000000123",
+          chainKind: .evm
+        )
+      ],
       syncState: SyncState(
         accountId: accountId,
         serverURL: "https://sync.example",
-        sessionToken: "revoke-session-token",
+        sessionToken: sessionToken,
         latestRemoteVersion: 7,
+        lastSyncedAt: Date(timeIntervalSince1970: 1_700_000_000),
         lastChecksum: String(repeating: "a", count: 64),
         lastSyncedContentChecksum: String(repeating: "b", count: 64)
       )
@@ -81,7 +91,7 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertEqual(request.httpMethod, "DELETE")
     XCTAssertEqual(
       request.value(forHTTPHeaderField: "authorization"),
-      "Bearer revoke-session-token"
+      "Bearer \(sessionToken)"
     )
     XCTAssertNil(request.value(forHTTPHeaderField: "x-address-atlas-confirm"))
     XCTAssertEqual(state.document.syncState.accountId, accountId)
@@ -102,13 +112,23 @@ extension AppStateNetworkBoundaryTests {
   func testDeletingSyncAccountUsesConfirmedEndpointAndKeepsLocalVault() async throws {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
-    let wallet = WalletRecord(label: "Kept locally", address: "0x456", chainKind: .evm)
+    let accountId = "34343434-3434-4434-8434-343434343434"
+    let sessionToken = testSessionToken(accountId: accountId)
+    let freshSessionToken = testSessionToken(
+      accountId: accountId,
+      sessionId: "34343434-3434-4434-8434-343434343435"
+    )
+    let wallet = WalletRecord(
+      label: "Kept locally",
+      address: "0x0000000000000000000000000000000000000456",
+      chainKind: .evm
+    )
     let document = VaultDocument(
       wallets: [wallet],
       syncState: SyncState(
-        accountId: "34343434-3434-4434-8434-343434343434",
+        accountId: accountId,
         serverURL: "https://sync.example",
-        sessionToken: "delete-session-token",
+        sessionToken: sessionToken,
         latestRemoteVersion: 12,
         lastSyncedAt: Date(timeIntervalSince1970: 1_700_000_000),
         lastChecksum: String(repeating: "c", count: 64),
@@ -119,8 +139,8 @@ extension AppStateNetworkBoundaryTests {
     _ = try fixture.store.saveRollbackCheckpoint(persisted)
     let authenticator = StubPasskeyAuthenticator(
       session: PasskeyWebSession(
-        userId: "34343434-3434-4434-8434-343434343434",
-        sessionToken: "fresh-delete-session-token",
+        userId: accountId,
+        sessionToken: freshSessionToken,
         serverURL: "https://sync.example"
       )
     )
@@ -162,7 +182,7 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertEqual(request.httpMethod, "DELETE")
     XCTAssertEqual(
       request.value(forHTTPHeaderField: "authorization"),
-      "Bearer fresh-delete-session-token"
+      "Bearer \(freshSessionToken)"
     )
     XCTAssertEqual(
       request.value(forHTTPHeaderField: "x-address-atlas-confirm"),
@@ -210,18 +230,23 @@ extension AppStateNetworkBoundaryTests {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let accountId = "45454545-4545-4545-8545-454545454545"
+    let originalSessionToken = testSessionToken(accountId: accountId)
+    let freshSessionToken = testSessionToken(
+      accountId: accountId,
+      sessionId: "45454545-4545-4545-8545-454545454546"
+    )
     let document = VaultDocument(
       syncState: SyncState(
         accountId: accountId,
         serverURL: "https://sync.example",
-        sessionToken: "older-sync-session"
+        sessionToken: originalSessionToken
       )
     )
     let persisted = try fixture.store.saveReturningPersistedDocument(document)
     let authenticator = StubPasskeyAuthenticator(
       session: PasskeyWebSession(
         userId: accountId,
-        sessionToken: "fresh-delete-session",
+        sessionToken: freshSessionToken,
         serverURL: "https://sync.example"
       )
     )
@@ -314,11 +339,13 @@ extension AppStateNetworkBoundaryTests {
   func testCompletedSessionRevocationClearsMemoryAndBlocksEditsWhenLocalSaveFails() async throws {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let accountId = "56565656-5656-4565-8565-565656565656"
+    let sessionToken = testSessionToken(accountId: accountId)
     let document = VaultDocument(
       syncState: SyncState(
-        accountId: "56565656-5656-4565-8565-565656565656",
+        accountId: accountId,
         serverURL: "https://sync.example",
-        sessionToken: "revoked-server-token"
+        sessionToken: sessionToken
       )
     )
     let persisted = try fixture.store.saveReturningPersistedDocument(document)
@@ -352,20 +379,27 @@ extension AppStateNetworkBoundaryTests {
       )
     )
     let reloaded = try winningStore.load()
-    XCTAssertEqual(reloaded.syncState.sessionToken, "revoked-server-token")
+    XCTAssertEqual(reloaded.syncState.sessionToken, sessionToken)
   }
 
   func testExplicitDisconnectRevokesThisMacAndDiscardsOldAccountRollbackPoint() async throws {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
-    let wallet = WalletRecord(label: "Kept locally", address: "0x789", chainKind: .evm)
+    let accountId = "78787878-7878-4878-8878-787878787878"
+    let sessionToken = testSessionToken(accountId: accountId)
+    let wallet = WalletRecord(
+      label: "Kept locally",
+      address: "0x0000000000000000000000000000000000000789",
+      chainKind: .evm
+    )
     let document = VaultDocument(
       wallets: [wallet],
       syncState: SyncState(
-        accountId: "78787878-7878-4878-8878-787878787878",
+        accountId: accountId,
         serverURL: "https://sync.example",
-        sessionToken: "switch-session-token",
+        sessionToken: sessionToken,
         latestRemoteVersion: 17,
+        lastSyncedAt: Date(timeIntervalSince1970: 1_700_000_000),
         lastChecksum: String(repeating: "a", count: 64),
         lastSyncedContentChecksum: String(repeating: "b", count: 64)
       )
@@ -399,7 +433,7 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertEqual(http.requests.count, 1)
     XCTAssertEqual(
       http.requests.first?.value(forHTTPHeaderField: "authorization"),
-      "Bearer switch-session-token"
+      "Bearer \(sessionToken)"
     )
     XCTAssertEqual(state.document.wallets.map(\.id), [wallet.id])
     XCTAssertNil(state.document.syncState.accountId)
@@ -429,11 +463,13 @@ extension AppStateNetworkBoundaryTests {
   func testFailedRemoteDisconnectKeepsBindingAndRollbackPointForOfflineRecovery() async throws {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let accountId = "89898989-8989-4989-8989-898989898989"
+    let sessionToken = testSessionToken(accountId: accountId)
     let document = VaultDocument(
       syncState: SyncState(
-        accountId: "89898989-8989-4989-8989-898989898989",
+        accountId: accountId,
         serverURL: "https://sync.example",
-        sessionToken: "offline-session-token"
+        sessionToken: sessionToken
       )
     )
     let persisted = try fixture.store.saveReturningPersistedDocument(document)
@@ -452,7 +488,7 @@ extension AppStateNetworkBoundaryTests {
     await state.disconnectSyncAccountForSwitch(expectedServerURL: expectedServerURL)
 
     XCTAssertEqual(state.document.syncState.accountId, document.syncState.accountId)
-    XCTAssertEqual(state.document.syncState.sessionToken, "offline-session-token")
+    XCTAssertEqual(state.document.syncState.sessionToken, sessionToken)
     XCTAssertTrue(state.hasVaultRollbackCheckpoint)
     XCTAssertTrue(state.error.contains("Disconnect locally without contacting server"))
     let verifier = try EncryptedSQLiteVaultStore(
@@ -468,12 +504,14 @@ extension AppStateNetworkBoundaryTests {
   {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let accountId = "90909090-9090-4090-8090-909090909090"
     let document = VaultDocument(
       syncState: SyncState(
-        accountId: "90909090-9090-4090-8090-909090909090",
+        accountId: accountId,
         serverURL: "https://sync.example",
-        sessionToken: "unreachable-server-token",
+        sessionToken: testSessionToken(accountId: accountId),
         latestRemoteVersion: 8,
+        lastSyncedAt: Date(timeIntervalSince1970: 1_700_000_000),
         lastChecksum: String(repeating: "a", count: 64)
       )
     )
@@ -515,11 +553,12 @@ extension AppStateNetworkBoundaryTests {
   {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let accountId = "91919191-9191-4191-8191-919191919191"
     let document = VaultDocument(
       syncState: SyncState(
-        accountId: "91919191-9191-4191-8191-919191919191",
+        accountId: accountId,
         serverURL: "https://sync.example",
-        sessionToken: "revoked-before-local-conflict"
+        sessionToken: testSessionToken(accountId: accountId)
       )
     )
     let persisted = try fixture.store.saveReturningPersistedDocument(document)

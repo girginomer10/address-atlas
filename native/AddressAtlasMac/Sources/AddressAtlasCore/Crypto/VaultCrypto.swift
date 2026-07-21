@@ -228,7 +228,19 @@ public struct VaultCrypto: Sendable {
     authenticatedData: Data? = nil,
     decoder: JSONDecoder = .addressAtlas
   ) throws -> T {
-    try decoder.decode(type, from: open(envelope, with: key, authenticatedData: authenticatedData))
+    let plaintext = try open(envelope, with: key, authenticatedData: authenticatedData)
+    if ObjectIdentifier(T.self) == ObjectIdentifier(VaultDocument.self) {
+      let document = try VaultDocument.decodeAuthenticatedPlaintext(
+        plaintext,
+        envelopeSchemaVersion: envelope.schemaVersion,
+        decoder: decoder
+      )
+      guard let typedDocument = document as? T else {
+        preconditionFailure("VaultDocument type identity changed during authenticated decode.")
+      }
+      return typedDocument
+    }
+    return try decoder.decode(type, from: plaintext)
   }
 
   private func validateMetadata(schemaVersion: Int, keyId: String) throws {

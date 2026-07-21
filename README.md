@@ -28,7 +28,7 @@ This repo is a cleaner follow-up to earlier hackathon experiments:
 - A local encrypted SQLite vault for watched wallets, holdings, exchange connections, and preferences.
 - AES-256-GCM encryption for the vault, using a Keychain-backed vault subkey.
 - Crypto USD prices and BTC-relative fiat conversion rates through CoinGecko; unsupported or unavailable rates remain visibly unpriced.
-- CSV and redacted JSON export from the latest local snapshot; sync sessions and authentication metadata are never exported.
+- Credential-free CSV and JSON portfolio export. These reports include identifying public wallet addresses, labels, balances, asset identifiers, and (for JSON) stored history; sync sessions and encrypted exchange credentials are omitted. Treat exports as sensitive unless you intend to share that portfolio data.
 - Visible partial-scan warnings when optional token, price, staking, reward, trustline, or pagination requests fail.
 - Working 15-minute in-app auto-refresh and an optional USD dust filter.
 - Native macOS UI: Portfolio, Wallets, Assets, Snapshots, Export, and Settings.
@@ -72,8 +72,9 @@ The release workflow accepts only a version tag whose commit is already on
 `main`, imports signing material into an ephemeral Keychain, verifies Apple's
 notarization/stapling result, and publishes a DMG with checksums and a provenance
 manifest. GitHub release immutability must be enabled, and the protected
-`release` environment must contain the Apple and Administration-read secrets
-listed in `docs/RELEASE_CHECKLIST.md`.
+`release` environment must contain the Apple signing secrets, the narrowly
+scoped Administration-write governance token, and the exact ruleset-bypass
+allowlist described in `docs/RELEASE_CHECKLIST.md`.
 
 For an operator-driven local notarization, use a Keychain profile without
 placing credentials in arguments:
@@ -111,13 +112,17 @@ For local sync development, start the bundled Postgres service first:
 npm run sync:db:up
 ```
 
-For a production VPS, copy `.env.production.example` to `.env.production`, fill
-the production domain and secrets, configure the age backup recipient/identity,
-and then start the sync-only stack. Generate independent owner and runtime
-PostgreSQL passwords with `openssl rand -hex 32`:
+For a production VPS, install `.env.production.example` as an operator-owned
+`0600` file, fill the production domain and secrets, configure the age backup
+recipient/identity, and then start the sync-only stack. Generate three distinct
+32-byte URL-safe PostgreSQL secrets: one each for the owner, isolated admin, and
+runtime roles. Never reuse one value across roles.
 
 ```bash
-cp server/sync/.env.production.example server/sync/.env.production
+umask 077
+install -m 0600 server/sync/.env.production.example server/sync/.env.production
+# Run three times and assign each output to a different POSTGRES_* field:
+openssl rand -hex 32
 npm run sync:prod:up
 curl https://your-domain.example/healthz
 ```
@@ -142,7 +147,7 @@ encrypted vault GET/PUT, bearer-session revocation, and confirmed account
 deletion. The server stores passkey public keys plus encrypted vault snapshot
 metadata; it does not store decryptable keys or plaintext portfolio data.
 
-The Mac app opens `/auth/native` in a system web authentication session for passkey account creation/sign-in, then receives only a short-lived sync session token through the `address-atlas://sync-auth` callback URL.
+The Mac app opens `/auth/native` in a system web authentication session for passkey account creation/sign-in. The `address-atlas://sync-auth` callback carries only a one-time authorization code, request state, and canonical server origin; the app exchanges that code with an S256 PKCE verifier for the short-lived sync session token in a cookie-free `POST`.
 
 `GET /config/native` returns public endpoint config for approved blockchain RPC and price providers. Exchange origins, credential-bearing routes, and request methods are pinned in the native binary and cannot be redirected by the sync server. The Mac app still sends scan requests client-side; the config endpoint does not receive wallet addresses or vault data.
 

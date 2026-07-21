@@ -44,7 +44,13 @@ extension AppState {
 
   static func normalizedWalletLabel(_ label: String) -> String? {
     let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
-    return trimmed.isEmpty || trimmed.count > 80 ? nil : trimmed
+    return trimmed.isEmpty
+      || !VaultTextLimits.contains(
+        trimmed,
+        maximumCharacters: VaultTextLimits.walletLabelCharacters,
+        maximumUTF8Bytes: VaultTextLimits.walletLabelUTF8Bytes
+      )
+      ? nil : trimmed
   }
 
   var hasPendingWalletLabelDrafts: Bool {
@@ -210,8 +216,18 @@ extension AppState {
       : UserInputValidation.normalizedCoinGeckoId(trimmedCoinGeckoId)
     guard chainKind == .evm || chainKind == .solana,
       !normalizedAddress.isEmpty,
-      !normalizedSymbol.isEmpty, normalizedSymbol.count <= 32,
-      !normalizedName.isEmpty, normalizedName.count <= 128,
+      !normalizedSymbol.isEmpty,
+      VaultTextLimits.contains(
+        normalizedSymbol,
+        maximumCharacters: VaultTextLimits.tokenSymbolCharacters,
+        maximumUTF8Bytes: VaultTextLimits.tokenSymbolUTF8Bytes
+      ),
+      !normalizedName.isEmpty,
+      VaultTextLimits.contains(
+        normalizedName,
+        maximumCharacters: VaultTextLimits.tokenNameCharacters,
+        maximumUTF8Bytes: VaultTextLimits.tokenNameUTF8Bytes
+      ),
       parsedDecimals >= 0,
       parsedDecimals <= 36
     else {

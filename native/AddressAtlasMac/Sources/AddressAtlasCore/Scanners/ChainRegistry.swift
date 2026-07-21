@@ -1,5 +1,14 @@
 import Foundation
 
+public enum ChainNetworkIdentity: Codable, Hashable, Sendable {
+  case bitcoinGenesisHash(String)
+  case evmChainID(UInt64)
+  case solanaGenesisHash(String)
+  case cosmosChainID(String)
+  case tronGenesisBlockID(String)
+  case xrpNetworkID(UInt32)
+}
+
 public struct ChainConfig: Codable, Hashable, Sendable {
   public var id: String
   public var name: String
@@ -7,6 +16,10 @@ public struct ChainConfig: Codable, Hashable, Sendable {
   public var symbol: String
   public var coinGeckoId: String
   public var decimals: Int
+  /// Compiled-in network identity is immutable even when a signed endpoint
+  /// document replaces transport URLs. Remote configuration can move a request
+  /// but can never redefine what chain a successful response must prove.
+  public let networkIdentity: ChainNetworkIdentity
   public var rpcUrl: URL?
   public var restUrl: URL?
   public var explorerUrl: URL
@@ -20,6 +33,7 @@ public struct ChainConfig: Codable, Hashable, Sendable {
     symbol: String,
     coinGeckoId: String,
     decimals: Int,
+    networkIdentity: ChainNetworkIdentity,
     rpcUrl: URL? = nil,
     restUrl: URL? = nil,
     explorerUrl: URL,
@@ -32,6 +46,7 @@ public struct ChainConfig: Codable, Hashable, Sendable {
     self.symbol = symbol
     self.coinGeckoId = coinGeckoId
     self.decimals = decimals
+    self.networkIdentity = networkIdentity
     self.rpcUrl = rpcUrl
     self.restUrl = restUrl
     self.explorerUrl = explorerUrl
@@ -79,6 +94,9 @@ public enum ChainRegistry {
     symbol: "BTC",
     coinGeckoId: "bitcoin",
     decimals: 8,
+    networkIdentity: .bitcoinGenesisHash(
+      "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f"
+    ),
     restUrl: URL(string: "https://blockstream.info/api"),
     explorerUrl: URL(string: "https://blockstream.info/address/")!
   )
@@ -90,6 +108,9 @@ public enum ChainRegistry {
     symbol: "SOL",
     coinGeckoId: "solana",
     decimals: 9,
+    networkIdentity: .solanaGenesisHash(
+      "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d"
+    ),
     rpcUrl: URL(string: "https://api.mainnet-beta.solana.com"),
     explorerUrl: URL(string: "https://solscan.io/account/")!
   )
@@ -101,6 +122,9 @@ public enum ChainRegistry {
     symbol: "TRX",
     coinGeckoId: "tron",
     decimals: 6,
+    networkIdentity: .tronGenesisBlockID(
+      "00000000000000001ebf88508a03865c71d452e25f4d51194196a1d22b6653dc"
+    ),
     restUrl: URL(string: "https://api.trongrid.io"),
     explorerUrl: URL(string: "https://tronscan.org/#/address/")!
   )
@@ -112,30 +136,31 @@ public enum ChainRegistry {
     symbol: "XRP",
     coinGeckoId: "ripple",
     decimals: 6,
+    networkIdentity: .xrpNetworkID(0),
     rpcUrl: URL(string: "https://s1.ripple.com:51234/"),
     explorerUrl: URL(string: "https://xrpscan.com/account/")!
   )
 
   public static let evmChains: [ChainConfig] = [
-    ChainConfig(id: "ethereum", name: "Ethereum", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, rpcUrl: URL(string: "https://ethereum-rpc.publicnode.com"), explorerUrl: URL(string: "https://etherscan.io/address/")!),
-    ChainConfig(id: "base", name: "Base", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, rpcUrl: URL(string: "https://mainnet.base.org"), explorerUrl: URL(string: "https://basescan.org/address/")!),
-    ChainConfig(id: "arbitrum", name: "Arbitrum One", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, rpcUrl: URL(string: "https://arb1.arbitrum.io/rpc"), explorerUrl: URL(string: "https://arbiscan.io/address/")!),
-    ChainConfig(id: "optimism", name: "Optimism", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, rpcUrl: URL(string: "https://mainnet.optimism.io"), explorerUrl: URL(string: "https://optimistic.etherscan.io/address/")!),
-    ChainConfig(id: "polygon", name: "Polygon PoS", family: .evm, symbol: "POL", coinGeckoId: "polygon-ecosystem-token", decimals: 18, rpcUrl: URL(string: "https://polygon.drpc.org"), explorerUrl: URL(string: "https://polygonscan.com/address/")!),
-    ChainConfig(id: "bsc", name: "BNB Chain", family: .evm, symbol: "BNB", coinGeckoId: "binancecoin", decimals: 18, rpcUrl: URL(string: "https://bsc-dataseed.binance.org"), explorerUrl: URL(string: "https://bscscan.com/address/")!),
-    ChainConfig(id: "avalanche", name: "Avalanche C-Chain", family: .evm, symbol: "AVAX", coinGeckoId: "avalanche-2", decimals: 18, rpcUrl: URL(string: "https://api.avax.network/ext/bc/C/rpc"), explorerUrl: URL(string: "https://snowtrace.io/address/")!),
-    ChainConfig(id: "gnosis", name: "Gnosis Chain", family: .evm, symbol: "XDAI", coinGeckoId: "xdai", decimals: 18, rpcUrl: URL(string: "https://rpc.gnosischain.com"), explorerUrl: URL(string: "https://gnosisscan.io/address/")!),
-    ChainConfig(id: "linea", name: "Linea", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, rpcUrl: URL(string: "https://rpc.linea.build"), explorerUrl: URL(string: "https://lineascan.build/address/")!),
-    ChainConfig(id: "mantle", name: "Mantle", family: .evm, symbol: "MNT", coinGeckoId: "mantle", decimals: 18, rpcUrl: URL(string: "https://rpc.mantle.xyz"), explorerUrl: URL(string: "https://explorer.mantle.xyz/address/")!),
-    ChainConfig(id: "scroll", name: "Scroll", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, rpcUrl: URL(string: "https://rpc.scroll.io"), explorerUrl: URL(string: "https://scrollscan.com/address/")!),
-    ChainConfig(id: "zksync-era", name: "ZKsync Era", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, rpcUrl: URL(string: "https://mainnet.era.zksync.io"), explorerUrl: URL(string: "https://explorer.zksync.io/address/")!)
+    ChainConfig(id: "ethereum", name: "Ethereum", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, networkIdentity: .evmChainID(1), rpcUrl: URL(string: "https://ethereum-rpc.publicnode.com"), explorerUrl: URL(string: "https://etherscan.io/address/")!),
+    ChainConfig(id: "base", name: "Base", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, networkIdentity: .evmChainID(8_453), rpcUrl: URL(string: "https://mainnet.base.org"), explorerUrl: URL(string: "https://basescan.org/address/")!),
+    ChainConfig(id: "arbitrum", name: "Arbitrum One", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, networkIdentity: .evmChainID(42_161), rpcUrl: URL(string: "https://arb1.arbitrum.io/rpc"), explorerUrl: URL(string: "https://arbiscan.io/address/")!),
+    ChainConfig(id: "optimism", name: "Optimism", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, networkIdentity: .evmChainID(10), rpcUrl: URL(string: "https://mainnet.optimism.io"), explorerUrl: URL(string: "https://optimistic.etherscan.io/address/")!),
+    ChainConfig(id: "polygon", name: "Polygon PoS", family: .evm, symbol: "POL", coinGeckoId: "polygon-ecosystem-token", decimals: 18, networkIdentity: .evmChainID(137), rpcUrl: URL(string: "https://polygon.drpc.org"), explorerUrl: URL(string: "https://polygonscan.com/address/")!),
+    ChainConfig(id: "bsc", name: "BNB Chain", family: .evm, symbol: "BNB", coinGeckoId: "binancecoin", decimals: 18, networkIdentity: .evmChainID(56), rpcUrl: URL(string: "https://bsc-dataseed.binance.org"), explorerUrl: URL(string: "https://bscscan.com/address/")!),
+    ChainConfig(id: "avalanche", name: "Avalanche C-Chain", family: .evm, symbol: "AVAX", coinGeckoId: "avalanche-2", decimals: 18, networkIdentity: .evmChainID(43_114), rpcUrl: URL(string: "https://api.avax.network/ext/bc/C/rpc"), explorerUrl: URL(string: "https://snowtrace.io/address/")!),
+    ChainConfig(id: "gnosis", name: "Gnosis Chain", family: .evm, symbol: "XDAI", coinGeckoId: "xdai", decimals: 18, networkIdentity: .evmChainID(100), rpcUrl: URL(string: "https://rpc.gnosischain.com"), explorerUrl: URL(string: "https://gnosisscan.io/address/")!),
+    ChainConfig(id: "linea", name: "Linea", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, networkIdentity: .evmChainID(59_144), rpcUrl: URL(string: "https://rpc.linea.build"), explorerUrl: URL(string: "https://lineascan.build/address/")!),
+    ChainConfig(id: "mantle", name: "Mantle", family: .evm, symbol: "MNT", coinGeckoId: "mantle", decimals: 18, networkIdentity: .evmChainID(5_000), rpcUrl: URL(string: "https://rpc.mantle.xyz"), explorerUrl: URL(string: "https://explorer.mantle.xyz/address/")!),
+    ChainConfig(id: "scroll", name: "Scroll", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, networkIdentity: .evmChainID(534_352), rpcUrl: URL(string: "https://rpc.scroll.io"), explorerUrl: URL(string: "https://scrollscan.com/address/")!),
+    ChainConfig(id: "zksync-era", name: "ZKsync Era", family: .evm, symbol: "ETH", coinGeckoId: "ethereum", decimals: 18, networkIdentity: .evmChainID(324), rpcUrl: URL(string: "https://mainnet.era.zksync.io"), explorerUrl: URL(string: "https://explorer.zksync.io/address/")!)
   ]
 
   public static let cosmosChains: [ChainConfig] = [
-    ChainConfig(id: "cosmoshub", name: "Cosmos Hub", family: .cosmos, symbol: "ATOM", coinGeckoId: "cosmos", decimals: 6, restUrl: URL(string: "https://cosmos-api.polkachu.com"), explorerUrl: URL(string: "https://www.mintscan.io/cosmos/address/")!, nativeDenom: "uatom", addressPrefix: "cosmos"),
-    ChainConfig(id: "osmosis", name: "Osmosis", family: .cosmos, symbol: "OSMO", coinGeckoId: "osmosis", decimals: 6, restUrl: URL(string: "https://lcd.osmosis.zone"), explorerUrl: URL(string: "https://www.mintscan.io/osmosis/address/")!, nativeDenom: "uosmo", addressPrefix: "osmo"),
-    ChainConfig(id: "celestia", name: "Celestia", family: .cosmos, symbol: "TIA", coinGeckoId: "celestia", decimals: 6, restUrl: URL(string: "https://celestia-api.polkachu.com"), explorerUrl: URL(string: "https://www.mintscan.io/celestia/address/")!, nativeDenom: "utia", addressPrefix: "celestia"),
-    ChainConfig(id: "stride", name: "Stride", family: .cosmos, symbol: "STRD", coinGeckoId: "stride", decimals: 6, restUrl: URL(string: "https://stride-api.polkachu.com"), explorerUrl: URL(string: "https://www.mintscan.io/stride/address/")!, nativeDenom: "ustrd", addressPrefix: "stride")
+    ChainConfig(id: "cosmoshub", name: "Cosmos Hub", family: .cosmos, symbol: "ATOM", coinGeckoId: "cosmos", decimals: 6, networkIdentity: .cosmosChainID("cosmoshub-4"), restUrl: URL(string: "https://cosmos-api.polkachu.com"), explorerUrl: URL(string: "https://www.mintscan.io/cosmos/address/")!, nativeDenom: "uatom", addressPrefix: "cosmos"),
+    ChainConfig(id: "osmosis", name: "Osmosis", family: .cosmos, symbol: "OSMO", coinGeckoId: "osmosis", decimals: 6, networkIdentity: .cosmosChainID("osmosis-1"), restUrl: URL(string: "https://lcd.osmosis.zone"), explorerUrl: URL(string: "https://www.mintscan.io/osmosis/address/")!, nativeDenom: "uosmo", addressPrefix: "osmo"),
+    ChainConfig(id: "celestia", name: "Celestia", family: .cosmos, symbol: "TIA", coinGeckoId: "celestia", decimals: 6, networkIdentity: .cosmosChainID("celestia"), restUrl: URL(string: "https://celestia-api.polkachu.com"), explorerUrl: URL(string: "https://www.mintscan.io/celestia/address/")!, nativeDenom: "utia", addressPrefix: "celestia"),
+    ChainConfig(id: "stride", name: "Stride", family: .cosmos, symbol: "STRD", coinGeckoId: "stride", decimals: 6, networkIdentity: .cosmosChainID("stride-1"), restUrl: URL(string: "https://stride-api.polkachu.com"), explorerUrl: URL(string: "https://www.mintscan.io/stride/address/")!, nativeDenom: "ustrd", addressPrefix: "stride")
   ]
 
   /// Retired networks are deliberately excluded from `allChains` so new

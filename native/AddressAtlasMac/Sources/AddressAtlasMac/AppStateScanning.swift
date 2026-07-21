@@ -141,6 +141,7 @@ extension AppState {
           amount: holding.amount,
           priceUsd: holding.priceUsd ?? 0,
           valueUsd: holding.valueUsd,
+          pricingStatus: holding.priceUsd != nil || holding.valueUsd > 0 ? .priced : .unpriced,
           source: .exchange
         )
       }
@@ -188,6 +189,7 @@ extension AppState {
     } catch is CancellationError {
       notice = "Scan cancelled."
     } catch {
+      recordDiagnosticFailure(.scanFailed)
       presentUserFacingError(error)
     }
   }

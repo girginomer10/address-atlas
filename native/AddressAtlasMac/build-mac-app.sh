@@ -197,6 +197,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
   <string>14.0</string>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.finance</string>
+  <key>LSMultipleInstancesProhibited</key>
+  <true/>
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSHumanReadableCopyright</key>

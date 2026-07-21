@@ -119,9 +119,35 @@ public actor VaultPersistenceCoordinator {
   }
 
   public func loadPendingVaultUpload(vaultKey: Data) throws -> PendingVaultUpload? {
-    guard let upload = try store.loadPendingVaultUpload() else { return nil }
-    try validatePendingVaultUpload(upload, vaultKey: vaultKey)
-    return upload
+    switch try inspectPendingVaultUpload(vaultKey: vaultKey) {
+    case .none:
+      return nil
+    case .pending(let upload, _):
+      return upload
+    case .quarantined:
+      throw PendingVaultUploadError.quarantinedOperation
+    }
+  }
+
+  /// Validate both the encrypted journal and its decrypted operation contract.
+  /// Any failure after the opaque row is read becomes quarantine, keeping the
+  /// primary document available read-only without silently deleting evidence.
+  public func inspectPendingVaultUpload(
+    vaultKey: Data
+  ) throws -> PendingVaultUploadInspection {
+    switch try store.inspectPendingVaultUpload() {
+    case .none:
+      return .none
+    case .quarantined(let identity):
+      return .quarantined(identity)
+    case .pending(let upload, let identity):
+      do {
+        try validatePendingVaultUpload(upload, vaultKey: vaultKey)
+        return .pending(upload, identity)
+      } catch {
+        return .quarantined(identity)
+      }
+    }
   }
 
   @discardableResult
@@ -157,6 +183,19 @@ public actor VaultPersistenceCoordinator {
     )
   }
 
+  public func canRecoverDamagedPrimaryFromRollbackCheckpoint() throws -> Bool {
+    try store.canRecoverDamagedPrimaryFromRollbackCheckpoint()
+  }
+
+  public func recoverDamagedPrimaryFromRollbackCheckpoint() throws -> VaultPersistenceResult {
+    let restored = try store.recoverDamagedPrimaryFromRollbackCheckpoint()
+    return VaultPersistenceResult(
+      document: restored,
+      removedScanRunCount: 0,
+      hasLocalChanges: try syncCodec.hasLocalChanges(in: restored)
+    )
+  }
+
   public func completePendingVaultUpload(
     _ upload: PendingVaultUpload,
     currentDocument: VaultDocument,
@@ -169,7 +208,7 @@ public actor VaultPersistenceCoordinator {
       throw PendingVaultUploadError.localDocumentChanged
     }
     if let localSessionToken {
-      guard SyncSessionToken.isValid(localSessionToken) else {
+      guard SyncSessionToken.isUsable(localSessionToken, forAccountId: upload.accountId) else {
         throw PendingVaultUploadError.invalidOperation
       }
     }
@@ -195,6 +234,17 @@ public actor VaultPersistenceCoordinator {
       throw PendingVaultUploadError.localDocumentChanged
     }
     let persisted = try store.abandonPendingVaultUpload(upload)
+    return VaultPersistenceResult(
+      document: persisted,
+      removedScanRunCount: 0,
+      hasLocalChanges: try syncCodec.hasLocalChanges(in: persisted)
+    )
+  }
+
+  public func discardQuarantinedPendingVaultUpload(
+    _ expected: QuarantinedPendingVaultUpload
+  ) throws -> VaultPersistenceResult {
+    let persisted = try store.discardQuarantinedPendingVaultUpload(expected)
     return VaultPersistenceResult(
       document: persisted,
       removedScanRunCount: 0,
@@ -295,6 +345,11 @@ public actor VaultPersistenceCoordinator {
     _ upload: PendingVaultUpload,
     vaultKey: Data
   ) throws {
+    try VaultDocumentSemanticValidator.validate(upload.postCommitDocument)
+    try VaultDocumentSemanticValidator.validateExchangeCredentialPayloads(
+      in: upload.postCommitDocument,
+      vaultKey: vaultKey
+    )
     let canonicalOrigin = SyncServerURL.validatedOrigin(upload.serverOrigin)
     let normalizedAccount = SyncAccountIdentifier.normalized(upload.accountId)
     let expectedMetadataIsPaired =
@@ -319,14 +374,22 @@ public actor VaultPersistenceCoordinator {
       expectedVersionIsExact,
       upload.expectedRemoteChecksum.map(Self.isChecksum) ?? true,
       Self.isChecksum(upload.baseLocalContentChecksum),
-      upload.removedScanRunCount >= 0,
+      (0...VaultDocumentLimits.maximumLegacyStoredScanRuns).contains(
+        upload.removedScanRunCount
+      ),
       upload.createdAt.timeIntervalSince1970.isFinite,
       upload.postCommitDocument.syncState.accountId == upload.accountId,
       SyncServerURL.validatedOrigin(upload.postCommitDocument.syncState.serverURL)?.absoluteString
         == upload.serverOrigin,
       upload.postCommitDocument.syncState.latestRemoteVersion == upload.snapshot.version,
       upload.postCommitDocument.syncState.lastChecksum == upload.snapshot.checksum,
-      SyncSessionToken.isValid(upload.postCommitDocument.syncState.sessionToken),
+      !upload.postCommitDocument.syncState.remoteOutcomeUncertain,
+      !upload.postCommitDocument.syncState.pendingExchangeCredentialCleanup,
+      upload.postCommitDocument.syncState.accountDeletionIdempotencyKey == nil,
+      SyncSessionToken.isValid(
+        upload.postCommitDocument.syncState.sessionToken,
+        forAccountId: upload.accountId
+      ),
       upload.postCommitDocument.syncState.lastSyncedContentChecksum
         == (try syncCodec.contentChecksum(for: upload.postCommitDocument))
     else {

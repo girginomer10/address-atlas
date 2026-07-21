@@ -8,10 +8,10 @@ export interface SyncMigrationDefinition {
 
 export interface PreparedSyncMigrationDefinition extends SyncMigrationDefinition {
   /**
-   * A prepared migration is shipped one release before it may be applied. The
-   * current binary knows its immutable checksum and exact resulting schema, so
-   * it can remain the verified N-1 rollback image after the next release
-   * commits the migration.
+   * A prepared migration belongs to a contiguous future-head batch shipped
+   * before activation. The next release may activate that batch in order; the
+   * current binary knows every immutable checksum and resulting schema, so it
+   * remains the verified N-1 rollback image after the batch commits.
    */
   readonly prepared: true;
 }

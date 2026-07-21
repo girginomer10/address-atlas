@@ -42,7 +42,12 @@ extension NativeScanner {
     }
   }
 
-  func scanBitcoin(address: String, chain: ChainConfig, prices: [String: PricePoint])
+  func scanBitcoin(
+    address: String,
+    chain: ChainConfig,
+    prices: [String: PricePoint],
+    networkIdentityProofs: ChainNetworkValueCache<Void>? = nil
+  )
     async throws -> [TrackedAsset]
   {
     struct Response: Decodable {
@@ -64,6 +69,25 @@ extension NativeScanner {
       }
     }
     guard let rest = chain.restUrl else { return [] }
+    guard case .bitcoinGenesisHash(let expectedGenesisHash) = chain.networkIdentity else {
+      throw Self.messageError(domain: "Bitcoin", message: "Bitcoin network identity is missing.")
+    }
+    let proofCache = networkIdentityProofs ?? ChainNetworkValueCache<Void>()
+    try await proofCache.prove(
+      chainID: chain.id,
+      endpoint: rest,
+      identity: chain.networkIdentity
+    ) {
+      let genesis = try await http.getRawResponse(rest.appending(path: "block-height/0"))
+      guard genesis.data.count <= 128,
+        let returnedGenesisHash = String(data: genesis.data, encoding: .utf8)?
+          .trimmingCharacters(in: .whitespacesAndNewlines),
+        returnedGenesisHash == expectedGenesisHash
+      else {
+        throw Self.messageError(
+          domain: "Bitcoin", message: "Bitcoin endpoint returned the wrong network identity.")
+      }
+    }
     let url = rest.appending(path: "address/\(address)")
     let response = try await http.get(url, as: Response.self)
     guard
@@ -99,9 +123,21 @@ extension NativeScanner {
     address: String,
     chain: ChainConfig,
     tokens: [TokenConfig],
-    prices: [String: PricePoint]
+    prices: [String: PricePoint],
+    networkIdentityProofs: ChainNetworkValueCache<Void>? = nil
   ) async throws -> NativeScanResult {
     guard let rpc = chain.rpcUrl else { return NativeScanResult() }
+    guard case .evmChainID(let expectedChainID) = chain.networkIdentity else {
+      throw Self.messageError(domain: "EVM", message: "EVM network identity is missing.")
+    }
+    let proofCache = networkIdentityProofs ?? ChainNetworkValueCache<Void>()
+    try await proofCache.prove(
+      chainID: chain.id,
+      endpoint: rpc,
+      identity: chain.networkIdentity
+    ) {
+      try await validateEvmNetwork(rpc: rpc, expectedChainID: expectedChainID)
+    }
     let blockTag = try await resolveEvmBlockTag(rpc: rpc)
     var assets: [TrackedAsset] = []
     var warnings: [String] = []
@@ -352,6 +388,23 @@ extension NativeScanner {
   public static func erc20BalanceOfData(_ owner: String) -> String {
     let normalized = owner.replacingOccurrences(of: "0x", with: "").lowercased()
     return "0x70a08231\(String(repeating: "0", count: max(0, 64 - normalized.count)))\(normalized)"
+  }
+
+  private func validateEvmNetwork(rpc: URL, expectedChainID: UInt64) async throws {
+    let identityResponse = try await http.post(
+      rpc,
+      body: JSONRPCRequest(id: 0, method: "eth_chainId", params: []),
+      as: EvmSingleResponse.self
+    )
+    let rawChainID = try Self.validatedEvmResult(
+      identityResponse, expectedID: 0, operation: "Network identity lookup")
+    guard let canonicalChainID = Self.canonicalEvmBlockTag(rawChainID),
+      let observedChainID = UInt64(canonicalChainID.dropFirst(2), radix: 16),
+      observedChainID == expectedChainID
+    else {
+      throw Self.messageError(
+        domain: "EVM", message: "RPC endpoint returned the wrong network identity.")
+    }
   }
 
   func resolveEvmBlockTag(rpc: URL) async throws -> String {

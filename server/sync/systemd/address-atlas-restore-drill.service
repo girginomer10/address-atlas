@@ -10,6 +10,7 @@ Group=root
 WorkingDirectory=/opt/address-atlas
 Environment=ADDRESS_ATLAS_PROD_ENV_FILE=/etc/address-atlas/sync.env
 Environment=ADDRESS_ATLAS_DEPLOY_SOURCE_ROOT=/var/lib/address-atlas/deploy-sources
+Environment=ADDRESS_ATLAS_CONTROL_ROOT=/var/lib/address-atlas/service-control
 ExecStart=/usr/bin/bash server/sync/manage-prod.sh restore-drill
 UMask=0077
 NoNewPrivileges=true
@@ -18,5 +19,5 @@ ProtectSystem=strict
 ProtectHome=read-only
 # Keep the source checkout read-only while allowing the reviewed Git fetch to
 # refresh origin/main metadata for deployment authorization.
-ReadWritePaths=/opt/address-atlas/.git /var/backups/address-atlas /var/lib/address-atlas/deploy-sources /var/run/docker.sock
+ReadWritePaths=/opt/address-atlas/.git /var/backups/address-atlas /var/lib/address-atlas/deploy-sources /var/lib/address-atlas/service-control /var/run/docker.sock
 TimeoutStartSec=45min

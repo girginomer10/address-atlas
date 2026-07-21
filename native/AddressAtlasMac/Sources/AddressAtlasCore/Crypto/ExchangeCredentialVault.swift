@@ -13,7 +13,14 @@ public struct ExchangeCredentialVault: Sendable {
     return try crypto.sealJSON(credentials, with: key, keyId: "exchange-\(connectionId.uuidString)")
   }
 
-  public func open(_ envelope: EncryptedVaultEnvelope, vaultKey: Data) throws -> ExchangeCredentials {
+  public func open(
+    _ envelope: EncryptedVaultEnvelope,
+    vaultKey: Data,
+    connectionId: UUID
+  ) throws -> ExchangeCredentials {
+    guard envelope.keyId == "exchange-\(connectionId.uuidString)" else {
+      throw VaultCryptoError.invalidEnvelope
+    }
     let key = try crypto.deriveKey(from: vaultKey, purpose: .exchangeCredentials)
     return try crypto.openJSON(ExchangeCredentials.self, envelope: envelope, with: key)
   }

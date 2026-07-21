@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { RemoteVaultSnapshot } from "./envelope";
 import { closeSyncPoolForTests, ensureSyncSchema, getSyncPool } from "./postgres";
 import {
@@ -10,9 +10,12 @@ import {
   revokeBearerSession
 } from "./sessions";
 import { TokenValidationError } from "./tokens";
+import { normalizeRequestClientKey } from "./rate-limit";
+import { setStorageLedgerAuditStateForTests } from "./storage-ledger-integrity";
 import { chargeVaultIngress, saveVaultSnapshot } from "./vault-storage";
 
 const maybeDescribe = process.env.TEST_SYNC_DATABASE_URL ? describe : describe.skip;
+const REQUEST_CLIENT = normalizeRequestClientKey("session-integration-test");
 
 const SNAPSHOT: RemoteVaultSnapshot = {
   version: 1,
@@ -41,6 +44,10 @@ maybeDescribe("session lifecycle against real Postgres", () => {
     process.env.SYNC_DATABASE_URL = process.env.TEST_SYNC_DATABASE_URL;
     process.env.SYNC_SESSION_SECRET = "ci-only-public-session-secret-for-session-tests";
     await ensureSyncSchema();
+  });
+
+  beforeEach(() => {
+    setStorageLedgerAuditStateForTests("valid");
   });
 
   afterEach(async () => {
@@ -94,10 +101,10 @@ maybeDescribe("session lifecycle against real Postgres", () => {
     const first = await grant(userId);
     const second = await grant(userId);
 
-    await revokeBearerSession(`Bearer ${first.sessionToken}`);
-    await expect(authenticateBearerSession(`Bearer ${first.sessionToken}`))
+    await revokeBearerSession(`Bearer ${first.sessionToken}`, REQUEST_CLIENT);
+    await expect(authenticateBearerSession(`Bearer ${first.sessionToken}`, REQUEST_CLIENT))
       .rejects.toBeInstanceOf(TokenValidationError);
-    await expect(authenticateBearerSession(`Bearer ${second.sessionToken}`))
+    await expect(authenticateBearerSession(`Bearer ${second.sessionToken}`, REQUEST_CLIENT))
       .resolves.toMatchObject({ userId, sessionId: second.session.sessionId });
   });
 
@@ -120,7 +127,12 @@ maybeDescribe("session lifecycle against real Postgres", () => {
     );
 
     const key = deletionKey();
-    await expect(deleteBearerAccount(`Bearer ${issued.sessionToken}`, key.digest, true))
+    await expect(deleteBearerAccount(
+      `Bearer ${issued.sessionToken}`,
+      key.digest,
+      true,
+      REQUEST_CLIENT
+    ))
       .resolves.toEqual({ replayed: false });
 
     const after = await getSyncPool().query<{ total_snapshot_bytes: string }>(
@@ -140,9 +152,10 @@ maybeDescribe("session lifecycle against real Postgres", () => {
       );
       expect(result.rows[0]?.count).toBe(0);
     }
-    await expect(authenticateBearerSession(`Bearer ${issued.sessionToken}`))
+    await expect(authenticateBearerSession(`Bearer ${issued.sessionToken}`, REQUEST_CLIENT))
       .rejects.toBeInstanceOf(TokenValidationError);
-    await expect(deleteBearerAccount(null, key.digest, false)).resolves.toEqual({ replayed: true });
+    await expect(deleteBearerAccount(null, key.digest, false, REQUEST_CLIENT))
+      .resolves.toEqual({ replayed: true });
     const receipt = await getSyncPool().query<{ digest: Buffer }>(
       `SELECT idempotency_key_digest AS digest
        FROM account_deletion_receipts
@@ -159,7 +172,8 @@ maybeDescribe("session lifecycle against real Postgres", () => {
     );
     // Permanent receipts resolve a lost successful response even when a client
     // was offline for far longer than an ordinary operational retention window.
-    await expect(deleteBearerAccount(null, key.digest, false)).resolves.toEqual({ replayed: true });
+    await expect(deleteBearerAccount(null, key.digest, false, REQUEST_CLIENT))
+      .resolves.toEqual({ replayed: true });
     users.delete(userId);
   });
 
@@ -169,8 +183,8 @@ maybeDescribe("session lifecycle against real Postgres", () => {
     const key = deletionKey();
 
     const results = await Promise.all([
-      deleteBearerAccount(`Bearer ${issued.sessionToken}`, key.digest, true),
-      deleteBearerAccount(`Bearer ${issued.sessionToken}`, key.digest, true)
+      deleteBearerAccount(`Bearer ${issued.sessionToken}`, key.digest, true, REQUEST_CLIENT),
+      deleteBearerAccount(`Bearer ${issued.sessionToken}`, key.digest, true, REQUEST_CLIENT)
     ]);
 
     expect(results).toEqual(expect.arrayContaining([{ replayed: false }, { replayed: true }]));
@@ -203,7 +217,12 @@ maybeDescribe("session lifecycle against real Postgres", () => {
       FOR EACH ROW EXECUTE FUNCTION ${functionName}()
     `);
     try {
-      await expect(deleteBearerAccount(`Bearer ${issued.sessionToken}`, key.digest, true))
+      await expect(deleteBearerAccount(
+        `Bearer ${issued.sessionToken}`,
+        key.digest,
+        true,
+        REQUEST_CLIENT
+      ))
         .rejects.toThrow(/forced deletion rollback/i);
       const account = await getSyncPool().query("SELECT 1 FROM users WHERE id = $1", [userId]);
       const receipt = await getSyncPool().query(

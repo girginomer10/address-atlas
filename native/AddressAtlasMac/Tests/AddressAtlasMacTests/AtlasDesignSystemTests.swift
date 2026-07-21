@@ -86,17 +86,89 @@ final class AtlasDesignSystemTests: XCTestCase {
   }
 
   @MainActor
-  func testExportPreviewAccessibilityContentMatchesGeneratedPreview() {
+  func testExportPreviewUsesBoundedNavigableRowsInsteadOfOneMonolithicAXValue() {
     let generated = "VOICEOVER_EXPORT_MARKER,{\"wallet\":\"visible\"}"
     let preview = ExportPreview(exportedPreview: generated)
-    let displayedText = preview.displayedText
-    let accessibilityContent = preview.accessibilityContent
-    let accessibilityIdentifier = ExportPreview.contentAccessibilityIdentifier
+    let model = preview.accessibilityModel
 
-    XCTAssertEqual(displayedText, generated)
-    XCTAssertEqual(accessibilityContent, generated)
-    XCTAssertNotEqual(displayedText, "Read-only export preview")
-    XCTAssertEqual(accessibilityIdentifier, "export-preview-content")
+    XCTAssertEqual(preview.displayedText, generated)
+    XCTAssertEqual(model.rows.map(\.content), [generated])
+    XCTAssertEqual(model.rows.map(\.locationLabel), ["Line 1"])
+    XCTAssertEqual(model.rows.map(\.accessibilityIdentifier), ["export-preview-row-1"])
+    XCTAssertFalse(model.spokenSummary.contains(generated))
+    XCTAssertLessThanOrEqual(
+      model.accessibilitySummaryLabel.utf8.count,
+      ExportPreviewAccessibilityModel.maximumSummaryByteCount
+    )
+    XCTAssertLessThanOrEqual(
+      ExportPreviewAccessibilityModel.navigationHint.utf8.count,
+      ExportPreviewAccessibilityModel.maximumSummaryByteCount
+    )
+    XCTAssertEqual(ExportPreview.contentAccessibilityIdentifier, "export-preview-content")
+  }
+
+  func testExportPreviewAXRowsBoundEveryValueAndPreserveNavigationOrder() {
+    let veryLongUnicodeLine = String(repeating: "wallet-😀-", count: 12_000)
+    let text = veryLongUnicodeLine + "\n\nfinal,row"
+    let model = ExportPreviewAccessibilityModel(text: text)
+
+    XCTAssertGreaterThan(model.rows.count, 3)
+    XCTAssertEqual(model.sourceLineCount, 3)
+    XCTAssertEqual(model.sourceByteCount, text.utf8.count)
+    XCTAssertEqual(model.rows.map(\.id), Array(1...model.rows.count))
+    XCTAssertEqual(Set(model.rows.map(\.accessibilityIdentifier)).count, model.rows.count)
+    XCTAssertTrue(
+      model.rows.allSatisfy {
+        $0.accessibilityValue.utf8.count
+          <= ExportPreviewAccessibilityModel.maximumNodeValueByteCount
+      }
+    )
+    XCTAssertTrue(
+      model.rows.allSatisfy {
+        $0.locationLabel.utf8.count
+          <= ExportPreviewAccessibilityModel.maximumNodeValueByteCount
+      }
+    )
+    XCTAssertEqual(
+      reconstructedPreview(from: model.rows, sourceLineCount: model.sourceLineCount),
+      text
+    )
+    XCTAssertEqual(
+      model.rows.first(where: { $0.sourceLine == 2 })?.accessibilityValue,
+      "Empty line"
+    )
+  }
+
+  func testExportPreviewCapsPathologicalAXNodeCountsAndDisclosesOmission() {
+    let text = String(repeating: "\n", count: 10_000)
+    let model = ExportPreviewAccessibilityModel(text: text)
+
+    XCTAssertEqual(model.rows.count, ExportPreviewAccessibilityModel.maximumNavigableRowCount)
+    XCTAssertTrue(model.didOmitContent)
+    XCTAssertTrue(model.spokenSummary.contains("Showing the first"))
+    XCTAssertTrue(model.spokenSummary.contains("Save the report"))
+    XCTAssertLessThanOrEqual(
+      model.accessibilitySummaryLabel.utf8.count,
+      ExportPreviewAccessibilityModel.maximumSummaryByteCount
+    )
+  }
+
+  @MainActor
+  func testExportPreviewRendersARealNavigableTableWithOneRowPerBoundedNode() {
+    let preview = ExportPreview(exportedPreview: "first\nsecond\nthird")
+    let hostingView = NSHostingView(rootView: preview)
+    hostingView.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
+    hostingView.layoutSubtreeIfNeeded()
+
+    let table: NSTableView? = firstDescendant(of: NSTableView.self, in: hostingView)
+
+    XCTAssertNotNil(table)
+    // SwiftUI may back Table with NSTableView or NSOutlineView across macOS
+    // releases; both roles retain row and column navigation.
+    let role = table?.accessibilityRole()
+    XCTAssertTrue(role == .table || role == .outline)
+    XCTAssertEqual(table?.numberOfRows, preview.accessibilityModel.rows.count)
+    XCTAssertEqual(table?.tableColumns.count, 2)
   }
 
   func testSecondaryTextMeetsNormalTextContrastOnBothPaperSurfaces() {
@@ -121,6 +193,121 @@ final class AtlasDesignSystemTests: XCTestCase {
       contrastRatio(AtlasTheme.warningRGB, AtlasTheme.paper2RGB),
       4.5
     )
+  }
+
+  @MainActor
+  func testThemeColorsResolveThroughLightAndDarkMacOSAppearances() throws {
+    let appearances: [(AtlasAppearanceVariant, NSAppearance.Name)] = [
+      (.light, .aqua),
+      (.dark, .darkAqua),
+    ]
+
+    for (variant, name) in appearances {
+      let appearance = try XCTUnwrap(NSAppearance(named: name))
+      let expected = AtlasTheme.palette(for: variant).paper
+      var resolved: NSColor?
+
+      appearance.performAsCurrentDrawingAppearance {
+        resolved = NSColor(AtlasTheme.paper).usingColorSpace(.sRGB)
+      }
+
+      let color = try XCTUnwrap(resolved)
+      XCTAssertEqual(Double(color.redComponent), expected.red, accuracy: 0.001)
+      XCTAssertEqual(Double(color.greenComponent), expected.green, accuracy: 0.001)
+      XCTAssertEqual(Double(color.blueComponent), expected.blue, accuracy: 0.001)
+    }
+  }
+
+  @MainActor
+  func testAppearanceResolverPromotesBothSchemesWhenIncreaseContrastIsEnabled() throws {
+    let light = try XCTUnwrap(NSAppearance(named: .aqua))
+    let dark = try XCTUnwrap(NSAppearance(named: .darkAqua))
+
+    XCTAssertEqual(
+      AtlasAppearanceVariant(appearance: light, increaseContrast: true),
+      .highContrastLight
+    )
+    XCTAssertEqual(
+      AtlasAppearanceVariant(appearance: dark, increaseContrast: true),
+      .highContrastDark
+    )
+  }
+
+  func testNormalControlBoundariesMeetThreeToOneInEverySupportedAppearance() {
+    for appearance in AtlasAppearanceVariant.allCases {
+      let palette = AtlasTheme.palette(for: appearance)
+
+      for kind in [AtlasControlKind.textField, .secondaryButton] {
+        let tokens = AtlasControlStyleResolver.tokens(
+          for: kind,
+          appearance: appearance,
+          state: AtlasControlVisualState(
+            isEnabled: true,
+            isPressed: false,
+            isFocused: false
+          )
+        )
+
+        XCTAssertGreaterThanOrEqual(
+          contrastRatio(tokens.boundary, tokens.background),
+          3,
+          "\(appearance) \(kind) boundary must contrast with its fill"
+        )
+        XCTAssertGreaterThanOrEqual(
+          contrastRatio(tokens.boundary, palette.paper2),
+          3,
+          "\(appearance) \(kind) boundary must contrast with an adjacent secondary surface"
+        )
+        XCTAssertGreaterThanOrEqual(
+          contrastRatio(tokens.foreground, tokens.background),
+          4.5,
+          "\(appearance) \(kind) text must remain readable"
+        )
+        XCTAssertGreaterThanOrEqual(tokens.boundaryWidth, 1.5)
+        XCTAssertEqual(tokens.focusRingWidth, 0)
+      }
+    }
+  }
+
+  func testFocusedTextFieldsAndSecondaryControlsGainExplicitThreePointFocusRing() {
+    for appearance in AtlasAppearanceVariant.allCases {
+      let palette = AtlasTheme.palette(for: appearance)
+
+      for kind in [AtlasControlKind.textField, .secondaryButton] {
+        let unfocused = AtlasControlStyleResolver.tokens(
+          for: kind,
+          appearance: appearance,
+          state: AtlasControlVisualState(
+            isEnabled: true,
+            isPressed: false,
+            isFocused: false
+          )
+        )
+        let focused = AtlasControlStyleResolver.tokens(
+          for: kind,
+          appearance: appearance,
+          state: AtlasControlVisualState(
+            isEnabled: true,
+            isPressed: false,
+            isFocused: true
+          )
+        )
+
+        XCTAssertEqual(unfocused.focusRingWidth, 0)
+        XCTAssertGreaterThanOrEqual(focused.focusRingWidth, 3)
+        XCTAssertGreaterThanOrEqual(focused.focusRingOutset, focused.focusRingWidth)
+        XCTAssertGreaterThanOrEqual(
+          contrastRatio(focused.focusRing, palette.paper),
+          3,
+          "\(appearance) \(kind) focus ring must contrast with the primary surface"
+        )
+        XCTAssertGreaterThanOrEqual(
+          contrastRatio(focused.focusRing, palette.paper2),
+          3,
+          "\(appearance) \(kind) focus ring must contrast with the secondary surface"
+        )
+      }
+    }
   }
 
   func testExportPreviewIsReadOnlySizedAndDisclosesTruncation() {
@@ -208,9 +395,40 @@ final class AtlasDesignSystemTests: XCTestCase {
     )
   }
 
+  @MainActor
+  func testPortfolioRowAccessibilityProvidesColumnMeaningAsOneNavigableRow() {
+    let asset = TrackedAsset(
+      id: "treasury-eth",
+      address: "0x0000000000000000000000000000000000000001",
+      chainId: "ethereum",
+      chainName: "Ethereum",
+      family: .evm,
+      symbol: "ETH",
+      name: "Ether",
+      amount: 1.25,
+      priceUsd: 0,
+      valueUsd: 0,
+      pricingStatus: .unpriced,
+      source: .native
+    )
+
+    let label = AtlasAccessibility.assetRowIdentity(asset)
+
+    XCTAssertTrue(label.contains("ETH, Ether"))
+    XCTAssertTrue(label.contains("Ethereum"))
+    XCTAssertTrue(label.contains("source native"))
+    XCTAssertTrue(label.contains("amount 1.25"))
+    XCTAssertTrue(label.contains("unpriced, USD value unknown"))
+    XCTAssertEqual(
+      AssetRow.accessibilityIdentifier(for: asset),
+      "portfolio-asset-row-treasury-eth"
+    )
+    XCTAssertLessThan(label.utf8.count, 256)
+  }
+
   private func contrastRatio(
-    _ first: (red: Double, green: Double, blue: Double),
-    _ second: (red: Double, green: Double, blue: Double)
+    _ first: AtlasRGB,
+    _ second: AtlasRGB
   ) -> Double {
     let lighter = max(relativeLuminance(first), relativeLuminance(second))
     let darker = min(relativeLuminance(first), relativeLuminance(second))
@@ -218,7 +436,7 @@ final class AtlasDesignSystemTests: XCTestCase {
   }
 
   private func relativeLuminance(
-    _ color: (red: Double, green: Double, blue: Double)
+    _ color: AtlasRGB
   ) -> Double {
     0.2126 * linearized(color.red)
       + 0.7152 * linearized(color.green)
@@ -229,6 +447,33 @@ final class AtlasDesignSystemTests: XCTestCase {
     component <= 0.04045
       ? component / 12.92
       : pow((component + 0.055) / 1.055, 2.4)
+  }
+
+  private func reconstructedPreview(
+    from rows: [ExportPreviewRow],
+    sourceLineCount: Int
+  ) -> String {
+    (1...sourceLineCount).map { sourceLine in
+      rows
+        .filter { $0.sourceLine == sourceLine }
+        .sorted { $0.part < $1.part }
+        .map(\.content)
+        .joined()
+    }.joined(separator: "\n")
+  }
+
+  @MainActor
+  private func firstDescendant<ViewType: NSView>(
+    of type: ViewType.Type,
+    in root: NSView
+  ) -> ViewType? {
+    if let match = root as? ViewType { return match }
+    for subview in root.subviews {
+      if let match = firstDescendant(of: type, in: subview) {
+        return match
+      }
+    }
+    return nil
   }
 
   @MainActor

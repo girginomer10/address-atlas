@@ -21,7 +21,7 @@ extension AppState {
       return
     }
     guard let serverURL = AppState.validatedSyncURL(document.syncState.serverURL),
-      !document.syncState.sessionToken.isEmpty
+      hasUsableSyncSession()
     else {
       error = "Sign in with passkey before revoking the sync session."
       return
@@ -53,6 +53,7 @@ extension AppState {
       notice = "This Mac's sync session was revoked."
       error = ""
     } catch {
+      recordDiagnosticFailure(.syncAccountLifecycleFailed)
       await handleSyncError(error)
     }
   }
@@ -162,6 +163,11 @@ extension AppState {
         "Sync account deleted. Your encrypted local vault was kept; the deleted account's automatic rollback point was removed."
       error = ""
     } catch let failure {
+      if !(failure is CancellationError),
+        (failure as? PasskeyAuthenticationError) != .cancelled
+      {
+        recordDiagnosticFailure(.syncAccountLifecycleFailed)
+      }
       presentUserFacingError(
         failure,
         cancellationNotice: "Account deletion cancelled. Nothing was deleted."
@@ -194,7 +200,7 @@ extension AppState {
     guard
       SyncAccountIdentifier.normalized(session.userId) == connectedAccountId,
       AppState.validatedSyncURL(session.serverURL) == serverURL,
-      SyncSessionToken.isValid(session.sessionToken)
+      SyncSessionToken.isUsable(session.sessionToken, forAccountId: connectedAccountId)
     else {
       throw UserFacingAppError(
         message: "Passkey sign-in did not match the connected sync account. Nothing was deleted."
@@ -267,9 +273,15 @@ extension AppState {
     let priorAcceptedEndpointConfigServerURL = acceptedEndpointConfigServerURL
     let priorEndpointConfigTrustDurabilityDegraded =
       endpointConfigTrustDurabilityDegraded
+    var remoteAuthenticationCompleted = false
     do {
       let stagedEndpointConfig = try await compatibilityPolicyCandidate(for: url)
       let session = try await passkeyAuthenticator.authenticate(serverURL: url, mode: mode)
+      remoteAuthenticationCompleted = true
+      if let passkeyAuthenticationCompletedHook {
+        self.passkeyAuthenticationCompletedHook = nil
+        passkeyAuthenticationCompletedHook()
+      }
       guard AppState.validatedSyncURL(session.serverURL) == url else {
         throw UserFacingAppError(
           message: "Passkey sign-in returned a different sync server. Nothing was changed."
@@ -307,12 +319,14 @@ extension AppState {
         )
       }
       guard await save(connected, projectedSyncVersion: nil) else {
+        let persistenceFailure = error
         endpointConfig = priorEndpointConfig
         endpointConfigStatus = priorEndpointConfigStatus
         acceptedEndpointConfigServerURL = priorAcceptedEndpointConfigServerURL
         setEndpointConfigTrustDurabilityDegraded(
           priorEndpointConfigTrustDurabilityDegraded
         )
+        error = "\(persistenceFailure) \(Self.postPasskeyAuthenticationGuidance(for: mode))"
         return
       }
       // The policy becomes active only after the authenticated server binding
@@ -330,6 +344,13 @@ extension AppState {
         + pruningNoticeSuffix(removedScanRunCount)
       error = ""
     } catch {
+      if !(error is CancellationError),
+        (error as? PasskeyAuthenticationError) != .cancelled
+      {
+        recordDiagnosticFailure(
+          mode == .register ? .passkeyRegistrationFailed : .passkeyAuthenticationFailed
+        )
+      }
       endpointConfig = priorEndpointConfig
       endpointConfigStatus = priorEndpointConfigStatus
       acceptedEndpointConfigServerURL = priorAcceptedEndpointConfigServerURL
@@ -337,6 +358,24 @@ extension AppState {
         priorEndpointConfigTrustDurabilityDegraded
       )
       presentUserFacingError(error, cancellationNotice: "Passkey sign-in cancelled.")
+      if remoteAuthenticationCompleted {
+        let guidance = Self.postPasskeyAuthenticationGuidance(for: mode)
+        if self.error.isEmpty {
+          notice = ""
+          self.error = guidance
+        } else if !self.error.contains(guidance) {
+          self.error += " \(guidance)"
+        }
+      }
+    }
+  }
+
+  static func postPasskeyAuthenticationGuidance(for mode: PasskeyWebMode) -> String {
+    switch mode {
+    case .register:
+      "The account and passkey may already exist on the server. The previous local binding was kept. Repair local storage, then choose Sign in before trying Create passkey account again."
+    case .authenticate:
+      "The previous local binding was kept. Repair local storage, then choose Sign in again."
     }
   }
 
@@ -366,7 +405,7 @@ extension AppState {
     defer { finishSyncActivity(.disconnectingAccount) }
     guard await flushWalletLabelDraftsBeforeRemoteOperation() else { return }
     do {
-      if !document.syncState.sessionToken.isEmpty {
+      if hasUsableSyncSession() {
         let client = ZeroKnowledgeSyncClient(baseURL: serverURL, http: httpClient)
         await client.setBearerToken(document.syncState.sessionToken)
         try await client.revokeCurrentSession()
@@ -383,6 +422,7 @@ extension AppState {
         "This Mac disconnected from the sync account. The remote account and encrypted remote vault were kept; the previous account's automatic rollback point was removed."
       error = ""
     } catch {
+      recordDiagnosticFailure(.syncAccountLifecycleFailed)
       await handleSyncError(error)
       let recovery =
         " The local account binding and encrypted rollback point were kept. If the server remains unavailable, use Disconnect locally without contacting server."
@@ -489,7 +529,7 @@ extension AppState {
       guard
         SyncAccountIdentifier.normalized(session.userId) == pendingUpload.accountId,
         AppState.validatedSyncURL(session.serverURL) == serverURL,
-        SyncSessionToken.isValid(session.sessionToken)
+        SyncSessionToken.isUsable(session.sessionToken, forAccountId: pendingUpload.accountId)
       else {
         throw UserFacingAppError(
           message:
@@ -524,6 +564,11 @@ extension AppState {
       finishSyncActivity(.signingIn)
       await recoverPendingVaultUpload()
     } catch {
+      if !(error is CancellationError),
+        (error as? PasskeyAuthenticationError) != .cancelled
+      {
+        recordDiagnosticFailure(.passkeyAuthenticationFailed)
+      }
       endpointConfig = priorEndpointConfig
       endpointConfigStatus = priorEndpointConfigStatus
       acceptedEndpointConfigServerURL = priorAcceptedEndpointConfigServerURL

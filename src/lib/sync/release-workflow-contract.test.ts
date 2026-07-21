@@ -14,6 +14,23 @@ import { describe, expect, it } from "vitest";
 const repoRoot = resolve(import.meta.dirname, "../../..");
 const workflow = readFileSync(join(repoRoot, ".github/workflows/release.yml"), "utf8");
 const ciWorkflow = readFileSync(join(repoRoot, ".github/workflows/ci.yml"), "utf8");
+const rulesetGovernanceFile = join(repoRoot, "scripts/check-ruleset-governance.jq");
+const rulesetGovernanceProgram = readFileSync(rulesetGovernanceFile, "utf8");
+const releaseEnvironmentPolicyFile = join(
+  repoRoot,
+  ".github/release-environment-policy.json"
+);
+const releaseEnvironmentPolicy = JSON.parse(
+  readFileSync(releaseEnvironmentPolicyFile, "utf8")
+);
+const releaseEnvironmentGovernanceFile = join(
+  repoRoot,
+  "scripts/check-release-environment-governance.jq"
+);
+const releaseEnvironmentGovernanceProgram = readFileSync(
+  releaseEnvironmentGovernanceFile,
+  "utf8"
+);
 const commitSha = "a".repeat(40);
 const requiredChecks = [
   "Repository secret-artifact hygiene",
@@ -90,20 +107,6 @@ and .conclusion == "success"
 and .app.id == $expected_app
 `;
 
-const rulesetIntegrationProgram = `
-.parameters.required_status_checks as $configured
-| all(
-    $required_checks[];
-    . as $required
-    | [
-        $configured[]?
-        | select(.context == $required)
-      ] as $matching
-    | ($matching | length) == 1
-      and $matching[0].integration_id == $ci_integration_id
-  )
-`;
-
 describe("macOS release workflow governance", () => {
   it("binds protected release secrets and live policy to the exact source commit", () => {
     expect(workflow).toContain("environment: release");
@@ -138,6 +141,9 @@ describe("macOS release workflow governance", () => {
 
   it("requires immutable releases, governed main, and create/update/delete-protected tags", () => {
     expect(workflow.match(/immutable-releases/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(workflow.match(/-f scripts\/check-ruleset-governance\.jq/g)?.length).toBe(2);
+    expect(workflow).toContain("RULESET_BYPASS_ALLOWLIST_JSON");
+    expect(workflow).toContain("secrets.RELEASE_ADMIN_WRITE_TOKEN");
     for (const rule of [
       'has_rule("creation")',
       'has_rule("update")',
@@ -145,10 +151,10 @@ describe("macOS release workflow governance", () => {
       'has_rule("non_fast_forward")',
       'has_rule("required_linear_history")'
     ]) {
-      expect(workflow).toContain(rule);
+      expect(rulesetGovernanceProgram).toContain(rule);
     }
-    expect(workflow).toContain("strict_required_status_checks_policy == true");
-    expect(workflow).toContain("required_review_thread_resolution == true");
+    expect(rulesetGovernanceProgram).toContain("strict_required_status_checks_policy == true");
+    expect(rulesetGovernanceProgram).toContain("required_review_thread_resolution == true");
     expect(workflow).toContain("ci-check-run-urls.txt");
     expect(workflow).toContain("check_run_url");
     expect(workflow).toContain("[ $check_runs[].app.id ] | unique | length == 1");
@@ -169,8 +175,63 @@ describe("macOS release workflow governance", () => {
     }
     expect(workflow).toContain("release_ci_is_intact || {");
     expect(workflow.match(/latest_ci_run_matches_preflight \\/g)?.length).toBe(2);
-    expect(workflow.match(/\.integration_id == \$ci_integration_id/g)?.length).toBe(2);
-    expect(workflow).not.toContain('select(.integration_id | type == "number" and . > 0)');
+    expect(rulesetGovernanceProgram).toContain(".integration_id == $ci_integration_id");
+    expect(rulesetGovernanceProgram).not.toContain(
+      'select(.integration_id | type == "number" and . > 0)'
+    );
+  });
+
+  it("pins the exact release reviewer and disables administrator bypass", () => {
+    expect(releaseEnvironmentPolicy).toEqual({
+      schemaVersion: 1,
+      environment: "release",
+      administratorsCanBypass: false,
+      reviewers: [{ type: "User", id: 67194558 }]
+    });
+    expect(
+      workflow.match(/-f scripts\/check-release-environment-governance\.jq/g)?.length
+    ).toBe(2);
+    expect(workflow.match(/--slurpfile expected \.github\/release-environment-policy\.json/g)?.length)
+      .toBe(2);
+    expect(ciWorkflow).toContain("bash scripts/check-release-environment-governance-tests.sh");
+    expect(releaseEnvironmentGovernanceProgram).toContain(
+      ".can_admins_bypass == $policy.administratorsCanBypass"
+    );
+
+    const governedEnvironment = {
+      name: "release",
+      can_admins_bypass: false,
+      deployment_branch_policy: {
+        protected_branches: false,
+        custom_branch_policies: true
+      },
+      protection_rules: [
+        {
+          type: "required_reviewers",
+          prevent_self_review: true,
+          reviewers: [
+            { type: "User", reviewer: { id: 67194558, login: "girginomer10" } }
+          ]
+        },
+        { type: "branch_policy" }
+      ]
+    };
+    expect(runReleaseEnvironmentJq(governedEnvironment).status).toBe(0);
+    expect(runReleaseEnvironmentJq({
+      ...governedEnvironment,
+      can_admins_bypass: true
+    }).status).not.toBe(0);
+    const missingBypassEvidence: Record<string, unknown> = { ...governedEnvironment };
+    delete missingBypassEvidence.can_admins_bypass;
+    expect(runReleaseEnvironmentJq(missingBypassEvidence).status).not.toBe(0);
+    expect(runReleaseEnvironmentJq({
+      ...governedEnvironment,
+      protection_rules: [{
+        type: "required_reviewers",
+        prevent_self_review: true,
+        reviewers: [{ type: "User", reviewer: { id: 9 } }]
+      }]
+    }).status).not.toBe(0);
   });
 
   it("rejects a missing run, failed latest attempt, or successful rerun drift", () => {
@@ -297,21 +358,16 @@ describe("macOS release workflow governance", () => {
     ] as const) {
       expect(runReleaseCiFixture(scenario).status).not.toBe(0);
     }
-  });
+  }, 15_000);
 
   it("requires every ruleset context to use the observed CI app integration", () => {
-    expect(compact(workflow)).toContain(compact(rulesetIntegrationProgram));
-    const rule = {
-      parameters: {
-        required_status_checks: requiredChecks.map((context) => ({
-          context,
-          integration_id: 15368
-        }))
-      }
-    };
-    expect(runRulesetJq(rule).status).toBe(0);
-    rule.parameters.required_status_checks[2]!.integration_id = 999;
-    expect(runRulesetJq(rule).status).not.toBe(0);
+    const rulesets = governedRulesets();
+    expect(runRulesetJq(rulesets).status).toBe(0);
+    const mainStatusRule = rulesets[0]!.rules.find(
+      (rule) => rule.type === "required_status_checks"
+    )!;
+    mainStatusRule.parameters!.required_status_checks![2]!.integration_id = 999;
+    expect(runRulesetJq(rulesets).status).not.toBe(0);
   });
 
   it("rejects malformed or out-of-repository check-run URLs", () => {
@@ -410,11 +466,70 @@ function runChecksJq(checks: Array<Record<string, unknown>>) {
   ]);
 }
 
-function runRulesetJq(rule: Record<string, unknown>) {
-  return runJq(rulesetIntegrationProgram, rule, [
-    "--argjson", "required_checks", JSON.stringify(requiredChecks),
-    "--argjson", "ci_integration_id", "15368"
-  ]);
+function governedRulesets() {
+  return [
+    {
+      target: "branch",
+      enforcement: "active",
+      conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } },
+      bypass_actors: [],
+      rules: [
+        { type: "deletion" },
+        { type: "non_fast_forward" },
+        { type: "required_linear_history" },
+        {
+          type: "pull_request",
+          parameters: {
+            dismiss_stale_reviews_on_push: true,
+            require_last_push_approval: true,
+            required_review_thread_resolution: true,
+            required_approving_review_count: 1
+          }
+        },
+        {
+          type: "required_status_checks",
+          parameters: {
+            strict_required_status_checks_policy: true,
+            do_not_enforce_on_create: false,
+            required_status_checks: requiredChecks.map((context) => ({
+              context,
+              integration_id: 15368
+            }))
+          }
+        }
+      ]
+    },
+    {
+      target: "tag",
+      enforcement: "active",
+      conditions: { ref_name: { include: ["refs/tags/v*"], exclude: [] } },
+      bypass_actors: [],
+      rules: [{ type: "creation" }, { type: "update" }, { type: "deletion" }]
+    }
+  ];
+}
+
+function runRulesetJq(rulesets: ReturnType<typeof governedRulesets>) {
+  return spawnSync("jq", [
+    "-cer",
+    "--argjson", "ci_integration_id", "15368",
+    "--argjson", "expected_bypass", JSON.stringify({ main: [], releaseTags: [] }),
+    "-f", rulesetGovernanceFile
+  ], {
+    encoding: "utf8",
+    input: JSON.stringify(rulesets)
+  });
+}
+
+function runReleaseEnvironmentJq(environment: Record<string, unknown>) {
+  return spawnSync("jq", [
+    "-e",
+    "--slurpfile", "expected", releaseEnvironmentPolicyFile,
+    "-f", releaseEnvironmentGovernanceFile
+  ], {
+    encoding: "utf8",
+    input: JSON.stringify(environment)
+  });
 }
 
 function runJq(program: string, input: unknown, args: string[]) {

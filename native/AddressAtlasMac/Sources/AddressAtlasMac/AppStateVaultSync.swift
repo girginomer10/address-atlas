@@ -14,7 +14,7 @@ extension AppState {
       return
     }
     guard let serverURL = AppState.validatedSyncURL(document.syncState.serverURL),
-      !document.syncState.sessionToken.isEmpty
+      hasUsableSyncSession()
     else {
       error = "Sign in with passkey before syncing."
       return
@@ -148,13 +148,10 @@ extension AppState {
       // Durability precedes the remote side effect. If this write fails, no
       // PUT is attempted and the full local document remains authoritative.
       try await persistence.savePendingVaultUpload(pendingUpload, vaultKey: vaultKey)
-      guard
-        let durablePendingUpload = try await persistence.loadPendingVaultUpload(
-          vaultKey: vaultKey
-        )
-      else {
-        throw PendingVaultUploadError.operationMissing
-      }
+      let durablePendingUpload = try await requiredPendingVaultUpload(
+        persistence: persistence,
+        vaultKey: vaultKey
+      )
       pendingVaultUpload = durablePendingUpload
       pendingVaultUploadHasRemoteConflict = false
       syncPersistencePending = true
@@ -181,7 +178,8 @@ extension AppState {
           : "Encrypted vault uploaded.")
         + pruningNoticeSuffix(hasUnsyncedLocalChanges ? 0 : projectedRemovedScanRunCount)
     } catch {
-      if pendingVaultUpload != nil {
+      recordDiagnosticFailure(.syncUploadFailed)
+      if pendingVaultUpload != nil || quarantinedPendingVaultUpload != nil {
         presentPendingVaultUploadError(error)
       } else {
         await handleSyncError(error)
@@ -206,7 +204,10 @@ extension AppState {
       serverURL.absoluteString == pendingUpload.serverOrigin,
       document.syncState.accountId.flatMap(SyncAccountIdentifier.normalized)
         == pendingUpload.accountId,
-      !document.syncState.sessionToken.isEmpty
+      SyncSessionToken.isUsable(
+        document.syncState.sessionToken,
+        forAccountId: pendingUpload.accountId
+      )
     else {
       syncPersistencePending = true
       error =
@@ -240,12 +241,11 @@ extension AppState {
         throw SyncClientError.requestFailed(
           426, "This app version is no longer supported. Update Address Atlas to keep syncing.")
       }
-      guard
-        let durablePendingUpload = try await persistence.loadPendingVaultUpload(
-          vaultKey: vaultKey
-        ),
-        durablePendingUpload == pendingUpload
-      else {
+      let durablePendingUpload = try await requiredPendingVaultUpload(
+        persistence: persistence,
+        vaultKey: vaultKey
+      )
+      guard durablePendingUpload == pendingUpload else {
         throw PendingVaultUploadError.operationMismatch
       }
       guard
@@ -285,6 +285,7 @@ extension AppState {
         )
       error = ""
     } catch {
+      recordDiagnosticFailure(.syncUploadRecoveryFailed)
       presentPendingVaultUploadError(error)
     }
   }
@@ -370,6 +371,13 @@ extension AppState {
 
   private func presentPendingVaultUploadError(_ failure: Error) {
     syncPersistencePending = true
+    if quarantinedPendingVaultUpload != nil {
+      pendingVaultUpload = nil
+      pendingVaultUploadHasRemoteConflict = false
+      error =
+        "The encrypted upload recovery record is damaged and has been quarantined. Your full local vault remains available read-only. Open Sync to explicitly discard only that recovery record."
+      return
+    }
     if let uploadError = failure as? PendingVaultUploadError,
       uploadError == .remoteConflict
     {
@@ -378,6 +386,24 @@ extension AppState {
     let detail = UserFacingErrorMapper.message(for: failure) ?? "Upload recovery was interrupted."
     error =
       "The encrypted vault upload remains safely pending. Retry recovery before editing the vault: \(detail)"
+  }
+
+  private func requiredPendingVaultUpload(
+    persistence: VaultPersistenceCoordinator,
+    vaultKey: Data
+  ) async throws -> PendingVaultUpload {
+    switch try await persistence.inspectPendingVaultUpload(vaultKey: vaultKey) {
+    case .none:
+      throw PendingVaultUploadError.operationMissing
+    case .pending(let upload, _):
+      return upload
+    case .quarantined(let identity):
+      pendingVaultUpload = nil
+      quarantinedPendingVaultUpload = identity
+      pendingVaultUploadHasRemoteConflict = false
+      syncPersistencePending = true
+      throw PendingVaultUploadError.quarantinedOperation
+    }
   }
 
   func abandonPendingVaultUpload(expectedServerURL: URL) async {
@@ -416,10 +442,50 @@ extension AppState {
       pendingVaultUploadHasRemoteConflict = false
       syncPersistencePending = pendingSyncPersistence != nil
       notice =
-        "Upload recovery stopped. The full local vault was kept. CSV and JSON exports are redacted reports, not backups; a destructive remote download will first create an automatic encrypted rollback point."
+        "Upload recovery stopped. The full local vault was kept. Portfolio exports omit credentials but include identifying addresses, labels, balances, and history; they are not backups. A destructive remote download will first create an automatic encrypted rollback point."
       error = ""
     } catch {
+      recordDiagnosticFailure(.syncUploadRecoveryFailed)
       presentPendingVaultUploadError(error)
+    }
+  }
+
+  /// Delete only an exact opaque corrupt journal after explicit confirmation.
+  /// The primary document is preserved transactionally and marked remote-dirty
+  /// because the interrupted PUT's server outcome can no longer be determined.
+  func discardQuarantinedPendingVaultUpload() async {
+    guard acceptsNewOperations else { return }
+    guard let quarantined = quarantinedPendingVaultUpload, let persistence else {
+      error = "No quarantined encrypted upload recovery record is available to discard."
+      return
+    }
+    guard !syncing, !isPersisting, !scanning, !isValidatingExchangeCredentials else {
+      error = "Wait for the active vault operation before discarding the recovery record."
+      return
+    }
+    guard beginSyncActivity(.stoppingUploadRecovery) else {
+      error = "Wait for the active vault operation before discarding the recovery record."
+      return
+    }
+    defer { finishSyncActivity(.stoppingUploadRecovery) }
+    do {
+      let durable = try await persistence.discardQuarantinedPendingVaultUpload(quarantined)
+      document = durable.document
+      documentRevision &+= 1
+      hasUnsyncedLocalChanges = durable.hasLocalChanges
+      quarantinedPendingVaultUpload = nil
+      pendingVaultUploadHasRemoteConflict = false
+      syncPersistencePending = pendingSyncPersistence != nil || pendingVaultUpload != nil
+      notice =
+        "The damaged upload recovery record was discarded. The full local vault was kept and marked as needing reconciliation because the remote outcome is unknown."
+      error = ""
+    } catch {
+      recordDiagnosticFailure(.syncUploadRecoveryFailed)
+      syncPersistencePending = true
+      let detail =
+        UserFacingErrorMapper.message(for: error)
+        ?? "The encrypted recovery row changed or could not be removed safely."
+      self.error = "The quarantined recovery record was not changed: \(detail)"
     }
   }
 
@@ -437,7 +503,7 @@ extension AppState {
       return
     }
     guard let serverURL = AppState.validatedSyncURL(document.syncState.serverURL),
-      !document.syncState.sessionToken.isEmpty
+      hasUsableSyncSession()
     else {
       error = "Sign in with passkey before syncing."
       return
@@ -519,9 +585,14 @@ extension AppState {
         throw PendingVaultUploadError.localDocumentChanged
       }
       let baseContentChecksum = try await persistence.contentChecksum(for: baseDocument)
+      if baseDocument.syncState.remoteOutcomeUncertain, !discardingLocalChanges {
+        error =
+          "The last upload outcome is unknown. Confirm the dedicated reconcile download in Sync before replacing local content."
+        return
+      }
       if baseHasUnsyncedLocalChanges, !discardingLocalChanges {
         error =
-          "Local changes have not been uploaded. Upload them first, or explicitly discard them before downloading."
+          "Local changes are not confirmed on the server. Upload them first, or explicitly discard them before downloading."
         return
       }
       let client = ZeroKnowledgeSyncClient(baseURL: serverURL, http: httpClient)
@@ -554,11 +625,22 @@ extension AppState {
         expectedAccountId: accountId
       )
       var opened = normalizedLoadedDocument(result.document)
-      opened.syncState.connect(
-        accountId: accountId,
-        serverURL: baseDocument.syncState.serverURL,
-        sessionToken: baseDocument.syncState.sessionToken
-      )
+      guard
+        opened.syncState.connect(
+          accountId: accountId,
+          serverURL: baseDocument.syncState.serverURL,
+          sessionToken: baseDocument.syncState.sessionToken,
+          at: sessionDateProvider()
+        )
+      else {
+        // The GET was authorized when it began, but a short-lived bearer may
+        // expire while a large snapshot downloads and decrypts. Never publish
+        // a remote document with an empty local authority binding; fail closed
+        // before creating the rollback point or replacing local content.
+        throw SyncClientError.authenticationRequired(
+          "The sync session expired while downloading the encrypted vault."
+        )
+      }
       opened = try await persistence.markingSynced(opened, snapshot: snapshot)
 
       // The authenticated remote candidate is safe to decode, but replacing
@@ -610,13 +692,10 @@ extension AppState {
           // replayable remote-adoption operation. Do not resurrect UI drafts
           // even if the network response is lost.
           discardAcceptedByRemoteStateMachine = true
-          guard
-            let durablePendingUpload = try await persistence.loadPendingVaultUpload(
-              vaultKey: vaultKey
-            )
-          else {
-            throw PendingVaultUploadError.operationMissing
-          }
+          let durablePendingUpload = try await requiredPendingVaultUpload(
+            persistence: persistence,
+            vaultKey: vaultKey
+          )
           pendingVaultUpload = durablePendingUpload
           pendingVaultUploadHasRemoteConflict = false
           syncPersistencePending = true
@@ -650,7 +729,7 @@ extension AppState {
           if error as? PendingVaultUploadError == .localDocumentChanged {
             throw error
           }
-          if pendingVaultUpload != nil { throw error }
+          if pendingVaultUpload != nil || quarantinedPendingVaultUpload != nil { throw error }
           guard
             await save(
               downloadedLegacy,
@@ -697,7 +776,8 @@ extension AppState {
       removedScanRunCount += lastSaveRemovedScanRunCount
       notice = "Encrypted vault downloaded." + pruningNoticeSuffix(removedScanRunCount)
     } catch {
-      if pendingVaultUpload != nil {
+      recordDiagnosticFailure(.syncDownloadFailed)
+      if pendingVaultUpload != nil || quarantinedPendingVaultUpload != nil {
         presentPendingVaultUploadError(error)
       } else {
         await handleSyncError(error, removedScanRunCount: removedScanRunCount)
@@ -733,31 +813,165 @@ extension AppState {
       hasVaultRollbackCheckpoint = false
       pendingSyncPersistence = nil
       pendingVaultUpload = nil
+      quarantinedPendingVaultUpload = nil
       pendingVaultUploadHasRemoteConflict = false
       syncPersistencePending = false
       notice =
         "The previous encrypted local vault content was restored. The current sync account and remote baseline were kept; review the changes before uploading."
       error = ""
     } catch {
+      recordDiagnosticFailure(.recoveryRollbackFailed)
       presentUserFacingError(error)
     }
   }
 
-  func exportRecoveryKit(to url: URL) throws -> String {
-    guard let vaultKey else {
-      throw RecoveryKitError.invalidVaultKey
+  func recoverDamagedVaultFromRollbackCheckpoint() async {
+    guard acceptsNewOperations else { return }
+    guard damagedVaultRecoveryAvailability == .validatedRollbackCheckpoint,
+      let key = damagedVaultRecoveryKey
+    else {
+      error = "No validated rollback point is available for the damaged vault."
+      return
     }
-    let output = try recoveryKit.create(vaultKey: vaultKey)
-    let data = try JSONEncoder.addressAtlas.encode(output.document)
-    try data.write(to: url, options: [.atomic])
-    notice = "Recovery kit saved. Store the code separately."
-    error = ""
-    return output.recoveryCode
+    guard !isUnlocking else { return }
+    isUnlocking = true
+    defer { isUnlocking = false }
+    do {
+      guard try keyStore.loadVaultKey() == key else {
+        throw UserFacingAppError(
+          message:
+            "The Keychain vault key changed during recovery. Nothing was replaced; restart Address Atlas before trying again."
+        )
+      }
+      let sqlite = try EncryptedSQLiteVaultStore(
+        path: appSupportDirectory.appending(path: "vault.sqlite"),
+        vaultKey: key,
+        crypto: crypto
+      )
+      let coordinator = VaultPersistenceCoordinator(
+        store: sqlite,
+        syncSnapshotByteLimit: syncSnapshotByteLimit
+      )
+      let restored = try await coordinator.recoverDamagedPrimaryFromRollbackCheckpoint()
+      guard try keyStore.loadVaultKey() == key else {
+        throw UserFacingAppError(
+          message:
+            "The rollback was restored on disk, but the Keychain vault key changed unexpectedly. Restart Address Atlas before continuing."
+        )
+      }
+      document = normalizedLoadedDocument(restored.document)
+      documentRevision &+= 1
+      hasUnsyncedLocalChanges = restored.hasLocalChanges
+      vaultKey = key
+      persistence = coordinator
+      pendingSyncPersistence = nil
+      pendingVaultUpload = nil
+      quarantinedPendingVaultUpload = nil
+      pendingVaultUploadHasRemoteConflict = false
+      syncPersistencePending = false
+      hasVaultRollbackCheckpoint = false
+      damagedVaultRecoveryAvailability = nil
+      damagedVaultRecoveryKey = nil
+      isUnlocked = true
+      notice =
+        "The validated automatic rollback point replaced the damaged primary vault atomically. Review the restored data and reconcile Sync before uploading."
+      error = ""
+    } catch {
+      recordDiagnosticFailure(.recoveryRollbackFailed)
+      presentUserFacingError(error)
+      isUnlocked = false
+    }
+  }
+
+  /// This path is intentionally user-driven and destructive only after a
+  /// durable byte-for-byte quarantine exists. It never rotates the vault key
+  /// and never claims that remote data was downloaded automatically.
+  func quarantineDamagedVaultAndStartClean() async {
+    guard acceptsNewOperations else { return }
+    guard damagedVaultRecoveryAvailability != nil, let key = damagedVaultRecoveryKey else {
+      error = "No damaged local vault is awaiting quarantine."
+      return
+    }
+    guard !isUnlocking else { return }
+    isUnlocking = true
+    defer { isUnlocking = false }
+    do {
+      guard try keyStore.loadVaultKey() == key else {
+        throw UserFacingAppError(
+          message:
+            "The Keychain vault key changed during recovery. The damaged vault was not replaced. Restart Address Atlas before trying again."
+        )
+      }
+      let vaultURL = appSupportDirectory.appending(path: "vault.sqlite")
+      let recovered = try await Task.detached {
+        try DamagedVaultRecoveryService().quarantineAndCreateCleanVault(
+          at: vaultURL,
+          vaultKey: key
+        )
+      }.value
+
+      let keyAfterRecovery = try keyStore.loadVaultKey()
+      if keyAfterRecovery == nil {
+        try keyStore.saveVaultKey(key)
+      }
+      guard try keyStore.loadVaultKey() == key else {
+        throw UserFacingAppError(
+          message:
+            "The damaged vault is preserved in quarantine, but the same vault key could not be retained in Keychain. Restore the key before continuing."
+        )
+      }
+      let coordinator = VaultPersistenceCoordinator(
+        store: recovered.store,
+        syncSnapshotByteLimit: syncSnapshotByteLimit
+      )
+      document = recovered.document
+      documentRevision &+= 1
+      hasUnsyncedLocalChanges = true
+      vaultKey = key
+      persistence = coordinator
+      pendingSyncPersistence = nil
+      pendingVaultUpload = nil
+      quarantinedPendingVaultUpload = nil
+      pendingVaultUploadHasRemoteConflict = false
+      syncPersistencePending = false
+      hasVaultRollbackCheckpoint = false
+      damagedVaultRecoveryAvailability = nil
+      damagedVaultRecoveryKey = nil
+      isUnlocked = true
+      notice =
+        "The damaged database and its SQLite sidecars were preserved in the private \(recovered.quarantineDirectory.lastPathComponent) folder. A clean local vault now uses the same vault key; no remote data was downloaded. Open Sync, sign in, and download the remote vault."
+      error = ""
+    } catch {
+      recordDiagnosticFailure(.recoveryQuarantineFailed)
+      presentUserFacingError(error)
+      isUnlocked = false
+    }
+  }
+
+  func exportRecoveryKit(to url: URL) throws -> String {
+    do {
+      guard let vaultKey else {
+        throw RecoveryKitError.invalidVaultKey
+      }
+      let recoveryCode = try recoveryKit.export(vaultKey: vaultKey, to: url)
+      notice = "Recovery kit saved. Store the code separately."
+      error = ""
+      return recoveryCode
+    } catch {
+      recordDiagnosticFailure(.recoveryKitExportFailed)
+      throw error
+    }
   }
 
   func restoreRecoveryKit(from url: URL, recoveryCode: String) async {
     guard acceptsNewOperations else { return }
-    if isUnlocked, !canMutateVault() { return }
+    if isUnlocked, quarantinedPendingVaultUpload == nil, !canMutateVault() { return }
+    if isUnlocked, quarantinedPendingVaultUpload != nil,
+      syncing || scanning || isPersisting || isValidatingExchangeCredentials
+    {
+      error = "Wait for the active vault operation before restoring the recovery kit."
+      return
+    }
     guard !isUnlocking else {
       notice = "A vault unlock or recovery is already running."
       return
@@ -781,13 +995,25 @@ extension AppState {
         store: recovered.store,
         syncSnapshotByteLimit: syncSnapshotByteLimit
       )
-      let pendingUpload = try await coordinator.loadPendingVaultUpload(
-        vaultKey: recovered.vaultKey
-      )
+      let pendingInspection = try await coordinator.inspectPendingVaultUpload(
+        vaultKey: recovered.vaultKey)
+      let pendingUpload: PendingVaultUpload?
+      let quarantinedUpload: QuarantinedPendingVaultUpload?
+      switch pendingInspection {
+      case .none:
+        pendingUpload = nil
+        quarantinedUpload = nil
+      case .pending(let upload, _):
+        pendingUpload = upload
+        quarantinedUpload = nil
+      case .quarantined(let identity):
+        pendingUpload = nil
+        quarantinedUpload = identity
+      }
       let hasRollbackCheckpoint = try await coordinator.hasRollbackCheckpoint()
       let normalized = normalizedLoadedDocument(recovered.document)
       let durable =
-        pendingUpload != nil || normalized == recovered.document
+        pendingUpload != nil || quarantinedUpload != nil || normalized == recovered.document
         ? VaultPersistenceResult(
           document: recovered.document,
           removedScanRunCount: 0,
@@ -799,21 +1025,31 @@ extension AppState {
       vaultKey = recovered.vaultKey
       persistence = coordinator
       documentRevision &+= 1
+      damagedVaultRecoveryAvailability = nil
+      damagedVaultRecoveryKey = nil
       isUnlocked = true
       pendingSyncPersistence = nil
       pendingVaultUpload = pendingUpload
+      quarantinedPendingVaultUpload = quarantinedUpload
       self.hasVaultRollbackCheckpoint = hasRollbackCheckpoint
       pendingVaultUploadHasRemoteConflict = false
-      syncPersistencePending = pendingUpload != nil
-      notice =
-        pendingUpload == nil
-        ? "Recovery kit restored."
-        : "Recovery kit restored. Recovering an interrupted encrypted vault upload."
-      error = ""
+      syncPersistencePending = pendingUpload != nil || quarantinedUpload != nil
+      if quarantinedUpload != nil {
+        notice = ""
+        error =
+          "Recovery kit restored. The full local vault is available read-only, and the damaged upload recovery record remains quarantined until you explicitly discard it in Sync."
+      } else {
+        notice =
+          pendingUpload == nil
+          ? "Recovery kit restored."
+          : "Recovery kit restored. Recovering an interrupted encrypted vault upload."
+        error = ""
+      }
       if pendingUpload != nil {
         await recoverPendingVaultUpload()
       }
     } catch {
+      recordDiagnosticFailure(.recoveryKitRestoreFailed)
       presentUserFacingError(error)
     }
   }
@@ -841,6 +1077,7 @@ extension AppState {
         documentRevision &+= 1
         hasUnsyncedLocalChanges = durable.hasLocalChanges
       } catch {
+        recordDiagnosticFailure(.storageSaveFailed)
         requirePendingSyncPersistence(
           document,
           projectedSyncVersion: nil,

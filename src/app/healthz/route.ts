@@ -12,6 +12,7 @@ import {
 import { getNativeEndpointConfig } from "@/lib/sync/native-config";
 import { checkSyncSchemaReadiness, ensureSyncSchema } from "@/lib/sync/postgres";
 import {
+  assertStorageLedgerAuditReady,
   scheduleStorageLedgerIntegrityAudit,
   resetStorageLedgerIntegrityForTests
 } from "@/lib/sync/storage-ledger-integrity";
@@ -48,7 +49,28 @@ export async function GET(request?: Request) {
 async function checkReadiness(diagnostics: ReturnType<typeof requestDiagnostics>) {
   const cached = readinessCache;
   if (cached && performance.now() < cached.expiresAt) {
-    if (cached.ready) return;
+    if (cached.ready) {
+      try {
+        // Schema/config checks can remain cached, but the process-local ledger
+        // state is allowed to transition asynchronously and must invalidate a
+        // positive response immediately when writes have already failed closed.
+        scheduleStorageLedgerIntegrityAudit(diagnostics);
+        assertStorageLedgerAuditReady();
+        return;
+      } catch (error) {
+        readinessCache = {
+          ready: false,
+          expiresAt: performance.now() + NOT_READY_TTL_MS
+        };
+        recordSecurityEvent("health.not_ready", diagnostics, {
+          status: 503,
+          reason: "runtime_or_database_not_ready",
+          errorCode: operationalErrorCode(error, "storage_ledger_invalid"),
+          severity: "error"
+        });
+        throw error;
+      }
+    }
     throw new Error("Readiness is temporarily cached as unavailable.");
   }
   if (readinessInFlight) {
@@ -70,6 +92,8 @@ async function checkReadiness(diagnostics: ReturnType<typeof requestDiagnostics>
       // A confirmed drift persists a marker that blocks vault writes without
       // taking authentication or encrypted reads out of service.
       scheduleStorageLedgerIntegrityAudit(diagnostics);
+      failureCode = "storage_ledger_invalid";
+      assertStorageLedgerAuditReady();
       readinessCache = {
         ready: true,
         expiresAt: performance.now() + READY_TTL_MS

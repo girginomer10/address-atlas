@@ -7,6 +7,7 @@ import {
   verifyRegistrationResponse
 } from "@simplewebauthn/server";
 import { base64urlDecode, base64urlEncode } from "./base64url";
+import { lockAccountForAuthentication } from "./authentication-lock-order";
 import { getSyncLimitConfig, getSyncPasskeyConfig, type SyncPasskeyConfig } from "./config";
 import { ensureSyncSchema, getSyncPool } from "./postgres";
 import {
@@ -27,7 +28,12 @@ import {
   validatePasskeyPublicKey,
   type GuardedStoredPasskeyCredentialRow
 } from "./stored-passkey-credential";
-import { ChallengeToken, issueChallengeToken, readChallengeToken } from "./tokens";
+import {
+  ChallengeToken,
+  isCanonical32ByteBase64url,
+  issueChallengeToken,
+  readChallengeToken
+} from "./tokens";
 
 type RegistrationResponseJSON = Parameters<typeof verifyRegistrationResponse>[0]["response"];
 type AuthenticationResponseJSON = Parameters<typeof verifyAuthenticationResponse>[0]["response"];
@@ -57,6 +63,30 @@ export interface PasskeyVerifyInput {
   mode: PasskeyMode;
   challengeToken: string;
   response: RegistrationResponseJSON | AuthenticationResponseJSON;
+  nativeCodeChallenge?: string;
+}
+
+export interface AuthenticationCryptoInput {
+  response: AuthenticationResponseJSON;
+  expectedChallenge: string;
+  expectedOrigin: string;
+  expectedRPID: string;
+  credential: WebAuthnCredential;
+}
+
+/**
+ * Keep the production SimpleWebAuthn boundary directly testable with a real,
+ * deterministic signature instead of validating only mocked control flow.
+ */
+export function verifyAuthenticationCryptographically(input: AuthenticationCryptoInput) {
+  return verifyAuthenticationResponse({
+    response: input.response,
+    expectedChallenge: input.expectedChallenge,
+    expectedOrigin: input.expectedOrigin,
+    expectedRPID: input.expectedRPID,
+    credential: input.credential,
+    requireUserVerification: true
+  });
 }
 
 const MAX_ACCOUNT_NAME_LENGTH = 80;
@@ -94,7 +124,12 @@ export function parsePasskeyVerifyInput(body: unknown): PasskeyVerifyInput {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     throw new PasskeyInputError("A JSON request body is required.");
   }
-  const input = body as { mode?: unknown; challengeToken?: unknown; response?: unknown };
+  const input = body as {
+    mode?: unknown;
+    challengeToken?: unknown;
+    response?: unknown;
+    nativeCodeChallenge?: unknown;
+  };
   if (input.mode !== "register" && input.mode !== "authenticate") {
     throw new PasskeyInputError("mode must be register or authenticate.");
   }
@@ -116,10 +151,19 @@ export function parsePasskeyVerifyInput(body: unknown): PasskeyVerifyInput {
   ) {
     throw new PasskeyInputError("A valid passkey credential ID is required.");
   }
+  if (
+    input.nativeCodeChallenge !== undefined
+    && !isCanonical32ByteBase64url(input.nativeCodeChallenge)
+  ) {
+    throw new PasskeyInputError("A valid nativeCodeChallenge is required.");
+  }
   return {
     mode: input.mode,
     challengeToken: input.challengeToken,
-    response: input.response as RegistrationResponseJSON | AuthenticationResponseJSON
+    response: input.response as RegistrationResponseJSON | AuthenticationResponseJSON,
+    ...(typeof input.nativeCodeChallenge === "string"
+      ? { nativeCodeChallenge: input.nativeCodeChallenge }
+      : {})
   };
 }
 
@@ -390,16 +434,34 @@ async function verifyAuthentication(
   let discardClient = false;
   try {
     await client.query("BEGIN");
-    // Lock before verification so concurrent assertions cannot both validate
-    // against the same counter. The monotonic UPDATE is a second line of defense
-    // for authenticators that always report counter zero.
+    // Discover the fixed-width owner without locking or projecting the stored
+    // credential payload. Revalidate the relationship after taking locks.
+    const owner = await client.query<{ user_id: string }>(
+      `SELECT credential.user_id
+       FROM passkey_credentials AS credential
+       WHERE credential.id = $1`,
+      [credentialId]
+    );
+    const userId = owner.rows[0]?.user_id;
+    if (typeof userId !== "string") throw new PasskeyVerificationError();
+
+    // Global lock order is parent account, then account-owned child. Deletion
+    // takes the parent first before cascading to credentials, so reversing this
+    // order here would deadlock sign-in against same-account deletion.
+    if (!(await lockAccountForAuthentication(client, userId))) {
+      throw new PasskeyVerificationError();
+    }
+    // Lock the credential through verification so concurrent assertions cannot
+    // both validate against one counter. The owner predicate closes the race
+    // between unlocked discovery and the two explicit row locks.
     const credentialRow = await client.query<GuardedStoredPasskeyCredentialRow>(
       `SELECT ${GUARDED_STORED_PASSKEY_CREDENTIAL_PROJECTION_SQL}
        FROM passkey_credentials AS credential
        ${STORED_PASSKEY_CREDENTIAL_SAFETY_LATERAL_SQL}
        WHERE credential.id = $1
+         AND credential.user_id = $2
        FOR UPDATE OF credential`,
-      [credentialId]
+      [credentialId, userId]
     );
     const row = credentialRow.rows[0];
     if (!row) throw new PasskeyVerificationError();
@@ -411,13 +473,12 @@ async function verifyAuthentication(
     };
     let verification: Awaited<ReturnType<typeof verifyAuthenticationResponse>>;
     try {
-      verification = await verifyAuthenticationResponse({
+      verification = await verifyAuthenticationCryptographically({
         response,
         expectedChallenge: challenge.challenge,
         expectedOrigin: config.expectedOrigin,
         expectedRPID: config.rpID,
-        credential,
-        requireUserVerification: true
+        credential
       });
     } catch {
       throw new PasskeyVerificationError();

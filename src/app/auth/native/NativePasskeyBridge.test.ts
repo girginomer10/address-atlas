@@ -5,7 +5,8 @@ import { passkeyCeremonyUserMessage, runPasskeyCeremony } from "./NativePasskeyB
 const CALLBACK = "address-atlas://sync-auth";
 const STATE = "11111111-1111-4111-8111-111111111111";
 const ORIGIN = "https://sync.example.com";
-const USER_ID = "22222222-2222-4222-8222-222222222222";
+const CODE_CHALLENGE = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const AUTHORIZATION_CODE = "v1.native-authorization.body.signature";
 
 function jsonResponse(body: unknown, status = 200, headers: HeadersInit = {}) {
   const responseHeaders = new Headers(headers);
@@ -38,14 +39,14 @@ describe("native passkey ceremony", () => {
     const credential = { id: "credential-1", type: "public-key" };
     const fetchImpl = fetchStub({
       options: () => jsonResponse({ mode: "register", challengeToken: "challenge-token-1", publicKey }),
-      verify: () => jsonResponse({ verified: true, userId: USER_ID, sessionToken: "session-token-1" })
+      verify: () => jsonResponse({ verified: true, authorizationCode: AUTHORIZATION_CODE })
     });
     const startRegistrationImpl = vi.fn(async () => credential);
     const startAuthenticationImpl = vi.fn(async () => ({}));
     const navigate = vi.fn();
 
     await runPasskeyCeremony(
-      { mode: "register", callback: CALLBACK, state: STATE, accountName: "  Omer's Mac  ", canReturn: true },
+      { mode: "register", callback: CALLBACK, state: STATE, codeChallenge: CODE_CHALLENGE, codeChallengeMethod: "S256", accountName: "  Omer's Mac  ", canReturn: true },
       { fetchImpl, startRegistrationImpl, startAuthenticationImpl, locationOrigin: ORIGIN, navigate }
     );
 
@@ -64,7 +65,8 @@ describe("native passkey ceremony", () => {
     expect(sentJSON(fetchImpl, 1)).toEqual({
       mode: "register",
       challengeToken: "challenge-token-1",
-      response: credential
+      response: credential,
+      nativeCodeChallenge: CODE_CHALLENGE
     });
     expect(fetchImpl).toHaveBeenNthCalledWith(2, "/auth/passkey/verify", expect.objectContaining({
       cache: "no-store",
@@ -78,8 +80,9 @@ describe("native passkey ceremony", () => {
     const target = new URL(navigate.mock.calls[0]![0] as string);
     expect(target.protocol).toBe("address-atlas:");
     expect(target.hostname).toBe("sync-auth");
-    expect(target.searchParams.get("sessionToken")).toBe("session-token-1");
-    expect(target.searchParams.get("userId")).toBe(USER_ID);
+    expect(target.searchParams.get("code")).toBe(AUTHORIZATION_CODE);
+    expect(target.searchParams.has("sessionToken")).toBe(false);
+    expect(target.searchParams.has("userId")).toBe(false);
     expect(target.searchParams.get("serverURL")).toBe(ORIGIN);
     expect(target.searchParams.get("state")).toBe(STATE);
   });
@@ -89,14 +92,14 @@ describe("native passkey ceremony", () => {
     const assertion = { id: "credential-2", type: "public-key" };
     const fetchImpl = fetchStub({
       options: () => jsonResponse({ mode: "authenticate", challengeToken: "challenge-token-2", publicKey }),
-      verify: () => jsonResponse({ verified: true, userId: USER_ID, sessionToken: "session-token-2" })
+      verify: () => jsonResponse({ verified: true, authorizationCode: AUTHORIZATION_CODE })
     });
     const startRegistrationImpl = vi.fn(async () => ({}));
     const startAuthenticationImpl = vi.fn(async () => assertion);
     const navigate = vi.fn();
 
     await runPasskeyCeremony(
-      { mode: "authenticate", callback: CALLBACK, state: STATE, accountName: "", canReturn: true },
+      { mode: "authenticate", callback: CALLBACK, state: STATE, codeChallenge: CODE_CHALLENGE, codeChallengeMethod: "S256", accountName: "", canReturn: true },
       { fetchImpl, startRegistrationImpl, startAuthenticationImpl, locationOrigin: ORIGIN, navigate }
     );
 
@@ -106,10 +109,12 @@ describe("native passkey ceremony", () => {
     expect(sentJSON(fetchImpl, 1)).toEqual({
       mode: "authenticate",
       challengeToken: "challenge-token-2",
-      response: assertion
+      response: assertion,
+      nativeCodeChallenge: CODE_CHALLENGE
     });
     const target = new URL(navigate.mock.calls[0]![0] as string);
-    expect(target.searchParams.get("sessionToken")).toBe("session-token-2");
+    expect(target.searchParams.get("code")).toBe(AUTHORIZATION_CODE);
+    expect(target.searchParams.has("sessionToken")).toBe(false);
     expect(target.searchParams.get("serverURL")).toBe(ORIGIN);
   });
 
@@ -118,7 +123,7 @@ describe("native passkey ceremony", () => {
     const navigate = vi.fn();
 
     await expect(runPasskeyCeremony(
-      { mode: "register", callback: "address-atlas://attacker", state: STATE, accountName: "", canReturn: false },
+      { mode: "register", callback: "address-atlas://attacker", state: STATE, codeChallenge: CODE_CHALLENGE, codeChallengeMethod: "S256", accountName: "", canReturn: false },
       {
         fetchImpl,
         startRegistrationImpl: vi.fn(async () => ({})),
@@ -144,7 +149,7 @@ describe("native passkey ceremony", () => {
     const navigate = vi.fn();
 
     await expect(runPasskeyCeremony(
-      { mode: "register", callback: CALLBACK, state: STATE, accountName: "", canReturn: true },
+      { mode: "register", callback: CALLBACK, state: STATE, codeChallenge: CODE_CHALLENGE, codeChallengeMethod: "S256", accountName: "", canReturn: true },
       {
         fetchImpl,
         startRegistrationImpl,
@@ -167,7 +172,7 @@ describe("native passkey ceremony", () => {
     });
 
     await expect(runPasskeyCeremony(
-      { mode: "register", callback: CALLBACK, state: STATE, accountName: "", canReturn: true },
+      { mode: "register", callback: CALLBACK, state: STATE, codeChallenge: CODE_CHALLENGE, codeChallengeMethod: "S256", accountName: "", canReturn: true },
       {
         fetchImpl,
         startRegistrationImpl: vi.fn(async () => ({})),
@@ -186,7 +191,7 @@ describe("native passkey ceremony", () => {
     });
 
     await expect(runPasskeyCeremony(
-      { mode: "authenticate", callback: CALLBACK, state: STATE, accountName: "", canReturn: true },
+      { mode: "authenticate", callback: CALLBACK, state: STATE, codeChallenge: CODE_CHALLENGE, codeChallengeMethod: "S256", accountName: "", canReturn: true },
       {
         fetchImpl,
         startRegistrationImpl: vi.fn(async () => ({})),
@@ -213,7 +218,7 @@ describe("native passkey ceremony", () => {
     const navigate = vi.fn();
 
     await expect(runPasskeyCeremony(
-      { mode: "authenticate", callback: CALLBACK, state: STATE, accountName: "", canReturn: true },
+      { mode: "authenticate", callback: CALLBACK, state: STATE, codeChallenge: CODE_CHALLENGE, codeChallengeMethod: "S256", accountName: "", canReturn: true },
       {
         fetchImpl,
         startRegistrationImpl: vi.fn(async () => ({})),
@@ -236,7 +241,7 @@ describe("native passkey ceremony", () => {
     });
 
     await expect(runPasskeyCeremony(
-      { mode: "register", callback: CALLBACK, state: STATE, accountName: "", canReturn: true },
+      { mode: "register", callback: CALLBACK, state: STATE, codeChallenge: CODE_CHALLENGE, codeChallengeMethod: "S256", accountName: "", canReturn: true },
       {
         fetchImpl,
         startRegistrationImpl: vi.fn(async () => ({})),
@@ -253,7 +258,7 @@ describe("native passkey ceremony", () => {
     });
 
     await expect(runPasskeyCeremony(
-      { mode: "register", callback: CALLBACK, state: STATE, accountName: "", canReturn: true },
+      { mode: "register", callback: CALLBACK, state: STATE, codeChallenge: CODE_CHALLENGE, codeChallengeMethod: "S256", accountName: "", canReturn: true },
       {
         fetchImpl,
         startRegistrationImpl: vi.fn(async () => ({})),
@@ -272,7 +277,7 @@ describe("native passkey ceremony", () => {
     const navigate = vi.fn();
 
     await expect(runPasskeyCeremony(
-      { mode: "authenticate", callback: CALLBACK, state: STATE, accountName: "", canReturn: true },
+      { mode: "authenticate", callback: CALLBACK, state: STATE, codeChallenge: CODE_CHALLENGE, codeChallengeMethod: "S256", accountName: "", canReturn: true },
       {
         fetchImpl,
         startRegistrationImpl: vi.fn(async () => ({})),
@@ -285,15 +290,15 @@ describe("native passkey ceremony", () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
-  it("treats an ok verification without a session token as an unknown authentication outcome", async () => {
+  it("treats an ok verification without an authorization code as an unknown authentication outcome", async () => {
     const fetchImpl = fetchStub({
       options: () => jsonResponse({ mode: "authenticate", challengeToken: "challenge-token-4", publicKey: {} }),
-      verify: () => jsonResponse({ verified: true, userId: USER_ID })
+      verify: () => jsonResponse({ verified: true })
     });
     const navigate = vi.fn();
 
     await expect(runPasskeyCeremony(
-      { mode: "authenticate", callback: CALLBACK, state: STATE, accountName: "", canReturn: true },
+      { mode: "authenticate", callback: CALLBACK, state: STATE, codeChallenge: CODE_CHALLENGE, codeChallengeMethod: "S256", accountName: "", canReturn: true },
       {
         fetchImpl,
         startRegistrationImpl: vi.fn(async () => ({})),
@@ -311,14 +316,13 @@ describe("native passkey ceremony", () => {
       options: () => jsonResponse({ mode: "authenticate", challengeToken: "challenge-token-shape", publicKey: {} }),
       verify: () => jsonResponse({
         verified: "true",
-        userId: USER_ID,
-        sessionToken: "session-token-shaped"
+        authorizationCode: AUTHORIZATION_CODE
       })
     });
     const navigate = vi.fn();
 
     await expect(runPasskeyCeremony(
-      { mode: "authenticate", callback: CALLBACK, state: STATE, accountName: "", canReturn: true },
+      { mode: "authenticate", callback: CALLBACK, state: STATE, codeChallenge: CODE_CHALLENGE, codeChallengeMethod: "S256", accountName: "", canReturn: true },
       {
         fetchImpl,
         startRegistrationImpl: vi.fn(async () => ({})),
@@ -331,19 +335,18 @@ describe("native passkey ceremony", () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
-  it("refuses malformed callback credentials even after a verified response", async () => {
+  it("refuses a malformed authorization code even after a verified response", async () => {
     const fetchImpl = fetchStub({
       options: () => jsonResponse({ mode: "register", challengeToken: "challenge-token-callback", publicKey: {} }),
       verify: () => jsonResponse({
         verified: true,
-        userId: USER_ID,
-        sessionToken: "session-token\r\nInjected: header"
+        authorizationCode: "native-code\r\nInjected: header"
       })
     });
     const navigate = vi.fn();
 
     await expect(runPasskeyCeremony(
-      { mode: "register", callback: CALLBACK, state: STATE, accountName: "", canReturn: true },
+      { mode: "register", callback: CALLBACK, state: STATE, codeChallenge: CODE_CHALLENGE, codeChallengeMethod: "S256", accountName: "", canReturn: true },
       {
         fetchImpl,
         startRegistrationImpl: vi.fn(async () => ({ id: "credential-callback" })),
@@ -358,19 +361,18 @@ describe("native passkey ceremony", () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
-  it("refuses a malformed verified user identity", async () => {
+  it("refuses an authorization code with non-token characters", async () => {
     const fetchImpl = fetchStub({
       options: () => jsonResponse({ mode: "authenticate", challengeToken: "challenge-token-user", publicKey: {} }),
       verify: () => jsonResponse({
         verified: true,
-        userId: "not-a-user-id",
-        sessionToken: "v1.session.body.signature"
+        authorizationCode: "native code with spaces"
       })
     });
     const navigate = vi.fn();
 
     await expect(runPasskeyCeremony(
-      { mode: "authenticate", callback: CALLBACK, state: STATE, accountName: "", canReturn: true },
+      { mode: "authenticate", callback: CALLBACK, state: STATE, codeChallenge: CODE_CHALLENGE, codeChallengeMethod: "S256", accountName: "", canReturn: true },
       {
         fetchImpl,
         startRegistrationImpl: vi.fn(async () => ({})),
@@ -390,7 +392,7 @@ describe("native passkey ceremony", () => {
     const navigate = vi.fn();
 
     await expect(runPasskeyCeremony(
-      { mode: "register", callback: CALLBACK, state: STATE, accountName: "", canReturn: true },
+      { mode: "register", callback: CALLBACK, state: STATE, codeChallenge: CODE_CHALLENGE, codeChallengeMethod: "S256", accountName: "", canReturn: true },
       {
         fetchImpl,
         startRegistrationImpl: vi.fn(async () => {
@@ -419,7 +421,7 @@ describe("native passkey ceremony", () => {
     });
 
     await expect(runPasskeyCeremony(
-      { mode: "register", callback: CALLBACK, state: STATE, accountName: "", canReturn: true },
+      { mode: "register", callback: CALLBACK, state: STATE, codeChallenge: CODE_CHALLENGE, codeChallengeMethod: "S256", accountName: "", canReturn: true },
       {
         fetchImpl,
         startRegistrationImpl: vi.fn(async () => {
@@ -445,7 +447,7 @@ describe("native passkey ceremony", () => {
     });
 
     await expect(runPasskeyCeremony(
-      { mode: "register", callback: CALLBACK, state: STATE, accountName: "", canReturn: true },
+      { mode: "register", callback: CALLBACK, state: STATE, codeChallenge: CODE_CHALLENGE, codeChallengeMethod: "S256", accountName: "", canReturn: true },
       {
         fetchImpl,
         startRegistrationImpl: vi.fn(async () => {
@@ -460,7 +462,7 @@ describe("native passkey ceremony", () => {
     );
   });
 
-  it("maps SimpleWebAuthn's wrapped NotAllowedError to a neutral cancellation", async () => {
+  it("maps SimpleWebAuthn's overloaded NotAllowedError to a neutral retry message", async () => {
     const fetchImpl = fetchStub({
       options: () => jsonResponse({ mode: "register", challengeToken: "challenge-token-6", publicKey: {} })
     });
@@ -471,13 +473,39 @@ describe("native passkey ceremony", () => {
     });
 
     await expect(runPasskeyCeremony(
-      { mode: "register", callback: CALLBACK, state: STATE, accountName: "", canReturn: true },
+      { mode: "register", callback: CALLBACK, state: STATE, codeChallenge: CODE_CHALLENGE, codeChallengeMethod: "S256", accountName: "", canReturn: true },
       {
         fetchImpl,
         startRegistrationImpl: vi.fn(async () => {
           throw wrappedCancellation;
         }),
         startAuthenticationImpl: vi.fn(async () => ({})),
+        locationOrigin: ORIGIN,
+        navigate: vi.fn()
+      }
+    )).rejects.toThrow(
+      "The passkey prompt was cancelled, timed out, or unavailable. Try again."
+    );
+  });
+
+  it("reserves cancellation copy for a signal-driven ceremony abort", async () => {
+    const fetchImpl = fetchStub({
+      options: () => jsonResponse({ mode: "authenticate", challengeToken: "challenge-token-abort", publicKey: {} })
+    });
+    const abortedCeremony = new WebAuthnError({
+      message: "ceremony aborted by the application signal",
+      code: "ERROR_CEREMONY_ABORTED",
+      cause: new DOMException("The operation was aborted.", "AbortError")
+    });
+
+    await expect(runPasskeyCeremony(
+      { mode: "authenticate", callback: CALLBACK, state: STATE, codeChallenge: CODE_CHALLENGE, codeChallengeMethod: "S256", accountName: "", canReturn: true },
+      {
+        fetchImpl,
+        startRegistrationImpl: vi.fn(async () => ({})),
+        startAuthenticationImpl: vi.fn(async () => {
+          throw abortedCeremony;
+        }),
         locationOrigin: ORIGIN,
         navigate: vi.fn()
       }
@@ -493,7 +521,7 @@ describe("native passkey ceremony", () => {
     });
 
     await expect(runPasskeyCeremony(
-      { mode: "register", callback: CALLBACK, state: STATE, accountName: "", canReturn: true },
+      { mode: "register", callback: CALLBACK, state: STATE, codeChallenge: CODE_CHALLENGE, codeChallengeMethod: "S256", accountName: "", canReturn: true },
       {
         fetchImpl,
         startRegistrationImpl: vi.fn(async () => ({ id: "credential-7" })),
@@ -513,7 +541,7 @@ describe("native passkey ceremony", () => {
     });
 
     await expect(runPasskeyCeremony(
-      { mode: "register", callback: CALLBACK, state: STATE, accountName: "", canReturn: true },
+      { mode: "register", callback: CALLBACK, state: STATE, codeChallenge: CODE_CHALLENGE, codeChallengeMethod: "S256", accountName: "", canReturn: true },
       {
         fetchImpl,
         startRegistrationImpl: vi.fn(async () => ({ id: "credential-8" })),
@@ -531,7 +559,7 @@ describe("native passkey ceremony", () => {
     });
 
     await expect(runPasskeyCeremony(
-      { mode: "authenticate", callback: CALLBACK, state: STATE, accountName: "", canReturn: true },
+      { mode: "authenticate", callback: CALLBACK, state: STATE, codeChallenge: CODE_CHALLENGE, codeChallengeMethod: "S256", accountName: "", canReturn: true },
       {
         fetchImpl,
         startRegistrationImpl: vi.fn(async () => ({})),

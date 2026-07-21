@@ -1,10 +1,14 @@
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { validateSessionSecret } from "./config";
 import {
   issueChallengeToken,
+  issueNativeAuthorizationCode,
   issueSessionToken,
   readBearerToken,
-  readChallengeToken
+  readChallengeToken,
+  readNativeAuthorizationCode,
+  readSessionToken
 } from "./tokens";
 
 const SECRET = "f4L7p9Q2v6N8x1R3m5K0s2T4u7W9y1Z3b6D8g0H2";
@@ -44,6 +48,30 @@ describe("sync tokens", () => {
     });
     expect(() => readBearerToken(`Bearer ${challenge}`)).toThrow(/invalid|expired/i);
     expect(() => readChallengeToken(session)).toThrow(/invalid|expired/i);
+  });
+
+  it("domain-separates a short-lived native authorization code without embedding a bearer", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-21T12:00:00Z"));
+    const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+    const challenge = createHash("sha256").update(verifier, "ascii").digest("base64url");
+    const sessionToken = issueSessionToken(USER_ID, SESSION_ID);
+    const code = issueNativeAuthorizationCode(readSessionToken(sessionToken), challenge);
+
+    expect(readNativeAuthorizationCode(code)).toMatchObject({
+      userId: USER_ID,
+      sessionId: SESSION_ID,
+      codeChallenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+      nonce: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/)
+    });
+    const payload = JSON.parse(Buffer.from(code.split(".")[2]!, "base64url").toString("utf8"));
+    expect(payload).not.toHaveProperty("sessionToken");
+    expect(code).not.toContain(sessionToken);
+    expect(() => readBearerToken(`Bearer ${code}`)).toThrow(/invalid|expired/i);
+    expect(() => readNativeAuthorizationCode(sessionToken)).toThrow(/invalid|expired/i);
+
+    vi.advanceTimersByTime(2 * 60_000 + 1);
+    expect(() => readNativeAuthorizationCode(code)).toThrow(/invalid|expired/i);
   });
 
   it("rejects a non-UUID account identifier before issuing a session", () => {

@@ -271,7 +271,8 @@ public struct NativeExchangeScanner: Sendable {
       guard
         let credentials = try? credentialVault.open(
           connection.encryptedCredentials,
-          vaultKey: vaultKey
+          vaultKey: vaultKey,
+          connectionId: connection.id
         )
       else { continue }
       let normalizedAPIKey = credentials.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -320,7 +321,11 @@ public struct NativeExchangeScanner: Sendable {
         throw ExchangeClientError.krakenCredentialBelongsToAnotherDevice
       }
     }
-    let credentials = try credentialVault.open(connection.encryptedCredentials, vaultKey: vaultKey)
+    let credentials = try credentialVault.open(
+      connection.encryptedCredentials,
+      vaultKey: vaultKey,
+      connectionId: connection.id
+    )
     if connection.provider == .binance {
       // Binance exposes the only authoritative scope endpoint in the supported
       // provider set. Re-check it immediately before every balance request so

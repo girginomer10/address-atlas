@@ -5,9 +5,31 @@ extension NativeScanner {
     address: String,
     chain: ChainConfig,
     tokens: [TokenConfig],
-    prices: [String: PricePoint]
+    prices: [String: PricePoint],
+    networkIdentityProofs: ChainNetworkValueCache<Void>? = nil
   ) async throws -> NativeScanResult {
     guard let rest = chain.restUrl else { return NativeScanResult() }
+    struct BlockNumberRequest: Encodable { var num: Int }
+    struct GenesisBlockResponse: Decodable { var blockID: String? }
+    guard case .tronGenesisBlockID(let expectedGenesisBlockID) = chain.networkIdentity else {
+      throw Self.messageError(domain: "TRON", message: "TRON network identity is missing.")
+    }
+    let proofCache = networkIdentityProofs ?? ChainNetworkValueCache<Void>()
+    try await proofCache.prove(
+      chainID: chain.id,
+      endpoint: rest,
+      identity: chain.networkIdentity
+    ) {
+      let genesis = try await http.post(
+        rest.appending(path: "wallet/getblockbynum"),
+        body: BlockNumberRequest(num: 0),
+        as: GenesisBlockResponse.self
+      )
+      guard genesis.blockID == expectedGenesisBlockID else {
+        throw Self.messageError(
+          domain: "TRON", message: "TRON endpoint returned the wrong network identity.")
+      }
+    }
     let url = rest.appending(path: "v1/accounts/\(address)")
     let response = try await http.get(url, as: TronAccountResponse.self)
     guard response.success == true else {

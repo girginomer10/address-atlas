@@ -32,7 +32,9 @@ describe("static production deployment contracts", () => {
     expect(compose).toContain("SYNC_GLOBAL_VAULT_DAILY_INGRESS_BYTE_LIMIT:");
     expect(compose).toContain('command: ["node", "dist/sync-bootstrap.cjs"]');
     expect(compose).toMatch(/db-role-bootstrap:[\s\S]*?POSTGRES_PASSWORD:[\s\S]*?db-provision:/);
-    const steadyProvision = compose.match(/  db-provision:[\s\S]*?\n  postgres:/)?.[0] ?? "";
+    const steadyProvision = compose.match(
+      /^  db-provision:\n[\s\S]*?(?=^  [A-Za-z0-9_-]+:\n)/m
+    )?.[0] ?? "";
     expect(steadyProvision).toContain("POSTGRES_ADMIN_PASSWORD:");
     expect(steadyProvision).not.toContain("POSTGRES_PASSWORD:");
     expect(envExample).toContain("SYNC_DATABASE_URL=postgres://address_atlas_runtime:");
@@ -81,7 +83,9 @@ describe("static production deployment contracts", () => {
     expect(caddy).toContain("/tmp:rw,noexec,nosuid,size=32m");
     expect(caddy).toContain("cap_drop:\n      - ALL");
     expect(caddy).toContain("cap_add:\n      - NET_BIND_SERVICE");
-    for (const service of ["caddy", "web", "schema", "db-role-bootstrap", "db-provision", "postgres"]) {
+    for (const service of [
+      "caddy", "web", "schema", "db-role-bootstrap", "db-provision", "db-rotate", "postgres"
+    ]) {
       const nextService = service === "postgres" ? "volumes:" : "  [a-z]";
       const section = compose.match(new RegExp(`  ${service}:[\\s\\S]*?\\n${nextService}`))?.[0] ?? "";
       expect(section, `${service} resource contract`).toContain("pids_limit:");

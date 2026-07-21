@@ -12,7 +12,9 @@ vi.mock("./postgres-pool", () => ({
 }));
 
 import {
+  assertStorageLedgerAuditReady,
   checkStorageLedgerIntegrity,
+  getStorageLedgerAuditState,
   resetStorageLedgerIntegrityForTests,
   scheduleStorageLedgerIntegrityAudit
 } from "./storage-ledger-integrity";
@@ -81,10 +83,12 @@ describe("storage ledger integrity audit", () => {
     });
 
     expect(scheduleStorageLedgerIntegrityAudit()).toBe(true);
+    expect(getStorageLedgerAuditState()).toBe("pending");
     expect(scheduleStorageLedgerIntegrityAudit()).toBe(false);
     await vi.waitFor(() => expect(resolveTotal).toBeTypeOf("function"));
     resolveTotal!({ rowCount: 1, rows: [{ actual_bytes: "321" }] });
     await vi.waitFor(() => expect(mocks.release).toHaveBeenCalledOnce());
+    expect(getStorageLedgerAuditState()).toBe("valid");
 
     expect(scheduleStorageLedgerIntegrityAudit()).toBe(false);
     monotonicNow += 5 * 60_000 + 1;
@@ -116,6 +120,69 @@ describe("storage ledger integrity audit", () => {
     const statements = mocks.query.mock.calls.map(([sql]) => String(sql));
     expect(statements).toContain("ROLLBACK");
     expect(statements.some((sql) => sql.includes("SET reconcile_required = true"))).toBe(false);
+  });
+
+  it("fails readiness closed while an audit is pending or unavailable", async () => {
+    let rejectTotal: ((error: Error) => void) | undefined;
+    installAuditResult({
+      recorded: "321",
+      actual: "321",
+      totalResult: () => new Promise((_resolve, reject) => { rejectTotal = reject; })
+    });
+
+    expect(scheduleStorageLedgerIntegrityAudit()).toBe(true);
+    expect(getStorageLedgerAuditState()).toBe("pending");
+    expect(() => assertStorageLedgerAuditReady()).toThrow(/storage accounting/i);
+    await vi.waitFor(() => expect(rejectTotal).toBeTypeOf("function"));
+    rejectTotal!(new Error("timed out"));
+    await vi.waitFor(() => expect(getStorageLedgerAuditState()).toBe("unavailable"));
+    expect(() => assertStorageLedgerAuditReady()).toThrow(/storage accounting/i);
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining(
+      '"event":"storage.ledger_audit_failed"'
+    ));
+  });
+
+  it("keeps a fresh valid state during refresh, then blocks after refresh failure", async () => {
+    expect(scheduleStorageLedgerIntegrityAudit()).toBe(true);
+    await vi.waitFor(() => expect(getStorageLedgerAuditState()).toBe("valid"));
+    monotonicNow += 5 * 60_000 + 1;
+
+    let rejectTotal: ((error: Error) => void) | undefined;
+    installAuditResult({
+      recorded: "321",
+      actual: "321",
+      totalResult: () => new Promise((_resolve, reject) => { rejectTotal = reject; })
+    });
+    expect(scheduleStorageLedgerIntegrityAudit()).toBe(true);
+    expect(getStorageLedgerAuditState()).toBe("valid");
+    expect(() => assertStorageLedgerAuditReady()).not.toThrow();
+
+    await vi.waitFor(() => expect(rejectTotal).toBeTypeOf("function"));
+    rejectTotal!(new Error("refresh timed out"));
+    await vi.waitFor(() => expect(getStorageLedgerAuditState()).toBe("unavailable"));
+    expect(() => assertStorageLedgerAuditReady()).toThrow(/storage accounting/i);
+
+    installAuditResult({ recorded: "321", actual: "321" });
+    monotonicNow += 60_001;
+    expect(scheduleStorageLedgerIntegrityAudit()).toBe(true);
+    await vi.waitFor(() => expect(getStorageLedgerAuditState()).toBe("valid"));
+    expect(console.info).toHaveBeenCalledOnce();
+    expect(JSON.parse(String(vi.mocked(console.info).mock.calls[0]?.[0])))
+      .toMatchObject({
+        event: "storage.ledger_integrity_restored",
+        reason: "exact_ledger_audit_passed",
+        severity: "info"
+      });
+  });
+
+  it("expires a stale success if no refresh can complete within the freshness window", async () => {
+    expect(scheduleStorageLedgerIntegrityAudit()).toBe(true);
+    await vi.waitFor(() => expect(getStorageLedgerAuditState()).toBe("valid"));
+
+    monotonicNow += 10 * 60_000 + 1;
+
+    expect(getStorageLedgerAuditState()).toBe("unavailable");
+    expect(() => assertStorageLedgerAuditReady()).toThrow(/storage accounting/i);
   });
 });
 

@@ -73,7 +73,7 @@ public struct VaultSyncSnapshotTooLargeError: Error, Equatable, LocalizedError, 
 
 public struct VaultSyncCodec: Sendable {
   public static let maximumSnapshotByteCount = 8_000_000
-  private static let maximumVersion = 2_000_000_000
+  private static let maximumVersion = VaultDocumentLimits.maximumRemoteVersion
   private let crypto: VaultCrypto
 
   public init(crypto: VaultCrypto = VaultCrypto()) {
@@ -89,6 +89,22 @@ public struct VaultSyncCodec: Sendable {
     let accountId = try validatedAccountId(accountId)
     try validateVersion(version)
     let remoteDocument = documentForRemoteSnapshot(document, accountId: accountId)
+    // Never emit ciphertext that this codec would reject on the read path. A
+    // snapshot is the immediate successor of the authenticated baseline
+    // recorded inside its plaintext; accepting a gap here would create an
+    // apparently successful upload that no client could safely open.
+    guard remoteDocument.syncState.latestRemoteVersion == version - 1 else {
+      throw VaultSyncCodecError.legacyMetadataMismatch
+    }
+    try VaultDocumentSemanticValidator.validate(
+      remoteDocument,
+      context: .remoteSnapshot(accountId: accountId)
+    )
+    try VaultDocumentSemanticValidator.validateExchangeCredentialPayloads(
+      in: remoteDocument,
+      vaultKey: vaultKey,
+      crypto: crypto
+    )
     let projectedByteCount = try encodedEnvelopeByteCount(for: remoteDocument)
     guard projectedByteCount <= Self.maximumSnapshotByteCount else {
       throw VaultSyncSnapshotTooLargeError(
@@ -193,8 +209,20 @@ public struct VaultSyncCodec: Sendable {
         with: key,
         authenticatedData: authenticatedData
       )
+      try VaultDocumentSemanticValidator.validate(
+        document,
+        context: .authenticatedLegacyRemoteSnapshot(accountId: accountId)
+      )
+      try VaultDocumentSemanticValidator.validateExchangeCredentialPayloads(
+        in: document,
+        vaultKey: vaultKey,
+        crypto: crypto
+      )
       guard document.syncState.accountId == accountId else {
         throw VaultSyncCodecError.accountMismatch
+      }
+      guard document.syncState.latestRemoteVersion == snapshot.version - 1 else {
+        throw VaultSyncCodecError.legacyMetadataMismatch
       }
       return OpenedVaultSnapshot(document: document, requiresV2Upgrade: false)
 
@@ -207,6 +235,15 @@ public struct VaultSyncCodec: Sendable {
         throw VaultSyncCodecError.invalidSnapshot
       }
       let document = try crypto.openJSON(VaultDocument.self, envelope: snapshot.envelope, with: key)
+      try VaultDocumentSemanticValidator.validate(
+        document,
+        context: .authenticatedLegacyRemoteSnapshot(accountId: accountId)
+      )
+      try VaultDocumentSemanticValidator.validateExchangeCredentialPayloads(
+        in: document,
+        vaultKey: vaultKey,
+        crypto: crypto
+      )
       guard document.syncState.accountId == accountId else {
         throw VaultSyncCodecError.accountMismatch
       }
@@ -223,7 +260,11 @@ public struct VaultSyncCodec: Sendable {
   /// Detect local user-content changes without relying on every UI mutation to
   /// remember to toggle a dirty flag.
   public func hasLocalChanges(in document: VaultDocument) throws -> Bool {
-    if document.syncState.remoteOutcomeUncertain { return true }
+    if document.syncState.remoteOutcomeUncertain
+      || document.syncState.pendingExchangeCredentialCleanup
+    {
+      return true
+    }
     let current = try contentChecksum(for: document)
     if let baseline = document.syncState.lastSyncedContentChecksum {
       return current != baseline
@@ -326,6 +367,7 @@ public struct VaultSyncCodec: Sendable {
     remoteDocument.syncState.serverURL = ""
     remoteDocument.syncState.accountDeletionIdempotencyKey = nil
     remoteDocument.syncState.remoteOutcomeUncertain = false
+    remoteDocument.syncState.pendingExchangeCredentialCleanup = false
     return remoteDocument
   }
 
@@ -459,7 +501,7 @@ public actor ZeroKnowledgeSyncClient {
     }
     // Keep the public client safe even for callers that bypass SyncState's
     // decode/connect validation. Invalid values must never reach an HTTP header.
-    bearerToken = SyncSessionToken.isValid(token) ? token : nil
+    bearerToken = SyncSessionToken.isUsable(token) ? token : nil
   }
 
   public func latestVault() async throws -> RemoteVaultSnapshot? {

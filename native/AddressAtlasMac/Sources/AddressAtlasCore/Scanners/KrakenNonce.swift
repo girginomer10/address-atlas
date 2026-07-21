@@ -612,7 +612,10 @@ private enum KrakenLocalNonceStore {
         offset += written
       }
     }
-    guard Darwin.fsync(temporaryDescriptor) == 0 else {
+    guard
+      let expectedIdentity = MacOSFileDurability.regularFileIdentity(temporaryDescriptor),
+      MacOSFileDurability.fullSynchronizeRegularFile(temporaryDescriptor)
+    else {
       throw KrakenNonceError.localStateUnavailable
     }
     guard
@@ -626,12 +629,34 @@ private enum KrakenLocalNonceStore {
     }
     shouldRemoveTemporary = false
 
+    // The rename is only a visibility boundary. Re-open through the published
+    // path, prove it still names the exact inode we durably wrote, and issue a
+    // second full barrier before certifying the nonce as safe to send.
+    let publishedDescriptor = storageURL.path.withCString {
+      Darwin.open($0, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+    }
+    guard publishedDescriptor >= 0 else { throw KrakenNonceError.localStateUnavailable }
+    defer { Darwin.close(publishedDescriptor) }
+    guard
+      MacOSFileDurability.regularFileIdentity(publishedDescriptor) == expectedIdentity,
+      MacOSFileDurability.fullSynchronizeRegularFile(publishedDescriptor),
+      MacOSFileDurability.regularFileIdentity(publishedDescriptor) == expectedIdentity
+    else { throw KrakenNonceError.localStateUnavailable }
+    var publishedPathMetadata = stat()
+    guard storageURL.path.withCString({ Darwin.lstat($0, &publishedPathMetadata) }) == 0,
+      publishedPathMetadata.st_dev == expectedIdentity.device,
+      publishedPathMetadata.st_ino == expectedIdentity.inode,
+      publishedPathMetadata.st_uid == expectedIdentity.owner,
+      publishedPathMetadata.st_nlink == expectedIdentity.linkCount,
+      publishedPathMetadata.st_mode == expectedIdentity.mode
+    else { throw KrakenNonceError.localStateUnavailable }
+
     let directoryDescriptor = storageURL.deletingLastPathComponent().path.withCString {
-      Darwin.open($0, O_RDONLY | O_NOFOLLOW)
+      Darwin.open($0, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
     }
     guard directoryDescriptor >= 0 else { throw KrakenNonceError.localStateUnavailable }
     defer { Darwin.close(directoryDescriptor) }
-    guard Darwin.fsync(directoryDescriptor) == 0 || errno == EINVAL else {
+    guard MacOSFileDurability.synchronizeDirectory(directoryDescriptor) else {
       throw KrakenNonceError.localStateUnavailable
     }
   }

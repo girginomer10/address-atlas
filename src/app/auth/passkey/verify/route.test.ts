@@ -6,7 +6,10 @@ const mocks = vi.hoisted(() => ({
   releaseBodyConcurrency: vi.fn(),
   releaseVerificationConcurrency: vi.fn(),
   verifyPasskey: vi.fn(),
-  rateLimitMany: vi.fn()
+  rateLimitMany: vi.fn(),
+  recordSecurityEvent: vi.fn(),
+  issueNativeAuthorizationCode: vi.fn(),
+  readSessionToken: vi.fn()
 }));
 
 vi.mock("@/lib/sync/passkeys", async (importOriginal) => ({
@@ -20,6 +23,17 @@ vi.mock("@/lib/sync/rate-limit", () => ({
   rateLimitMany: mocks.rateLimitMany
 }));
 
+vi.mock("@/lib/sync/diagnostics", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/sync/diagnostics")>()),
+  recordSecurityEvent: mocks.recordSecurityEvent
+}));
+
+vi.mock("@/lib/sync/tokens", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/sync/tokens")>()),
+  issueNativeAuthorizationCode: mocks.issueNativeAuthorizationCode,
+  readSessionToken: mocks.readSessionToken
+}));
+
 import { PasskeyVerificationError } from "@/lib/sync/passkeys";
 import {
   RegistrationAdmissionQuotaError,
@@ -28,11 +42,15 @@ import {
 import { PASSKEY_BODY_DEADLINE_MS } from "../body-concurrency";
 import { POST } from "./route";
 
-function request() {
+function request(body: Record<string, unknown> = {
+  mode: "authenticate",
+  challengeToken: "token",
+  response: { id: "credential" }
+}) {
   return new NextRequest("https://sync.example/auth/passkey/verify", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ mode: "authenticate", challengeToken: "token", response: { id: "credential" } })
+    body: JSON.stringify(body)
   });
 }
 
@@ -50,6 +68,15 @@ describe("passkey verification error boundary", () => {
       userId: "user-1",
       sessionToken: "session-token"
     });
+    mocks.readSessionToken.mockReturnValue({
+      userId: "11111111-1111-4111-8111-111111111111",
+      sessionId: "22222222-2222-4222-8222-222222222222",
+      issuedAt: 1_700_000_000_000,
+      expiresAt: 1_700_043_200_000
+    });
+    mocks.issueNativeAuthorizationCode.mockReturnValue(
+      "v1.native-authorization.body.signature"
+    );
   });
 
   it("marks session-token responses as non-cacheable", async () => {
@@ -63,6 +90,54 @@ describe("passkey verification error boundary", () => {
     expect(mocks.releaseBodyConcurrency).toHaveBeenCalledOnce();
     expect(mocks.releaseVerificationConcurrency).toHaveBeenCalledOnce();
     expect(PASSKEY_BODY_DEADLINE_MS).toBe(15_000);
+  });
+
+  it("returns only a short-lived authorization code for a PKCE-bound native ceremony", async () => {
+    const nativeCodeChallenge = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    const response = await POST(request({
+      mode: "authenticate",
+      challengeToken: "token",
+      response: { id: "credential" },
+      nativeCodeChallenge
+    }));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({
+      verified: true,
+      authorizationCode: "v1.native-authorization.body.signature"
+    });
+    expect(mocks.readSessionToken).toHaveBeenCalledWith("session-token");
+    expect(mocks.issueNativeAuthorizationCode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "11111111-1111-4111-8111-111111111111",
+        sessionId: "22222222-2222-4222-8222-222222222222"
+      }),
+      nativeCodeChallenge
+    );
+  });
+
+  it("does not log success when native authorization-code construction fails", async () => {
+    mocks.issueNativeAuthorizationCode.mockImplementationOnce(() => {
+      throw new Error("native code issuance failed");
+    });
+
+    const response = await POST(request({
+      mode: "authenticate",
+      challengeToken: "token",
+      response: { id: "credential" },
+      nativeCodeChallenge: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    }));
+
+    expect(response.status).toBe(500);
+    expect(mocks.recordSecurityEvent.mock.calls.some(
+      ([event]) => event === "auth.authentication_succeeded"
+    )).toBe(false);
+    expect(mocks.recordSecurityEvent).toHaveBeenCalledWith(
+      "auth.authentication_failed",
+      expect.any(Object),
+      expect.objectContaining({ status: 500, reason: "internal_error" })
+    );
   });
 
   it("rejects at the active-body boundary before reading the request", async () => {
@@ -127,7 +202,7 @@ describe("passkey verification error boundary", () => {
     expect(mocks.releaseVerificationConcurrency).not.toHaveBeenCalled();
     expect(mocks.verifyPasskey).not.toHaveBeenCalled();
     expect(mocks.acquireConcurrencyMany).toHaveBeenNthCalledWith(2, [
-      { key: "auth-verify-active:global", limit: 5 },
+      { key: "auth-database-active:global", limit: 5 },
       { key: "auth-verify-active:client:client", limit: 2 },
       { key: "auth-verify-active:credential:credential", limit: 1 }
     ]);

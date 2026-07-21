@@ -34,9 +34,10 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 ENV ADDRESS_ATLAS_BUILD_REVISION=${ADDRESS_ATLAS_BUILD_REVISION}
 LABEL org.opencontainers.image.revision=${ADDRESS_ATLAS_BUILD_REVISION}
-LABEL com.addressatlas.sync.max-compatible-schema-head=4
+LABEL com.addressatlas.sync.max-compatible-schema-head=5
 LABEL com.addressatlas.sync.compatible-schema-head-3-sha256=47ad43aa7438c5c8969f7c01162bb73eab8d51066abef482a03fed86a7890ee3
 LABEL com.addressatlas.sync.compatible-schema-head-4-sha256=ceb0b725a162b5be512bf35e63ecaf178aa67e7c1335e2807a116f2ef7f65dfe
+LABEL com.addressatlas.sync.compatible-schema-head-5-sha256=c101eabfc6cdf4252a5a58ac3320958818243e62375d12c4ff864499551cff39
 COPY --from=builder --chown=node:node /app/next.config.mjs ./next.config.mjs
 COPY --from=builder --chown=node:node /app/package.json ./package.json
 COPY --from=builder --chown=node:node /app/package-lock.json ./package-lock.json

@@ -208,6 +208,9 @@ extension AppState {
       guard request.generation == endpointConfigRefreshGeneration,
         AppState.validatedSyncURL(document.syncState.serverURL) == serverURL
       else { return false }
+      if !silent {
+        recordDiagnosticFailure(.endpointPolicyRefreshFailed)
+      }
       if case EndpointConfigTrustStoreError.rollback(_, let received) = error,
         acceptedEndpointConfigServerURL == serverURL
       {

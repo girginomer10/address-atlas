@@ -10,10 +10,11 @@ extension AppStateNetworkBoundaryTests {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let accountId = "18181818-1818-4818-8818-181818181818"
+    let sessionToken = testSessionToken(accountId: accountId)
     let authenticator = StubPasskeyAuthenticator(
       session: PasskeyWebSession(
         userId: accountId,
-        sessionToken: "uncertain-trust-session",
+        sessionToken: sessionToken,
         serverURL: "https://sync.example"
       )
     )
@@ -38,6 +39,69 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertEqual(state.endpointConfig, .bundled)
     XCTAssertFalse(state.endpointConfigTrustDurabilityDegraded)
     XCTAssertTrue(state.error.contains("crash-durability check failed"))
+    XCTAssertTrue(state.error.contains("account and passkey may already exist"))
+    XCTAssertTrue(state.error.contains("choose Sign in"))
+    XCTAssertFalse(state.error.contains("Create passkey account again before"))
+  }
+
+  func testPostAuthenticationSaveFailureKeepsPriorBindingAndUsesSignInGuidance()
+    async throws
+  {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let accountId = "28282828-2828-4828-8828-282828282828"
+    let oldSession = testSessionToken(
+      accountId: accountId,
+      sessionId: "11111111-1111-4111-8111-111111111111"
+    )
+    let newSession = testSessionToken(
+      accountId: accountId,
+      sessionId: "22222222-2222-4222-8222-222222222222"
+    )
+    let prior = try fixture.store.saveReturningPersistedDocument(
+      VaultDocument(
+        syncState: SyncState(
+          accountId: accountId,
+          serverURL: "https://sync.example",
+          sessionToken: oldSession
+        )
+      )
+    )
+    let competingStore = try EncryptedSQLiteVaultStore(
+      path: fixture.database,
+      vaultKey: fixture.vaultKey
+    )
+    let competingDocument = try competingStore.load()
+    let state = AppState(
+      testStore: fixture.store,
+      document: prior,
+      testVaultKey: fixture.vaultKey,
+      endpointConfigClient: FixedEndpointConfigClient(
+        config: NativeEndpointConfig(configVersion: 30, refreshAfterSeconds: 300)
+      ),
+      passkeyAuthenticator: StubPasskeyAuthenticator(
+        session: PasskeyWebSession(
+          userId: accountId,
+          sessionToken: newSession,
+          serverURL: "https://sync.example"
+        )
+      )
+    )
+    state.passkeyAuthenticationCompletedHook = {
+      _ = try! competingStore.saveReturningPersistedDocument(competingDocument)
+    }
+
+    await state.signInWithPasskey(serverURL: "https://sync.example")
+
+    XCTAssertEqual(state.document.syncState.sessionToken, oldSession)
+    XCTAssertTrue(state.error.contains("previous local binding was kept"))
+    XCTAssertTrue(state.error.contains("choose Sign in again"))
+    XCTAssertFalse(state.error.contains("account and passkey may already exist"))
+    let verifier = try EncryptedSQLiteVaultStore(
+      path: fixture.database,
+      vaultKey: fixture.vaultKey
+    )
+    XCTAssertEqual(try verifier.load().syncState.sessionToken, oldSession)
   }
 
   func testIntentionalPasskeyCancellationIsNeutralAndDoesNotChangeVault() async throws {
@@ -88,6 +152,7 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertFalse(FileManager.default.fileExists(atPath: trustFile.path))
 
     let accountId = "19191919-1919-4919-8919-191919191919"
+    let sessionToken = testSessionToken(accountId: accountId)
     let relaunchedState = AppState(
       testStore: fixture.store,
       document: VaultDocument(),
@@ -99,7 +164,7 @@ extension AppStateNetworkBoundaryTests {
       passkeyAuthenticator: StubPasskeyAuthenticator(
         session: PasskeyWebSession(
           userId: accountId,
-          sessionToken: "version-19-session",
+          sessionToken: sessionToken,
           serverURL: server.absoluteString
         )
       )
@@ -185,6 +250,8 @@ extension AppStateNetworkBoundaryTests {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let existingServer = URL(string: "https://existing.example")!
+    let existingAccountId = "abababab-abab-4bab-8bab-abababababab"
+    let existingSession = testSessionToken(accountId: existingAccountId)
     let existingConfig = NativeEndpointConfig(
       configVersion: 12,
       refreshAfterSeconds: 600,
@@ -192,9 +259,9 @@ extension AppStateNetworkBoundaryTests {
     )
     let document = VaultDocument(
       syncState: SyncState(
-        accountId: "abababab-abab-4bab-8bab-abababababab",
+        accountId: existingAccountId,
         serverURL: existingServer.absoluteString,
-        sessionToken: "existing-session"
+        sessionToken: existingSession
       )
     )
     let persisted = try fixture.store.saveReturningPersistedDocument(document)
@@ -217,7 +284,7 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertEqual(authenticator.callCount, 0)
     XCTAssertTrue(state.error.contains("Disconnect it explicitly"))
     XCTAssertEqual(state.document.syncState.serverURL, existingServer.absoluteString)
-    XCTAssertEqual(state.document.syncState.sessionToken, "existing-session")
+    XCTAssertEqual(state.document.syncState.sessionToken, existingSession)
     XCTAssertEqual(state.endpointConfig, existingConfig)
     XCTAssertEqual(state.endpointConfigStatus, "Remote v12")
     XCTAssertEqual(state.acceptedEndpointConfigServerURL, existingServer)
@@ -228,21 +295,26 @@ extension AppStateNetworkBoundaryTests {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let originalAccount = "abababab-abab-4bab-8bab-abababababab"
+    let originalSession = testSessionToken(accountId: originalAccount)
     let server = URL(string: "https://sync.example")!
     var document = VaultDocument()
     XCTAssertTrue(
       document.syncState.connect(
         accountId: originalAccount,
         serverURL: server.absoluteString,
-        sessionToken: "original-session-token"
+        sessionToken: originalSession
       )
     )
     document.syncState.latestRemoteVersion = 7
+    document.syncState.lastSyncedAt = Date(timeIntervalSince1970: 1_700_000_000)
+    document.syncState.lastChecksum = String(repeating: "a", count: 64)
     let persisted = try fixture.store.saveReturningPersistedDocument(document)
     let authenticator = StubPasskeyAuthenticator(
       session: PasskeyWebSession(
         userId: "cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd",
-        sessionToken: "different-account-session",
+        sessionToken: testSessionToken(
+          accountId: "cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd"
+        ),
         serverURL: server.absoluteString
       )
     )
@@ -261,7 +333,7 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertEqual(authenticator.callCount, 1)
     XCTAssertTrue(state.error.contains("different sync account"))
     XCTAssertEqual(state.document.syncState.accountId, originalAccount)
-    XCTAssertEqual(state.document.syncState.sessionToken, "original-session-token")
+    XCTAssertEqual(state.document.syncState.sessionToken, originalSession)
     XCTAssertEqual(state.document.syncState.latestRemoteVersion, 7)
     let verifier = try EncryptedSQLiteVaultStore(
       path: fixture.database,
@@ -273,12 +345,13 @@ extension AppStateNetworkBoundaryTests {
   func testConnectedAccountRejectsRegistrationAndServerSaveUntilExplicitDisconnect() async throws {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let connectedAccountId = "abababab-abab-4bab-8bab-abababababab"
     var document = VaultDocument()
     XCTAssertTrue(
       document.syncState.connect(
-        accountId: "abababab-abab-4bab-8bab-abababababab",
+        accountId: connectedAccountId,
         serverURL: "https://sync.example",
-        sessionToken: "connected-session-token"
+        sessionToken: testSessionToken(accountId: connectedAccountId)
       )
     )
     let persisted = try fixture.store.saveReturningPersistedDocument(document)
@@ -301,7 +374,7 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertEqual(state.document.syncState.serverURL, "https://sync.example")
     XCTAssertEqual(
       state.document.syncState.accountId,
-      "abababab-abab-4bab-8bab-abababababab"
+      connectedAccountId
     )
     XCTAssertTrue(state.error.contains("Disconnect the current sync account"))
   }
@@ -310,12 +383,13 @@ extension AppStateNetworkBoundaryTests {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let server = URL(string: "https://sync.example")!
+    let accountId = "cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd"
     let existingConfig = NativeEndpointConfig(configVersion: 14, refreshAfterSeconds: 600)
     let document = VaultDocument(
       syncState: SyncState(
-        accountId: "cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd",
+        accountId: accountId,
         serverURL: server.absoluteString,
-        sessionToken: "same-server-session"
+        sessionToken: testSessionToken(accountId: accountId)
       )
     )
     let persisted = try fixture.store.saveReturningPersistedDocument(document)
@@ -343,10 +417,11 @@ extension AppStateNetworkBoundaryTests {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let accountId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    let sessionToken = testSessionToken(accountId: accountId)
     let authenticator = StubPasskeyAuthenticator(
       session: PasskeyWebSession(
         userId: accountId,
-        sessionToken: "passkey-session-token",
+        sessionToken: sessionToken,
         serverURL: "https://sync.example"
       )
     )
@@ -369,7 +444,7 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertEqual(state.error, "")
     XCTAssertTrue(state.notice.hasPrefix("Passkey account connected."))
     XCTAssertEqual(state.document.syncState.accountId, accountId)
-    XCTAssertEqual(state.document.syncState.sessionToken, "passkey-session-token")
+    XCTAssertEqual(state.document.syncState.sessionToken, sessionToken)
     XCTAssertEqual(state.endpointConfig.configVersion, 9)
     XCTAssertEqual(state.endpointConfigStatus, "Remote v9")
     XCTAssertEqual(
@@ -391,12 +466,13 @@ extension AppStateNetworkBoundaryTests {
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let server = URL(string: "https://sync.example")!
     let accountId = "78787878-7878-4878-8878-787878787878"
+    let initialSession = testSessionToken(accountId: accountId)
     var document = VaultDocument()
     XCTAssertTrue(
       document.syncState.connect(
         accountId: accountId,
         serverURL: server.absoluteString,
-        sessionToken: "expired-upload-session"
+        sessionToken: initialSession
       )
     )
     let persisted = try fixture.store.saveReturningPersistedDocument(document)
@@ -430,7 +506,7 @@ extension AppStateNetworkBoundaryTests {
     let authenticator = StubPasskeyAuthenticator(
       session: PasskeyWebSession(
         userId: accountId,
-        sessionToken: "fresh-recovery-session",
+        sessionToken: testSessionToken(accountId: accountId),
         serverURL: server.absoluteString
       )
     )
@@ -467,7 +543,9 @@ extension AppStateNetworkBoundaryTests {
     let recovered = try verifier.load()
     XCTAssertEqual(recovered.syncState.accountId, accountId)
     XCTAssertEqual(recovered.syncState.serverURL, server.absoluteString)
-    XCTAssertEqual(recovered.syncState.sessionToken, "fresh-recovery-session")
+    XCTAssertTrue(
+      SyncSessionToken.isUsable(recovered.syncState.sessionToken, forAccountId: accountId)
+    )
     XCTAssertEqual(recovered.syncState.latestRemoteVersion, pendingUpload.snapshot.version)
     XCTAssertNil(try verifier.loadPendingVaultUpload())
   }

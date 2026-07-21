@@ -71,7 +71,9 @@ extension AppState {
       if let blocker = terminationBlockingOperationMessage {
         return cancelTermination(with: blocker)
       }
-    } else if syncPersistencePending, pendingVaultUpload == nil {
+    } else if syncPersistencePending, pendingVaultUpload == nil,
+      quarantinedPendingVaultUpload == nil
+    {
       return cancelTermination(
         with:
           "The pending sync state cannot be saved safely. Reopen Address Atlas before quitting."

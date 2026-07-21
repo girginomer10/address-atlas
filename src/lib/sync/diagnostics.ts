@@ -12,6 +12,8 @@ export type SecurityEvent =
   | "auth.authentication_failed"
   | "auth.authentication_succeeded"
   | "auth.challenge_prune_failed"
+  | "auth.native_exchange_failed"
+  | "auth.native_exchange_succeeded"
   | "auth.rate_limited"
   | "auth.registration_denied"
   | "auth.registration_failed"
@@ -20,6 +22,7 @@ export type SecurityEvent =
   | "database.connection_failed"
   | "health.not_ready"
   | "restore.readiness_failed"
+  | "restore.integrity_progress"
   | "restore.readiness_succeeded"
   | "session.rejected"
   | "session.revoked"
@@ -28,6 +31,8 @@ export type SecurityEvent =
   | "storage.ledger_audit_failed"
   | "storage.ledger_drift_detected"
   | "storage.ledger_integrity_restored"
+  | "storage.usage_retention_failed"
+  | "storage.usage_retention_restored"
   | "vault.conflict"
   | "vault.load_failed"
   | "vault.quota_exceeded"
@@ -128,6 +133,8 @@ export interface SecurityEventDetails {
   reason: string;
   errorCode?: OperationalErrorCode;
   mode?: "authenticate" | "register";
+  phase?: "vault" | "passkey";
+  progressRows?: number;
   severity?: "info" | "warn" | "error";
 }
 
@@ -172,7 +179,9 @@ export function recordSecurityEvent(
     status: details.status,
     reason: details.reason,
     ...(details.errorCode ? { errorCode: details.errorCode } : {}),
-    ...(details.mode ? { mode: details.mode } : {})
+    ...(details.mode ? { mode: details.mode } : {}),
+    ...(details.phase ? { phase: details.phase } : {}),
+    ...(details.progressRows !== undefined ? { progressRows: details.progressRows } : {})
   });
   const severity = details.severity ?? (details.status >= 500 ? "error" : "warn");
   if (severity === "error") {

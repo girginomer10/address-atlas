@@ -4,28 +4,179 @@ import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
+struct AtlasRGB: Equatable, Sendable {
+  let red: Double
+  let green: Double
+  let blue: Double
+
+  var color: Color {
+    Color(red: red, green: green, blue: blue)
+  }
+
+  var nsColor: NSColor {
+    NSColor(srgbRed: red, green: green, blue: blue, alpha: 1)
+  }
+}
+
+enum AtlasAppearanceVariant: CaseIterable, Equatable, Sendable {
+  case light
+  case dark
+  case highContrastLight
+  case highContrastDark
+
+  init(colorScheme: ColorScheme, contrast: ColorSchemeContrast) {
+    switch (colorScheme, contrast) {
+    case (.light, .standard): self = .light
+    case (.dark, .standard): self = .dark
+    case (.light, .increased): self = .highContrastLight
+    case (.dark, .increased): self = .highContrastDark
+    @unknown default: self = colorScheme == .dark ? .dark : .light
+    }
+  }
+
+  init(appearance: NSAppearance, increaseContrast: Bool) {
+    let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    switch (isDark, increaseContrast) {
+    case (false, false): self = .light
+    case (true, false): self = .dark
+    case (false, true): self = .highContrastLight
+    case (true, true): self = .highContrastDark
+    }
+  }
+}
+
+struct AtlasPalette: Equatable, Sendable {
+  let paper: AtlasRGB
+  let paper2: AtlasRGB
+  let paper3: AtlasRGB
+  let ink: AtlasRGB
+  let ink2: AtlasRGB
+  let ink3: AtlasRGB
+  let rule: AtlasRGB
+  let ruleSoft: AtlasRGB
+  let controlBoundary: AtlasRGB
+  let controlBoundaryDisabled: AtlasRGB
+  let focusRing: AtlasRGB
+  let accent: AtlasRGB
+  let gain: AtlasRGB
+  let loss: AtlasRGB
+  let warning: AtlasRGB
+}
+
 enum AtlasTheme {
-  static let paperRGB = (red: 0.965, green: 0.952, blue: 0.92)
-  static let paper2RGB = (red: 0.925, green: 0.912, blue: 0.88)
-  static let ink3RGB = (red: 0.42, green: 0.39, blue: 0.34)
-  static let warningRGB = (red: 0.55, green: 0.30, blue: 0.02)
-  static let paper = Color(red: paperRGB.red, green: paperRGB.green, blue: paperRGB.blue)
-  static let paper2 = Color(red: paper2RGB.red, green: paper2RGB.green, blue: paper2RGB.blue)
-  static let paper3 = Color(red: 0.885, green: 0.872, blue: 0.84)
-  static let ink = Color(red: 0.16, green: 0.15, blue: 0.13)
-  static let ink2 = Color(red: 0.34, green: 0.32, blue: 0.28)
-  static let ink3 = Color(red: ink3RGB.red, green: ink3RGB.green, blue: ink3RGB.blue)
-  static let rule = Color(red: 0.78, green: 0.755, blue: 0.69)
-  static let ruleSoft = Color(red: 0.84, green: 0.82, blue: 0.76)
-  static let accent = Color(red: 0.18, green: 0.31, blue: 0.56)
-  static let gain = Color(red: 0.12, green: 0.45, blue: 0.27)
-  static let loss = Color(red: 0.72, green: 0.17, blue: 0.12)
-  /// Dark enough for normal-size warning text on both paper surfaces.
-  static let warning = Color(
-    red: warningRGB.red,
-    green: warningRGB.green,
-    blue: warningRGB.blue
+  static let lightPalette = AtlasPalette(
+    paper: AtlasRGB(red: 0.965, green: 0.952, blue: 0.92),
+    paper2: AtlasRGB(red: 0.925, green: 0.912, blue: 0.88),
+    paper3: AtlasRGB(red: 0.885, green: 0.872, blue: 0.84),
+    ink: AtlasRGB(red: 0.16, green: 0.15, blue: 0.13),
+    ink2: AtlasRGB(red: 0.34, green: 0.32, blue: 0.28),
+    ink3: AtlasRGB(red: 0.42, green: 0.39, blue: 0.34),
+    rule: AtlasRGB(red: 0.50, green: 0.47, blue: 0.42),
+    ruleSoft: AtlasRGB(red: 0.68, green: 0.65, blue: 0.59),
+    controlBoundary: AtlasRGB(red: 0.42, green: 0.39, blue: 0.34),
+    controlBoundaryDisabled: AtlasRGB(red: 0.50, green: 0.47, blue: 0.42),
+    focusRing: AtlasRGB(red: 0.18, green: 0.31, blue: 0.56),
+    accent: AtlasRGB(red: 0.18, green: 0.31, blue: 0.56),
+    gain: AtlasRGB(red: 0.12, green: 0.45, blue: 0.27),
+    loss: AtlasRGB(red: 0.72, green: 0.17, blue: 0.12),
+    warning: AtlasRGB(red: 0.55, green: 0.30, blue: 0.02)
   )
+
+  static let darkPalette = AtlasPalette(
+    paper: AtlasRGB(red: 0.075, green: 0.070, blue: 0.060),
+    paper2: AtlasRGB(red: 0.115, green: 0.105, blue: 0.090),
+    paper3: AtlasRGB(red: 0.17, green: 0.16, blue: 0.14),
+    ink: AtlasRGB(red: 0.94, green: 0.93, blue: 0.90),
+    ink2: AtlasRGB(red: 0.78, green: 0.76, blue: 0.71),
+    ink3: AtlasRGB(red: 0.67, green: 0.64, blue: 0.58),
+    rule: AtlasRGB(red: 0.52, green: 0.50, blue: 0.45),
+    ruleSoft: AtlasRGB(red: 0.38, green: 0.36, blue: 0.32),
+    controlBoundary: AtlasRGB(red: 0.62, green: 0.60, blue: 0.54),
+    controlBoundaryDisabled: AtlasRGB(red: 0.52, green: 0.50, blue: 0.45),
+    focusRing: AtlasRGB(red: 0.48, green: 0.68, blue: 1.0),
+    accent: AtlasRGB(red: 0.48, green: 0.68, blue: 1.0),
+    gain: AtlasRGB(red: 0.38, green: 0.79, blue: 0.52),
+    loss: AtlasRGB(red: 0.98, green: 0.45, blue: 0.40),
+    warning: AtlasRGB(red: 0.98, green: 0.70, blue: 0.30)
+  )
+
+  static let highContrastLightPalette = AtlasPalette(
+    paper: AtlasRGB(red: 1, green: 1, blue: 1),
+    paper2: AtlasRGB(red: 0.96, green: 0.96, blue: 0.96),
+    paper3: AtlasRGB(red: 0.90, green: 0.90, blue: 0.90),
+    ink: AtlasRGB(red: 0, green: 0, blue: 0),
+    ink2: AtlasRGB(red: 0.12, green: 0.12, blue: 0.12),
+    ink3: AtlasRGB(red: 0.22, green: 0.22, blue: 0.22),
+    rule: AtlasRGB(red: 0.18, green: 0.18, blue: 0.18),
+    ruleSoft: AtlasRGB(red: 0.35, green: 0.35, blue: 0.35),
+    controlBoundary: AtlasRGB(red: 0, green: 0, blue: 0),
+    controlBoundaryDisabled: AtlasRGB(red: 0.18, green: 0.18, blue: 0.18),
+    focusRing: AtlasRGB(red: 0, green: 0.20, blue: 0.65),
+    accent: AtlasRGB(red: 0, green: 0.20, blue: 0.65),
+    gain: AtlasRGB(red: 0, green: 0.34, blue: 0.10),
+    loss: AtlasRGB(red: 0.68, green: 0, blue: 0),
+    warning: AtlasRGB(red: 0.45, green: 0.20, blue: 0)
+  )
+
+  static let highContrastDarkPalette = AtlasPalette(
+    paper: AtlasRGB(red: 0, green: 0, blue: 0),
+    paper2: AtlasRGB(red: 0.04, green: 0.04, blue: 0.04),
+    paper3: AtlasRGB(red: 0.10, green: 0.10, blue: 0.10),
+    ink: AtlasRGB(red: 1, green: 1, blue: 1),
+    ink2: AtlasRGB(red: 0.90, green: 0.90, blue: 0.90),
+    ink3: AtlasRGB(red: 0.78, green: 0.78, blue: 0.78),
+    rule: AtlasRGB(red: 0.82, green: 0.82, blue: 0.82),
+    ruleSoft: AtlasRGB(red: 0.62, green: 0.62, blue: 0.62),
+    controlBoundary: AtlasRGB(red: 1, green: 1, blue: 1),
+    controlBoundaryDisabled: AtlasRGB(red: 0.82, green: 0.82, blue: 0.82),
+    focusRing: AtlasRGB(red: 0.50, green: 0.80, blue: 1),
+    accent: AtlasRGB(red: 0.50, green: 0.80, blue: 1),
+    gain: AtlasRGB(red: 0.52, green: 1, blue: 0.62),
+    loss: AtlasRGB(red: 1, green: 0.52, blue: 0.48),
+    warning: AtlasRGB(red: 1, green: 0.78, blue: 0.32)
+  )
+
+  static let paperRGB = lightPalette.paper
+  static let paper2RGB = lightPalette.paper2
+  static let ink3RGB = lightPalette.ink3
+  static let warningRGB = lightPalette.warning
+
+  static let paper = dynamicColor("paper", \.paper)
+  static let paper2 = dynamicColor("paper2", \.paper2)
+  static let paper3 = dynamicColor("paper3", \.paper3)
+  static let ink = dynamicColor("ink", \.ink)
+  static let ink2 = dynamicColor("ink2", \.ink2)
+  static let ink3 = dynamicColor("ink3", \.ink3)
+  static let rule = dynamicColor("rule", \.rule)
+  static let ruleSoft = dynamicColor("ruleSoft", \.ruleSoft)
+  static let accent = dynamicColor("accent", \.accent)
+  static let gain = dynamicColor("gain", \.gain)
+  static let loss = dynamicColor("loss", \.loss)
+  /// Dark enough for normal-size warning text on each supported surface.
+  static let warning = dynamicColor("warning", \.warning)
+
+  static func palette(for appearance: AtlasAppearanceVariant) -> AtlasPalette {
+    switch appearance {
+    case .light: lightPalette
+    case .dark: darkPalette
+    case .highContrastLight: highContrastLightPalette
+    case .highContrastDark: highContrastDarkPalette
+    }
+  }
+
+  private static func dynamicColor(
+    _ name: String,
+    _ keyPath: KeyPath<AtlasPalette, AtlasRGB>
+  ) -> Color {
+    Color(
+      nsColor: NSColor(name: NSColor.Name("AddressAtlas.\(name)")) { appearance in
+        palette(
+          for: AtlasAppearanceVariant(
+            appearance: appearance,
+            increaseContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+          ))[keyPath: keyPath].nsColor
+      })
+  }
 }
 
 struct Page<Content: View>: View {
@@ -559,21 +710,105 @@ struct StatusLine: View {
   }
 }
 
+enum AtlasControlKind: Equatable, Sendable {
+  case textField
+  case secondaryButton
+}
+
+struct AtlasControlVisualState: Equatable, Sendable {
+  var isEnabled: Bool
+  var isPressed: Bool
+  var isFocused: Bool
+}
+
+struct AtlasControlStyleTokens: Equatable, Sendable {
+  let foreground: AtlasRGB
+  let background: AtlasRGB
+  let boundary: AtlasRGB
+  let focusRing: AtlasRGB
+  let boundaryWidth: Double
+  let focusRingWidth: Double
+  let focusRingOutset: Double
+}
+
+enum AtlasControlStyleResolver {
+  static func tokens(
+    for kind: AtlasControlKind,
+    appearance: AtlasAppearanceVariant,
+    state: AtlasControlVisualState
+  ) -> AtlasControlStyleTokens {
+    let palette = AtlasTheme.palette(for: appearance)
+    let foreground: AtlasRGB
+    let boundary: AtlasRGB
+
+    if state.isEnabled {
+      foreground = kind == .secondaryButton && state.isPressed ? palette.accent : palette.ink
+      boundary = kind == .secondaryButton && state.isPressed
+        ? palette.accent
+        : palette.controlBoundary
+    } else {
+      foreground = palette.ink3
+      boundary = palette.controlBoundaryDisabled
+    }
+
+    return AtlasControlStyleTokens(
+      foreground: foreground,
+      background: state.isEnabled ? palette.paper : palette.paper2,
+      boundary: boundary,
+      focusRing: palette.focusRing,
+      boundaryWidth: appearance == .highContrastLight || appearance == .highContrastDark ? 2 : 1.5,
+      focusRingWidth: state.isEnabled && state.isFocused ? 3 : 0,
+      focusRingOutset: 3
+    )
+  }
+}
+
+private struct AtlasControlOutline: View {
+  let tokens: AtlasControlStyleTokens
+
+  var body: some View {
+    Rectangle()
+      .stroke(tokens.boundary.color, lineWidth: tokens.boundaryWidth)
+      .overlay {
+        if tokens.focusRingWidth > 0 {
+          Rectangle()
+            .stroke(tokens.focusRing.color, lineWidth: tokens.focusRingWidth)
+            .padding(-tokens.focusRingOutset)
+            .accessibilityHidden(true)
+        }
+      }
+      .accessibilityHidden(true)
+  }
+}
+
 struct AtlasTextFieldStyle: TextFieldStyle {
   @Environment(\.isEnabled) private var isEnabled
+  @Environment(\.isFocused) private var isFocused
+  @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
   func _body(configuration: TextField<Self._Label>) -> some View {
+    let tokens = AtlasControlStyleResolver.tokens(
+      for: .textField,
+      appearance: AtlasAppearanceVariant(
+        colorScheme: colorScheme,
+        contrast: colorSchemeContrast
+      ),
+      state: AtlasControlVisualState(
+        isEnabled: isEnabled,
+        isPressed: false,
+        isFocused: isFocused
+      )
+    )
+
     configuration
       .textFieldStyle(.plain)
-      .foregroundStyle(isEnabled ? AtlasTheme.ink : AtlasTheme.ink3)
+      .foregroundStyle(tokens.foreground.color)
       .padding(.horizontal, 12)
       .padding(.vertical, 9)
       .frame(minHeight: 40)
-      .background(isEnabled ? AtlasTheme.paper : AtlasTheme.paper2)
-      .overlay(
-        Rectangle().stroke(isEnabled ? AtlasTheme.rule : AtlasTheme.ruleSoft, lineWidth: 1)
-      )
-      .opacity(isEnabled ? 1 : 0.72)
+      .background(tokens.background.color)
+      .overlay(AtlasControlOutline(tokens: tokens))
   }
 }
 
@@ -601,27 +836,32 @@ struct AtlasPrimaryButtonStyle: ButtonStyle {
 
 struct AtlasSecondaryButtonStyle: ButtonStyle {
   @Environment(\.isEnabled) private var isEnabled
+  @Environment(\.isFocused) private var isFocused
+  @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.colorSchemeContrast) private var colorSchemeContrast
 
   func makeBody(configuration: Configuration) -> some View {
+    let tokens = AtlasControlStyleResolver.tokens(
+      for: .secondaryButton,
+      appearance: AtlasAppearanceVariant(
+        colorScheme: colorScheme,
+        contrast: colorSchemeContrast
+      ),
+      state: AtlasControlVisualState(
+        isEnabled: isEnabled,
+        isPressed: configuration.isPressed,
+        isFocused: isFocused
+      )
+    )
+
     configuration.label
       .font(.callout.weight(.medium))
-      .foregroundStyle(
-        isEnabled
-          ? (configuration.isPressed ? AtlasTheme.accent : AtlasTheme.ink)
-          : AtlasTheme.ink3
-      )
+      .foregroundStyle(tokens.foreground.color)
       .padding(.horizontal, 14)
       .frame(minHeight: 38)
-      .background(isEnabled ? AtlasTheme.paper : AtlasTheme.paper2)
-      .overlay(
-        Rectangle().stroke(
-          isEnabled
-            ? (configuration.isPressed ? AtlasTheme.accent : AtlasTheme.rule)
-            : AtlasTheme.ruleSoft,
-          lineWidth: 1)
-      )
+      .background(tokens.background.color)
+      .overlay(AtlasControlOutline(tokens: tokens))
       .contentShape(Rectangle())
-      .opacity(isEnabled ? 1 : 0.72)
   }
 }
 
@@ -673,6 +913,16 @@ enum AtlasAccessibility {
 
   static func snapshotIdentity(_ run: ScanRunRecord) -> String {
     "\(run.generatedAt.formatted(date: .abbreviated, time: .shortened)), record ID \(run.id.uuidString.lowercased())"
+  }
+
+  static func assetRowIdentity(_ asset: TrackedAsset) -> String {
+    let valuation = switch asset.pricingStatus {
+    case .priced: "known value \(money(asset.valueUsd))"
+    case .unpriced: "unpriced, USD value unknown"
+    case .valuationUnavailable: "price known, USD value unavailable"
+    }
+    return
+      "\(asset.symbol), \(asset.name), \(asset.chainName), source \(asset.source.rawValue), amount \(asset.canonicalAmount), \(valuation)"
   }
 }
 

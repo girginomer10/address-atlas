@@ -18,8 +18,7 @@ type OptionsResponse = {
 
 type VerifyResponse = {
   verified?: boolean;
-  userId?: string;
-  sessionToken?: string;
+  authorizationCode?: string;
   error?: string;
 };
 
@@ -32,6 +31,7 @@ type PasskeyCeremonyFailureCode =
   | "registration-outcome-unknown"
   | "authentication-outcome-unknown"
   | "cancelled"
+  | "authenticator-not-completed"
   | "authenticator-incompatible"
   | "authenticator-already-registered"
   | "authenticator-unavailable"
@@ -55,6 +55,8 @@ const PASSKEY_FAILURE_MESSAGES: Record<PasskeyCeremonyFailureCode, string> = {
   "authentication-outcome-unknown":
     "Sign-in may have completed, but confirmation was lost. Try Sign in again.",
   cancelled: "Passkey sign-in was cancelled.",
+  "authenticator-not-completed":
+    "The passkey prompt was cancelled, timed out, or unavailable. Try again.",
   "authenticator-incompatible":
     "This authenticator does not support the required passkey features. Use Touch ID or a passkey-compatible security key, then try again.",
   "authenticator-already-registered":
@@ -68,9 +70,9 @@ const PASSKEY_REQUEST_TIMEOUT_MS = 15_000;
 const MAXIMUM_RETRY_AFTER_SECONDS = 86_400;
 const UNEXPECTED_PASSKEY_FAILURE_MESSAGE =
   "Passkey sign-in could not be completed. Close this page and restart sync from Address Atlas Mac.";
-const USER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const INVALID_SESSION_TOKEN_CHARACTER_RE = /[^A-Za-z0-9._+/=~-]/;
-const MAXIMUM_SESSION_TOKEN_LENGTH = 4_096;
+const CANONICAL_CODE_CHALLENGE_RE = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
+const AUTHORIZATION_CODE_RE = /^[A-Za-z0-9._-]+$/;
+const MAXIMUM_AUTHORIZATION_CODE_LENGTH = 4_096;
 
 function passkeyFailure(code: PasskeyCeremonyFailureCode): PasskeyCeremonyError {
   return new PasskeyCeremonyError(code);
@@ -115,9 +117,8 @@ function rateLimitedFailure(response: Response): PasskeyCeremonyError {
 
 function authenticatorFailure(error: unknown): PasskeyCeremonyError {
   if (
-    (error instanceof WebAuthnError
-      && (error.code === "ERROR_CEREMONY_ABORTED" || error.name === "NotAllowedError"))
-    || (error instanceof DOMException && ["AbortError", "NotAllowedError"].includes(error.name))
+    (error instanceof WebAuthnError && error.code === "ERROR_CEREMONY_ABORTED")
+    || (error instanceof DOMException && error.name === "AbortError")
   ) {
     return passkeyFailure("cancelled");
   }
@@ -137,13 +138,18 @@ function authenticatorFailure(error: unknown): PasskeyCeremonyError {
       case "ERROR_MALFORMED_PUBKEYCREDPARAMS":
         return passkeyFailure("passkey-configuration-invalid");
       case "ERROR_AUTHENTICATOR_GENERAL_ERROR":
-      case "ERROR_PASSTHROUGH_SEE_CAUSE_PROPERTY":
-      case "ERROR_CEREMONY_ABORTED":
         return passkeyFailure("authenticator-unavailable");
+      case "ERROR_PASSTHROUGH_SEE_CAUSE_PROPERTY":
+        return passkeyFailure("authenticator-not-completed");
+      case "ERROR_CEREMONY_ABORTED":
+        return passkeyFailure("cancelled");
     }
   }
 
   if (error instanceof DOMException) {
+    if (error.name === "NotAllowedError") {
+      return passkeyFailure("authenticator-not-completed");
+    }
     if (["ConstraintError", "NotSupportedError"].includes(error.name)) {
       return passkeyFailure("authenticator-incompatible");
     }
@@ -158,17 +164,14 @@ function authenticatorFailure(error: unknown): PasskeyCeremonyError {
   return passkeyFailure("authenticator-unavailable");
 }
 
-function isVerifiedSession(
+function isVerifiedAuthorization(
   response: VerifyResponse
-): response is VerifyResponse & { verified: true; userId: string; sessionToken: string } {
+): response is VerifyResponse & { verified: true; authorizationCode: string } {
   return response.verified === true
-    && typeof response.userId === "string"
-    && response.userId.length === 36
-    && USER_ID_RE.test(response.userId)
-    && typeof response.sessionToken === "string"
-    && response.sessionToken.length > 0
-    && response.sessionToken.length <= MAXIMUM_SESSION_TOKEN_LENGTH
-    && !INVALID_SESSION_TOKEN_CHARACTER_RE.test(response.sessionToken);
+    && typeof response.authorizationCode === "string"
+    && response.authorizationCode.length > 0
+    && response.authorizationCode.length <= MAXIMUM_AUTHORIZATION_CODE_LENGTH
+    && AUTHORIZATION_CODE_RE.test(response.authorizationCode);
 }
 
 export function passkeyCeremonyUserMessage(error: unknown): string {
@@ -180,6 +183,8 @@ export interface PasskeyCeremonyInput {
   mode: Mode;
   callback: string;
   state: string;
+  codeChallenge: string;
+  codeChallengeMethod: string;
   accountName: string;
   canReturn: boolean;
 }
@@ -209,10 +214,22 @@ function browserPasskeyCeremonyDeps(): PasskeyCeremonyDeps {
 }
 
 export async function runPasskeyCeremony(
-  { mode, callback, state, accountName, canReturn }: PasskeyCeremonyInput,
+  {
+    mode,
+    callback,
+    state,
+    codeChallenge,
+    codeChallengeMethod,
+    accountName,
+    canReturn
+  }: PasskeyCeremonyInput,
   deps: PasskeyCeremonyDeps = browserPasskeyCeremonyDeps()
 ): Promise<void> {
-  if (!canReturn) {
+  if (
+    !canReturn
+    || codeChallengeMethod !== "S256"
+    || !CANONICAL_CODE_CHALLENGE_RE.test(codeChallenge)
+  ) {
     throw passkeyFailure("invalid-return");
   }
   let optionsResponse: Response;
@@ -277,7 +294,8 @@ export async function runPasskeyCeremony(
       body: JSON.stringify({
         mode,
         challengeToken: options.challengeToken,
-        response
+        response,
+        nativeCodeChallenge: codeChallenge
       })
     });
   } catch {
@@ -304,13 +322,12 @@ export async function runPasskeyCeremony(
   if (verified.verified === false) {
     throw passkeyFailure("verification-rejected");
   }
-  if (!isVerifiedSession(verified)) {
+  if (!isVerifiedAuthorization(verified)) {
     throw unknownVerificationOutcome(mode);
   }
 
   const returnURL = new URL(callback);
-  returnURL.searchParams.set("sessionToken", verified.sessionToken);
-  returnURL.searchParams.set("userId", verified.userId);
+  returnURL.searchParams.set("code", verified.authorizationCode);
   returnURL.searchParams.set("serverURL", deps.locationOrigin);
   // Echo the native-supplied state so the app can bind this callback to the
   // request it started (CSRF / replay protection).
@@ -321,10 +338,14 @@ export async function runPasskeyCeremony(
 export function NativePasskeyBridge({
   callback,
   state,
+  codeChallenge,
+  codeChallengeMethod,
   mode
 }: {
   callback: string;
   state: string;
+  codeChallenge: string;
+  codeChallengeMethod: string;
   mode: Mode | null;
 }) {
   const [accountName, setAccountName] = useState("");
@@ -341,11 +362,13 @@ export function NativePasskeyBridge({
         && !url.pathname
         && !url.search
         && !url.hash
-        && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(state);
+        && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(state)
+        && codeChallengeMethod === "S256"
+        && CANONICAL_CODE_CHALLENGE_RE.test(codeChallenge);
     } catch {
       return false;
     }
-  }, [callback, state]);
+  }, [callback, codeChallenge, codeChallengeMethod, state]);
   const validationMessage = !mode
     ? "Open this page from a valid sync action in Address Atlas Mac."
     : !canReturn
@@ -361,7 +384,15 @@ export function NativePasskeyBridge({
     setBusy(mode);
     setMessage("");
     try {
-      await runPasskeyCeremony({ mode, callback, state, accountName, canReturn });
+      await runPasskeyCeremony({
+        mode,
+        callback,
+        state,
+        codeChallenge,
+        codeChallengeMethod,
+        accountName,
+        canReturn
+      });
     } catch (error) {
       setMessage(passkeyCeremonyUserMessage(error));
     } finally {
@@ -381,8 +412,9 @@ export function NativePasskeyBridge({
           <span className="aa-eyebrow">Address Atlas Mac</span>
           <h1 id="passkey-heading">Passkey Sync</h1>
           <p>
-            Connect the Mac app to encrypted vault sync. The server receives account auth only; vault
-            contents stay encrypted before upload.
+            Connect the Mac app to encrypted vault sync. The server authenticates the account and
+            stores opaque encrypted snapshots with limited sync metadata; it never receives vault
+            plaintext or key material.
           </p>
         </div>
 
@@ -394,7 +426,7 @@ export function NativePasskeyBridge({
               onChange={(event) => setAccountName(event.target.value)}
               placeholder="Omer's Mac"
               maxLength={80}
-              autoComplete="username webauthn"
+              autoComplete="nickname"
               onKeyDown={(event) => {
                 if (event.key !== "Enter") return;
                 event.preventDefault();

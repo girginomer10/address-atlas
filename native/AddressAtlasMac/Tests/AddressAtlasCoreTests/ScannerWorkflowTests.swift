@@ -224,7 +224,6 @@ final class ScannerWorkflowTests: XCTestCase {
       http: JSONHTTPClient(http: http),
       priceProvider: ScannerStaticPriceProvider(values: [:])
     )
-
     let result = try await scanner.scan(
       addresses: "0x0000000000000000000000000000000000000001")
     let bodies = requests.snapshot().compactMap { request in
@@ -364,6 +363,64 @@ final class ScannerWorkflowTests: XCTestCase {
       result.warnings.contains(where: { $0.contains("Liquid balance could not be read") }))
   }
 
+  func testConcurrentCosmosJobsShareOneVerifiedSnapshotAnchor() async throws {
+    let requests = ScannerRequestLog()
+    let http = ScannerHTTPStub(automaticallyServesNetworkIdentity: false) { request in
+      _ = requests.append(request)
+      switch request.url?.path {
+      case "/cosmos/base/tendermint/v1beta1/blocks/latest":
+        try await Task.sleep(for: .milliseconds(20))
+        return scannerResponse(
+          request,
+          #"{"block":{"header":{"chain_id":"cosmoshub-4","height":"700"}}}"#
+        )
+      case let path? where path.contains("/cosmos/bank/"):
+        XCTAssertEqual(request.value(forHTTPHeaderField: "x-cosmos-block-height"), "700")
+        return scannerResponse(
+          request,
+          #"{"balances":[{"denom":"uatom","amount":"1"}]}"#,
+          headerFields: ["x-cosmos-block-height": "700"]
+        )
+      case let path? where path.contains("/cosmos/staking/"):
+        return scannerResponse(
+          request,
+          #"{"delegation_responses":[]}"#,
+          headerFields: ["x-cosmos-block-height": "700"]
+        )
+      default:
+        return scannerResponse(
+          request,
+          #"{"total":[]}"#,
+          headerFields: ["x-cosmos-block-height": "700"]
+        )
+      }
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: ScannerStaticPriceProvider(values: [:])
+    )
+    let workflowAnchor = ChainNetworkValueCache<Int64>()
+
+    try await withThrowingTaskGroup(of: Void.self) { group in
+      for index in 0..<10 {
+        group.addTask {
+          _ = try await scanner.scanCosmos(
+            address: "cosmos1concurrentjob\(index)",
+            chain: ChainRegistry.cosmosChains[0],
+            prices: [:],
+            snapshotAnchors: workflowAnchor
+          )
+        }
+      }
+      try await group.waitForAll()
+    }
+
+    let latestRequests = requests.snapshot().filter {
+      $0.url?.path == "/cosmos/base/tendermint/v1beta1/blocks/latest"
+    }
+    XCTAssertEqual(latestRequests.count, 1)
+  }
+
   func testCosmosPaginationFollowsNextKeysAndCombinesAllPages() async throws {
     let requests = ScannerRequestLog()
     let http = ScannerHTTPStub { request in
@@ -480,11 +537,16 @@ final class ScannerWorkflowTests: XCTestCase {
   func testCosmosRequiresAndPinsOneResponseHeightAcrossParts() async throws {
     let address = "cosmos1qqqtduhx4t2xvgcxrqfmrz0heq00vlvjqhuz93nwt6d2y0quqlqqxxec22"
     let requests = ScannerRequestLog()
-    let http = ScannerHTTPStub { request in
+    let http = ScannerHTTPStub(automaticallyServesNetworkIdentity: false) { request in
       _ = requests.append(request)
       switch request.url?.path {
+      case "/cosmos/base/tendermint/v1beta1/blocks/latest":
+        return scannerResponse(
+          request,
+          #"{"block":{"header":{"chain_id":"cosmoshub-4","height":"700"}}}"#
+        )
       case let path? where path.contains("/cosmos/bank/"):
-        XCTAssertNil(request.value(forHTTPHeaderField: "x-cosmos-block-height"))
+        XCTAssertEqual(request.value(forHTTPHeaderField: "x-cosmos-block-height"), "700")
         return scannerResponse(
           request,
           #"{"balances":[{"denom":"uatom","amount":"1000000"}]}"#,
@@ -518,13 +580,13 @@ final class ScannerWorkflowTests: XCTestCase {
     XCTAssertEqual(result.holdings.first(where: { $0.source == .native })?.amount, 1)
     XCTAssertFalse(result.holdings.contains(where: { $0.source == .staked }))
     XCTAssertTrue(result.warnings.contains(where: { $0.contains("Delegations could not be read") }))
-    XCTAssertEqual(requests.snapshot().count, 3)
+    XCTAssertEqual(requests.snapshot().count, 4)
   }
 
   func testCosmosRejectsProvidersThatDoNotEchoBoundHeight() async throws {
     let address = "cosmos1qqqtduhx4t2xvgcxrqfmrz0heq00vlvjqhuz93nwt6d2y0quqlqqxxec22"
     let requests = ScannerRequestLog()
-    let http = ScannerHTTPStub { request in
+    let http = ScannerHTTPStub(automaticallyServesNetworkIdentity: false) { request in
       _ = requests.append(request)
       let pinnedHeight = request.value(forHTTPHeaderField: "x-cosmos-block-height")
       switch request.url?.path {
@@ -535,12 +597,6 @@ final class ScannerWorkflowTests: XCTestCase {
           #"{"block":{"header":{"chain_id":"cosmoshub-4","height":"700"}}}"#
         )
       case let path? where path.contains("/cosmos/bank/"):
-        if pinnedHeight == nil {
-          // This unbound discovery response is deliberately discarded because
-          // the provider did not echo a height.
-          return scannerResponse(
-            request, #"{"balances":[{"denom":"uatom","amount":"9000000"}]}"#)
-        }
         XCTAssertEqual(pinnedHeight, "700")
         return scannerResponse(
           request, #"{"balances":[{"denom":"uatom","amount":"1000000"}]}"#)
@@ -560,14 +616,14 @@ final class ScannerWorkflowTests: XCTestCase {
     let result = try await scanner.scan(addresses: address)
 
     XCTAssertTrue(result.holdings.isEmpty)
-    XCTAssertEqual(requests.snapshot().count, 3)
+    XCTAssertEqual(requests.snapshot().count, 2)
     XCTAssertTrue(result.warnings.contains(where: { $0.contains("height-bound Cosmos snapshot") }))
   }
 
   func testCosmosAcceptsGrpcMetadataHeightAndPinsEveryFallbackPart() async throws {
     let address = "cosmos1qqqtduhx4t2xvgcxrqfmrz0heq00vlvjqhuz93nwt6d2y0quqlqqxxec22"
     let requests = ScannerRequestLog()
-    let http = ScannerHTTPStub { request in
+    let http = ScannerHTTPStub(automaticallyServesNetworkIdentity: false) { request in
       _ = requests.append(request)
       let pinnedHeight = request.value(forHTTPHeaderField: "x-cosmos-block-height")
       switch request.url?.path {
@@ -578,10 +634,6 @@ final class ScannerWorkflowTests: XCTestCase {
           #"{"block":{"header":{"chain_id":"cosmoshub-4","height":"700"}}}"#
         )
       case let path? where path.contains("/cosmos/bank/"):
-        if pinnedHeight == nil {
-          return scannerResponse(
-            request, #"{"balances":[{"denom":"uatom","amount":"9000000"}]}"#)
-        }
         XCTAssertEqual(pinnedHeight, "700")
         return scannerResponse(
           request,
@@ -612,16 +664,22 @@ final class ScannerWorkflowTests: XCTestCase {
     let result = try await scanner.scan(addresses: address)
 
     XCTAssertEqual(result.holdings.first(where: { $0.source == .native })?.amount, 1)
-    XCTAssertEqual(requests.snapshot().count, 5)
+    XCTAssertEqual(requests.snapshot().count, 4)
     XCTAssertFalse(result.warnings.contains(where: { $0.contains("height-bound Cosmos snapshot") }))
     XCTAssertFalse(result.warnings.contains(where: { $0.contains("could not be read") }))
   }
 
   func testCosmosSkipsBoundPartsThatOmitBothHeightHeaders() async throws {
     let address = "cosmos1qqqtduhx4t2xvgcxrqfmrz0heq00vlvjqhuz93nwt6d2y0quqlqqxxec22"
-    let http = ScannerHTTPStub { request in
+    let http = ScannerHTTPStub(automaticallyServesNetworkIdentity: false) { request in
       switch request.url?.path {
+      case "/cosmos/base/tendermint/v1beta1/blocks/latest":
+        return scannerResponse(
+          request,
+          #"{"block":{"header":{"chain_id":"cosmoshub-4","height":"700"}}}"#
+        )
       case let path? where path.contains("/cosmos/bank/"):
+        XCTAssertEqual(request.value(forHTTPHeaderField: "x-cosmos-block-height"), "700")
         return scannerResponse(
           request,
           #"{"balances":[{"denom":"uatom","amount":"1000000"}]}"#,
@@ -650,7 +708,7 @@ final class ScannerWorkflowTests: XCTestCase {
   func testCosmosRejectsLatestBlockFromTheWrongNetwork() async throws {
     let address = "cosmos1qqqtduhx4t2xvgcxrqfmrz0heq00vlvjqhuz93nwt6d2y0quqlqqxxec22"
     let requests = ScannerRequestLog()
-    let http = ScannerHTTPStub { request in
+    let http = ScannerHTTPStub(automaticallyServesNetworkIdentity: false) { request in
       _ = requests.append(request)
       if request.url?.path == "/cosmos/base/tendermint/v1beta1/blocks/latest" {
         return scannerResponse(
@@ -668,7 +726,7 @@ final class ScannerWorkflowTests: XCTestCase {
     let result = try await scanner.scan(addresses: address)
 
     XCTAssertTrue(result.holdings.isEmpty)
-    XCTAssertEqual(requests.snapshot().count, 2)
+    XCTAssertEqual(requests.snapshot().count, 1)
     XCTAssertTrue(result.warnings.contains(where: { $0.contains("height-bound Cosmos snapshot") }))
   }
 

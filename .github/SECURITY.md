@@ -14,6 +14,10 @@ repository:
 
 <https://github.com/girginomer10/address-atlas/security/advisories/new>
 
+That private-reporting setting must remain enabled. The release workflow checks
+both the live repository setting and this exact repository-specific link and
+blocks publication if either side of the reporting contract is unavailable.
+
 Include the affected version or commit, a minimal reproduction, impact, and any
 known mitigations. Do not include real wallet inventories, exchange credentials,
 passkeys, bearer tokens, recovery material, private keys, or production logs.

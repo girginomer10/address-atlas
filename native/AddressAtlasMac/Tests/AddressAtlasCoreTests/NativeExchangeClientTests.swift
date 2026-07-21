@@ -292,6 +292,10 @@ final class NativeExchangeClientTests: XCTestCase {
     XCTAssertEqual(result.holdings.first(where: { $0.symbol == "USDC" })?.priceUsd, 1)
     XCTAssertEqual(result.holdings.first(where: { $0.symbol == "USDC" })?.valueUsd, 42)
     XCTAssertEqual(
+      result.holdings.first(where: { $0.symbol == "USDC" })?.pricingStatus,
+      .priced
+    )
+    XCTAssertEqual(
       try XCTUnwrap(result.holdings.first(where: { $0.symbol == "USDT" })?.valueUsd),
       9.8,
       accuracy: 0.000_001
@@ -299,6 +303,10 @@ final class NativeExchangeClientTests: XCTestCase {
     XCTAssertEqual(result.holdings.first(where: { $0.symbol == "USD" })?.valueUsd, 5)
     XCTAssertEqual(result.holdings.first(where: { $0.symbol == "BTC" })?.priceUsd, 0)
     XCTAssertEqual(result.holdings.first(where: { $0.symbol == "BTC" })?.valueUsd, 0)
+    XCTAssertEqual(
+      result.holdings.first(where: { $0.symbol == "BTC" })?.pricingStatus,
+      .unpriced
+    )
     XCTAssertTrue(
       result.warnings.contains(where: {
         $0.contains("USDC") && $0.contains("$1.00") && !$0.contains("BTC")

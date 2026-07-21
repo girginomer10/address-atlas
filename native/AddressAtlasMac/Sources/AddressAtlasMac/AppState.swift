@@ -43,6 +43,11 @@ enum SyncActivity: String, CaseIterable, Equatable, Sendable {
   var accessibilityLabel: String { "\(progressTitle), in progress" }
 }
 
+enum DamagedVaultRecoveryAvailability: Equatable, Sendable {
+  case validatedRollbackCheckpoint
+  case quarantineOnly
+}
+
 @MainActor
 final class AppState: ObservableObject {
   @Published var document = VaultDocument() {
@@ -73,10 +78,15 @@ final class AppState: ObservableObject {
   @Published private(set) var isPersisting = false
   @Published private(set) var isTerminationInProgress = false
   @Published private(set) var isExportOperationInProgress = false
+  @Published var damagedVaultRecoveryAvailability:
+    DamagedVaultRecoveryAvailability?
   @Published private(set) var walletLabelDrafts: [UUID: String] = [:]
   @Published var isValidatingExchangeCredentials = false
   @Published var syncPersistencePending = false
   @Published var pendingVaultUploadHasRemoteConflict = false
+  /// Damaged encrypted upload journal. The decrypted primary remains visible,
+  /// while mutation stays blocked until this exact row is explicitly discarded.
+  @Published var quarantinedPendingVaultUpload: QuarantinedPendingVaultUpload?
   @Published var hasVaultRollbackCheckpoint = false
   @Published var hasUnsyncedLocalChanges = true
   var lastSaveRemovedScanRunCount = 0
@@ -108,6 +118,10 @@ final class AppState: ObservableObject {
   /// Nil whenever the server supplied no message or only whitespace.
   @Published private(set) var operatorMessage: String?
 
+  /// Process-local support history. Its event type has no free-form payload,
+  /// so even an upstream error that contains secrets cannot enter diagnostics.
+  var privacySafeDiagnosticLog = PrivacySafeDiagnosticLog()
+
   let crypto = VaultCrypto()
   let keyStore: any VaultKeyStore
   let appSupportDirectoryOverride: URL?
@@ -117,12 +131,19 @@ final class AppState: ObservableObject {
   let endpointConfigClient: any EndpointConfigFetching
   let endpointConfigTrustStore: any EndpointConfigTrustPersisting
   let krakenDeviceIdentifier: @Sendable () throws -> String
+  /// Injected only to make session-expiry boundaries deterministic in tests.
+  /// Production samples wall-clock time at each authorization decision.
+  let sessionDateProvider: @Sendable () -> Date
   /// Test seam for the network boundary only. Nil keeps each production
   /// client's own BoundedURLSessionHTTPClient defaults.
   let httpClient: (any HTTPClient)?
   let passkeyAuthenticator: any PasskeyAuthenticating
   private lazy var vaultKeyManager = VaultKeyManager(store: keyStore, crypto: crypto)
   var vaultKey: Data?
+  /// Held only after Keychain supplied the existing key and the primary row
+  /// then failed a recoverable integrity read. It is never replaced with a new
+  /// key during damaged-vault recovery.
+  var damagedVaultRecoveryKey: Data?
   var persistence: VaultPersistenceCoordinator?
   /// Encrypted upload intent mirrored from SQLite. Its presence blocks all
   /// vault mutation until the exact remote snapshot is reconciled.
@@ -151,6 +172,9 @@ final class AppState: ObservableObject {
   var pendingUploadStagedHook: (@MainActor () -> Void)?
   /// Focused test seam for the post-CAS memory-adoption boundary.
   var pendingUploadCompletedPersistenceHook: (@MainActor () -> Void)?
+  /// One-shot test seam after the browser/code exchange has completed but
+  /// before endpoint trust and the local account binding are committed.
+  var passkeyAuthenticationCompletedHook: (@MainActor () -> Void)?
   /// The origin that supplied the currently accepted remote configuration.
   /// Versions are monotonic only within one authority; changing servers resets
   /// this state to the bundled baseline.
@@ -170,11 +194,11 @@ final class AppState: ObservableObject {
     var saveExactly: Bool
   }
 
-  static let maximumStoredScanRuns = 30
-  static let maximumWallets = 24
-  static let maximumCustomTokens = 100
-  static let maximumManualHoldings = 100
-  static let maximumExchangeConnections = 20
+  static let maximumStoredScanRuns = VaultDocumentLimits.maximumStoredScanRuns
+  static let maximumWallets = VaultDocumentLimits.maximumWallets
+  static let maximumCustomTokens = VaultDocumentLimits.maximumCustomTokens
+  static let maximumManualHoldings = VaultDocumentLimits.maximumManualHoldings
+  static let maximumExchangeConnections = VaultDocumentLimits.maximumExchangeConnections
   /// The app-bundle script reads this value when generating Info.plist.
   /// SwiftPM's `swift run` executable has no Info.plist, so it also needs the
   /// compiled release version for the server compatibility check.
@@ -194,6 +218,7 @@ final class AppState: ObservableObject {
     krakenDeviceIdentifier: @escaping @Sendable () throws -> String = {
       try KrakenDeviceIdentity.currentIdentifier()
     },
+    sessionDateProvider: @escaping @Sendable () -> Date = { Date() },
     keyStore: any VaultKeyStore = KeychainVaultKeyStore(),
     appSupportDirectoryOverride: URL? = nil
   ) {
@@ -202,6 +227,7 @@ final class AppState: ObservableObject {
     self.httpClient = httpClient
     self.passkeyAuthenticator = passkeyAuthenticator ?? PasskeyWebAuthenticator()
     self.krakenDeviceIdentifier = krakenDeviceIdentifier
+    self.sessionDateProvider = sessionDateProvider
     self.keyStore = keyStore
     self.appSupportDirectoryOverride = appSupportDirectoryOverride
     syncSnapshotByteLimit = VaultSyncCodec.maximumSnapshotByteCount
@@ -221,7 +247,8 @@ final class AppState: ObservableObject {
     passkeyAuthenticator: (any PasskeyAuthenticating)? = nil,
     krakenDeviceIdentifier: @escaping @Sendable () throws -> String = {
       try KrakenDeviceIdentity.currentIdentifier()
-    }
+    },
+    sessionDateProvider: @escaping @Sendable () -> Date = { Date() }
   ) {
     precondition((1...VaultSyncCodec.maximumSnapshotByteCount).contains(syncSnapshotByteLimit))
     self.endpointConfigClient = endpointConfigClient
@@ -229,6 +256,7 @@ final class AppState: ObservableObject {
     self.httpClient = httpClient
     self.passkeyAuthenticator = passkeyAuthenticator ?? PasskeyWebAuthenticator()
     self.krakenDeviceIdentifier = krakenDeviceIdentifier
+    self.sessionDateProvider = sessionDateProvider
     self.keyStore = KeychainVaultKeyStore()
     self.appSupportDirectoryOverride = nil
     self.syncSnapshotByteLimit = syncSnapshotByteLimit
@@ -240,8 +268,18 @@ final class AppState: ObservableObject {
     self.document = document
     self.hasUnsyncedLocalChanges = (try? VaultSyncCodec().hasLocalChanges(in: document)) ?? true
     self.isUnlocked = true
-    self.pendingVaultUpload = try? testStore.loadPendingVaultUpload()
-    self.syncPersistencePending = pendingVaultUpload != nil
+    if let inspection = try? testStore.inspectPendingVaultUpload() {
+      switch inspection {
+      case .none:
+        break
+      case .pending(let upload, _):
+        self.pendingVaultUpload = upload
+      case .quarantined(let identity):
+        self.quarantinedPendingVaultUpload = identity
+      }
+    }
+    self.syncPersistencePending =
+      pendingVaultUpload != nil || quarantinedPendingVaultUpload != nil
     self.hasVaultRollbackCheckpoint = (try? testStore.containsRollbackCheckpoint()) ?? false
   }
 
@@ -257,13 +295,19 @@ final class AppState: ObservableObject {
       : 0
     let visible =
       document.preferences.hideDust
-      ? holdings.filter { $0.valueUsd.isFinite && $0.valueUsd >= threshold }
+      ? holdings.filter {
+        $0.pricingStatus != .priced
+          || ($0.valueUsd.isFinite && $0.valueUsd >= threshold)
+      }
       : holdings
     return Self.sortedHoldingsForDisplay(visible)
   }
 
   static func sortedHoldingsForDisplay(_ holdings: [TrackedAsset]) -> [TrackedAsset] {
     holdings.sorted { lhs, rhs in
+      if (lhs.pricingStatus == .priced) != (rhs.pricingStatus == .priced) {
+        return lhs.pricingStatus == .priced
+      }
       let lhsValue = lhs.valueUsd.isFinite && lhs.valueUsd >= 0 ? lhs.valueUsd : 0
       let rhsValue = rhs.valueUsd.isFinite && rhs.valueUsd >= 0 ? rhs.valueUsd : 0
       if lhsValue != rhsValue { return lhsValue > rhsValue }
@@ -280,16 +324,28 @@ final class AppState: ObservableObject {
   /// The headline always represents the complete validated snapshot. Dust is
   /// a row-visibility preference and must never silently rewrite portfolio
   /// value.
-  var latestTotalUsd: Double {
+  var latestKnownValueUsd: Double {
     AppState.validatedPortfolioTotal(latestScan?.holdings ?? []) ?? 0
   }
+
+  /// Compatibility name for call sites that only need the numeric subtotal.
+  /// Presentation must qualify it whenever `unpricedHoldingCount` is nonzero.
+  var latestTotalUsd: Double { latestKnownValueUsd }
+
+  var unpricedHoldingCount: Int {
+    (latestScan?.holdings ?? []).filter { $0.pricingStatus != .priced }.count
+  }
+
+  var hasPartialValuation: Bool { unpricedHoldingCount > 0 }
 
   var hiddenDustHoldingCount: Int {
     hiddenDustHoldings.count
   }
 
   var hiddenDustValueUsd: Double {
-    let valued = hiddenDustHoldings.filter { $0.valueUsd.isFinite && $0.valueUsd >= 0 }
+    let valued = hiddenDustHoldings.filter {
+      $0.pricingStatus == .priced && $0.valueUsd.isFinite && $0.valueUsd >= 0
+    }
     return AppState.validatedPortfolioTotal(valued) ?? 0
   }
 
@@ -300,7 +356,7 @@ final class AppState: ObservableObject {
       ? max(0, document.preferences.dustThreshold)
       : 0
     return (latestScan?.holdings ?? []).filter {
-      !$0.valueUsd.isFinite || $0.valueUsd < threshold
+      $0.pricingStatus == .priced && (!$0.valueUsd.isFinite || $0.valueUsd < threshold)
     }
   }
 
@@ -331,10 +387,28 @@ final class AppState: ObservableObject {
     ) != nil
   }
 
+  func hasUsableSyncSession(at date: Date? = nil) -> Bool {
+    guard let accountId = document.syncState.accountId else { return false }
+    return SyncSessionToken.isUsable(
+      document.syncState.sessionToken,
+      forAccountId: accountId,
+      at: date ?? sessionDateProvider()
+    )
+  }
+
+  func syncSessionStatus(at date: Date? = nil) -> String {
+    guard !document.syncState.sessionToken.isEmpty else { return "sign in required" }
+    return hasUsableSyncSession(at: date) ? "active" : "expired—sign in required"
+  }
+
   /// Recovery obligations are global vault state, not page-level feedback.
   /// Keep this guidance visible across navigation until the underlying durable
   /// operation is resolved, even though ordinary notices and errors are reset.
   var persistentOperationGuidance: String? {
+    if quarantinedPendingVaultUpload != nil {
+      return
+        "The encrypted upload recovery record is quarantined. Your local vault is available read-only; open Sync to explicitly discard only the damaged recovery record."
+    }
     if pendingVaultUploadHasRemoteConflict {
       return
         "Encrypted upload recovery has a remote conflict. Open Sync to review it before changing the vault."
@@ -350,6 +424,14 @@ final class AppState: ObservableObject {
     if hasPendingAccountDeletion {
       return
         "Sync account deletion is still pending. Open Sync and retry the saved deletion operation."
+    }
+    if document.syncState.remoteOutcomeUncertain {
+      return
+        "The last encrypted upload may or may not have reached the server. Open Sync to reconcile the unknown remote outcome before trusting remote status or replacing this local vault."
+    }
+    if document.syncState.pendingExchangeCredentialCleanup {
+      return
+        "Exchange credentials were removed locally, but the last confirmed remote snapshot may still contain them. Open Sync and upload the replacement encrypted vault to complete remote cleanup."
     }
     return nil
   }
@@ -420,20 +502,39 @@ final class AppState: ObservableObject {
   func unlock() async {
     guard beginUnlockOperationIfAllowed() else { return }
     defer { isUnlocking = false }
+    damagedVaultRecoveryAvailability = nil
+    damagedVaultRecoveryKey = nil
+    var candidateRecoveryKey: Data?
+    var candidateRecoveryCoordinator: VaultPersistenceCoordinator?
     do {
       let vaultURL = appSupportDirectory.appending(path: "vault.sqlite")
       let key = try await vaultKeyManager.loadOrCreateVaultKey(existingVaultAt: vaultURL)
+      candidateRecoveryKey = key
       let sqlite = try EncryptedSQLiteVaultStore(path: vaultURL, vaultKey: key, crypto: crypto)
       let coordinator = VaultPersistenceCoordinator(
         store: sqlite,
         syncSnapshotByteLimit: syncSnapshotByteLimit
       )
+      candidateRecoveryCoordinator = coordinator
       let loaded = try await coordinator.load()
-      let pendingUpload = try await coordinator.loadPendingVaultUpload(vaultKey: key)
+      let pendingInspection = try await coordinator.inspectPendingVaultUpload(vaultKey: key)
+      let pendingUpload: PendingVaultUpload?
+      let quarantinedUpload: QuarantinedPendingVaultUpload?
+      switch pendingInspection {
+      case .none:
+        pendingUpload = nil
+        quarantinedUpload = nil
+      case .pending(let upload, _):
+        pendingUpload = upload
+        quarantinedUpload = nil
+      case .quarantined(let identity):
+        pendingUpload = nil
+        quarantinedUpload = identity
+      }
       let hasRollbackCheckpoint = try await coordinator.hasRollbackCheckpoint()
       let normalized = normalizedLoadedDocument(loaded.document)
       let durable =
-        pendingUpload != nil || normalized == loaded.document
+        pendingUpload != nil || quarantinedUpload != nil || normalized == loaded.document
         ? loaded
         : try await coordinator.saveExactly(normalized)
       document = durable.document
@@ -444,17 +545,61 @@ final class AppState: ObservableObject {
       isUnlocked = true
       pendingSyncPersistence = nil
       pendingVaultUpload = pendingUpload
+      quarantinedPendingVaultUpload = quarantinedUpload
       self.hasVaultRollbackCheckpoint = hasRollbackCheckpoint
       pendingVaultUploadHasRemoteConflict = false
-      syncPersistencePending = pendingUpload != nil
-      notice = pendingUpload == nil ? "" : "Recovering an interrupted encrypted vault upload."
-      error = ""
+      syncPersistencePending = pendingUpload != nil || quarantinedUpload != nil
+      if quarantinedUpload != nil {
+        notice = ""
+        error =
+          "The encrypted upload recovery record is damaged and has been quarantined. Your full local vault is available read-only. Open Sync to explicitly discard only that recovery record."
+      } else {
+        notice = pendingUpload == nil ? "" : "Recovering an interrupted encrypted vault upload."
+        error = ""
+      }
       if pendingUpload != nil {
         await recoverPendingVaultUpload()
       }
     } catch {
+      recordDiagnosticFailure(.storageUnlockFailed)
+      if let key = candidateRecoveryKey,
+        let coordinator = candidateRecoveryCoordinator,
+        Self.isRecoverableDamagedPrimaryRead(error)
+      {
+        let hasValidatedRollback =
+          (try? await coordinator.canRecoverDamagedPrimaryFromRollbackCheckpoint()) == true
+        damagedVaultRecoveryKey = key
+        damagedVaultRecoveryAvailability =
+          hasValidatedRollback ? .validatedRollbackCheckpoint : .quarantineOnly
+        notice = ""
+        self.error =
+          hasValidatedRollback
+          ? "The primary encrypted vault is damaged, but its automatic encrypted rollback point was independently validated. Restore that rollback point first, or explicitly quarantine the damaged database and start with a clean local vault. Nothing has been reset."
+          : "The primary encrypted vault is damaged and no valid automatic rollback point is available. You can explicitly preserve the database and its SQLite sidecars in a private quarantine, then start with a clean local vault and sign in to download the remote copy. Nothing has been reset."
+        isUnlocked = false
+        return
+      }
       presentUserFacingError(error)
       isUnlocked = false
+    }
+  }
+
+  private static func isRecoverableDamagedPrimaryRead(_ error: Error) -> Bool {
+    if error is DecodingError || error is VaultCryptoError
+      || error is VaultDocumentSemanticError
+    {
+      return true
+    }
+    guard let storeError = error as? EncryptedSQLiteVaultStoreError else {
+      return false
+    }
+    switch storeError {
+    case .prepareFailed, .stepFailed, .invalidRow:
+      return true
+    case .openFailed, .bindFailed, .filePermissionsFailed, .durabilityUnavailable,
+      .missingDocument, .staleDocument, .pendingUploadExists, .pendingUploadMissing,
+      .pendingUploadMismatch, .primaryDocumentIsReadable:
+      return false
     }
   }
 
@@ -516,6 +661,7 @@ final class AppState: ObservableObject {
         )
       }
       guard startingRevision == documentRevision else {
+        recordDiagnosticFailure(.storageSaveFailed)
         syncPersistencePending = true
         error =
           "The vault changed while a local save was finishing. Reopen Address Atlas before making more changes."
@@ -528,7 +674,9 @@ final class AppState: ObservableObject {
       if resolvesPendingSyncPersistence {
         pendingSyncPersistence = nil
         syncPersistencePending = false
-      } else if pendingSyncPersistence == nil, pendingVaultUpload == nil {
+      } else if pendingSyncPersistence == nil, pendingVaultUpload == nil,
+        quarantinedPendingVaultUpload == nil
+      {
         syncPersistencePending = false
       }
       notice = "Saved locally." + pruningNoticeSuffix(result.removedScanRunCount)
@@ -536,15 +684,16 @@ final class AppState: ObservableObject {
       persistenceSucceeded = true
       return true
     } catch {
+      recordDiagnosticFailure(.storageSaveFailed)
       notice = ""
       presentUserFacingError(error)
       return false
     }
   }
 
-  /// Persist an account-disconnected document and remove its historical
-  /// rollback point as one durable operation. This prevents a crash or disk
-  /// error from leaving only one side of the identity transition committed.
+  /// Persist a privacy- or identity-sensitive document transition and remove
+  /// its historical rollback point as one durable operation. This prevents a
+  /// crash or disk error from committing only one side of the transition.
   @discardableResult
   func saveAndDiscardRollbackCheckpoint(_ candidate: VaultDocument) async -> Bool {
     lastSaveRemovedScanRunCount = 0
@@ -574,15 +723,18 @@ final class AppState: ObservableObject {
       let result = try await persistence.saveAndDiscardRollbackCheckpoint(candidate)
       hasVaultRollbackCheckpoint = false
       guard startingRevision == documentRevision else {
+        recordDiagnosticFailure(.storageProtectedTransitionFailed)
         syncPersistencePending = true
         error =
-          "The vault changed while a local account transition was finishing. Reopen Address Atlas before making more changes."
+          "The vault changed while a protected local transition was finishing. Reopen Address Atlas before making more changes."
         return false
       }
       document = result.document
       documentRevision &+= 1
       hasUnsyncedLocalChanges = result.hasLocalChanges
-      if pendingSyncPersistence == nil, pendingVaultUpload == nil {
+      if pendingSyncPersistence == nil, pendingVaultUpload == nil,
+        quarantinedPendingVaultUpload == nil
+      {
         syncPersistencePending = false
       }
       notice = "Saved locally."
@@ -590,6 +742,7 @@ final class AppState: ObservableObject {
       persistenceSucceeded = true
       return true
     } catch {
+      recordDiagnosticFailure(.storageProtectedTransitionFailed)
       notice = ""
       presentUserFacingError(error)
       return false
@@ -599,6 +752,11 @@ final class AppState: ObservableObject {
   func retryPendingSyncPersistence() async {
     guard acceptsNewOperations else { return }
     guard syncPersistencePending else { return }
+    if quarantinedPendingVaultUpload != nil {
+      error =
+        "The damaged encrypted upload recovery record cannot be replayed. Review it in Sync and explicitly discard only that record to keep the full local vault."
+      return
+    }
     if pendingVaultUpload != nil {
       await recoverPendingVaultUpload()
       return
@@ -664,6 +822,9 @@ final class AppState: ObservableObject {
     output.customTokens = AppState.repairLegacyCoinGeckoIDs(in: output.customTokens)
     output.scanRuns = Array(
       output.scanRuns.sorted { $0.generatedAt > $1.generatedAt }.prefix(Self.maximumStoredScanRuns))
+    for index in output.scanRuns.indices {
+      output.scanRuns[index].warnings = ScanWarningPolicy.bounded(output.scanRuns[index].warnings)
+    }
     if let canonicalServer = AppState.validatedSyncURL(output.syncState.serverURL) {
       // Equivalent origin spellings must not clear a valid session/baseline.
       output.syncState.serverURL = canonicalServer.absoluteString
@@ -709,9 +870,11 @@ final class AppState: ObservableObject {
     }
     guard !syncPersistencePending else {
       error =
-        pendingVaultUpload == nil
-        ? "Save the pending sync state locally before editing the vault."
-        : "Recover the interrupted encrypted vault upload before editing the vault."
+        quarantinedPendingVaultUpload != nil
+        ? "Discard the quarantined upload recovery record explicitly before editing the read-only vault."
+        : pendingVaultUpload == nil
+          ? "Save the pending sync state locally before editing the vault."
+          : "Recover the interrupted encrypted vault upload before editing the vault."
       return false
     }
     guard allowPendingAccountDeletion || !hasPendingAccountDeletion else {

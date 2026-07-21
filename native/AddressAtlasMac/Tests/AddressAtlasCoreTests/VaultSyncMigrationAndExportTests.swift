@@ -44,27 +44,32 @@ final class VaultSyncMigrationAndExportTests: XCTestCase {
   }
 
   func testJSONExportOmitsSyncAndCredentialSecrets() throws {
-    let credentialCiphertext = "credential-ciphertext-marker"
-    let envelope = EncryptedVaultEnvelope(
-      keyId: "exchange-id",
-      nonce: Base64URL.encode(Data(repeating: 1, count: 12)),
-      ciphertext: credentialCiphertext,
-      checksum: String(repeating: "a", count: 64)
+    let credentialCanary = "credential-api-key-marker"
+    let vaultKey = try VaultCrypto().generateVaultKey()
+    let connectionId = UUID()
+    let envelope = try ExchangeCredentialVault().seal(
+      ExchangeCredentials(apiKey: credentialCanary, secret: "credential-secret-marker"),
+      vaultKey: vaultKey,
+      connectionId: connectionId
     )
     var connection = ExchangeConnectionRecord(
+      id: connectionId,
       provider: .binance,
       label: "Binance",
       encryptedCredentials: envelope,
       credentialScopeAssurance: .verifiedReadOnly
     )
+    connection.status = .failed
+    connection.lastTestedAt = Date(timeIntervalSince1970: 1)
     connection.lastError = "raw-provider-error-marker"
+    let accountId = "abababab-abab-4bab-8bab-abababababab"
+    let sessionToken = testSessionToken(accountId: accountId)
     let document = VaultDocument(
       exchangeConnections: [connection],
       syncState: SyncState(
-        accountId: "private-account-id",
+        accountId: accountId,
         serverURL: "https://private-sync.example",
-        sessionToken: "live-bearer-token",
-        lastChecksum: "private-sync-checksum"
+        sessionToken: sessionToken
       )
     )
 
@@ -73,9 +78,10 @@ final class VaultSyncMigrationAndExportTests: XCTestCase {
 
     XCTAssertFalse(json.contains("syncState"))
     XCTAssertFalse(json.contains("sessionToken"))
-    XCTAssertFalse(json.contains("live-bearer-token"))
+    XCTAssertFalse(json.contains(sessionToken))
     XCTAssertFalse(json.contains("encryptedCredentials"))
-    XCTAssertFalse(json.contains(credentialCiphertext))
+    XCTAssertFalse(json.contains(envelope.ciphertext))
+    XCTAssertFalse(json.contains(credentialCanary))
     XCTAssertFalse(json.contains("lastError"))
     XCTAssertFalse(json.contains("raw-provider-error-marker"))
     XCTAssertTrue(json.contains("Binance"))

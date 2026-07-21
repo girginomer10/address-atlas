@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acquireConcurrencyMany,
   clientKey,
+  normalizeRequestClientKey,
   rateLimitMany,
   rateLimitWeightedMany,
   resetRateLimitsForTests
@@ -173,6 +174,12 @@ describe("bounded rate limiter", () => {
       headers: { "x-forwarded-for": "x".repeat(10_000) }
     });
     expect(clientKey(request)).toMatch(/^sha256:[a-f0-9]{64}$/);
+  });
+
+  it("normalizes direct client identities to bounded fail-closed keys", () => {
+    expect(normalizeRequestClientKey(undefined)).toBe("unknown");
+    expect(normalizeRequestClientKey("x".repeat(10_000)))
+      .toMatch(/^sha256:[a-f0-9]{64}$/);
   });
 
   it("reserves concurrency limits atomically and releases them idempotently", () => {

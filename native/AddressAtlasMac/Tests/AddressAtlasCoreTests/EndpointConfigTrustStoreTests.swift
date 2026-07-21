@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import XCTest
 @testable import AddressAtlasCore
@@ -176,6 +177,73 @@ final class EndpointConfigTrustStoreTests: XCTestCase {
     XCTAssertEqual(try Data(contentsOf: fixture.file), original)
   }
 
+  func testSymlinkedTrustStoreFailsClosed() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let target = fixture.directory.appending(path: "target.json")
+    try Data("{}".utf8).write(to: target)
+    try FileManager.default.createSymbolicLink(at: fixture.file, withDestinationURL: target)
+
+    do {
+      try await EndpointConfigTrustStore(fileURL: fixture.file).validate(
+        config(version: 8),
+        for: URL(string: "https://sync.example")!
+      )
+      XCTFail("Expected a symlinked trust record to fail closed")
+    } catch {
+      XCTAssertEqual(error as? EndpointConfigTrustStoreError, .invalidStore)
+    }
+  }
+
+  func testOversizedTrustStoreFailsBeforeDecode() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    try Data(repeating: 0x20, count: 128_001).write(to: fixture.file)
+    try FileManager.default.setAttributes(
+      [.posixPermissions: NSNumber(value: Int16(0o600))],
+      ofItemAtPath: fixture.file.path
+    )
+
+    do {
+      try await EndpointConfigTrustStore(fileURL: fixture.file).validate(
+        config(version: 8),
+        for: URL(string: "https://sync.example")!
+      )
+      XCTFail("Expected an oversized trust record to fail closed")
+    } catch {
+      XCTAssertEqual(error as? EndpointConfigTrustStoreError, .invalidStore)
+    }
+  }
+
+  func testPathSwapAfterDescriptorOpenFailsClosed() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let origin = URL(string: "https://sync.example")!
+    let writer = EndpointConfigTrustStore(fileURL: fixture.file)
+    try await writer.validateAndRecord(config(version: 20), for: origin)
+    let replacement = fixture.directory.appending(path: "replacement.json")
+    try Data(contentsOf: fixture.file).write(to: replacement)
+    try FileManager.default.setAttributes(
+      [.posixPermissions: NSNumber(value: Int16(0o600))],
+      ofItemAtPath: replacement.path
+    )
+    let hook = OneShotAction {
+      precondition(Darwin.rename(replacement.path, fixture.file.path) == 0)
+    }
+    let reader = EndpointConfigTrustStore(
+      fileURL: fixture.file,
+      postRenameDirectorySync: { _ in true },
+      postOpenReadHook: { hook.run() }
+    )
+
+    do {
+      try await reader.validate(config(version: 20), for: origin)
+      XCTFail("Expected a swapped pathname to fail descriptor identity validation")
+    } catch {
+      XCTAssertEqual(error as? EndpointConfigTrustStoreError, .invalidStore)
+    }
+  }
+
   func testIndependentStoreInstancesSerializeSameVersionRace() async throws {
     let fixture = try makeFixture()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -242,6 +310,45 @@ final class EndpointConfigTrustStoreTests: XCTestCase {
     XCTAssertEqual(directorySync.callCount, 2)
   }
 
+  func testRegularFileFullSyncFailureBeforeRenamePublishesNothing() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let store = EndpointConfigTrustStore(
+      fileURL: fixture.file,
+      regularFileSync: { _ in false },
+      postRenameDirectorySync: { _ in true }
+    )
+
+    do {
+      try await store.validateAndRecord(
+        config(version: 20),
+        for: URL(string: "https://sync.example")!
+      )
+      XCTFail("Expected the missing full durability barrier to fail closed")
+    } catch {
+      XCTAssertEqual(error as? EndpointConfigTrustStoreError, .unavailable)
+    }
+    XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.file.path))
+  }
+
+  func testPostRenameFileIdentityOrFullSyncUncertaintyBlocksUntilExactRetry() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let origin = URL(string: "https://sync.example")!
+    let regularSync = DirectorySyncResultSequence([true, false, true])
+    let store = EndpointConfigTrustStore(
+      fileURL: fixture.file,
+      regularFileSync: { _ in regularSync.next() },
+      postRenameDirectorySync: { _ in true }
+    )
+
+    let firstOutcome = try await store.validateAndRecord(config(version: 20), for: origin)
+    XCTAssertEqual(firstOutcome, .committedDurabilityUncertain)
+    let retryOutcome = try await store.validateAndRecord(config(version: 20), for: origin)
+    XCTAssertEqual(retryOutcome, .durable)
+    XCTAssertEqual(regularSync.callCount, 3)
+  }
+
   private func config(version: Int, message: String? = nil) -> NativeEndpointConfig {
     var config = NativeEndpointConfig.bundled
     config.configVersion = version
@@ -290,5 +397,22 @@ private final class DirectorySyncResultSequence: @unchecked Sendable {
 
   var callCount: Int {
     lock.withLock { count }
+  }
+}
+
+private final class OneShotAction: @unchecked Sendable {
+  private let lock = NSLock()
+  private var action: (() -> Void)?
+
+  init(_ action: @escaping () -> Void) {
+    self.action = action
+  }
+
+  func run() {
+    lock.withLock {
+      let next = action
+      action = nil
+      next?()
+    }
   }
 }

@@ -62,6 +62,7 @@ retention and access control.
    install -d -m 0700 /var/backups/address-atlas
    install -d -m 0700 /var/lib/address-atlas
    install -d -m 0700 /var/lib/address-atlas/deploy-sources
+   install -d -m 0700 /var/lib/address-atlas/service-control
    age-keygen -o /root/.config/address-atlas/backup.agekey
    chmod 0600 /root/.config/address-atlas/backup.agekey
    age-keygen -y /root/.config/address-atlas/backup.agekey
@@ -178,9 +179,69 @@ fetched `origin/main`, an exact running image/revision pair, and the config
 fingerprint served publicly by that same revision. It cannot overwrite an
 existing receipt.
 
+## Rotate Database Credentials
+
+Rotate the owner, isolated admin, and runtime credentials only as one operation.
+The reviewed path requires `steady` role mode, one running provenance-bound
+web/Caddy pair, and a fresh encrypted backup that decrypts and verifies before
+the frontend is stopped.
+
+```bash
+export ADDRESS_ATLAS_PROD_ENV_FILE=/etc/address-atlas/sync.env
+umask 077
+install -m 0600 "$ADDRESS_ATLAS_PROD_ENV_FILE" \
+  "$ADDRESS_ATLAS_PROD_ENV_FILE.next"
+# In .next, change only these five fields, using three new mutually distinct
+# role secrets that are also distinct from all three old values:
+# POSTGRES_PASSWORD, POSTGRES_ADMIN_PASSWORD, POSTGRES_RUNTIME_PASSWORD,
+# SYNC_SCHEMA_DATABASE_URL, SYNC_DATABASE_URL
+next_sha="$(sha256sum "$ADDRESS_ATLAS_PROD_ENV_FILE.next" | awk '{print $1}')"
+npm run sync:credentials:rotate -- \
+  "$ADDRESS_ATLAS_PROD_ENV_FILE.next" --confirm \
+  "ROTATE-DATABASE-CREDENTIALS:${next_sha}"
+```
+
+The host lock covers backup, the atomic PostgreSQL transaction, environment
+replacement, and public smoke. A nonsecret `prepared` → `database-committed` →
+`environment-committed` → `service-verified` journal binds the exact A/B file
+hashes, operation source revision, recovery-tool hashes (including the exact
+immutable backup implementation), backup digest/path,
+served revision, image, containers, and PostgreSQL volume. Database URLs may
+retain required remote TLS parameters such as `sslmode=verify-full`, but their
+complete non-credential protocol/host/port/path/query contract must be
+byte-identical in A and B.
+The command rejects `ADDRESS_ATLAS_BACKUP_SCRIPT` overrides. Rotation Compose
+commands run inside a positive environment allowlist, so inherited domain,
+role-mode, credential, URL, or native-config values cannot outrank the locked
+environment files. PostgreSQL connect, statement, and lock deadlines are fixed
+at 5, 60, and 10 seconds respectively; the database-rotation worker has a
+120-second outer deadline. After the atomic role changes, every pre-existing
+session for the owner, admin, and runtime roles is terminated and absence is
+verified before old-password rejection counts as successful.
+Environment replacement writes a `0600` same-directory temporary file, fsyncs
+it, renames it, and fsyncs the directory. The old web/Caddy identities are
+stopped exactly; the same immutable web image and revision are recreated with B
+and must pass public smoke before the journal is removed. The `.next` file is
+consumed only after service verification. A resumed `service-verified` journal
+rechecks the current exact Caddy/web identity, image, revision, and public smoke
+before cleanup. Any partial restart, identity mismatch, or smoke failure stops
+all fixed-project Caddy/web containers and retains the journal for recovery.
+
+If power or the process stops, reclaim the operations lock only through the
+documented stale-owner procedure, then rerun the exact command with the same
+`.next` file and confirmation from the exact journaled source revision. A source
+update or change to `manage-prod.sh`, the state tool, Compose contract, role
+provisioner, or backup tool is rejected until the existing operation is
+completed with its original toolchain. Other stateful operations remain
+blocked while the journal exists. Never edit or delete the journal, never
+rotate one role in isolation, and never restart the A-configured frontend after
+the database phase may have committed.
+
 ## Automated Backup, Restore Drill, And Monitoring
 
-Install the supplied unit templates after reviewing paths for the host:
+Install the supplied unit templates after reviewing paths for the host. The
+stateless monitor also requires Python 3 for a monotonic sub-second total
+deadline shared by both probes:
 
 ```bash
 cp server/sync/systemd/address-atlas-*.service /etc/systemd/system/
@@ -392,7 +453,24 @@ deleted vault; the user must retain a local recovery kit.
   callback state, cookies, or exact client IPs.
 - If the public process is unsafe, `npm run sync:prod:down` stops only
   containers carrying the fixed Address Atlas Compose project label and leaves
-  containers/volumes recoverable.
+  containers/volumes recoverable. It also durably publishes a private
+  `/var/lib/address-atlas/service-control/emergency-stop` fence before the
+  verified stop pass. Every later production service start/create rechecks that
+  fence under the same short cutover lock, so a backup, build, restore, or
+  credential rotation that was already in flight cannot recreate the project
+  after `down` succeeds. The long backup/restore operation lock is deliberately
+  not required for the immediate stop.
+- Keep the fence active through incident review. After verifying Docker state
+  and recovering/removing any separately verified stale operation or
+  `service-control.lock`, clear it only under the normal host operation lock:
+
+  ```bash
+  bash server/sync/manage-prod.sh clear-emergency-stop \
+    --confirm CLEAR-EMERGENCY-STOP:address-atlas-sync
+  ```
+
+  Clearing refuses while any fixed-project container is running. A subsequent
+  `up` still performs all normal backup, provenance, migration, and smoke gates.
 
 ### Readiness fails but liveness passes
 

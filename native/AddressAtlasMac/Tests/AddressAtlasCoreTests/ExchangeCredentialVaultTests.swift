@@ -12,13 +12,30 @@ final class ExchangeCredentialVaultTests: XCTestCase {
     let credentialVault = ExchangeCredentialVault(crypto: crypto)
     let credentials = ExchangeCredentials(apiKey: "api", secret: "secret", passphrase: "pass")
 
-    let envelope = try credentialVault.seal(credentials, vaultKey: vaultKey, connectionId: UUID())
-    let opened = try credentialVault.open(envelope, vaultKey: vaultKey)
+    let connectionID = UUID()
+    let envelope = try credentialVault.seal(
+      credentials,
+      vaultKey: vaultKey,
+      connectionId: connectionID
+    )
+    let opened = try credentialVault.open(
+      envelope,
+      vaultKey: vaultKey,
+      connectionId: connectionID
+    )
 
     XCTAssertEqual(opened, credentials)
 
     let localKey = try crypto.deriveKey(from: vaultKey, purpose: .localDatabase)
     XCTAssertThrowsError(
       try crypto.openJSON(ExchangeCredentials.self, envelope: envelope, with: localKey))
+
+    XCTAssertThrowsError(
+      try credentialVault.open(
+        envelope,
+        vaultKey: vaultKey,
+        connectionId: UUID()
+      )
+    )
   }
 }

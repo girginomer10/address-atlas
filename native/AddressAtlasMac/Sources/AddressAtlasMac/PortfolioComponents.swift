@@ -24,6 +24,7 @@ struct AssetList: View {
             .padding(.vertical, 8)
             .frame(minHeight: 38)
             .background(AtlasTheme.paper2)
+            .accessibilityHidden(true)
             Divider().overlay(AtlasTheme.rule)
             ForEach(assets) { asset in
               AssetRow(asset: asset)
@@ -68,6 +69,10 @@ struct ScanWarningsView: View {
 struct AssetRow: View {
   var asset: TrackedAsset
 
+  static func accessibilityIdentifier(for asset: TrackedAsset) -> String {
+    "portfolio-asset-row-\(asset.id)"
+  }
+
   var body: some View {
     HStack(spacing: 14) {
       VStack(alignment: .leading, spacing: 4) {
@@ -77,8 +82,11 @@ struct AssetRow: View {
             .lineLimit(1)
             .truncationMode(.middle)
             .help(asset.symbol)
-          if asset.priceUsd <= 0 && asset.valueUsd <= 0 {
-            Badge("UNPRICED", color: AtlasTheme.warning)
+          if asset.pricingStatus != .priced {
+            Badge(
+              asset.pricingStatus == .unpriced ? "UNPRICED" : "VALUE UNKNOWN",
+              color: AtlasTheme.warning
+            )
           }
         }
         Text(asset.name)
@@ -105,13 +113,16 @@ struct AssetRow: View {
         .minimumScaleFactor(0.65)
         .help(asset.canonicalAmount)
         .frame(width: 150, alignment: .trailing)
-      Text(money(asset.valueUsd))
+      Text(asset.pricingStatus == .priced ? money(asset.valueUsd) : "—")
         .font(.callout.monospaced().weight(.semibold))
         .frame(width: 150, alignment: .trailing)
     }
     .padding(.horizontal, 18)
     .padding(.vertical, 9)
     .frame(minHeight: 62)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(AtlasAccessibility.assetRowIdentity(asset))
+    .accessibilityIdentifier(Self.accessibilityIdentifier(for: asset))
   }
 }
 
@@ -152,17 +163,20 @@ struct TotalBlock: View {
   var total: Double
   var generatedAt: Date?
   var assetCount: Int
+  var unpricedCount: Int = 0
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
-      AtlasLabel("TOTAL VALUE")
+      AtlasLabel(unpricedCount > 0 ? "PRICED SUBTOTAL (PARTIAL)" : "KNOWN VALUE")
       Text(money(total))
         .font(.system(size: totalSize, weight: .regular, design: .serif))
         .italic()
         .lineLimit(1)
         .minimumScaleFactor(0.6)
       Text(
-        "\(assetCount) assets - \(generatedAt?.formatted(date: .abbreviated, time: .shortened) ?? "no snapshot")"
+        unpricedCount > 0
+          ? "\(assetCount) assets - \(unpricedCount) without a known USD value - \(generatedAt?.formatted(date: .abbreviated, time: .shortened) ?? "no snapshot")"
+          : "\(assetCount) assets - \(generatedAt?.formatted(date: .abbreviated, time: .shortened) ?? "no snapshot")"
       )
       .font(.caption.monospaced())
       .foregroundStyle(AtlasTheme.ink3)

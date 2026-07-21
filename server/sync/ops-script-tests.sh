@@ -130,20 +130,52 @@ url="${!#}"
 printf '%s\n' "$url" >> "${MOCK_CURL_CALL_LOG:-/dev/null}"
 case "${MOCK_MONITOR_MODE:-healthy}" in
   healthy)
-    printf '%s\n%s\n' '{"ok":true,"service":"address-atlas-sync"}' '200'
+    printf '%s\n%s\n%s\n' '{"ok":true,"service":"address-atlas-sync"}' '200' '0.125'
     ;;
   not_ready)
     if [[ "$url" == */livez ]]; then
-      printf '%s\n%s\n' '{"ok":true,"service":"address-atlas-sync"}' '200'
+      printf '%s\n%s\n%s\n' '{"ok":true,"service":"address-atlas-sync"}' '200' '0.125'
     else
-      printf '%s\n%s\n' '{"ok":false}' '503'
+      printf '%s\n%s\n%s\n' '{"ok":false}' '503' '0.250'
     fi
     ;;
   unhealthy)
-    printf '%s\n%s\n' '{"ok":false}' '503'
+    printf '%s\n%s\n%s\n' '{"ok":false}' '503' '0.250'
+    ;;
+  submillisecond)
+    printf '%s\n%s\n%s\n' '{"ok":true,"service":"address-atlas-sync"}' '200' '0.000001'
+    ;;
+  short_fraction)
+    if [[ "$url" == */livez ]]; then
+      printf '%s\n%s\n%s\n' '{"ok":true,"service":"address-atlas-sync"}' '200' '0.1'
+    else
+      printf '%s\n%s\n%s\n' '{"ok":true,"service":"address-atlas-sync"}' '200' '0.0001'
+    fi
+    ;;
+  slow_first)
+    if [[ "$url" == */livez ]]; then
+      sleep 1.1
+      printf '%s\n%s\n%s\n' '{"ok":true,"service":"address-atlas-sync"}' '200' '1.100000'
+    else
+      printf '%s\n%s\n%s\n' '{"ok":true,"service":"address-atlas-sync"}' '200' '0.001000'
+    fi
+    ;;
+  fractional_boundary)
+    max_time=''
+    previous=''
+    for argument in "$@"; do
+      [[ "$previous" == '--max-time' ]] && max_time="$argument"
+      previous="$argument"
+    done
+    printf 'max-time=%s\n' "$max_time" >> "${MOCK_CURL_CALL_LOG:-/dev/null}"
+    if [[ "$url" == */livez ]]; then
+      printf '%s\n%s\n%s\n' '{"ok":true,"service":"address-atlas-sync"}' '200' '0.999500000'
+    else
+      printf '%s\n%s\n%s\n' '{"ok":false}' '503' '0.000500000'
+    fi
     ;;
   secret_failure)
-    printf '{"detail":"%s"}\n500\n' "${MOCK_RESPONSE_SECRET:-RESPONSE_SECRET}"
+    printf '{"detail":"%s"}\n500\n0.250\n' "${MOCK_RESPONSE_SECRET:-RESPONSE_SECRET}"
     printf 'curl diagnostic contains %s\n' "${MOCK_STDERR_SECRET:-STDERR_SECRET}" >&2
     exit 22
     ;;
@@ -155,18 +187,34 @@ EOF
   chmod 0700 "$CASE_DIR/bin/curl"
 }
 
+install_monotonic_fake() {
+  cat > "$CASE_DIR/bin/monotonic" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+sequence="${MOCK_MONOTONIC_SEQUENCE_FILE:?}"
+value="$(head -n 1 "$sequence")"
+tail -n +2 "$sequence" > "$sequence.next"
+mv "$sequence.next" "$sequence"
+printf '%s\n' "$value"
+EOF
+  chmod 0700 "$CASE_DIR/bin/monotonic"
+}
+
 run_monitor_capture() {
   local mode="$1"
   local base_url="$2"
   local response_secret="${3:-RESPONSE_SECRET}"
   local stderr_secret="${4:-STDERR_SECRET}"
+  local timeout_seconds="${5:-5}"
   set +e
   env -i \
     PATH="$CASE_DIR/bin:/usr/bin:/bin" \
     HOME="$CASE_DIR/home" \
     CURL_BIN="$CASE_DIR/bin/curl" \
+    MONOTONIC_BIN="${MOCK_MONOTONIC_BIN:-python3}" \
+    MOCK_MONOTONIC_SEQUENCE_FILE="${MOCK_MONOTONIC_SEQUENCE_FILE:-}" \
     ADDRESS_ATLAS_MONITOR_BASE_URL="$base_url" \
-    ADDRESS_ATLAS_MONITOR_TIMEOUT_SECONDS=5 \
+    ADDRESS_ATLAS_MONITOR_TIMEOUT_SECONDS="$timeout_seconds" \
     MOCK_MONITOR_MODE="$mode" \
     MOCK_RESPONSE_SECRET="$response_secret" \
     MOCK_STDERR_SECRET="$stderr_secret" \
@@ -184,7 +232,7 @@ test_monitor_healthy() {
   run_monitor_capture healthy 'https://monitor.example.test'
   assert_status "$CAPTURE_STATUS" 0 'healthy monitor exit status'
   assert_file_equals "$CASE_DIR/stdout" \
-    '{"timestamp":"2026-07-20T16:00:00Z","service":"address-atlas-sync","status":"healthy","live":true,"ready":true,"durationMs":0}' \
+    '{"timestamp":"2026-07-20T16:00:00Z","service":"address-atlas-sync","status":"healthy","live":true,"ready":true,"durationMs":250}' \
     'healthy monitor JSON'
   assert_file_equals "$CASE_DIR/stderr" '' 'healthy monitor stderr'
 }
@@ -207,6 +255,69 @@ test_monitor_unhealthy() {
   assert_file_contains "$CASE_DIR/stdout" '"status":"unhealthy"' 'unhealthy status field'
   assert_file_contains "$CASE_DIR/stdout" '"live":false,"ready":false' 'unhealthy probe fields'
   assert_file_equals "$CASE_DIR/stderr" '' 'unhealthy monitor stderr'
+}
+
+test_monitor_failure_timing_and_secret_safety() {
+  new_case
+  install_monitor_fakes
+  run_monitor_capture secret_failure 'https://monitor.example.test' \
+    'RESPONSE_SECRET_a9X4' 'STDERR_SECRET_k2Q8'
+  assert_status "$CAPTURE_STATUS" 2 'failed monitor probe exit status'
+  assert_file_contains "$CASE_DIR/stdout" '"durationMs":500' \
+    'failed probe durations were not retained'
+  assert_file_not_contains "$CASE_DIR/stdout" 'RESPONSE_SECRET_a9X4' \
+    'failed response body leaked to monitor stdout'
+  assert_file_not_contains "$CASE_DIR/stderr" 'STDERR_SECRET_k2Q8' \
+    'curl diagnostics leaked to monitor stderr'
+}
+
+test_monitor_timing_and_total_deadline_contract() {
+  new_case
+  install_monitor_fakes
+  run_monitor_capture submillisecond 'https://monitor.example.test' '' '' 20
+  assert_status "$CAPTURE_STATUS" 0 '20-second total monitor deadline acceptance'
+  assert_file_contains "$CASE_DIR/stdout" '"durationMs":2' \
+    'positive sub-millisecond probes were rounded down to zero'
+
+  new_case
+  install_monitor_fakes
+  run_monitor_capture short_fraction 'https://monitor.example.test' '' '' 20
+  assert_status "$CAPTURE_STATUS" 0 'short fractional curl timing acceptance'
+  assert_file_contains "$CASE_DIR/stdout" '"durationMs":101' \
+    'short curl fractions were not right-padded as decimal seconds'
+
+  new_case
+  install_monitor_fakes
+  run_monitor_capture healthy 'https://monitor.example.test' '' '' 21
+  assert_status "$CAPTURE_STATUS" 65 '21-second monitor deadline rejection'
+  assert_path_absent "$CASE_DIR/log/curl.calls" \
+    'invalid total deadline reached curl'
+
+  new_case
+  install_monitor_fakes
+  install_monotonic_fake
+  printf '%s\n' 1000000000 1000000000 2100000000 \
+    > "$CASE_DIR/log/monotonic.sequence"
+  MOCK_MONOTONIC_BIN="$CASE_DIR/bin/monotonic" \
+  MOCK_MONOTONIC_SEQUENCE_FILE="$CASE_DIR/log/monotonic.sequence" \
+    run_monitor_capture slow_first 'https://monitor.example.test' '' '' 1
+  assert_status "$CAPTURE_STATUS" 1 'exhausted total monitor deadline status'
+  [[ "$(wc -l < "$CASE_DIR/log/curl.calls" | tr -d '[:space:]')" == 1 ]] \
+    || fail 'the second probe ran after the shared total deadline was exhausted'
+  assert_file_contains "$CASE_DIR/stdout" '"durationMs":1100' \
+    'slow successful first probe timing was not retained'
+
+  new_case
+  install_monitor_fakes
+  install_monotonic_fake
+  printf '%s\n' 1000000000 1000000000 1999500000 \
+    > "$CASE_DIR/log/monotonic.sequence"
+  MOCK_MONOTONIC_BIN="$CASE_DIR/bin/monotonic" \
+  MOCK_MONOTONIC_SEQUENCE_FILE="$CASE_DIR/log/monotonic.sequence" \
+    run_monitor_capture fractional_boundary 'https://monitor.example.test' '' '' 1
+  assert_status "$CAPTURE_STATUS" 1 'fractional total deadline monitor status'
+  assert_file_contains "$CASE_DIR/log/curl.calls" 'max-time=0.000500000' \
+    'fractional remaining deadline was rounded up to a whole second'
 }
 
 test_monitor_rejects_non_origin_urls_before_curl() {
@@ -2752,6 +2863,196 @@ test_secret_entrypoints_disable_shell_trace() {
     done
   done
 }
+
+install_emergency_stop_docker_fake() {
+  cat > "$CASE_DIR/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+state_dir="${MOCK_LOG_DIR:?}"
+command="${1:-}"
+shift || true
+case "$command" in
+  ps)
+    if [[ "$(< "$state_dir/project.running")" == true ]]; then
+      printf '%s\n' address-atlas-web
+    fi
+    ;;
+  stop)
+    printf 'false\n' > "$state_dir/project.running"
+    printf 'stop %s\n' "$*" >> "$state_dir/docker.events"
+    ;;
+  compose)
+    if [[ "${MOCK_PAUSE_COMPOSE:-false}" == true ]]; then
+      : > "$state_dir/compose.entered"
+      while [[ ! -e "$state_dir/compose.resume" ]]; do
+        sleep 0.05
+      done
+    fi
+    printf 'compose-start %s\n' "$*" >> "$state_dir/docker.events"
+    printf 'true\n' > "$state_dir/project.running"
+    ;;
+  *)
+    printf 'unexpected %s %s\n' "$command" "$*" >> "$state_dir/docker.events"
+    exit 64
+    ;;
+esac
+EOF
+  chmod 0700 "$CASE_DIR/bin/docker"
+}
+
+run_manage_down_capture() {
+  set +e
+  env -i \
+    PATH="$CASE_DIR/bin:/usr/bin:/bin" \
+    HOME="$CASE_DIR/home" \
+    DOCKER_BIN="$CASE_DIR/bin/docker" \
+    NODE_BIN="$REAL_NODE_BIN" \
+    MOCK_LOG_DIR="$CASE_DIR/log" \
+    ADDRESS_ATLAS_CONTROL_ROOT="$CASE_DIR/control" \
+    "$OPS_TEST_BASH_BIN" "$SCRIPT_DIR/manage-prod.sh" down \
+      > "$CASE_DIR/stdout" 2> "$CASE_DIR/stderr"
+  CAPTURE_STATUS=$?
+  set -e
+}
+
+test_manage_prod_terminal_emergency_stop_race() {
+  [[ -n "$REAL_NODE_BIN" ]] || fail 'Node.js is required for emergency-stop tests'
+  new_case
+  mkdir -m 0700 "$CASE_DIR/control"
+  : > "$CASE_DIR/log/docker.events"
+  printf 'true\n' > "$CASE_DIR/log/project.running"
+  install_emergency_stop_docker_fake
+  cat > "$CASE_DIR/paused-operation" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "${SERVICE_CONTROL_LIBRARY:?}"
+run_service_mutation_if_allowed \
+  "$DOCKER_BIN" compose --project-name address-atlas-sync up -d
+EOF
+  chmod 0700 "$CASE_DIR/paused-operation"
+
+  env \
+    DOCKER_BIN="$CASE_DIR/bin/docker" \
+    NODE_BIN="$REAL_NODE_BIN" \
+    MOCK_LOG_DIR="$CASE_DIR/log" \
+    MOCK_PAUSE_COMPOSE=true \
+    ADDRESS_ATLAS_CONTROL_ROOT="$CASE_DIR/control" \
+    SERVICE_CONTROL_LIBRARY="$SCRIPT_DIR/service-control.sh" \
+    "$OPS_TEST_BASH_BIN" "$CASE_DIR/paused-operation" \
+      > "$CASE_DIR/log/operation.stdout" \
+      2> "$CASE_DIR/log/operation.stderr" &
+  local operation_pid=$! attempt operation_status down_pid down_status stop_count
+  local fenced_status start_count_before start_count_after
+  for attempt in {1..100}; do
+    [[ -e "$CASE_DIR/log/compose.entered" ]] && break
+    kill -0 "$operation_pid" 2>/dev/null \
+      || fail 'paused operation exited before the emergency stop'
+    sleep 0.05
+  done
+  assert_path_exists "$CASE_DIR/log/compose.entered" \
+    'operation did not pause inside Docker after its fenced start check'
+
+  (
+    set +e
+    env -i \
+      PATH="$CASE_DIR/bin:/usr/bin:/bin" \
+      HOME="$CASE_DIR/home" \
+      DOCKER_BIN="$CASE_DIR/bin/docker" \
+      NODE_BIN="$REAL_NODE_BIN" \
+      MOCK_LOG_DIR="$CASE_DIR/log" \
+      ADDRESS_ATLAS_CONTROL_ROOT="$CASE_DIR/control" \
+      "$OPS_TEST_BASH_BIN" "$SCRIPT_DIR/manage-prod.sh" down \
+        > "$CASE_DIR/stdout" 2> "$CASE_DIR/stderr"
+    printf '%s\n' "$?" > "$CASE_DIR/log/down.status"
+  ) &
+  down_pid=$!
+  for attempt in {1..100}; do
+    if [[ -d "$CASE_DIR/control/emergency-stop" \
+        && "$(< "$CASE_DIR/log/project.running")" == false ]]; then
+      break
+    fi
+    kill -0 "$down_pid" 2>/dev/null \
+      || fail 'down returned before publishing its fence and initial stop'
+    sleep 0.05
+  done
+  assert_path_exists "$CASE_DIR/control/emergency-stop" \
+    'down did not publish its fence while cutover held the short lock'
+  assert_file_equals "$CASE_DIR/log/project.running" false \
+    'down did not interrupt the project before waiting for cutover'
+  assert_path_absent "$CASE_DIR/log/down.status" \
+    'down returned before the in-flight fenced start released cutover'
+  kill -0 "$down_pid" 2>/dev/null \
+    || fail 'down was not waiting for the in-flight cutover lock'
+
+  : > "$CASE_DIR/log/compose.resume"
+  set +e
+  wait "$operation_pid"
+  operation_status=$?
+  wait "$down_pid"
+  down_status="$(< "$CASE_DIR/log/down.status")"
+  set -e
+  assert_status "$operation_status" 0 \
+    'already-authorized cutover did not complete for the race regression'
+  assert_status "$down_status" 0 'terminal emergency-stop status'
+  assert_file_equals "$CASE_DIR/log/project.running" false \
+    'down returned before its second stop removed the raced restart'
+  assert_file_contains "$CASE_DIR/log/docker.events" compose-start \
+    'race regression did not exercise the post-check Docker start'
+  stop_count="$(grep -c '^stop ' "$CASE_DIR/log/docker.events" || true)"
+  [[ "$stop_count" -ge 2 ]] || fail \
+    'down did not perform both the immediate and serialized verification stops'
+
+  start_count_before="$(grep -c '^compose-start ' \
+    "$CASE_DIR/log/docker.events" || true)"
+  set +e
+  env \
+    DOCKER_BIN="$CASE_DIR/bin/docker" \
+    NODE_BIN="$REAL_NODE_BIN" \
+    MOCK_LOG_DIR="$CASE_DIR/log" \
+    ADDRESS_ATLAS_CONTROL_ROOT="$CASE_DIR/control" \
+    SERVICE_CONTROL_LIBRARY="$SCRIPT_DIR/service-control.sh" \
+    "$OPS_TEST_BASH_BIN" "$CASE_DIR/paused-operation" \
+      > "$CASE_DIR/log/fenced.stdout" 2> "$CASE_DIR/log/fenced.stderr"
+  fenced_status=$?
+  set -e
+  assert_status "$fenced_status" 75 \
+    'a service start begun after down did not fail at the durable fence'
+  start_count_after="$(grep -c '^compose-start ' \
+    "$CASE_DIR/log/docker.events" || true)"
+  [[ "$start_count_after" -eq "$start_count_before" ]] || fail \
+    'an operation that began behind the fence reached Docker service creation'
+  assert_path_exists "$CASE_DIR/control/emergency-stop" \
+    'down did not retain its durable terminal stop fence'
+  assert_file_contains "$CASE_DIR/stdout" \
+    'no in-flight legal operation can restart the project' \
+    'down did not report verified terminal semantics'
+}
+
+test_service_control_stale_lock_fails_closed() {
+  [[ -n "$REAL_NODE_BIN" ]] || fail 'Node.js is required for emergency-stop tests'
+  new_case
+  mkdir -m 0700 "$CASE_DIR/control"
+  : > "$CASE_DIR/log/docker.events"
+  printf 'true\n' > "$CASE_DIR/log/project.running"
+  install_emergency_stop_docker_fake
+  printf 'pid=999999999\nstart=stale-owner-identity\n' \
+    > "$CASE_DIR/control/service-control.lock"
+  chmod 0600 "$CASE_DIR/control/service-control.lock"
+
+  run_manage_down_capture
+  assert_status "$CAPTURE_STATUS" 75 'stale service-control lock status'
+  assert_file_equals "$CASE_DIR/log/project.running" false \
+    'stale cutover lock prevented the immediate incident stop'
+  assert_file_equals "$CASE_DIR/control/service-control.lock" \
+    $'pid=999999999\nstart=stale-owner-identity' \
+    'stale-lock handling deleted or replaced an unbound lock inode'
+  assert_path_exists "$CASE_DIR/control/emergency-stop" \
+    'stale-lock failure did not preserve the terminal stop fence'
+  assert_file_contains "$CASE_DIR/stderr" \
+    'Verify the recorded PID/start identity and Docker state' \
+    'stale-lock failure lacked explicit safe recovery guidance'
+}
+
 run_case() {
   local name="$1"
   local function_name="$2"
@@ -2780,6 +3081,8 @@ run_case() {
 run_case 'monitor healthy' test_monitor_healthy
 run_case 'monitor not ready' test_monitor_not_ready
 run_case 'monitor unhealthy' test_monitor_unhealthy
+run_case 'monitor failure timing and secret safety' test_monitor_failure_timing_and_secret_safety
+run_case 'monitor timing and total deadline contract' test_monitor_timing_and_total_deadline_contract
 run_case 'monitor rejects non-origin URLs before curl' test_monitor_rejects_non_origin_urls_before_curl
 run_case 'backup classifies source fail-closed' test_backup_classify_source
 run_case 'backup schema advisory-lock contract' test_backup_schema_lock_constant_contract
@@ -2835,6 +3138,8 @@ run_case 'runtime role never falls back to owner' test_provision_bad_admin_never
 run_case 'runtime role failure diagnostics are secret-safe' test_provision_failure_diagnostics_are_secret_safe
 run_case 'bootstrap role failure diagnostics are secret-safe' test_bootstrap_failure_diagnostics_are_secret_safe
 run_case 'secret-bearing entrypoints disable shell trace' test_secret_entrypoints_disable_shell_trace
+run_case 'manage-prod terminal emergency-stop race' test_manage_prod_terminal_emergency_stop_race
+run_case 'service-control stale lock fails closed' test_service_control_stale_lock_fails_closed
 
 printf '%d passed, %d failed\n' "$PASSED" "$FAILED"
 [[ "$FAILED" -eq 0 ]]

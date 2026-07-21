@@ -13,6 +13,8 @@ ENV_SNAPSHOT_ROOT=""
 PREDEPLOY_RECOVERY_ENABLED=false
 PREDEPLOY_COMPOSE_COMMAND=()
 PREDEPLOY_BACKUP_MIGRATION_HEAD=""
+PREDEPLOY_BACKUP_PATH=""
+PREDEPLOY_BACKUP_ARTIFACT_SHA256=""
 IMMUTABLE_SOURCE_ROOT=""
 IMMUTABLE_SOURCE_BASE=""
 IMMUTABLE_SOURCE_STAGING=""
@@ -24,21 +26,30 @@ NODE_BIN="${NODE_BIN:-node}"
 COMPOSE_PROJECT_NAME_FIXED="address-atlas-sync"
 BACKUP_SCRIPT="${ADDRESS_ATLAS_BACKUP_SCRIPT:-${SCRIPT_DIR}/postgres-backup.sh}"
 NATIVE_CONFIG_STATE_TOOL="${SCRIPT_DIR}/native-config-deploy-state.mjs"
+CREDENTIAL_ROTATION_STATE_TOOL="${SCRIPT_DIR}/credential-rotation-state.mjs"
+ROTATION_COMMAND_TIMEOUT_SECONDS=120
 PINNED_POSTGRES_IMAGE="postgres:16.14-alpine3.24@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
+source "${SCRIPT_DIR}/service-control.sh"
+source "${SCRIPT_DIR}/frontend-recovery.sh"
 EXPECTED_RESTORE_MIGRATION_HEAD=3
-MAX_COMPATIBLE_ROLLBACK_MIGRATION_HEAD=4
+MAX_COMPATIBLE_ROLLBACK_MIGRATION_HEAD=5
 EXPECTED_MIGRATION_CHAIN_SHA256_3="47ad43aa7438c5c8969f7c01162bb73eab8d51066abef482a03fed86a7890ee3"
 EXPECTED_MIGRATION_CHAIN_SHA256_4="ceb0b725a162b5be512bf35e63ecaf178aa67e7c1335e2807a116f2ef7f65dfe"
+EXPECTED_MIGRATION_CHAIN_SHA256_5="c101eabfc6cdf4252a5a58ac3320958818243e62375d12c4ff864499551cff39"
 usage() {
   cat >&2 <<EOF
 Usage:
   $0 {up|down|maintenance|config|detect-volume|detect-volumes|backup|verify-backup|restore-drill}
+  $0 clear-emergency-stop --confirm CLEAR-EMERGENCY-STOP:address-atlas-sync
   $0 adopt-native-config --confirm ADOPT:<revision>:<version>:<sha256>
   $0 restore <absolute-backup.dump.age> --confirm RESTORE:<database>
   $0 bootstrap-restore <absolute-backup.dump.age> --confirm BOOTSTRAP-RESTORE:<database>
+  $0 rotate-database-credentials <absolute-.env.production.next> --confirm ROTATE-DATABASE-CREDENTIALS:<sha256>
 
   up             create and verify an encrypted PostgreSQL backup, then deploy
   down           emergency-stop the fixed Address Atlas project without volume discovery
+  clear-emergency-stop
+                 clear the durable stop fence under the normal operation lock
   maintenance    stop only Caddy/web while leaving PostgreSQL available
   backup         create an encrypted PostgreSQL backup of the running stack
   verify-backup  fully decrypt/inspect the newest backup without writing plaintext
@@ -49,6 +60,8 @@ Usage:
                  and return service only after policy, database, and public checks
   adopt-native-config
                  one-time, explicit recovery of a missing live config receipt
+  rotate-database-credentials
+                 crash-resumable three-role rotation with a verified backup
 EOF
   exit 64
 }
@@ -76,7 +89,8 @@ assert_clean_deployment_checkout() {
 assert_authorized_deployment_revision() {
   local mode="${1:-exact}"
   [[ "$mode" == "exact" || "$mode" == "install-resume" \
-     || "$mode" == "bootstrap-resume" ]] || return 70
+     || "$mode" == "bootstrap-resume" || "$mode" == "rotation-resume" ]] \
+    || return 70
   local branch head remote_head
   branch="$("$GIT_BIN" -C "$ROOT_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null)" || {
     echo "Production deployment requires the checked-out main branch, not detached HEAD." >&2
@@ -109,6 +123,16 @@ assert_authorized_deployment_revision() {
     }
     "$GIT_BIN" -C "$ROOT_DIR" merge-base --is-ancestor "$head" "$remote_head" || {
       echo "The interrupted first-install revision is not an ancestor of current origin/main." >&2
+      exit 67
+    }
+  elif [[ "$mode" == "rotation-resume" ]]; then
+    [[ "${ROTATION_SOURCE_REVISION:-}" =~ ^[0-9a-f]{40}$ \
+       && "$head" == "$ROTATION_SOURCE_REVISION" ]] || {
+      echo "Credential rotation recovery must run from the exact journaled source revision." >&2
+      exit 67
+    }
+    "$GIT_BIN" -C "$ROOT_DIR" merge-base --is-ancestor "$head" "$remote_head" || {
+      echo "The interrupted credential-rotation revision is not an ancestor of current origin/main." >&2
       exit 67
     }
   else
@@ -154,6 +178,7 @@ assert_postgres_container_uses_volume() {
 }
 
 capture_previous_web_release() {
+  PREVIOUS_WEB_CONTAINER_ID=""
   PREVIOUS_WEB_IMAGE_ID=""
   PREVIOUS_WEB_REVISION=""
   PREVIOUS_WEB_RUNNING="false"
@@ -178,6 +203,7 @@ capture_previous_web_release() {
     exit 66
   }
   [[ "$container_count" -eq 1 ]] || return 0
+  PREVIOUS_WEB_CONTAINER_ID="$container"
 
   metadata="$("$DOCKER_BIN" inspect --format '{{.Image}}|{{index .Config.Labels "org.opencontainers.image.revision"}}|{{.State.Running}}' "$container" 2>/dev/null)" || {
     echo "Unable to inspect the currently deployed web image provenance." >&2
@@ -216,6 +242,7 @@ expected_migration_chain_sha256() {
   case "$1" in
     3) printf '%s\n' "$EXPECTED_MIGRATION_CHAIN_SHA256_3" ;;
     4) printf '%s\n' "$EXPECTED_MIGRATION_CHAIN_SHA256_4" ;;
+    5) printf '%s\n' "$EXPECTED_MIGRATION_CHAIN_SHA256_5" ;;
     *) return 67 ;;
   esac
 }
@@ -515,16 +542,82 @@ capture_native_config_baseline() {
 
 stop_fixed_project() {
   local containers=()
-  local container
+  local container observed
+  observed="$($DOCKER_BIN ps -q \
+    --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME_FIXED}")" || {
+    echo "Unable to inspect running Address Atlas production containers." >&2
+    return 69
+  }
   while IFS= read -r container; do
     [[ -n "$container" ]] && containers+=("$container")
-  done < <("$DOCKER_BIN" ps -q --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME_FIXED}")
+  done <<< "$observed"
   if [[ "${#containers[@]}" -eq 0 ]]; then
     echo "Address Atlas production containers are already stopped."
     return 0
   fi
-  "$DOCKER_BIN" stop --time 30 "${containers[@]}" >/dev/null
+  "$DOCKER_BIN" stop --time 30 "${containers[@]}" >/dev/null || {
+    echo "Unable to stop every fixed-project production container." >&2
+    return 70
+  }
   echo "Stopped ${#containers[@]} Address Atlas production container(s); volumes and containers were preserved."
+}
+
+assert_fixed_project_stopped() {
+  local observed container
+  observed="$($DOCKER_BIN ps -q \
+    --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME_FIXED}")" || {
+    echo "Unable to verify the fixed-project emergency-stop state." >&2
+    return 69
+  }
+  while IFS= read -r container; do
+    [[ -z "$container" ]] || {
+      echo "A fixed-project container is still running after the emergency stop." >&2
+      return 70
+    }
+  done <<< "$observed"
+}
+
+terminal_emergency_stop() {
+  local initial_stop_status=0 final_status=0 release_status=0
+  if request_terminal_emergency_stop; then
+    :
+  else
+    final_status=$?
+    stop_fixed_project >/dev/null 2>&1 || true
+    echo "Containers were stopped where possible, but no durable terminal stop could be proven." >&2
+    return "$final_status"
+  fi
+
+  # Interrupt public/database service immediately without waiting for the long
+  # operation lock. A second stop runs under the short service-control lock so
+  # an already-authorized start can neither race this command nor outlive it.
+  stop_fixed_project || initial_stop_status=$?
+  acquire_service_control_lock || {
+    final_status=$?
+    stop_fixed_project >/dev/null 2>&1 || true
+    echo "The stop fence remains active, but an in-flight cutover could not be proven quiescent." >&2
+    return "$final_status"
+  }
+  if request_terminal_emergency_stop; then
+    if stop_fixed_project; then
+      if assert_fixed_project_stopped; then
+        :
+      else
+        final_status=$?
+      fi
+    else
+      final_status=$?
+    fi
+  else
+    final_status=$?
+  fi
+  release_service_control_lock || release_status=$?
+  [[ "$release_status" -eq 0 ]] || return "$release_status"
+  [[ "$final_status" -eq 0 ]] || return "$final_status"
+  [[ "$initial_stop_status" -eq 0 ]] || {
+    echo "The first emergency-stop attempt failed, but the fenced verification pass succeeded." >&2
+  }
+  echo "Terminal emergency stop is durable and no in-flight legal operation can restart the project."
 }
 
 stop_fixed_frontend() {
@@ -583,10 +676,11 @@ ensure_postgres_container_ready() {
     container="${postgres_containers[0]}"
     assert_postgres_container_uses_volume "$container" "$expected_volume"
     if [[ "$("$DOCKER_BIN" inspect --format '{{.State.Running}}' "$container")" != "true" ]]; then
-      "$DOCKER_BIN" start "$container" >/dev/null
+      run_service_mutation_if_allowed "$DOCKER_BIN" start "$container" >/dev/null
     fi
   else
-    "$DOCKER_BIN" "${compose_command[@]}" up -d postgres
+    run_service_mutation_if_allowed \
+      "$DOCKER_BIN" "${compose_command[@]}" up -d postgres
     container="$("$DOCKER_BIN" ps -q \
       --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME_FIXED}" \
       --filter "label=com.docker.compose.service=postgres")"
@@ -616,7 +710,7 @@ require_existing_postgres_container_ready() {
   container="${containers[0]}"
   assert_postgres_container_uses_volume "$container" "$expected_volume"
   if [[ "$("$DOCKER_BIN" inspect --format '{{.State.Running}}' "$container")" != "true" ]]; then
-    "$DOCKER_BIN" start "$container" >/dev/null
+    run_service_mutation_if_allowed "$DOCKER_BIN" start "$container" >/dev/null
   fi
   wait_for_postgres_health "$container"
   READY_POSTGRES_CONTAINER="$container"
@@ -637,6 +731,8 @@ prepare_verified_predeploy_backup() {
     bash "$BACKUP_SCRIPT" verify "$backup" >/dev/null
   inspect_verified_backup_migration_head "$backup"
   PREDEPLOY_BACKUP_MIGRATION_HEAD="$INSPECTED_BACKUP_MIGRATION_HEAD"
+  PREDEPLOY_BACKUP_PATH="$backup"
+  PREDEPLOY_BACKUP_ARTIFACT_SHA256="$INSPECTED_BACKUP_ARTIFACT_SHA256"
   echo "Verified encrypted pre-deploy backup: ${backup}"
 }
 
@@ -670,6 +766,7 @@ inspect_verified_backup_migration_head() {
     echo "The verified backup metadata is malformed." >&2
     return 65
   }
+  INSPECTED_BACKUP_ARTIFACT_SHA256="$artifact_sha"
   INSPECTED_BACKUP_MIGRATION_HEAD="$migration_head"
 }
 
@@ -766,28 +863,11 @@ cleanup_environment_snapshot() {
   fi
 }
 
-recover_previous_frontend_if_needed() {
-  [[ "$PREDEPLOY_RECOVERY_ENABLED" == "true" ]] || return 0
-  PREDEPLOY_RECOVERY_ENABLED=false
-  if [[ -z "${PREVIOUS_WEB_IMAGE_ID:-}" \
-      || "${PREVIOUS_WEB_RUNNING:-false}" != "true" \
-      || "${#PREDEPLOY_COMPOSE_COMMAND[@]}" -eq 0 ]]; then
-    return 0
-  fi
-  echo "Pre-deploy work failed; restarting the exact captured frontend containers." >&2
-  if ! env ADDRESS_ATLAS_BUILD_REVISION="$PREVIOUS_WEB_REVISION" \
-      "$DOCKER_BIN" "${PREDEPLOY_COMPOSE_COMMAND[@]}" start web caddy >/dev/null \
-      || ! smoke_public_with_retries "$PREVIOUS_WEB_REVISION"; then
-    echo "CRITICAL The captured frontend could not be restarted and verified; keep the service in maintenance and investigate." >&2
-    return 70
-  fi
-  echo "The previously verified frontend release is serving again." >&2
-}
-
 manage_exit_cleanup() {
   local status=$?
+  local recovery_status=0
   trap - EXIT
-  recover_previous_frontend_if_needed || true
+  recover_previous_frontend_if_needed || recovery_status=$?
   if [[ -n "$IMMUTABLE_SOURCE_STAGING" \
       && -d "$IMMUTABLE_SOURCE_STAGING" && ! -L "$IMMUTABLE_SOURCE_STAGING" ]]; then
     find "$IMMUTABLE_SOURCE_STAGING" -type d -exec chmod u+w {} + 2>/dev/null || true
@@ -798,6 +878,9 @@ manage_exit_cleanup() {
     find "$IMMUTABLE_SOURCE_ARCHIVE" -maxdepth 0 -type f -delete 2>/dev/null || true
   fi
   cleanup_environment_snapshot
+  if [[ "$recovery_status" -ne 0 ]]; then
+    status="$recovery_status"
+  fi
   exit "$status"
 }
 
@@ -933,12 +1016,17 @@ prepare_immutable_source_tree() {
     server/sync/migrate-restored-database.sh \
     server/sync/provision-restored-database.sh \
     server/sync/provision-runtime-role.sh \
+    server/sync/manage-prod.sh \
+    server/sync/service-control.sh \
+    server/sync/frontend-recovery.sh \
+    server/sync/credential-rotation-state.mjs \
     server/sync/native-config-deploy-state.mjs; do
     [[ -f "$IMMUTABLE_SOURCE_ROOT/$required_source" \
        && ! -L "$IMMUTABLE_SOURCE_ROOT/$required_source" ]] || return 67
   done
   COMPOSE_FILE="$IMMUTABLE_SOURCE_ROOT/server/sync/compose.prod.yml"
   NATIVE_CONFIG_STATE_TOOL="$IMMUTABLE_SOURCE_ROOT/server/sync/native-config-deploy-state.mjs"
+  CREDENTIAL_ROTATION_STATE_TOOL="$IMMUTABLE_SOURCE_ROOT/server/sync/credential-rotation-state.mjs"
   if [[ -z "${ADDRESS_ATLAS_BACKUP_SCRIPT:-}" ]]; then
     BACKUP_SCRIPT="$IMMUTABLE_SOURCE_ROOT/server/sync/postgres-backup.sh"
   fi
@@ -1158,6 +1246,219 @@ assert_no_unfinished_bootstrap_recovery() {
     echo "Resume the exact bootstrap-restore artifact and target before any other state change." >&2
     return 75
   }
+}
+
+credential_rotation_state_file() {
+  printf '%s/.database-credential-rotation.state\n' "$ADDRESS_ATLAS_BACKUP_DIR"
+}
+
+assert_no_unfinished_credential_rotation() {
+  local state_file
+  state_file="$(credential_rotation_state_file)"
+  [[ ! -e "$state_file" && ! -L "$state_file" ]] || {
+    echo "An unfinished database-credential rotation blocks this production operation." >&2
+    echo "Resume rotate-database-credentials with the exact journal-bound .next file." >&2
+    return 75
+  }
+}
+
+load_credential_rotation_state() {
+  ROTATION_STATE_FILE="$(credential_rotation_state_file)"
+  local record schema extra
+  record="$($NODE_BIN "$CREDENTIAL_ROTATION_STATE_TOOL" state-read "$ROTATION_STATE_FILE")" \
+    || return $?
+  IFS='|' read -r schema ROTATION_PHASE ROTATION_CURRENT_ENV_HASH \
+    ROTATION_NEXT_ENV_HASH ROTATION_SOURCE_REVISION \
+    ROTATION_MANAGE_PROD_SHA256 ROTATION_STATE_TOOL_SHA256 \
+    ROTATION_COMPOSE_SHA256 ROTATION_PROVISION_SHA256 \
+    ROTATION_BACKUP_TOOL_SHA256 ROTATION_BACKUP_PATH \
+    ROTATION_BACKUP_SHA256 ROTATION_REVISION \
+    ROTATION_WEB_IMAGE_ID ROTATION_WEB_CONTAINER_ID \
+    ROTATION_CADDY_CONTAINER_ID ROTATION_POSTGRES_CONTAINER_ID \
+    ROTATION_POSTGRES_VOLUME extra <<< "$record"
+  [[ "$schema" == 3 && -z "$extra" ]] || return 66
+}
+
+capture_rotation_toolchain_contract() {
+  ROTATION_ACTIVE_SOURCE_REVISION="$ADDRESS_ATLAS_BUILD_REVISION"
+  ROTATION_ACTIVE_MANAGE_PROD_SHA256="$(sha256_regular_file \
+    "$IMMUTABLE_SOURCE_ROOT/server/sync/manage-prod.sh")" || return $?
+  ROTATION_ACTIVE_STATE_TOOL_SHA256="$(sha256_regular_file \
+    "$CREDENTIAL_ROTATION_STATE_TOOL")" || return $?
+  ROTATION_ACTIVE_COMPOSE_SHA256="$(sha256_regular_file "$COMPOSE_FILE")" \
+    || return $?
+  ROTATION_ACTIVE_PROVISION_SHA256="$(sha256_regular_file \
+    "$IMMUTABLE_SOURCE_ROOT/server/sync/provision-runtime-role.sh")" || return $?
+  ROTATION_ACTIVE_BACKUP_TOOL_SHA256="$(sha256_regular_file \
+    "$BACKUP_SCRIPT")" || return $?
+  local value
+  for value in "$ROTATION_ACTIVE_MANAGE_PROD_SHA256" \
+      "$ROTATION_ACTIVE_STATE_TOOL_SHA256" "$ROTATION_ACTIVE_COMPOSE_SHA256" \
+      "$ROTATION_ACTIVE_PROVISION_SHA256" \
+      "$ROTATION_ACTIVE_BACKUP_TOOL_SHA256"; do
+    [[ "$value" =~ ^[0-9a-f]{64}$ ]] || return 66
+  done
+}
+
+configured_value_from_file() {
+  local file="$1" name="$2" previous="$ENV_FILE" value
+  ENV_FILE="$file"
+  value="$(configured_volume_from_env_file "$name")"
+  ENV_FILE="$previous"
+  printf '%s' "$value"
+}
+
+export_rotation_current_credentials() {
+  local file="$1"
+  ADDRESS_ATLAS_ROTATE_CURRENT_OWNER_PASSWORD="$(configured_value_from_file "$file" POSTGRES_PASSWORD)"
+  ADDRESS_ATLAS_ROTATE_CURRENT_ADMIN_PASSWORD="$(configured_value_from_file "$file" POSTGRES_ADMIN_PASSWORD)"
+  ADDRESS_ATLAS_ROTATE_CURRENT_RUNTIME_PASSWORD="$(configured_value_from_file "$file" POSTGRES_RUNTIME_PASSWORD)"
+  export ADDRESS_ATLAS_ROTATE_CURRENT_OWNER_PASSWORD \
+    ADDRESS_ATLAS_ROTATE_CURRENT_ADMIN_PASSWORD \
+    ADDRESS_ATLAS_ROTATE_CURRENT_RUNTIME_PASSWORD
+}
+
+rebuild_rotation_compose_args() {
+  local next_environment="$1"
+  ROTATION_COMPOSE_ARGS=(compose --env-file "$next_environment" \
+    --project-name "$COMPOSE_PROJECT_NAME_FIXED" -f "$COMPOSE_FILE")
+}
+
+run_with_rotation_clean_environment() {
+  local -a isolated_environment=("PATH=${PATH:?}")
+  local name value
+  # Only transport/runtime inputs needed to reach the Docker daemon survive.
+  # Desired service configuration is always resolved from the journal-bound
+  # env file or supplied explicitly by the rotation caller.
+  for name in HOME DOCKER_HOST DOCKER_CONTEXT DOCKER_TLS_VERIFY \
+      DOCKER_CERT_PATH DOCKER_CONFIG XDG_CONFIG_HOME XDG_RUNTIME_DIR \
+      SSH_AUTH_SOCK TMPDIR SSL_CERT_FILE SSL_CERT_DIR; do
+    value="${!name:-}"
+    [[ -n "$value" ]] && isolated_environment+=("${name}=${value}")
+  done
+  env -i "${isolated_environment[@]}" "$@"
+}
+
+run_database_credential_rotation_mode() {
+  local role_mode="$1"
+  run_service_mutation_if_allowed \
+    run_with_rotation_clean_environment \
+      "ADDRESS_ATLAS_ROTATE_CURRENT_OWNER_PASSWORD=${ADDRESS_ATLAS_ROTATE_CURRENT_OWNER_PASSWORD:?}" \
+      "ADDRESS_ATLAS_ROTATE_CURRENT_ADMIN_PASSWORD=${ADDRESS_ATLAS_ROTATE_CURRENT_ADMIN_PASSWORD:?}" \
+      "ADDRESS_ATLAS_ROTATE_CURRENT_RUNTIME_PASSWORD=${ADDRESS_ATLAS_ROTATE_CURRENT_RUNTIME_PASSWORD:?}" \
+      ADDRESS_ATLAS_ROTATION_ROLE_MODE="$role_mode" \
+      "$NODE_BIN" "$CREDENTIAL_ROTATION_STATE_TOOL" run-with-deadline \
+        "$ROTATION_COMMAND_TIMEOUT_SECONDS" -- \
+        "$DOCKER_BIN" "${ROTATION_COMPOSE_ARGS[@]}" \
+          --profile admin run --rm --no-deps db-rotate
+}
+
+restore_rotation_frontend_capture() {
+  PREVIOUS_WEB_CONTAINER_ID="$ROTATION_WEB_CONTAINER_ID"
+  PREVIOUS_WEB_IMAGE_ID="$ROTATION_WEB_IMAGE_ID"
+  PREVIOUS_WEB_REVISION="$ROTATION_REVISION"
+  PREVIOUS_WEB_RUNNING=true
+  PREDEPLOY_CADDY_CONTAINER_ID="$ROTATION_CADDY_CONTAINER_ID"
+  PREDEPLOY_CADDY_RUNNING=true
+  PREDEPLOY_FRONTEND_RUNNING_SERVICES=(web caddy)
+  PREDEPLOY_FRONTEND_RUNNING_CONTAINERS=(
+    "$ROTATION_WEB_CONTAINER_ID" "$ROTATION_CADDY_CONTAINER_ID"
+  )
+  PREDEPLOY_FRONTEND_STATE_CAPTURED=true
+  local observed running
+  observed="$(fixed_frontend_container_for_service web)" || return $?
+  [[ "$observed" == "$ROTATION_WEB_CONTAINER_ID" ]] || return 67
+  running="$($DOCKER_BIN inspect --format '{{.State.Running}}' \
+    "$ROTATION_WEB_CONTAINER_ID" 2>/dev/null)" || return 69
+  inspect_captured_frontend_container web "$ROTATION_WEB_CONTAINER_ID" "$running" \
+    || return $?
+  observed="$(fixed_frontend_container_for_service caddy)" || return $?
+  [[ "$observed" == "$ROTATION_CADDY_CONTAINER_ID" ]] || return 67
+  running="$($DOCKER_BIN inspect --format '{{.State.Running}}' \
+    "$ROTATION_CADDY_CONTAINER_ID" 2>/dev/null)" || return 69
+  inspect_captured_frontend_container caddy "$ROTATION_CADDY_CONTAINER_ID" "$running" \
+    || return $?
+}
+
+verify_rotation_backup_and_postgres_binding() {
+  [[ "$SELECTED_POSTGRES_VOLUME" == "$ROTATION_POSTGRES_VOLUME" ]] || {
+    echo "The rotation journal belongs to a different PostgreSQL volume." >&2
+    return 67
+  }
+  assert_postgres_container_uses_volume \
+    "$ROTATION_POSTGRES_CONTAINER_ID" "$ROTATION_POSTGRES_VOLUME"
+  if [[ "$($DOCKER_BIN inspect --format '{{.State.Running}}' \
+      "$ROTATION_POSTGRES_CONTAINER_ID")" != true ]]; then
+    run_service_mutation_if_allowed \
+      "$DOCKER_BIN" start "$ROTATION_POSTGRES_CONTAINER_ID" >/dev/null
+  fi
+  wait_for_postgres_health "$ROTATION_POSTGRES_CONTAINER_ID"
+  READY_POSTGRES_CONTAINER="$ROTATION_POSTGRES_CONTAINER_ID"
+  ADDRESS_ATLAS_POSTGRES_CONTAINER="$READY_POSTGRES_CONTAINER" \
+    bash "$BACKUP_SCRIPT" verify "$ROTATION_BACKUP_PATH" >/dev/null
+  inspect_verified_backup_migration_head "$ROTATION_BACKUP_PATH"
+  [[ "$INSPECTED_BACKUP_ARTIFACT_SHA256" == "$ROTATION_BACKUP_SHA256" ]] || {
+    echo "The verified rotation backup no longer matches its journal binding." >&2
+    return 67
+  }
+}
+
+verify_rotated_frontend_current() {
+  local caddy caddy_metadata caddy_running caddy_project caddy_service
+  local caddy_extra web web_metadata web_running web_project web_service
+  local web_image web_revision web_extra
+  caddy="$(fixed_frontend_container_for_service caddy)" || return $?
+  [[ "$caddy" == "$ROTATION_CADDY_CONTAINER_ID" ]] || return 67
+  caddy_metadata="$($DOCKER_BIN inspect --format \
+    '{{.State.Running}}|{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}' \
+    "$caddy" 2>/dev/null)" || return 69
+  IFS='|' read -r caddy_running caddy_project caddy_service caddy_extra \
+    <<< "$caddy_metadata"
+  [[ -z "$caddy_extra" && "$caddy_running" == true \
+     && "$caddy_project" == "$COMPOSE_PROJECT_NAME_FIXED" \
+     && "$caddy_service" == caddy ]] || return 67
+
+  web="$(fixed_frontend_container_for_service web)" || return $?
+  [[ -n "$web" ]] || return 67
+  web_metadata="$($DOCKER_BIN inspect --format \
+    '{{.State.Running}}|{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}|{{.Image}}|{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+    "$web" 2>/dev/null)" || return 69
+  IFS='|' read -r web_running web_project web_service web_image web_revision \
+    web_extra <<< "$web_metadata"
+  [[ -z "$web_extra" && "$web_running" == true \
+     && "$web_project" == "$COMPOSE_PROJECT_NAME_FIXED" \
+     && "$web_service" == web \
+     && "$web_image" == "$ROTATION_WEB_IMAGE_ID" \
+     && "$web_revision" == "$ROTATION_REVISION" ]] || return 67
+  smoke_public_with_retries "$ROTATION_REVISION" || return $?
+}
+
+restart_rotated_frontend_once() {
+  "$DOCKER_BIN" image inspect "$ROTATION_WEB_IMAGE_ID" >/dev/null 2>&1 || return 67
+  "$DOCKER_BIN" tag "$ROTATION_WEB_IMAGE_ID" \
+    "address-atlas-sync:${ROTATION_REVISION}" || return $?
+  local serving_compose=(compose --env-file "$ORIGINAL_ENV_FILE" \
+    --project-name "$COMPOSE_PROJECT_NAME_FIXED" -f "$COMPOSE_FILE")
+  run_service_mutation_if_allowed \
+    run_with_rotation_clean_environment \
+      ADDRESS_ATLAS_BUILD_REVISION="$ROTATION_REVISION" \
+        "$DOCKER_BIN" "${serving_compose[@]}" up -d --no-build --no-deps \
+          --force-recreate web || return $?
+  # Caddy carries no rotated credential. Preserve and restart its exact
+  # captured container instead of letting Compose silently replace its image or
+  # configuration while this maintenance operation is scoped to database auth.
+  run_service_mutation_if_allowed \
+    "$DOCKER_BIN" start "$ROTATION_CADDY_CONTAINER_ID" >/dev/null || return $?
+  verify_rotated_frontend_current
+}
+
+restart_rotated_frontend() {
+  local status=0
+  restart_rotated_frontend_once || status=$?
+  [[ "$status" -eq 0 ]] && return 0
+  echo "Credential rotation could not prove the exact B-configured public frontend; stopping every fixed-project frontend container." >&2
+  fail_safe_stop_fixed_frontend || true
+  return 70
 }
 
 configure_restore_contract() {
@@ -1581,8 +1882,8 @@ assert_volume_mount_safe_for_up() {
 }
 
 production_domain() {
-  local domain="${ADDRESS_ATLAS_DOMAIN:-}"
-  [[ -n "$domain" ]] || domain="$(configured_volume_from_env_file ADDRESS_ATLAS_DOMAIN)"
+  local domain
+  domain="$(configured_volume_from_env_file ADDRESS_ATLAS_DOMAIN)"
   if [[ ! "$domain" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ \
      || "$domain" == *..* ]]; then
     echo "ADDRESS_ATLAS_DOMAIN must be an exact hostname without a scheme, port, path, query, or fragment." >&2
@@ -1592,8 +1893,8 @@ production_domain() {
 }
 
 database_role_mode() {
-  local mode="${ADDRESS_ATLAS_DATABASE_ROLE_MODE:-}"
-  [[ -n "$mode" ]] || mode="$(configured_volume_from_env_file ADDRESS_ATLAS_DATABASE_ROLE_MODE)"
+  local mode
+  mode="$(configured_volume_from_env_file ADDRESS_ATLAS_DATABASE_ROLE_MODE)"
   mode="${mode:-steady}"
   case "$mode" in
     bootstrap|steady) printf '%s\n' "$mode" ;;
@@ -1696,9 +1997,7 @@ smoke_public_once() {
   [[ "$ready" == '{"ok":true,"service":"address-atlas-sync"}' ]] || return 1
   probe_public_native_config \
     "${base}/config/native?deployment_probe=${expected_revision}" "$expected_revision" || return 1
-  expected_config_version="${NATIVE_ENDPOINT_CONFIG_VERSION:-}"
-  [[ -n "$expected_config_version" ]] \
-    || expected_config_version="$(configured_volume_from_env_file NATIVE_ENDPOINT_CONFIG_VERSION)"
+  expected_config_version="$(configured_volume_from_env_file NATIVE_ENDPOINT_CONFIG_VERSION)"
   expected_config_version="${expected_config_version:-5}"
   [[ "$expected_config_version" =~ ^[0-9]+$ \
      && "$CANDIDATE_CONFIG_VERSION" == "$expected_config_version" ]] || return 1
@@ -1781,9 +2080,10 @@ preflight_private_web_config() {
     echo "A private native-config preflight container already exists: ${name}." >&2
     return 67
   fi
-  if ! env ADDRESS_ATLAS_BUILD_REVISION="$revision" \
-    "$DOCKER_BIN" "${compose_command[@]}" run --detach --name "$name" --no-deps web \
-      >/dev/null; then
+  if ! run_service_mutation_if_allowed \
+    env ADDRESS_ATLAS_BUILD_REVISION="$revision" \
+      "$DOCKER_BIN" "${compose_command[@]}" run --detach --name "$name" --no-deps web \
+        >/dev/null; then
     echo "Unable to start the private native-config preflight container." >&2
     return 70
   fi
@@ -1876,7 +2176,9 @@ ensure_install_candidate_container() {
   local compose_command=("$@")
   capture_previous_web_release
   if [[ -z "$PREVIOUS_WEB_IMAGE_ID" ]]; then
-    "$DOCKER_BIN" "${compose_command[@]}" create --no-build --no-deps web >/dev/null || {
+    run_service_mutation_if_allowed \
+      "$DOCKER_BIN" "${compose_command[@]}" create --no-build --no-deps web \
+        >/dev/null || {
       echo "Unable to create the stopped first-install web provenance container." >&2
       return 70
     }
@@ -1972,8 +2274,10 @@ rollback_web_release() {
     echo "Unable to retag the previous verified web image for rollback." >&2
     return 70
   }
-  env ADDRESS_ATLAS_BUILD_REVISION="$PREVIOUS_WEB_REVISION" \
-    "$DOCKER_BIN" "${compose_command[@]}" up -d --no-build --wait --wait-timeout 120 || {
+  run_service_mutation_if_allowed \
+    env ADDRESS_ATLAS_BUILD_REVISION="$PREVIOUS_WEB_REVISION" \
+      "$DOCKER_BIN" "${compose_command[@]}" up -d --no-build --wait \
+        --wait-timeout 120 || {
       echo "Unable to restart the previous verified web image." >&2
       return 70
     }
@@ -1984,7 +2288,8 @@ rollback_web_release() {
 
 deploy_and_verify_or_rollback() {
   local compose_command=("$@")
-  if "$DOCKER_BIN" "${compose_command[@]}" up -d --no-build --wait --wait-timeout 120 \
+  if run_service_mutation_if_allowed \
+    "$DOCKER_BIN" "${compose_command[@]}" up -d --no-build --wait --wait-timeout 120 \
     && smoke_public_with_retries "$ADDRESS_ATLAS_BUILD_REVISION" \
     && persist_verified_native_config_receipt "$ADDRESS_ATLAS_BUILD_REVISION"; then
     return 0
@@ -2000,7 +2305,8 @@ deploy_and_verify_or_rollback() {
 
 deploy_and_verify_without_rollback() {
   local compose_command=("$@")
-  if "$DOCKER_BIN" "${compose_command[@]}" up -d --no-build --wait --wait-timeout 120 \
+  if run_service_mutation_if_allowed \
+    "$DOCKER_BIN" "${compose_command[@]}" up -d --no-build --wait --wait-timeout 120 \
     && smoke_public_with_retries "$ADDRESS_ATLAS_BUILD_REVISION" \
     && persist_verified_native_config_receipt "$ADDRESS_ATLAS_BUILD_REVISION"; then
     return 0
@@ -2012,20 +2318,30 @@ deploy_and_verify_without_rollback() {
 
 [[ "$#" -ge 1 ]] || usage
 command="$1"
-if [[ "$command" == "restore" || "$command" == "bootstrap-restore" ]]; then
+if [[ "$command" == "restore" || "$command" == "bootstrap-restore" \
+    || "$command" == "rotate-database-credentials" ]]; then
   [[ "$#" -eq 4 && "$3" == "--confirm" ]] || usage
-elif [[ "$command" == "adopt-native-config" ]]; then
+elif [[ "$command" == "adopt-native-config" \
+    || "$command" == "clear-emergency-stop" ]]; then
   [[ "$#" -eq 3 && "$2" == "--confirm" ]] || usage
 else
   [[ "$#" -eq 1 ]] || usage
 fi
 
+if [[ "$command" == "rotate-database-credentials" \
+   && -n "${ADDRESS_ATLAS_BACKUP_SCRIPT:-}" ]]; then
+  echo "Credential rotation forbids ADDRESS_ATLAS_BACKUP_SCRIPT; the backup tool is bound to the immutable release source." >&2
+  exit 65
+fi
+
 # Every stateful production operation shares one cross-process host lock.
 # Deploy/restore hold it from the first source/provenance read through migration,
 # role convergence, public smoke, and durable receipt. Backup/drill commands
-# acquire the same lock internally; emergency `down` deliberately bypasses it.
+# acquire the same lock internally. Emergency `down` bypasses that long lock,
+# but publishes a durable fence and coordinates every service start through a
+# separate short cutover lock.
 case "$command" in
-  up|backup|verify-backup|restore-drill|restore|bootstrap-restore|maintenance|adopt-native-config)
+  up|backup|verify-backup|restore-drill|restore|bootstrap-restore|rotate-database-credentials|maintenance|adopt-native-config|clear-emergency-stop)
     if [[ -z "${ADDRESS_ATLAS_OPERATION_LOCK_OWNER_PID:-}" ]]; then
       validate_production_environment_file true
       load_backup_lock_environment
@@ -2053,8 +2369,17 @@ case "$command" in
     snapshot_production_environment
     assert_snapshot_uses_locked_backup_directory
     load_backup_environment
-    [[ "$command" == "bootstrap-restore" ]] \
+    [[ "$command" == "bootstrap-restore" \
+       || "$command" == "clear-emergency-stop" ]] \
       || assert_no_unfinished_bootstrap_recovery
+    [[ "$command" == "rotate-database-credentials" \
+       || "$command" == "clear-emergency-stop" ]] \
+      || assert_no_unfinished_credential_rotation
+    ;;
+esac
+case "$command" in
+  up|backup|restore-drill|restore|bootstrap-restore|rotate-database-credentials)
+    assert_terminal_emergency_stop_not_requested
     ;;
 esac
 case "$command" in
@@ -2063,7 +2388,14 @@ case "$command" in
     # discovery/adoption decision. Exact Compose ownership labels are enough to
     # identify the running project, and preserving containers makes the next
     # pre-deploy backup possible even after an emergency stop.
-    stop_fixed_project
+    terminal_emergency_stop
+    ;;
+  clear-emergency-stop)
+    [[ "$3" == "CLEAR-EMERGENCY-STOP:${COMPOSE_PROJECT_NAME_FIXED}" ]] || {
+      echo "Confirmation must exactly equal CLEAR-EMERGENCY-STOP:${COMPOSE_PROJECT_NAME_FIXED}." >&2
+      exit 64
+    }
+    clear_terminal_emergency_stop
     ;;
   maintenance)
     stop_fixed_frontend
@@ -2160,6 +2492,166 @@ case "$command" in
     latest_backup="$(bash "$BACKUP_SCRIPT" latest)"
     bash "$BACKUP_SCRIPT" drill "$latest_backup"
     ;;
+  rotate-database-credentials)
+    validate_production_environment_file true
+    rotation_next_environment="$2"
+    [[ "$rotation_next_environment" == /* \
+       && "$rotation_next_environment" == "${ORIGINAL_ENV_FILE}.next" \
+       && "$rotation_next_environment" != *$'\n'* ]] || {
+      echo "Credential rotation requires the exact ${ORIGINAL_ENV_FILE}.next path." >&2
+      exit 65
+    }
+    assert_clean_deployment_checkout
+    ADDRESS_ATLAS_BUILD_REVISION="$(build_revision)"
+    export ADDRESS_ATLAS_BUILD_REVISION
+    ROTATION_STATE_FILE="$(credential_rotation_state_file)"
+    rotation_authorization_mode=exact
+    rotation_state_exists=false
+    if [[ -e "$ROTATION_STATE_FILE" || -L "$ROTATION_STATE_FILE" ]]; then
+      # Read only enough durable state to authorize an exact old-source resume.
+      # The state is parsed again by the immutable journaled toolchain below.
+      load_credential_rotation_state
+      rotation_authorization_mode=rotation-resume
+      rotation_state_exists=true
+    fi
+    assert_authorized_deployment_revision "$rotation_authorization_mode"
+    initialize_production_compose_context
+    prepare_immutable_source_tree
+    capture_rotation_toolchain_contract
+    rebuild_production_compose_args
+    [[ "$(database_role_mode)" == steady ]] || {
+      echo "Credential rotation requires ADDRESS_ATLAS_DATABASE_ROLE_MODE=steady." >&2
+      exit 65
+    }
+    if [[ "$rotation_state_exists" == true ]]; then
+      load_credential_rotation_state
+      "$NODE_BIN" "$CREDENTIAL_ROTATION_STATE_TOOL" resume-contract \
+        "$ROTATION_STATE_FILE" "$ORIGINAL_ENV_FILE" \
+        "$rotation_next_environment" "$ROTATION_ACTIVE_SOURCE_REVISION" \
+        "$ROTATION_ACTIVE_MANAGE_PROD_SHA256" \
+        "$ROTATION_ACTIVE_STATE_TOOL_SHA256" \
+        "$ROTATION_ACTIVE_COMPOSE_SHA256" \
+        "$ROTATION_ACTIVE_PROVISION_SHA256" \
+        "$ROTATION_ACTIVE_BACKUP_TOOL_SHA256" >/dev/null
+    else
+      rotation_contract="$($NODE_BIN "$CREDENTIAL_ROTATION_STATE_TOOL" env-contract \
+        "$ORIGINAL_ENV_FILE" "$rotation_next_environment")" || exit $?
+      IFS='|' read -r ROTATION_CURRENT_ENV_HASH ROTATION_NEXT_ENV_HASH \
+        rotation_extra <<< "$rotation_contract"
+      [[ -z "$rotation_extra" \
+         && "$ROTATION_CURRENT_ENV_HASH" =~ ^[0-9a-f]{64}$ \
+         && "$ROTATION_NEXT_ENV_HASH" =~ ^[0-9a-f]{64}$ ]] || exit 66
+      expected_rotation_confirmation="ROTATE-DATABASE-CREDENTIALS:${ROTATION_NEXT_ENV_HASH}"
+      [[ "$4" == "$expected_rotation_confirmation" ]] || {
+        echo "Confirmation must exactly equal ${expected_rotation_confirmation}." >&2
+        exit 64
+      }
+      capture_previous_web_release
+      [[ -n "$PREVIOUS_WEB_IMAGE_ID" && "$PREVIOUS_WEB_RUNNING" == true ]] || {
+        echo "Credential rotation requires one running provenance-bound web release." >&2
+        exit 67
+      }
+      assert_deployed_revision_is_authorized_ancestor "$PREVIOUS_WEB_REVISION" || exit $?
+      capture_native_config_baseline
+      PREDEPLOY_COMPOSE_COMMAND=("${PRODUCTION_COMPOSE_ARGS[@]}")
+      prepare_verified_predeploy_backup \
+        "$SELECTED_POSTGRES_VOLUME" "${PRODUCTION_COMPOSE_ARGS[@]}"
+      capture_fixed_frontend_runtime_state
+      [[ "$PREVIOUS_WEB_RUNNING" == true \
+         && "$PREDEPLOY_CADDY_RUNNING" == true \
+         && "${#PREDEPLOY_FRONTEND_RUNNING_CONTAINERS[@]}" -eq 2 ]] || {
+        echo "Credential rotation requires the exact running web and Caddy containers." >&2
+        exit 67
+      }
+      "$NODE_BIN" "$CREDENTIAL_ROTATION_STATE_TOOL" state-write \
+        "$ROTATION_STATE_FILE" prepared \
+        "$ROTATION_CURRENT_ENV_HASH" "$ROTATION_NEXT_ENV_HASH" \
+        "$ROTATION_ACTIVE_SOURCE_REVISION" \
+        "$ROTATION_ACTIVE_MANAGE_PROD_SHA256" \
+        "$ROTATION_ACTIVE_STATE_TOOL_SHA256" \
+        "$ROTATION_ACTIVE_COMPOSE_SHA256" \
+        "$ROTATION_ACTIVE_PROVISION_SHA256" \
+        "$ROTATION_ACTIVE_BACKUP_TOOL_SHA256" \
+        "$PREDEPLOY_BACKUP_PATH" "$PREDEPLOY_BACKUP_ARTIFACT_SHA256" \
+        "$PREVIOUS_WEB_REVISION" "$PREVIOUS_WEB_IMAGE_ID" \
+        "$PREVIOUS_WEB_CONTAINER_ID" "$PREDEPLOY_CADDY_CONTAINER_ID" \
+        "$READY_POSTGRES_CONTAINER" "$SELECTED_POSTGRES_VOLUME"
+      load_credential_rotation_state
+    fi
+
+    expected_rotation_confirmation="ROTATE-DATABASE-CREDENTIALS:${ROTATION_NEXT_ENV_HASH}"
+    [[ "$4" == "$expected_rotation_confirmation" ]] || {
+      echo "Confirmation does not match the journal-bound next environment SHA-256." >&2
+      exit 64
+    }
+    [[ "$ROTATION_REVISION" =~ ^[0-9a-f]{40}$ ]] || exit 66
+    assert_deployed_revision_is_authorized_ancestor "$ROTATION_REVISION" || exit $?
+    verify_rotation_backup_and_postgres_binding
+    rebuild_rotation_compose_args "$rotation_next_environment"
+
+    if [[ "$ROTATION_PHASE" == prepared ]]; then
+      export_rotation_current_credentials "$ENV_FILE"
+      restore_rotation_frontend_capture
+      PREDEPLOY_RECOVERY_ENABLED=true
+      stop_captured_frontend
+      if run_database_credential_rotation_mode verify-rotation \
+          >/dev/null 2>&1; then
+        # The transaction committed before a prior process could fsync its next
+        # phase. Exact B/A verification makes that ambiguity safe to resume.
+        PREDEPLOY_RECOVERY_ENABLED=false
+      else
+        # From the first atomic ALTER ROLE transaction onward, restarting the
+        # A-configured frontend would be unsafe even if client verification is
+        # interrupted after PostgreSQL commits.
+        PREDEPLOY_RECOVERY_ENABLED=false
+        if ! run_database_credential_rotation_mode rotate; then
+          run_database_credential_rotation_mode verify-rotation || {
+            echo "Credential rotation could not prove either a fresh or resumed B credential set." >&2
+            exit 74
+          }
+        fi
+      fi
+      "$NODE_BIN" "$CREDENTIAL_ROTATION_STATE_TOOL" state-advance \
+        "$ROTATION_STATE_FILE" prepared database-committed
+      unset ADDRESS_ATLAS_ROTATE_CURRENT_OWNER_PASSWORD \
+        ADDRESS_ATLAS_ROTATE_CURRENT_ADMIN_PASSWORD \
+        ADDRESS_ATLAS_ROTATE_CURRENT_RUNTIME_PASSWORD
+      load_credential_rotation_state
+    fi
+
+    if [[ "$ROTATION_PHASE" == database-committed ]]; then
+      "$NODE_BIN" "$CREDENTIAL_ROTATION_STATE_TOOL" install-env \
+        "$rotation_next_environment" "$ORIGINAL_ENV_FILE" \
+        "$ROTATION_CURRENT_ENV_HASH" "$ROTATION_NEXT_ENV_HASH"
+      "$NODE_BIN" "$CREDENTIAL_ROTATION_STATE_TOOL" state-advance \
+        "$ROTATION_STATE_FILE" database-committed environment-committed
+      load_credential_rotation_state
+    fi
+
+    if [[ "$ROTATION_PHASE" == environment-committed ]]; then
+      restart_rotated_frontend
+      "$NODE_BIN" "$CREDENTIAL_ROTATION_STATE_TOOL" state-advance \
+        "$ROTATION_STATE_FILE" environment-committed service-verified
+      load_credential_rotation_state
+    fi
+
+    [[ "$ROTATION_PHASE" == service-verified ]] || {
+      echo "Credential rotation stopped at an unknown recovery phase." >&2
+      exit 74
+    }
+    if ! verify_rotated_frontend_current; then
+      echo "The service-verified rotation journal no longer matches a healthy exact B-configured frontend; retaining recovery state." >&2
+      fail_safe_stop_fixed_frontend || true
+      exit 70
+    fi
+    if [[ -e "$rotation_next_environment" || -L "$rotation_next_environment" ]]; then
+      "$NODE_BIN" "$CREDENTIAL_ROTATION_STATE_TOOL" cleanup-next \
+        "$rotation_next_environment" "$ROTATION_NEXT_ENV_HASH"
+    fi
+    "$NODE_BIN" "$CREDENTIAL_ROTATION_STATE_TOOL" state-delete \
+      "$ROTATION_STATE_FILE" "$ROTATION_NEXT_ENV_HASH"
+    echo "Database credentials, production environment, and exact prior web release are verified on B."
+    ;;
   restore)
     validate_production_environment_file true
     load_backup_environment
@@ -2200,11 +2692,7 @@ case "$command" in
     "$DOCKER_BIN" tag "$PREVIOUS_WEB_IMAGE_ID" "address-atlas-sync:${PREVIOUS_WEB_REVISION}"
     preflight_private_web_config \
       "$PREVIOUS_WEB_REVISION" rollback "${PRODUCTION_COMPOSE_ARGS[@]}"
-    previous_frontend_was_running="$PREVIOUS_WEB_RUNNING"
-    stop_fixed_frontend
-    if [[ "$previous_frontend_was_running" == "true" ]]; then
-      PREDEPLOY_RECOVERY_ENABLED=true
-    fi
+    stop_frontend_before_database_mutation
     assert_clean_deployment_checkout
     assert_authorized_deployment_revision exact
     # Once database replacement starts, an error deliberately leaves the web
@@ -2212,8 +2700,9 @@ case "$command" in
     # candidate, so blindly restarting the old frontend would be unsafe.
     PREDEPLOY_RECOVERY_ENABLED=false
     bash "$BACKUP_SCRIPT" restore "$2" "$3" "$4"
-    "$DOCKER_BIN" "${PRODUCTION_COMPOSE_ARGS[@]}" \
-      --profile admin run --rm --no-deps db-provision
+    run_service_mutation_if_allowed \
+      "$DOCKER_BIN" "${PRODUCTION_COMPOSE_ARGS[@]}" \
+        --profile admin run --rm --no-deps db-provision
     preflight_private_web_config \
       "$ADDRESS_ATLAS_BUILD_REVISION" candidate "${PRODUCTION_COMPOSE_ARGS[@]}"
     preflight_private_web_config \
@@ -2277,8 +2766,7 @@ case "$command" in
 
     capture_previous_web_release
     load_durable_native_config_baseline
-    PREDEPLOY_RECOVERY_ENABLED=false
-    stop_fixed_frontend
+    stop_frontend_before_database_mutation
     ensure_postgres_container_ready \
       "$SELECTED_POSTGRES_VOLUME" "${PRODUCTION_COMPOSE_ARGS[@]}"
     assert_exact_bootstrap_postgres_image "$READY_POSTGRES_CONTAINER"
@@ -2300,6 +2788,9 @@ case "$command" in
     assert_clean_deployment_checkout
     assert_authorized_deployment_revision "$bootstrap_authorization_mode"
 
+    # From this point the restore engine may commit database-global state. The
+    # pre-loss frontend is no longer a safe automatic recovery target.
+    PREDEPLOY_RECOVERY_ENABLED=false
     bootstrap_engine_output="$({
       ADDRESS_ATLAS_POSTGRES_CONTAINER="$READY_POSTGRES_CONTAINER" \
         bash "$BACKUP_SCRIPT" bootstrap-restore \
@@ -2439,7 +2930,9 @@ case "$command" in
         "$DOCKER_BIN" "${compose_args[@]}" build web
       fi
 
-      "$DOCKER_BIN" "${compose_args[@]}" --profile admin run --rm --no-deps schema
+      run_service_mutation_if_allowed \
+        "$DOCKER_BIN" "${compose_args[@]}" \
+          --profile admin run --rm --no-deps schema
       if [[ -n "$INSTALL_PHASE" ]]; then
         if [[ "$INSTALL_PHASE" == "candidate-ready" ]]; then
           record_install_deployment_phase schema-ready
@@ -2453,21 +2946,31 @@ case "$command" in
           # before its phase receipt is fsynced. Steady convergence succeeds
           # only for that exact already-complete state and is mutation-free on
           # missing/wrong desired credentials; otherwise run the one-time split.
-          if "$DOCKER_BIN" "${compose_args[@]}" --profile admin run --rm --no-deps db-provision; then
+          if run_service_mutation_if_allowed \
+              "$DOCKER_BIN" "${compose_args[@]}" \
+                --profile admin run --rm --no-deps db-provision; then
             echo "Recovered a committed database role split after interruption."
           else
-            "$DOCKER_BIN" "${compose_args[@]}" --profile admin run --rm --no-deps db-role-bootstrap
+            run_service_mutation_if_allowed \
+              "$DOCKER_BIN" "${compose_args[@]}" \
+                --profile admin run --rm --no-deps db-role-bootstrap
           fi
           record_install_deployment_phase roles-ready
           echo "Database role bootstrap completed. Set ADDRESS_ATLAS_DATABASE_ROLE_MODE=steady before the next deploy."
         else
-          "$DOCKER_BIN" "${compose_args[@]}" --profile admin run --rm --no-deps db-provision
+          run_service_mutation_if_allowed \
+            "$DOCKER_BIN" "${compose_args[@]}" \
+              --profile admin run --rm --no-deps db-provision
         fi
       elif [[ "$selected_database_role_mode" == "bootstrap" ]]; then
-        "$DOCKER_BIN" "${compose_args[@]}" --profile admin run --rm --no-deps db-role-bootstrap
+        run_service_mutation_if_allowed \
+          "$DOCKER_BIN" "${compose_args[@]}" \
+            --profile admin run --rm --no-deps db-role-bootstrap
         echo "Database role bootstrap completed. Set ADDRESS_ATLAS_DATABASE_ROLE_MODE=steady before the next deploy."
       else
-        "$DOCKER_BIN" "${compose_args[@]}" --profile admin run --rm --no-deps db-provision
+        run_service_mutation_if_allowed \
+          "$DOCKER_BIN" "${compose_args[@]}" \
+            --profile admin run --rm --no-deps db-provision
       fi
       preflight_private_web_config \
         "$ADDRESS_ATLAS_BUILD_REVISION" candidate "${compose_args[@]}"

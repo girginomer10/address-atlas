@@ -18,7 +18,11 @@ import {
   RegistrationDisabledError
 } from "@/lib/sync/registration";
 import { readLimitedJSON, RequestBodyError } from "@/lib/sync/request";
-import { TokenValidationError } from "@/lib/sync/tokens";
+import {
+  issueNativeAuthorizationCode,
+  readSessionToken,
+  TokenValidationError
+} from "@/lib/sync/tokens";
 import {
   acquirePasskeyBodyConcurrency,
   PASSKEY_BODY_DEADLINE_MS
@@ -102,12 +106,23 @@ export async function POST(request: NextRequest) {
     } finally {
       verificationPermit();
     }
+    const response = input.nativeCodeChallenge
+      ? {
+          verified: true,
+          authorizationCode: issueNativeAuthorizationCode(
+            readSessionToken(result.sessionToken),
+            input.nativeCodeChallenge
+          )
+        }
+      : result;
     recordSecurityEvent(
       input.mode === "register" ? "auth.registration_succeeded" : "auth.authentication_succeeded",
       diagnostics,
       { status: 200, reason: "verified", mode: input.mode, severity: "info" }
     );
-    return NextResponse.json(result, { headers: diagnosticHeaders(diagnostics, NO_STORE_HEADERS) });
+    return NextResponse.json(response, {
+      headers: diagnosticHeaders(diagnostics, NO_STORE_HEADERS)
+    });
   } catch (error) {
     const disabled = error instanceof RegistrationDisabledError;
     const capacity = error instanceof RegistrationAdmissionQuotaError;
