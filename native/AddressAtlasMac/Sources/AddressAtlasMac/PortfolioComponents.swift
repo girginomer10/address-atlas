@@ -99,8 +99,11 @@ struct AssetRow: View {
       }
       .frame(maxWidth: .infinity, alignment: .leading)
 
-      Text(asset.amount.formatted())
+      Text(asset.displayedAmount)
         .font(.callout.monospaced())
+        .lineLimit(1)
+        .minimumScaleFactor(0.65)
+        .help(asset.canonicalAmount)
         .frame(width: 150, alignment: .trailing)
       Text(money(asset.valueUsd))
         .font(.callout.monospaced().weight(.semibold))

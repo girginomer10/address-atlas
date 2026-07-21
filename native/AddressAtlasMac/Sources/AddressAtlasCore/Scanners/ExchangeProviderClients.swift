@@ -6,23 +6,26 @@ import Foundation
 /// Keep only that invariant here; provider-specific validation stays at each
 /// wire boundary.
 private struct ExchangeBalanceAccumulator {
-  private(set) var total: [String: Double] = [:]
-  private(set) var free: [String: Double] = [:]
+  private(set) var total: [String: ExchangeAmount] = [:]
+  private(set) var free: [String: ExchangeAmount] = [:]
   private(set) var overflowedSymbols = Set<String>()
+  private var invalidSymbols = Set<String>()
 
   mutating func addAvailable(
-    _ available: Double,
-    restricted: Double,
+    _ available: ExchangeAmount,
+    restricted: ExchangeAmount,
     for symbol: String
   ) {
-    guard !overflowedSymbols.contains(symbol) else { return }
-    guard let combined = FiniteValueMath.addingNonnegative(available, restricted) else {
+    guard !overflowedSymbols.contains(symbol), !invalidSymbols.contains(symbol) else { return }
+    guard let combined = available.adding(restricted) else {
       markOverflow(for: symbol)
       return
     }
-    guard combined > 0 else { return }
-    guard let nextTotal = FiniteValueMath.addingNonnegative(total[symbol, default: 0], combined),
-      let nextFree = FiniteValueMath.addingNonnegative(free[symbol, default: 0], available)
+    guard combined.isPositive else { return }
+    let currentTotal = total[symbol] ?? .zero
+    let currentFree = free[symbol] ?? .zero
+    guard let nextTotal = currentTotal.adding(combined),
+      let nextFree = currentFree.adding(available)
     else {
       markOverflow(for: symbol)
       return
@@ -31,26 +34,33 @@ private struct ExchangeBalanceAccumulator {
     free[symbol] = nextFree
   }
 
-  mutating func addTotal(_ amount: Double, for symbol: String) {
-    guard amount > 0, !overflowedSymbols.contains(symbol) else { return }
-    guard let nextTotal = FiniteValueMath.addingNonnegative(total[symbol, default: 0], amount)
-    else {
+  mutating func addTotal(_ amount: ExchangeAmount, for symbol: String) {
+    guard amount.isPositive, !overflowedSymbols.contains(symbol), !invalidSymbols.contains(symbol)
+    else { return }
+    let current = total[symbol] ?? .zero
+    guard let nextTotal = current.adding(amount) else {
       markOverflow(for: symbol)
       return
     }
     total[symbol] = nextTotal
   }
 
-  private mutating func markOverflow(for symbol: String) {
+  mutating func markOverflow(for symbol: String) {
     total.removeValue(forKey: symbol)
     free.removeValue(forKey: symbol)
     overflowedSymbols.insert(symbol)
   }
+
+  mutating func markInvalid(for symbol: String) {
+    total.removeValue(forKey: symbol)
+    free.removeValue(forKey: symbol)
+    invalidSymbols.insert(symbol)
+  }
 }
 
 private struct BinanceBalanceRecord: Equatable {
-  var free: Double
-  var locked: Double
+  var free: ExchangeAmount
+  var locked: ExchangeAmount
 }
 
 public struct NativeExchangeBalanceClient: Sendable {
@@ -232,9 +242,18 @@ public struct NativeExchangeBalanceClient: Sendable {
         invalidSymbolCount += 1
         continue
       }
-      guard let freeAmount = Self.parseAmount(balance.free),
-        let lockedAmount = Self.parseAmount(balance.locked)
-      else {
+      let freeAmount: ExchangeAmount
+      let lockedAmount: ExchangeAmount
+      switch (ExchangeAmount.parse(balance.free), ExchangeAmount.parse(balance.locked)) {
+      case (.value(let free), .value(let locked)):
+        freeAmount = free
+        lockedAmount = locked
+      case (.outOfRange, _), (_, .outOfRange):
+        accumulator.markOverflow(for: symbol)
+        malformedSymbols.insert(symbol)
+        recordsBySymbol.removeValue(forKey: symbol)
+        continue
+      case (.invalid, _), (_, .invalid):
         invalidAmountCount += 1
         malformedSymbols.insert(symbol)
         recordsBySymbol.removeValue(forKey: symbol)
@@ -286,8 +305,8 @@ public struct NativeExchangeBalanceClient: Sendable {
       )
     }
     return ExchangeBalance(
-      total: accumulator.total,
-      free: accumulator.free,
+      exactTotal: accumulator.total,
+      exactFree: accumulator.free,
       warnings: ScanWarningPolicy.bounded(warnings)
     )
   }
@@ -384,10 +403,21 @@ public struct NativeExchangeBalanceClient: Sendable {
         invalidSymbolCount += 1
         continue
       }
-      guard let available = Self.parseAmount(account.availableBalance?.value ?? "0"),
-        let hold = Self.parseAmount(account.hold?.value ?? "0")
-      else {
+      let available: ExchangeAmount
+      let hold: ExchangeAmount
+      switch (
+        ExchangeAmount.parse(account.availableBalance?.value ?? "0"),
+        ExchangeAmount.parse(account.hold?.value ?? "0")
+      ) {
+      case (.value(let parsedAvailable), .value(let parsedHold)):
+        available = parsedAvailable
+        hold = parsedHold
+      case (.outOfRange, _), (_, .outOfRange):
+        accumulator.markOverflow(for: symbol)
+        continue
+      case (.invalid, _), (_, .invalid):
         invalidAmountCount += 1
+        accumulator.markInvalid(for: symbol)
         continue
       }
       accumulator.addAvailable(available, restricted: hold, for: symbol)
@@ -423,8 +453,8 @@ public struct NativeExchangeBalanceClient: Sendable {
       )
     }
     return ExchangeBalance(
-      total: accumulator.total,
-      free: accumulator.free,
+      exactTotal: accumulator.total,
+      exactFree: accumulator.free,
       warnings: ScanWarningPolicy.bounded(warnings)
     )
   }
@@ -484,17 +514,25 @@ public struct NativeExchangeBalanceClient: Sendable {
         invalidSymbolCount += 1
         continue
       }
-      guard let amount = Self.parseAmount(rawAmount) else {
-        invalidAmountCount += 1
-        continue
-      }
-      guard amount > 0 else { continue }
       guard let symbol = Self.normalizedKrakenSymbol(validatedRawSymbol, aliases: aliases),
         !symbol.isEmpty
       else {
         invalidSymbolCount += 1
         continue
       }
+      let amount: ExchangeAmount
+      switch ExchangeAmount.parse(rawAmount) {
+      case .value(let parsed):
+        amount = parsed
+      case .outOfRange:
+        accumulator.markOverflow(for: symbol)
+        continue
+      case .invalid:
+        invalidAmountCount += 1
+        accumulator.markInvalid(for: symbol)
+        continue
+      }
+      guard amount.isPositive else { continue }
       accumulator.addTotal(amount, for: symbol)
     }
     if invalidSymbolCount > 0 {
@@ -513,7 +551,7 @@ public struct NativeExchangeBalanceClient: Sendable {
       )
     }
     return ExchangeBalance(
-      total: accumulator.total,
+      exactTotal: accumulator.total,
       warnings: ScanWarningPolicy.bounded(warnings)
     )
   }
@@ -588,11 +626,6 @@ public struct NativeExchangeBalanceClient: Sendable {
       )
     }
     return data
-  }
-
-  private static func parseAmount(_ raw: String) -> Double? {
-    guard let amount = Double(raw), amount.isFinite, amount >= 0 else { return nil }
-    return amount
   }
 
   private static func normalizedKrakenSymbol(_ validatedRaw: String, aliases: [String: String])

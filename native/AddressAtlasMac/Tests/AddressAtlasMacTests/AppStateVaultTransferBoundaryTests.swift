@@ -437,10 +437,17 @@ extension AppStateNetworkBoundaryTests {
       AppState.validatedSyncURL(persisted.syncState.serverURL)
     )
     let http = RecordingHTTPStub { request in
-      guard request.url?.path == "/vault/latest", request.httpMethod == "GET" else {
+      guard request.url?.path == "/vault/latest" else {
         throw URLError(.unsupportedURL)
       }
-      return (snapshotJSON, stubHTTPResponse(request))
+      switch request.httpMethod {
+      case "GET":
+        return (snapshotJSON, stubHTTPResponse(request))
+      case "PUT":
+        return stubJSONResponse(request, #"{"ok":true}"#)
+      default:
+        throw URLError(.unsupportedURL)
+      }
     }
     let state = AppState(
       testStore: fixture.store,
@@ -461,10 +468,41 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertEqual(state.error, "")
     XCTAssertTrue(state.walletLabelDrafts.isEmpty)
     XCTAssertEqual(state.document.wallets.first?.label, "Remote Treasury")
+    XCTAssertTrue(state.hasVaultRollbackCheckpoint)
+    let downloadedSyncState = state.document.syncState
+
+    await state.restoreVaultRollbackCheckpoint()
+
+    XCTAssertEqual(state.error, "")
+    XCTAssertFalse(state.hasVaultRollbackCheckpoint)
+    XCTAssertTrue(state.walletLabelDrafts.isEmpty)
+    XCTAssertEqual(state.document.wallets.first?.label, "Local Treasury")
+    XCTAssertEqual(state.document.syncState, downloadedSyncState)
+    XCTAssertEqual(state.document.syncState.latestRemoteVersion, snapshot.version)
+    XCTAssertEqual(state.document.syncState.lastChecksum, snapshot.checksum)
+    XCTAssertTrue(state.hasUnsyncedLocalChanges)
+
+    await state.uploadEncryptedVault(expectedServerURL: expectedServerURL)
+
+    XCTAssertEqual(state.error, "")
+    XCTAssertEqual(state.notice, "Encrypted vault uploaded.")
+    XCTAssertEqual(http.requests.map(\.httpMethod), ["GET", "GET", "PUT"])
+    let uploaded = try JSONDecoder.addressAtlas.decode(
+      RemoteVaultSnapshot.self,
+      from: XCTUnwrap(http.requests.last?.httpBody)
+    )
+    XCTAssertEqual(uploaded.version, snapshot.version + 1)
+    let reopened = try VaultSyncCodec().open(
+      snapshot: uploaded,
+      vaultKey: fixture.vaultKey,
+      expectedAccountId: accountId
+    )
+    XCTAssertEqual(reopened.document.wallets.first?.label, "Local Treasury")
+    XCTAssertFalse(state.hasUnsyncedLocalChanges)
     XCTAssertTrue(state.beginTerminationRequest())
     let terminationPrepared = await state.prepareForTermination()
     XCTAssertTrue(terminationPrepared)
-    XCTAssertEqual(state.document.wallets.first?.label, "Remote Treasury")
+    XCTAssertEqual(state.document.wallets.first?.label, "Local Treasury")
   }
 
   func testFailedDiscardDownloadRestoresWalletLabelDraftWhenNothingRemoteWasAdopted() async throws {
@@ -596,7 +634,7 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertEqual(currentRemote, legacySnapshot)
   }
 
-  func testDownloadSaveFailureRetainsExactOpenedVaultCandidateForRetry() async throws {
+  func testCompetingWriteDuringDownloadFailsBeforeDestructiveRemoteAdoption() async throws {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let accountId = "89898989-8989-4989-8989-898989898989"
@@ -646,17 +684,82 @@ extension AppStateNetworkBoundaryTests {
 
     await state.downloadEncryptedVault(expectedServerURL: expectedServerURL)
 
-    XCTAssertTrue(state.syncPersistencePending)
-    XCTAssertEqual(state.document.wallets.map(\.id), [remoteWallet.id])
-    XCTAssertEqual(state.document.syncState.latestRemoteVersion, 4)
-    XCTAssertEqual(state.document.syncState.lastChecksum, snapshot.checksum)
-    XCTAssertTrue(state.error.contains("remote vault was opened"))
+    // The external write invalidates the baseline before a trustworthy local
+    // rollback point can be committed. Fail closed: do not publish or queue the
+    // authenticated remote candidate without that durable safety boundary.
+    XCTAssertFalse(state.syncPersistencePending)
+    XCTAssertNil(state.pendingSyncPersistence)
+    XCTAssertNil(state.pendingVaultUpload)
+    XCTAssertFalse(state.hasVaultRollbackCheckpoint)
+    XCTAssertTrue(state.document.wallets.isEmpty)
+    XCTAssertEqual(state.document.syncState.latestRemoteVersion, 0)
+    XCTAssertNil(state.document.syncState.lastChecksum)
+    XCTAssertFalse(state.error.isEmpty)
 
-    await state.retryPendingSyncPersistence()
+    let verifier = try EncryptedSQLiteVaultStore(
+      path: fixture.database,
+      vaultKey: fixture.vaultKey
+    )
+    let durableExternalWinner = try verifier.load()
+    XCTAssertTrue(durableExternalWinner.preferences.hideDust)
+    XCTAssertTrue(durableExternalWinner.wallets.isEmpty)
+    XCTAssertEqual(durableExternalWinner.syncState.accountId, accountId)
+    XCTAssertFalse(try verifier.containsRollbackCheckpoint())
+  }
 
-    XCTAssertTrue(state.syncPersistencePending)
-    XCTAssertEqual(state.document.wallets.map(\.id), [remoteWallet.id])
-    XCTAssertEqual(state.document.syncState.latestRemoteVersion, 4)
+  func testRecoveryKitUnlockPublishesAndCanRestoreDurableRollbackCheckpoint() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    let supportDirectory = directory.appending(path: "Application Support")
+    try FileManager.default.createDirectory(
+      at: supportDirectory,
+      withIntermediateDirectories: true
+    )
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let vaultURL = supportDirectory.appending(path: "vault.sqlite")
+    let recoveryURL = directory.appending(path: "vault.atlas-recovery")
+    let vaultKey = try VaultCrypto().generateVaultKey()
+    let store = try EncryptedSQLiteVaultStore(path: vaultURL, vaultKey: vaultKey)
+    _ = try store.load()
+    let checkpoint = VaultDocument(wallets: [
+      WalletRecord(label: "Before download", address: "0x1", chainKind: .evm)
+    ])
+    let persistedCheckpoint = try store.saveReturningPersistedDocument(checkpoint)
+    _ = try store.saveRollbackCheckpoint(persistedCheckpoint)
+    let current = try store.saveReturningPersistedDocument(
+      VaultDocument(wallets: [
+        WalletRecord(label: "Downloaded", address: "0x2", chainKind: .evm)
+      ])
+    )
+    XCTAssertEqual(current.wallets.map(\.label), ["Downloaded"])
+
+    let recoveryKit = try RecoveryKitCodec().create(vaultKey: vaultKey)
+    try JSONEncoder.addressAtlas.encode(recoveryKit.document).write(
+      to: recoveryURL,
+      options: [.atomic]
+    )
+    let keyStore = AppStateTestVaultKeyStore()
+    let state = AppState(
+      keyStore: keyStore,
+      appSupportDirectoryOverride: supportDirectory
+    )
+
+    await state.restoreRecoveryKit(
+      from: recoveryURL,
+      recoveryCode: recoveryKit.recoveryCode
+    )
+
+    XCTAssertTrue(state.isUnlocked)
+    XCTAssertEqual(state.error, "")
+    XCTAssertEqual(state.document.wallets.map(\.label), ["Downloaded"])
+    XCTAssertTrue(state.hasVaultRollbackCheckpoint)
+    XCTAssertEqual(try keyStore.loadVaultKey(), vaultKey)
+
+    await state.restoreVaultRollbackCheckpoint()
+
+    XCTAssertEqual(state.document.wallets.map(\.label), ["Before download"])
+    XCTAssertFalse(state.hasVaultRollbackCheckpoint)
+    XCTAssertFalse(try store.containsRollbackCheckpoint())
   }
 
 }

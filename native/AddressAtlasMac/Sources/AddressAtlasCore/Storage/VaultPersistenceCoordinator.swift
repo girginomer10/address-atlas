@@ -124,6 +124,28 @@ public actor VaultPersistenceCoordinator {
     return upload
   }
 
+  @discardableResult
+  public func saveRollbackCheckpoint(_ document: VaultDocument) throws -> Date {
+    try store.saveRollbackCheckpoint(document)
+  }
+
+  public func hasRollbackCheckpoint() throws -> Bool {
+    try store.containsRollbackCheckpoint()
+  }
+
+  public func discardRollbackCheckpoint() throws {
+    try store.discardRollbackCheckpoint()
+  }
+
+  public func restoreRollbackCheckpoint() throws -> VaultPersistenceResult {
+    let restored = try store.restoreRollbackCheckpoint()
+    return VaultPersistenceResult(
+      document: restored,
+      removedScanRunCount: 0,
+      hasLocalChanges: try syncCodec.hasLocalChanges(in: restored)
+    )
+  }
+
   public func completePendingVaultUpload(
     _ upload: PendingVaultUpload,
     currentDocument: VaultDocument,

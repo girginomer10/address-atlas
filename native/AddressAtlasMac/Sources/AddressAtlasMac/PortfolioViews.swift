@@ -33,7 +33,9 @@ struct PortfolioView: View {
       }
 
       SectionHeader(
-        title: "Top holdings", meta: "\(state.visibleLatestHoldings.count) visible rows")
+        title: "Top holdings",
+        meta: holdingsVisibilitySummary
+      )
       AssetList(assets: state.visibleLatestHoldings)
     }
   }
@@ -45,9 +47,9 @@ struct PortfolioView: View {
   private var portfolioSummary: some View {
     VStack(alignment: .leading, spacing: 18) {
       TotalBlock(
-        total: state.visibleLatestTotalUsd,
+        total: state.latestTotalUsd,
         generatedAt: state.latestScan?.generatedAt,
-        assetCount: state.visibleLatestHoldings.count
+        assetCount: state.latestScan?.holdings.count ?? 0
       )
       MetricStrip(items: [
         ("Wallets", "\(state.document.wallets.count)"),
@@ -56,6 +58,14 @@ struct PortfolioView: View {
       ])
     }
     .frame(minWidth: 300, maxWidth: .infinity, alignment: .leading)
+  }
+
+  private var holdingsVisibilitySummary: String {
+    guard state.hiddenDustHoldingCount > 0 else {
+      return "\(state.visibleLatestHoldings.count) visible rows"
+    }
+    return
+      "\(state.visibleLatestHoldings.count) visible, \(state.hiddenDustHoldingCount) hidden as dust (\(money(state.hiddenDustValueUsd)))"
   }
 }
 
@@ -132,6 +142,8 @@ struct WalletRow: View {
         .font(.body.weight(.semibold))
         .frame(width: 180)
         .focused($labelIsFocused)
+        .accessibilityLabel("Label for wallet \(AtlasAccessibility.walletIdentity(wallet))")
+        .accessibilityHint("Edit the local display label for this saved wallet.")
         .onSubmit(commitLabel)
         .onChange(of: labelIsFocused) { _, isFocused in
           if !isFocused { commitLabel() }

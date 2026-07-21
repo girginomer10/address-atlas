@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { types as pgTypes } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { STORAGE_RECONCILIATION_VERSION, SYNC_MIGRATIONS } from "./postgres-migrations";
+import {
+  PREPARED_SYNC_MIGRATIONS,
+  STORAGE_RECONCILIATION_VERSION,
+  SYNC_MIGRATIONS
+} from "./postgres-migrations";
 import {
   checkSyncSchemaReadiness,
   closeSyncPoolForTests,
@@ -42,6 +47,144 @@ maybeDescribe("versioned Postgres schema migrations", () => {
       await ensureSyncSchema();
       expect(await migrationRows()).toEqual(first);
       await expect(checkSyncSchemaReadiness()).resolves.toBeUndefined();
+      const storage = await getSyncPool().query<{ attstorage: string }>(
+        `SELECT attribute.attstorage::text AS attstorage
+         FROM pg_catalog.pg_attribute AS attribute
+         WHERE attribute.attrelid = 'vault_snapshots'::pg_catalog.regclass
+           AND attribute.attname = 'envelope'`
+      );
+      expect(storage.rows[0]?.attstorage).toBe("e");
+    });
+  });
+
+  it("accepts the exact prepared next head as a healthy N-1 runtime", async () => {
+    await withIsolatedSchema(async () => {
+      await ensureSyncSchema();
+      const prepared = PREPARED_SYNC_MIGRATIONS[0]!;
+
+      // Release N already converges the storage policy. Prove the immutable
+      // N+1 migration does not reacquire ACCESS EXCLUSIVE when it activates:
+      // an unconditional ALTER would time out behind this reader lock.
+      const reader = await getSyncPool().connect();
+      const migrationRunner = await getSyncPool().connect();
+      try {
+        await reader.query("BEGIN");
+        await reader.query("LOCK TABLE vault_snapshots IN ACCESS SHARE MODE");
+        await migrationRunner.query("SET lock_timeout = '250ms'");
+        await expect(migrationRunner.query(prepared.statements[0]!)).resolves.toBeDefined();
+      } finally {
+        await migrationRunner.query("RESET lock_timeout").catch(() => undefined);
+        migrationRunner.release();
+        await reader.query("ROLLBACK").catch(() => undefined);
+        reader.release();
+      }
+
+      // The conditional expand step must still repair a skipped catalog
+      // convergence; otherwise a predicate typo would turn it into a no-op.
+      await getSyncPool().query(
+        "ALTER TABLE vault_snapshots ALTER COLUMN envelope SET STORAGE EXTENDED"
+      );
+      await getSyncPool().query(prepared.statements[0]!);
+      const repairedStorage = await getSyncPool().query<{ storage_policy: string }>(
+        `SELECT attribute.attstorage::text AS storage_policy
+         FROM pg_catalog.pg_attribute AS attribute
+         WHERE attribute.attrelid = 'vault_snapshots'::pg_catalog.regclass
+           AND attribute.attname = 'envelope'`
+      );
+      expect(repairedStorage.rows[0]?.storage_policy).toBe("e");
+
+      for (const statement of prepared.statements) {
+        await getSyncPool().query(statement);
+      }
+      await getSyncPool().query(
+        `INSERT INTO sync_schema_migrations (version, name, checksum)
+         VALUES ($1, $2, $3)`,
+        [prepared.version, prepared.name, prepared.checksum]
+      );
+
+      await closeSyncPoolForTests();
+      await expect(ensureSyncSchema()).resolves.toBeUndefined();
+      await expect(checkSyncSchemaReadiness()).resolves.toBeUndefined();
+      const preparedConstraint = await getSyncPool().query<{ validated: boolean }>(
+        `SELECT constraint_row.convalidated AS validated
+         FROM pg_catalog.pg_constraint AS constraint_row
+         WHERE constraint_row.conrelid = 'vault_snapshots'::pg_catalog.regclass
+           AND constraint_row.conname = 'vault_snapshots_envelope_storage_bound_check'`
+      );
+      expect(preparedConstraint.rows).toEqual([{ validated: false }]);
+
+      const invalidUserId = randomUUID();
+      await getSyncPool().query("INSERT INTO users (id) VALUES ($1)", [invalidUserId]);
+      await expect(getSyncPool().query(
+        `INSERT INTO vault_snapshots (user_id, version, envelope, byte_size, checksum)
+         VALUES (
+           $1,
+           1,
+           pg_catalog.jsonb_build_object('blob', pg_catalog.repeat('x', 8100000)),
+           1,
+           pg_catalog.repeat('a', 64)
+         )`,
+        [invalidUserId]
+      )).rejects.toThrow(/vault_snapshots_envelope_storage_bound_check/i);
+      expect(await migrationRows()).toEqual([
+        ...SYNC_MIGRATIONS,
+        prepared
+      ].map(({ version, name, checksum }) => ({ version, name, checksum })));
+    });
+  });
+
+  it("blocks cutover on legacy compressed vault data without rendering it", async () => {
+    await withIsolatedSchema(async () => {
+      await ensureSyncSchema();
+      const userId = randomUUID();
+      await getSyncPool().query("ALTER TABLE vault_snapshots ALTER COLUMN envelope SET STORAGE EXTENDED");
+      await getSyncPool().query("INSERT INTO users (id) VALUES ($1)", [userId]);
+      await getSyncPool().query(
+        `INSERT INTO vault_snapshots (user_id, version, envelope, byte_size, checksum)
+         VALUES (
+           $1,
+           1,
+           pg_catalog.jsonb_build_object('blob', pg_catalog.repeat('x', 1000000)),
+           1,
+           pg_catalog.repeat('a', 64)
+         )`,
+        [userId]
+      );
+      await getSyncPool().query(
+        `UPDATE sync_storage_usage
+         SET total_snapshot_bytes = total_snapshot_bytes + 1,
+             updated_at = now()
+         WHERE singleton = true`
+      );
+      const compression = await getSyncPool().query<{ compression: string | null }>(
+        `SELECT pg_catalog.pg_column_compression(envelope) AS compression
+         FROM vault_snapshots
+         WHERE user_id = $1`,
+        [userId]
+      );
+      expect(compression.rows[0]?.compression).not.toBeNull();
+
+      // SET STORAGE does not rewrite the already-compressed value.
+      await getSyncPool().query("ALTER TABLE vault_snapshots ALTER COLUMN envelope SET STORAGE EXTERNAL");
+      await closeSyncPoolForTests();
+
+      const originalJSONBParser = pgTypes.getTypeParser(3802, "text");
+      let jsonbDeserializations = 0;
+      pgTypes.setTypeParser(3802, (value) => {
+        jsonbDeserializations += 1;
+        return originalJSONBParser(value);
+      });
+      try {
+        await expect(ensureSyncSchema()).rejects.toThrow(/projection-safe/i);
+        expect(jsonbDeserializations).toBe(0);
+      } finally {
+        pgTypes.setTypeParser(3802, originalJSONBParser);
+      }
+
+      await getSyncPool().query("DELETE FROM vault_snapshots WHERE user_id = $1", [userId]);
+      await getSyncPool().query("DELETE FROM users WHERE id = $1", [userId]);
+      await closeSyncPoolForTests();
+      await expect(ensureSyncSchema()).resolves.toBeUndefined();
     });
   });
 
@@ -117,6 +260,17 @@ maybeDescribe("versioned Postgres schema migrations", () => {
         `INSERT INTO sync_schema_migrations (version, name, checksum)
          VALUES ($1, $2, $3)`,
         [SYNC_MIGRATIONS.length + 1, "future-release", "f".repeat(64)]
+      );
+      await closeSyncPoolForTests();
+      await expect(ensureSyncSchema()).rejects.toThrow(/unknown or modified/i);
+    });
+
+    await withIsolatedSchema(async () => {
+      await ensureSyncSchema();
+      await getSyncPool().query(
+        `INSERT INTO sync_schema_migrations (version, name, checksum)
+         VALUES ($1, $2, $3)`,
+        [SYNC_MIGRATIONS.length + 2, "unsupported-release", "e".repeat(64)]
       );
       await closeSyncPoolForTests();
       await expect(ensureSyncSchema()).rejects.toThrow(/newer than this server supports/i);

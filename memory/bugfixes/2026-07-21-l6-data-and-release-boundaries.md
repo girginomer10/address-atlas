@@ -2,8 +2,8 @@
 title: L6 data boundaries must bind identity, snapshot, durability, and release evidence
 date: 2026-07-21
 status: active
-tags: [bugfix, macos, sync, postgres, release, solana, xrpl, evm, passkeys]
-related_files: [native/AddressAtlasMac/Sources/AddressAtlasCore/Sync/PendingVaultUpload.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Storage/EncryptedSQLiteVaultStore.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerSolana.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerXRP.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerBitcoinEVM.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/AppStateTermination.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/AppStateEndpointConfiguration.swift, src/lib/sync/postgres-readiness.ts, src/lib/sync/postgres-schema.ts, src/lib/sync/postgres-search-path.ts, src/lib/sync/restore-readiness.ts, src/lib/sync/stored-vault-row.ts, src/lib/sync/rate-limit.ts, src/app/auth/passkey/body-concurrency.ts, src/app/vault/latest/route.ts, .github/workflows/release.yml]
+tags: [bugfix, macos, sync, postgres, release, solana, xrpl, evm, passkeys, sqlite, exchange, kraken, accessibility]
+related_files: [native/AddressAtlasMac/Sources/AddressAtlasCore/Sync/PendingVaultUpload.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Storage/EncryptedSQLiteVaultStore.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/ExchangeAmount.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/KrakenNonce.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerSolana.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerXRP.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerBitcoinEVM.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/AppStateTermination.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/AppStateAccountLifecycle.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/AppStateEndpointConfiguration.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/AppStateVaultSync.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/ExchangeSyncViews.swift, src/lib/sync/postgres-readiness.ts, src/lib/sync/postgres-schema.ts, src/lib/sync/postgres-search-path.ts, src/lib/sync/restore-readiness.ts, src/lib/sync/stored-vault-row.ts, src/lib/sync/rate-limit.ts, src/lib/sync/postgres-migrations/index.ts, src/lib/sync/postgres-migrations/004-vault-envelope-storage-bound.ts, src/app/auth/passkey/body-concurrency.ts, src/app/vault/latest/route.ts, server/sync/Dockerfile, server/sync/manage-prod.sh, server/sync/postgres-backup.sh, .github/workflows/release.yml]
 ---
 
 ## Durable invariants
@@ -36,6 +36,33 @@ related_files: [native/AddressAtlasMac/Sources/AddressAtlasCore/Sync/PendingVaul
   any in-memory post-sync persistence candidate, and cancel termination on any
   validation or save failure. A durable upload journal may survive a quit; an
   in-memory-only pending candidate may not.
+- A downloaded remote vault needs an encrypted full-document checkpoint before
+  destructive adoption. The at-rest checkpoint includes credentials and the
+  historical sync state, but restoration must atomically apply only its
+  user-controlled vault content onto the entire current `SyncState`. Preserve
+  the current account, server, bearer session, remote version, checksums, and
+  outcome markers so restored content can be uploaded over the snapshot that
+  triggered rollback; consume the checkpoint only in that same commit.
+  Disconnect and account deletion must durably discard it before clearing
+  account identity, or a later restore could resurrect prior-account secrets.
+- Treat the local SQLite file and its app-owned leaf directory as hostile
+  filesystem inputs. Reject a symlinked leaf directory, symlinked database,
+  hard-linked database, wrong owners, and post-open path/inode mismatches; use
+  no-follow and close-on-exec opens, owner-only modes, SQLite length limits,
+  bounded BLOB projections, and encoded-envelope limits before allocating
+  attacker-controlled data. Canonical macOS system ancestors such as `/var`
+  may legitimately traverse a platform symlink.
+- Exchange quantities are wire-exact decimal values, not binary floating-point
+  totals. Parse and add canonical base-10 values with explicit significant-digit
+  and wire-size bounds, persist and export the exact form, and derive `Double`
+  only as a compatibility view for valuation. If duplicate provider aliases
+  disagree or one alias is malformed, quarantine the normalized symbol rather
+  than silently returning a partial total.
+- A monotonic exchange nonce contract is cross-process. Test it with separate
+  OS processes sharing an isolated real Keychain namespace and state file,
+  including a process that exits immediately after persistence. Nested xctest
+  workers cannot reliably load Thread Sanitizer early enough, so only this
+  process harness is skipped under TSan; the normal suite must always run it.
 - PostgreSQL migration history alone is not permission to mutate. Under the
   advisory lock, validate the exact predecessor schema surface inside the same
   transaction before each pending migration, validate the resulting surface
@@ -46,6 +73,27 @@ related_files: [native/AddressAtlasMac/Sources/AddressAtlasCore/Sync/PendingVaul
   that tolerates both schema shapes, then migrate in a later release; do not
   combine a new exact migration head or constraint set with code that makes the
   previous image reject the database.
+- Keep the next migration immutable and prepared one release ahead. The active
+  image may accept only its exact current head and the checksum-verified prepared
+  next head; modified, unknown, or further-future heads fail closed. This creates
+  an auditable N/N-1 rolling window without advancing the live schema early.
+  Any prepared expand DDL must inspect the catalog and skip its `ALTER TABLE`
+  when the current release already converged the attribute; otherwise activation
+  can reacquire an avoidable access-exclusive lock despite making no change.
+- Add a large-table constraint as `NOT VALID` in the expand migration and
+  validate it in a later migration. `ADD CONSTRAINT` retains its
+  access-exclusive lock until transaction commit, so validating in the same
+  migration defeats the weaker-lock benefit even when `VALIDATE CONSTRAINT`
+  itself uses a less restrictive lock.
+- A rollback image capability is an exact migration-chain claim, not merely a
+  numeric maximum. Read the current durable head from verified, signed
+  pre-deploy backup metadata, require the captured image's maximum to cover
+  `max(current head, active head)`, and match that head's cumulative chain
+  digest label. Missing both labels is accepted only for a legacy image already
+  serving an unchanged active-head database; a partial label set or any schema
+  advance fails before build or migration. A transaction-consistent `pg_dump`
+  plus the shared schema advisory lock permits this safety backup while the
+  verified web tier remains available; destructive restore still quiesces it.
 - Integration fixtures must respect that exactness too. If a role-boundary test
   creates adversarial objects in `public`, prove their grants are revoked and
   bootstrap rejects the expanded surface, then remove those fixture objects
@@ -80,6 +128,12 @@ related_files: [native/AddressAtlasMac/Sources/AddressAtlasCore/Sync/PendingVaul
   projecting them into the application, distinguish corruption from absence,
   scan restores through a bounded server-side cursor, and expose only
   allow-listed operational error categories.
+- PostgreSQL physical safety checks precede logical parsing. Inspect compression
+  and raw datum size before casts, rendering, JSONB access, or client projection;
+  a pre-cutover owner scan must reject compressed or oversized legacy envelopes
+  without detoasting them. Apply `SET STORAGE EXTERNAL` only when storage policy
+  actually differs so routine convergence does not reacquire an unnecessary
+  access-exclusive table lock.
 - A successful vault download owns its concurrency permit through response
   drain or cancellation, not merely until the route returns. Charge the exact
   encoded response bytes atomically against account, client, and global egress
@@ -93,10 +147,13 @@ related_files: [native/AddressAtlasMac/Sources/AddressAtlasCore/Sync/PendingVaul
 
 ## Verification baseline
 
-- Production-pinned PostgreSQL 16.14 plus the full web suite: 478 tests passed
-  across 46 files.
-- Native suite: 358 tests, 2 opt-in live tests skipped; strict concurrency and
-  full Thread Sanitizer passed with no race finding.
+- Web unit and contract suite: 444 passed, 50 environment or live tests
+  skipped; operations passed 58/58. Focused PostgreSQL 16.14 migration/vault
+  and readiness suites passed 27/27 and 6/6.
+- Native suite: 385 tests, 2 opt-in live tests skipped; strict concurrency and
+  warnings-as-errors passed. Thread Sanitizer passed the same suite with one
+  additional, explicitly documented nested-process harness skip and no race
+  report.
 - Operations: 58 passed. Notary credential/timeout and build-version harnesses
   passed. The universal x86_64/arm64 app bundle passed plist, icon, hardened
   runtime, and signature verification.

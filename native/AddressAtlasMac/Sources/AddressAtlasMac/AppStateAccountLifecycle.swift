@@ -31,8 +31,11 @@ extension AppState {
         "The sync server selection changed. Review the saved server before revoking the session."
       return
     }
-    syncing = true
-    defer { syncing = false }
+    guard beginSyncActivity(.revokingSession) else {
+      notice = "A sync operation is already running."
+      return
+    }
+    defer { finishSyncActivity(.revokingSession) }
     guard await flushWalletLabelDraftsBeforeRemoteOperation() else { return }
     do {
       let client = ZeroKnowledgeSyncClient(baseURL: serverURL, http: httpClient)
@@ -59,7 +62,7 @@ extension AppState {
   /// remote-baseline metadata are cleared and persisted locally.
   func deleteSyncAccount(expectedServerURL: URL) async {
     guard canMutateVault(allowPendingAccountDeletion: true) else { return }
-    guard persistence != nil, isUnlocked else {
+    guard let persistence, isUnlocked else {
       error = "Unlock the vault before deleting the sync account."
       return
     }
@@ -76,8 +79,11 @@ extension AppState {
         "The sync server selection changed. Review the saved server before deleting the account."
       return
     }
-    syncing = true
-    defer { syncing = false }
+    guard beginSyncActivity(.deletingAccount) else {
+      notice = "A sync operation is already running."
+      return
+    }
+    defer { finishSyncActivity(.deletingAccount) }
     guard await flushWalletLabelDraftsBeforeRemoteOperation() else { return }
     do {
       let client = ZeroKnowledgeSyncClient(baseURL: serverURL, http: httpClient)
@@ -140,6 +146,12 @@ extension AppState {
         try await client.deleteAccount(idempotencyKey: operationKey)
       }
 
+      // The deleted account's rollback point contains its historical account
+      // and session metadata. Remove it before persisting the disconnected
+      // state; on failure the idempotency key remains durable so retry can
+      // replay the server receipt and finish this local privacy cleanup.
+      try await persistence.discardRollbackCheckpoint()
+      hasVaultRollbackCheckpoint = false
       var disconnected = document
       disconnected.syncState.disconnectAccount()
       guard await save(disconnected, projectedSyncVersion: nil) else {
@@ -149,7 +161,8 @@ extension AppState {
           "The sync account was deleted, but clearing its local metadata is pending persistence. Use Retry local save after fixing storage: \(persistenceError)"
         return
       }
-      notice = "Sync account deleted. Your encrypted local vault was kept."
+      notice =
+        "Sync account deleted. Your encrypted local vault was kept; the deleted account's automatic rollback point was removed."
       error = ""
     } catch let failure {
       presentUserFacingError(
@@ -203,6 +216,20 @@ extension AppState {
       error = "Sync server URL must use https (http is allowed only for localhost)."
       return
     }
+    let connectedAccountId = document.syncState.accountId.flatMap(
+      SyncAccountIdentifier.normalized
+    )
+    let connectedServerURL = AppState.validatedSyncURL(document.syncState.serverURL)
+    if connectedAccountId != nil, mode == .register {
+      error =
+        "Disconnect the current sync account explicitly before creating or switching to another account."
+      return
+    }
+    if connectedAccountId != nil, connectedServerURL != url {
+      error =
+        "This vault is connected to a different sync server. Disconnect it explicitly before switching servers or accounts."
+      return
+    }
     if syncPersistencePending {
       guard let pendingUpload = pendingVaultUpload else {
         error = "Save the pending sync state locally before changing sync accounts."
@@ -231,8 +258,12 @@ extension AppState {
       notice = "A sync operation is already running."
       return
     }
-    syncing = true
-    defer { syncing = false }
+    let activity: SyncActivity = mode == .register ? .creatingPasskeyAccount : .signingIn
+    guard beginSyncActivity(activity) else {
+      notice = "A sync operation is already running."
+      return
+    }
+    defer { finishSyncActivity(activity) }
     guard await flushWalletLabelDraftsBeforeRemoteOperation() else { return }
     let priorEndpointConfig = endpointConfig
     let priorEndpointConfigStatus = endpointConfigStatus
@@ -244,6 +275,14 @@ extension AppState {
         throw UserFacingAppError(
           message: "Passkey sign-in returned a different sync server. Nothing was changed."
         )
+      }
+      if let connectedAccountId {
+        guard SyncAccountIdentifier.normalized(session.userId) == connectedAccountId else {
+          throw UserFacingAppError(
+            message:
+              "That passkey belongs to a different sync account. The current account was kept; disconnect it explicitly before switching."
+          )
+        }
       }
       var connected = document
       guard
@@ -281,6 +320,68 @@ extension AppState {
       endpointConfigStatus = priorEndpointConfigStatus
       acceptedEndpointConfigServerURL = priorAcceptedEndpointConfigServerURL
       presentUserFacingError(error, cancellationNotice: "Passkey sign-in cancelled.")
+    }
+  }
+
+  /// Revoke this Mac's current bearer grant when possible, then durably clear
+  /// the local account binding. This explicit transition is the only path that
+  /// makes account creation or a different sync authority available again.
+  func disconnectSyncAccountForSwitch(expectedServerURL: URL) async {
+    guard canMutateVault() else { return }
+    guard let persistence, isUnlocked else {
+      error = "Unlock the vault before disconnecting the sync account."
+      return
+    }
+    guard let serverURL = AppState.validatedSyncURL(document.syncState.serverURL),
+      document.syncState.accountId.flatMap(SyncAccountIdentifier.normalized) != nil
+    else {
+      error = "No sync account is connected."
+      return
+    }
+    guard serverURL == expectedServerURL else {
+      error = "The saved sync server changed. Review it before disconnecting the account."
+      return
+    }
+    guard beginSyncActivity(.disconnectingAccount) else {
+      notice = "A sync operation is already running."
+      return
+    }
+    defer { finishSyncActivity(.disconnectingAccount) }
+    guard await flushWalletLabelDraftsBeforeRemoteOperation() else { return }
+    do {
+      // A rollback point contains a full historical SyncState, including its
+      // account and bearer grant. Delete it durably before account switching
+      // is admitted so a crash or relaunch cannot resurrect the old identity.
+      try await persistence.discardRollbackCheckpoint()
+      hasVaultRollbackCheckpoint = false
+    } catch {
+      let detail =
+        UserFacingErrorMapper.message(for: error)
+        ?? "The encrypted rollback point could not be removed."
+      self.error =
+        "The automatic encrypted rollback point could not be cleared safely, so this Mac was not disconnected. \(detail)"
+      return
+    }
+    do {
+      if !document.syncState.sessionToken.isEmpty {
+        let client = ZeroKnowledgeSyncClient(baseURL: serverURL, http: httpClient)
+        await client.setBearerToken(document.syncState.sessionToken)
+        try await client.revokeCurrentSession()
+      }
+      var disconnected = document
+      disconnected.syncState.disconnectAccount()
+      guard await save(disconnected, projectedSyncVersion: nil) else {
+        let persistenceError = error
+        requirePendingSyncPersistence(disconnected, projectedSyncVersion: nil)
+        error =
+          "Clearing this Mac's local sync-account binding is pending persistence. Use Retry local save after fixing storage: \(persistenceError)"
+        return
+      }
+      notice =
+        "This Mac disconnected from the sync account. The remote account and encrypted remote vault were kept; the previous account's automatic rollback point was removed."
+      error = ""
+    } catch {
+      await handleSyncError(error)
     }
   }
 
@@ -324,7 +425,11 @@ extension AppState {
     let priorEndpointConfig = endpointConfig
     let priorEndpointConfigStatus = endpointConfigStatus
     let priorAcceptedEndpointConfigServerURL = acceptedEndpointConfigServerURL
-    syncing = true
+    guard beginSyncActivity(.signingIn) else {
+      notice = "A sync operation is already running."
+      return
+    }
+    defer { finishSyncActivity(.signingIn) }
     do {
       let stagedEndpointConfig = try await compatibilityPolicyCandidate(for: serverURL)
       let session = try await passkeyAuthenticator.authenticate(
@@ -352,10 +457,11 @@ extension AppState {
       acceptedEndpointConfigServerURL = serverURL
       endpointConfigStatus = "Remote v\(stagedEndpointConfig.configVersion)"
       error = ""
-      syncing = false
+      // Hand the single operation lane from authentication to replay so the
+      // UI moves progress from Sign in to Retry upload recovery.
+      finishSyncActivity(.signingIn)
       await recoverPendingVaultUpload()
     } catch {
-      syncing = false
       endpointConfig = priorEndpointConfig
       endpointConfigStatus = priorEndpointConfigStatus
       acceptedEndpointConfigServerURL = priorAcceptedEndpointConfigServerURL

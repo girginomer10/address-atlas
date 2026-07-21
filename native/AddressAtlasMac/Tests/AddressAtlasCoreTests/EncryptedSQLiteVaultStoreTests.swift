@@ -108,12 +108,228 @@ final class EncryptedSQLiteVaultStoreTests: XCTestCase {
     try store.initialize()
     var attributes = try FileManager.default.attributesOfItem(atPath: databaseURL.path)
     XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+    let directoryAttributes = try FileManager.default.attributesOfItem(atPath: tempDir.path)
+    XCTAssertEqual((directoryAttributes[.posixPermissions] as? NSNumber)?.intValue, 0o700)
 
     try FileManager.default.setAttributes(
       [.posixPermissions: 0o644], ofItemAtPath: databaseURL.path)
     try store.initialize()
     attributes = try FileManager.default.attributesOfItem(atPath: databaseURL.path)
     XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+  }
+
+  func testStoreRejectsSymlinkedDatabaseWithoutTouchingItsTarget() throws {
+    let tempDir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+    let protectedTarget = tempDir.appending(path: "protected.txt")
+    let original = Data("do-not-touch".utf8)
+    try original.write(to: protectedTarget)
+    let databaseURL = tempDir.appending(path: "vault.sqlite")
+    try FileManager.default.createSymbolicLink(
+      at: databaseURL,
+      withDestinationURL: protectedTarget
+    )
+    let store = try EncryptedSQLiteVaultStore(
+      path: databaseURL,
+      vaultKey: try VaultCrypto().generateVaultKey()
+    )
+
+    XCTAssertThrowsError(try store.initialize())
+    XCTAssertEqual(try Data(contentsOf: protectedTarget), original)
+  }
+
+  func testStoreRejectsHardLinkedDatabaseWithoutChangingTargetMetadata() throws {
+    let tempDir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+    let protectedTarget = tempDir.appending(path: "protected.txt")
+    let original = Data("do-not-touch".utf8)
+    try original.write(to: protectedTarget)
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o644],
+      ofItemAtPath: protectedTarget.path
+    )
+    let databaseURL = tempDir.appending(path: "vault.sqlite")
+    try FileManager.default.linkItem(at: protectedTarget, to: databaseURL)
+    let store = try EncryptedSQLiteVaultStore(
+      path: databaseURL,
+      vaultKey: try VaultCrypto().generateVaultKey()
+    )
+
+    XCTAssertThrowsError(try store.initialize())
+    XCTAssertEqual(try Data(contentsOf: protectedTarget), original)
+    let attributes = try FileManager.default.attributesOfItem(atPath: protectedTarget.path)
+    XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o644)
+  }
+
+  func testStoreRejectsSymlinkedDatabaseDirectory() throws {
+    let tempDir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+    let protectedDirectory = tempDir.appending(path: "protected")
+    try FileManager.default.createDirectory(
+      at: protectedDirectory,
+      withIntermediateDirectories: true
+    )
+    let linkedDirectory = tempDir.appending(path: "linked")
+    try FileManager.default.createSymbolicLink(
+      at: linkedDirectory,
+      withDestinationURL: protectedDirectory
+    )
+    let protectedDatabase = protectedDirectory.appending(path: "vault.sqlite")
+    let store = try EncryptedSQLiteVaultStore(
+      path: linkedDirectory.appending(path: "vault.sqlite"),
+      vaultKey: try VaultCrypto().generateVaultKey()
+    )
+
+    XCTAssertThrowsError(try store.initialize())
+    XCTAssertFalse(FileManager.default.fileExists(atPath: protectedDatabase.path))
+  }
+
+  func testStoreRejectsOversizedLegacyBlobBeforeProjection() throws {
+    let tempDir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+    let databaseURL = tempDir.appending(path: "vault.sqlite")
+    let limit = 4_096
+    let store = try EncryptedSQLiteVaultStore(
+      path: databaseURL,
+      vaultKey: try VaultCrypto().generateVaultKey(),
+      crypto: VaultCrypto(),
+      maximumStoredEnvelopeByteCount: limit
+    )
+    try store.initialize()
+    try executeVaultSQL(
+      at: databaseURL,
+      sql: """
+        INSERT INTO encrypted_vault_documents (id, envelope_json, updated_at, revision)
+        VALUES ('primary', zeroblob(\(limit + 1)), '2026-07-21T00:00:00Z', 1);
+        """
+    )
+
+    XCTAssertThrowsError(try store.load())
+    XCTAssertThrowsError(try store.rawStoredEnvelopeBytes())
+  }
+
+  func testEncryptedRollbackCheckpointRestoresFullVaultAndIsConsumedAtomically() throws {
+    let tempDir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+    let databaseURL = tempDir.appending(path: "vault.sqlite")
+    let vaultKey = try VaultCrypto().generateVaultKey()
+    let store = try EncryptedSQLiteVaultStore(path: databaseURL, vaultKey: vaultKey)
+    _ = try store.load()
+    let credentialMarker = "checkpoint-credential-ciphertext"
+    let connection = ExchangeConnectionRecord(
+      provider: .binance,
+      label: "Local Binance",
+      encryptedCredentials: EncryptedVaultEnvelope(
+        keyId: "exchange-id",
+        nonce: Base64URL.encode(Data(repeating: 1, count: 12)),
+        ciphertext: credentialMarker,
+        checksum: String(repeating: "a", count: 64)
+      ),
+      credentialScopeAssurance: .verifiedReadOnly
+    )
+    var original = VaultDocument(
+      wallets: [
+        WalletRecord(label: "Local Treasury", address: "0x1", chainKind: .evm)
+      ],
+      exchangeConnections: [connection]
+    )
+    XCTAssertTrue(
+      original.syncState.connect(
+        accountId: "11111111-1111-4111-8111-111111111111",
+        serverURL: "https://sync.example",
+        sessionToken: "checkpoint-session-token"
+      )
+    )
+    original = try store.saveReturningPersistedDocument(original)
+
+    _ = try store.saveRollbackCheckpoint(original)
+    XCTAssertTrue(try store.containsRollbackCheckpoint())
+    var downloaded = VaultDocument(wallets: [
+      WalletRecord(label: "Remote Treasury", address: "0x2", chainKind: .evm)
+    ])
+    XCTAssertTrue(
+      downloaded.syncState.connect(
+        accountId: "22222222-2222-4222-8222-222222222222",
+        serverURL: "https://other-sync.example",
+        sessionToken: "current-session-token"
+      )
+    )
+    downloaded.syncState.markSynced(
+      version: 7,
+      snapshotChecksum: String(repeating: "b", count: 64),
+      contentChecksum: String(repeating: "c", count: 64),
+      at: Date(timeIntervalSince1970: 1_234)
+    )
+    downloaded.syncState.remoteOutcomeUncertain = true
+    downloaded.syncState.accountDeletionIdempotencyKey = String(repeating: "A", count: 43)
+    downloaded = try store.saveReturningPersistedDocument(downloaded)
+
+    let restored = try store.restoreRollbackCheckpoint()
+
+    XCTAssertEqual(restored.wallets.map(\.label), ["Local Treasury"])
+    XCTAssertEqual(restored.exchangeConnections.map(\.id), [connection.id])
+    XCTAssertEqual(
+      restored.exchangeConnections.first?.encryptedCredentials.ciphertext,
+      credentialMarker
+    )
+    XCTAssertEqual(
+      restored.exchangeConnections.first?.credentialScopeAssurance,
+      .verifiedReadOnly
+    )
+    XCTAssertEqual(restored.syncState, downloaded.syncState)
+    XCTAssertEqual(restored.syncState.sessionToken, "current-session-token")
+    XCTAssertEqual(restored.syncState.latestRemoteVersion, 7)
+    XCTAssertEqual(restored.syncState.lastChecksum, String(repeating: "b", count: 64))
+    XCTAssertTrue(try VaultSyncCodec().hasLocalChanges(in: restored))
+    XCTAssertFalse(try store.containsRollbackCheckpoint())
+    let verifier = try EncryptedSQLiteVaultStore(path: databaseURL, vaultKey: vaultKey)
+    XCTAssertEqual(try verifier.load(), restored)
+    XCTAssertFalse(
+      String(decoding: try Data(contentsOf: databaseURL), as: UTF8.self).contains(
+        credentialMarker
+      ))
+  }
+
+  func testRollbackCheckpointDiscardIsIdempotentAndRejectsAStaleStore() throws {
+    let tempDir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+    let databaseURL = tempDir.appending(path: "vault.sqlite")
+    let vaultKey = try VaultCrypto().generateVaultKey()
+    let currentStore = try EncryptedSQLiteVaultStore(path: databaseURL, vaultKey: vaultKey)
+    _ = try currentStore.load()
+    let original = try currentStore.saveReturningPersistedDocument(
+      VaultDocument(wallets: [
+        WalletRecord(label: "Original", address: "0x1", chainKind: .evm)
+      ])
+    )
+    _ = try currentStore.saveRollbackCheckpoint(original)
+
+    let staleStore = try EncryptedSQLiteVaultStore(path: databaseURL, vaultKey: vaultKey)
+    _ = try staleStore.load()
+    try currentStore.save(
+      VaultDocument(wallets: [
+        WalletRecord(label: "Current", address: "0x2", chainKind: .evm)
+      ])
+    )
+
+    XCTAssertThrowsError(try staleStore.restoreRollbackCheckpoint()) { error in
+      XCTAssertEqual(error as? EncryptedSQLiteVaultStoreError, .staleDocument)
+    }
+    XCTAssertEqual(try currentStore.load().wallets.map(\.label), ["Current"])
+    XCTAssertTrue(try currentStore.containsRollbackCheckpoint())
+    XCTAssertThrowsError(try staleStore.discardRollbackCheckpoint()) { error in
+      XCTAssertEqual(error as? EncryptedSQLiteVaultStoreError, .staleDocument)
+    }
+    XCTAssertTrue(try currentStore.containsRollbackCheckpoint())
+    try currentStore.discardRollbackCheckpoint()
+    XCTAssertFalse(try currentStore.containsRollbackCheckpoint())
+    try currentStore.discardRollbackCheckpoint()
   }
 
   func testSequentialWholeDocumentSavesAdvanceWithoutConflict() throws {

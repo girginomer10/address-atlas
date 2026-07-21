@@ -1,15 +1,62 @@
 import Foundation
 
 public struct ExchangeBalance: Equatable, Sendable {
-  public var total: [String: Double]
-  public var free: [String: Double]
+  /// Authoritative base-10 amounts returned by the exchange providers.
+  ///
+  /// Exchange APIs encode balances as decimal strings. Keeping those values as
+  /// `ExchangeAmount` prevents aggregation from silently dropping integer or
+  /// fractional units that cannot be represented by `Double` (for example,
+  /// `9_007_199_254_740_993`). `total` remains available as a compatibility
+  /// view for portfolio code that still consumes binary floating-point values.
+  public private(set) var exactTotal: [String: ExchangeAmount]
+  public private(set) var exactFree: [String: ExchangeAmount]
+  public var total: [String: Double] {
+    didSet {
+      guard total != oldValue else { return }
+      exactTotal = Self.exactView(of: total)
+    }
+  }
+  public var free: [String: Double] {
+    didSet {
+      guard free != oldValue else { return }
+      exactFree = Self.exactView(of: free)
+    }
+  }
   public var warnings: [String]
 
   public init(total: [String: Double] = [:], free: [String: Double] = [:], warnings: [String] = [])
   {
     self.total = total
     self.free = free
+    exactTotal = Self.exactView(of: total)
+    exactFree = Self.exactView(of: free)
     self.warnings = warnings
+  }
+
+  init(
+    exactTotal: [String: ExchangeAmount],
+    exactFree: [String: ExchangeAmount] = [:],
+    warnings: [String] = []
+  ) {
+    self.exactTotal = exactTotal
+    self.exactFree = exactFree
+    total = Self.doubleView(of: exactTotal)
+    free = Self.doubleView(of: exactFree)
+    self.warnings = warnings
+  }
+
+  private static func exactView(of values: [String: Double]) -> [String: ExchangeAmount] {
+    values.reduce(into: [:]) { result, entry in
+      guard let amount = ExchangeAmount(legacyDouble: entry.value) else { return }
+      result[entry.key] = amount
+    }
+  }
+
+  private static func doubleView(of values: [String: ExchangeAmount]) -> [String: Double] {
+    values.reduce(into: [:]) { result, entry in
+      guard let approximate = entry.value.approximateDouble else { return }
+      result[entry.key] = approximate
+    }
   }
 }
 

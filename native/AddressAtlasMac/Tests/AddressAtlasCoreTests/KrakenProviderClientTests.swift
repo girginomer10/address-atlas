@@ -5,6 +5,41 @@ import XCTest
 @testable import AddressAtlasCore
 
 final class KrakenProviderClientTests: XCTestCase {
+  func testKrakenInvalidAliasAmountQuarantinesWholeNormalizedAsset() async throws {
+    let fixture = try krakenStateFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let http = ScannerHTTPStub { request in
+      if request.url?.path == "/0/private/Balance" {
+        return scannerResponse(
+          request,
+          #"{"error":[],"result":{"XBT":"1","XXBT":"not-a-number","XETH":"2"}}"#
+        )
+      }
+      return scannerResponse(
+        request,
+        #"{"error":[],"result":{"XBT":{"altname":"XBT"},"XXBT":{"altname":"XBT"},"XETH":{"altname":"ETH"}}}"#
+      )
+    }
+    let client = NativeExchangeBalanceClient(
+      http: http,
+      now: { Date(timeIntervalSince1970: 1_700_000_000) },
+      krakenNonceGenerator: fixture.makeGenerator()
+    )
+
+    let balance = try await client.fetchBalance(
+      provider: .kraken,
+      credentials: ExchangeCredentials(
+        apiKey: "invalid-alias-amount-key",
+        secret: Data("secret".utf8).base64EncodedString()
+      )
+    )
+
+    XCTAssertNil(balance.exactTotal["BTC"])
+    XCTAssertNil(balance.total["BTC"])
+    XCTAssertEqual(balance.exactTotal["ETH"]?.canonicalString, "2")
+    XCTAssertTrue(balance.warnings.contains { $0.contains("invalid numeric amounts") })
+  }
+
   func testKrakenRejectsInvalidBalanceCodesAndMetadataAliasesButPreservesKnownSuffixes()
     async throws
   {

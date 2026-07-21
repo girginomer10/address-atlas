@@ -64,6 +64,11 @@ describe("bounded restored-vault integrity scan", () => {
     expect(statements[0]).toBe("BEGIN TRANSACTION READ ONLY");
     expect(statements[1]).toContain("DECLARE address_atlas_vault_integrity");
     expect(statements[1]).toContain("jsonb_typeof(vault.envelope) = 'object'");
+    expect(statements[1]).toContain("pg_column_compression(vault.envelope) IS NULL");
+    expect(statements[1]).toContain("pg_column_size(vault.envelope)");
+    expect(statements[1]).toContain("pg_column_compression(vault.checksum) IS NULL");
+    expect(statements[1]).toContain("pg_column_size(vault.checksum)");
+    expect(statements[1]).toMatch(/CASE[\s\S]+pg_column_size\(vault\.envelope\)[\s\S]+THEN \([\s\S]+octet_length\(vault\.envelope::pg_catalog\.text\)/);
     expect(statements[1]).toContain("octet_length(vault.envelope::pg_catalog.text)");
     expect(statements[1]).toContain("CASE WHEN safety.stored_row_valid THEN vault.envelope ELSE NULL END");
     expect(statements[1]).toContain("CASE WHEN safety.stored_row_valid THEN vault.checksum ELSE NULL END");

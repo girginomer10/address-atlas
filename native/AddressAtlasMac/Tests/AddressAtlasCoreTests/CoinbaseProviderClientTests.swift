@@ -54,6 +54,33 @@ final class CoinbaseProviderClientTests: XCTestCase {
     )
   }
 
+  func testCoinbaseInvalidAmountQuarantinesEveryAccountForNormalizedSymbol() async throws {
+    let http = ScannerHTTPStub { request in
+      scannerResponse(
+        request,
+        #"{"accounts":[{"uuid":"11111111-1111-4111-8111-111111111111","currency":"BTC","available_balance":{"value":"1"},"hold":{"value":"0"}},{"uuid":"22222222-2222-4222-8222-222222222222","currency":"BTC","available_balance":{"value":"not-a-number"},"hold":{"value":"0"}},{"uuid":"33333333-3333-4333-8333-333333333333","currency":"ETH","available_balance":{"value":"2"},"hold":{"value":"0"}}],"has_next":false}"#
+      )
+    }
+    let client = NativeExchangeBalanceClient(
+      http: http,
+      now: { Date(timeIntervalSince1970: 1_700_000_000) },
+      jwtNonce: { "invalid-amount" }
+    )
+
+    let balance = try await client.fetchBalance(
+      provider: .coinbase,
+      credentials: ExchangeCredentials(
+        apiKey: "organizations/test/apiKeys/key-id",
+        secret: try scannerPrivateKey().pemRepresentation
+      )
+    )
+
+    XCTAssertNil(balance.exactTotal["BTC"])
+    XCTAssertNil(balance.total["BTC"])
+    XCTAssertEqual(balance.exactTotal["ETH"]?.canonicalString, "2")
+    XCTAssertTrue(balance.warnings.contains { $0.contains("invalid numeric amounts") })
+  }
+
   func testCoinbaseDeduplicatesRepeatedAccountUUIDAcrossPages() async throws {
     let requests = ScannerRequestLog()
     let nonces = ScannerNonceSequence(["page-one", "page-two"])

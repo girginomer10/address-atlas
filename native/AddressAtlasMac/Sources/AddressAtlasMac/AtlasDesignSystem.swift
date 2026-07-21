@@ -1,5 +1,6 @@
 import AddressAtlasCore
 import AppKit
+import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -53,38 +54,41 @@ struct Page<Content: View>: View {
   }
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 26) {
-        ViewThatFits(in: .horizontal) {
-          HStack(alignment: .top, spacing: 28) {
-            heading(lineLimit: 1)
-            Spacer()
-            headerStat
-              .frame(minWidth: 170, alignment: .trailing)
-          }
-          // Below this width the subtitle becomes an unreadably narrow sliver
-          // beside the stat block even if SwiftUI can technically compress it.
-          .frame(minWidth: 760)
+    VStack(spacing: 0) {
+      StatusLine(presentation: .pinned)
 
-          VStack(alignment: .leading, spacing: 18) {
-            heading(lineLimit: 2)
-            headerStat
-              .frame(maxWidth: .infinity, alignment: .leading)
-          }
-        }
-        .padding(.bottom, 28)
-        .overlay(alignment: .bottom) {
-          Rectangle().fill(AtlasTheme.rule).frame(height: 1)
-        }
+      ScrollView {
+        VStack(alignment: .leading, spacing: 26) {
+          ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: 28) {
+              heading(lineLimit: 1)
+              Spacer()
+              headerStat
+                .frame(minWidth: 170, alignment: .trailing)
+            }
+            // Below this width the subtitle becomes an unreadably narrow sliver
+            // beside the stat block even if SwiftUI can technically compress it.
+            .frame(minWidth: 760)
 
-        StatusLine()
-        content
+            VStack(alignment: .leading, spacing: 18) {
+              heading(lineLimit: 2)
+              headerStat
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+          }
+          .padding(.bottom, 28)
+          .overlay(alignment: .bottom) {
+            Rectangle().fill(AtlasTheme.rule).frame(height: 1)
+          }
+
+          content
+        }
+        .padding(.horizontal, 30)
+        .padding(.vertical, 30)
+        .frame(maxWidth: 1220, alignment: .leading)
       }
-      .padding(.horizontal, 30)
-      .padding(.vertical, 30)
-      .frame(maxWidth: 1220, alignment: .leading)
+      .scrollContentBackground(.hidden)
     }
-    .scrollContentBackground(.hidden)
     .background(AtlasTheme.paper)
   }
 
@@ -314,50 +318,244 @@ struct SidebarTrustLine: View {
   }
 }
 
-struct StatusLine: View {
-  @EnvironmentObject private var state: AppState
+/// Posts dynamic status changes through AppKit's application-level
+/// announcement channel. A process-wide active-message registry prevents a
+/// newly installed SwiftUI page from repeating the same still-visible status,
+/// while a fresh publication of that status remains announceable after clear.
+@MainActor
+final class AtlasAccessibilityAnnouncer {
+  enum Kind: Hashable {
+    case operatorMessage
+    case guidance
+    case notice
+    case error
 
-  var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
-      if let operatorMessage = state.operatorMessage {
-        HStack(spacing: 8) {
-          Image(systemName: "info.circle")
-          Text(operatorMessage)
-        }
-        .foregroundStyle(AtlasTheme.accent)
-        .accessibilityLabel("Sync server message: \(operatorMessage)")
-      }
-      if let persistentGuidance = state.persistentOperationGuidance {
-        HStack(alignment: .top, spacing: 8) {
-          Image(systemName: "exclamationmark.shield")
-          Text(persistentGuidance)
-        }
-        .foregroundStyle(AtlasTheme.warning)
-        .accessibilityLabel("Action required: \(persistentGuidance)")
-      }
-      if !state.notice.isEmpty {
-        HStack(spacing: 8) {
-          Image(systemName: "checkmark.circle")
-          Text(state.notice)
-        }
-        .foregroundStyle(AtlasTheme.gain)
-      }
-      if !state.error.isEmpty {
-        HStack(spacing: 8) {
-          Image(systemName: "exclamationmark.triangle")
-          Text(state.error)
-        }
-        .foregroundStyle(AtlasTheme.loss)
-      }
-      if !state.isAppVersionSupported {
-        Link(destination: state.safeUpdateDownloadURL) {
-          Label(
-            "Download the latest signed Address Atlas release", systemImage: "arrow.down.circle")
-        }
-        .accessibilityHint("Opens the hard-pinned Address Atlas releases page in your browser")
+    var prefix: String {
+      switch self {
+      case .operatorMessage: "Sync server message"
+      case .guidance: "Action required"
+      case .notice: "Status"
+      case .error: "Error"
       }
     }
-    .font(.callout)
+
+    var priority: NSAccessibilityPriorityLevel {
+      switch self {
+      case .operatorMessage, .notice: .medium
+      case .guidance, .error: .high
+      }
+    }
+  }
+
+  typealias Clock = @MainActor () -> TimeInterval
+  typealias Poster = @MainActor (String, NSAccessibilityPriorityLevel) -> Void
+
+  static let shared = AtlasAccessibilityAnnouncer()
+
+  private struct RecentAnnouncement {
+    var message: String
+    var postedAt: TimeInterval
+  }
+
+  private let duplicateCoalescingInterval: TimeInterval
+  private let now: Clock
+  private let poster: Poster
+  private var activeMessages: [Kind: String] = [:]
+  private var recentAnnouncements: [Kind: RecentAnnouncement] = [:]
+
+  init(
+    duplicateCoalescingInterval: TimeInterval = 0.75,
+    now: @escaping Clock = { ProcessInfo.processInfo.systemUptime },
+    poster: @escaping Poster = AtlasAccessibilityAnnouncer.postToAppKit
+  ) {
+    self.duplicateCoalescingInterval = duplicateCoalescingInterval
+    self.now = now
+    self.poster = poster
+  }
+
+  /// Use for a view's initial snapshot. Recreated pages do not repeat a status
+  /// that the same application process already announced and still presents.
+  func announceVisible(_ message: String, kind: Kind) {
+    guard let spokenMessage = normalizedSpokenMessage(message, kind: kind) else {
+      clear(kind)
+      return
+    }
+    guard activeMessages[kind] != spokenMessage else { return }
+    activeMessages[kind] = spokenMessage
+    post(spokenMessage, kind: kind)
+  }
+
+  /// Use for a Published state event. Two simultaneously installed views are
+  /// coalesced, but the same legitimate result can be announced again later.
+  func announceEvent(_ message: String, kind: Kind) {
+    guard let spokenMessage = normalizedSpokenMessage(message, kind: kind) else {
+      clear(kind)
+      return
+    }
+    let wasAlreadyActive = activeMessages[kind] == spokenMessage
+    activeMessages[kind] = spokenMessage
+    if wasAlreadyActive,
+      let recent = recentAnnouncements[kind],
+      recent.message == spokenMessage,
+      now() - recent.postedAt < duplicateCoalescingInterval
+    {
+      return
+    }
+    post(spokenMessage, kind: kind)
+  }
+
+  func clear(_ kind: Kind) {
+    activeMessages.removeValue(forKey: kind)
+  }
+
+  private func normalizedSpokenMessage(_ message: String, kind: Kind) -> String? {
+    let normalized = message.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalized.isEmpty else { return nil }
+    return "\(kind.prefix): \(normalized)"
+  }
+
+  private func post(_ message: String, kind: Kind) {
+    recentAnnouncements[kind] = RecentAnnouncement(message: message, postedAt: now())
+    poster(message, kind.priority)
+  }
+
+  private static func postToAppKit(
+    _ message: String,
+    priority: NSAccessibilityPriorityLevel
+  ) {
+    NSAccessibility.post(
+      element: NSApplication.shared,
+      notification: .announcementRequested,
+      userInfo: [
+        .announcement: message,
+        .priority: priority.rawValue,
+      ]
+    )
+  }
+}
+
+struct StatusLine: View {
+  enum Presentation {
+    case inline
+    case pinned
+  }
+
+  @EnvironmentObject private var state: AppState
+  var presentation: Presentation = .inline
+
+  private var hasVisibleContent: Bool {
+    state.operatorMessage != nil || state.persistentOperationGuidance != nil
+      || !state.notice.isEmpty || !state.error.isEmpty || !state.isAppVersionSupported
+  }
+
+  @ViewBuilder
+  var body: some View {
+    Group {
+      if hasVisibleContent {
+        VStack(alignment: .leading, spacing: 8) {
+          if let operatorMessage = state.operatorMessage {
+            HStack(spacing: 8) {
+              Image(systemName: "info.circle")
+              Text(operatorMessage)
+            }
+            .foregroundStyle(AtlasTheme.accent)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Sync server message: \(operatorMessage)")
+          }
+          if let persistentGuidance = state.persistentOperationGuidance {
+            HStack(alignment: .top, spacing: 8) {
+              Image(systemName: "exclamationmark.shield")
+              Text(persistentGuidance)
+            }
+            .foregroundStyle(AtlasTheme.warning)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Action required: \(persistentGuidance)")
+          }
+          if !state.notice.isEmpty {
+            HStack(spacing: 8) {
+              Image(systemName: "checkmark.circle")
+              Text(state.notice)
+            }
+            .foregroundStyle(AtlasTheme.gain)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Status: \(state.notice)")
+          }
+          if !state.error.isEmpty {
+            HStack(spacing: 8) {
+              Image(systemName: "exclamationmark.triangle")
+              Text(state.error)
+            }
+            .foregroundStyle(AtlasTheme.loss)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Error: \(state.error)")
+          }
+          if !state.isAppVersionSupported {
+            Link(destination: state.safeUpdateDownloadURL) {
+              Label(
+                "Download the latest signed Address Atlas release",
+                systemImage: "arrow.down.circle"
+              )
+            }
+            .accessibilityHint(
+              "Opens the hard-pinned Address Atlas releases page in your browser")
+          }
+        }
+        .font(.callout)
+        .padding(.horizontal, presentation == .pinned ? 30 : 0)
+        .padding(.vertical, presentation == .pinned ? 12 : 0)
+        .frame(maxWidth: presentation == .pinned ? .infinity : nil, alignment: .leading)
+        .background(presentation == .pinned ? AtlasTheme.paper2 : Color.clear)
+        .overlay(alignment: .bottom) {
+          if presentation == .pinned {
+            Rectangle().fill(AtlasTheme.rule).frame(height: 1)
+          }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilitySortPriority(100)
+      }
+    }
+    .onAppear(perform: announceVisibleMessages)
+    .onReceive(state.$notice.dropFirst()) { message in
+      AtlasAccessibilityAnnouncer.shared.announceEvent(message, kind: .notice)
+    }
+    .onReceive(state.$error.dropFirst()) { message in
+      AtlasAccessibilityAnnouncer.shared.announceEvent(message, kind: .error)
+    }
+    .onChange(of: state.operatorMessage) { _, message in
+      announceEvent(message, kind: .operatorMessage)
+    }
+    .onChange(of: state.persistentOperationGuidance) { _, message in
+      announceEvent(message, kind: .guidance)
+    }
+  }
+
+  private func announceVisibleMessages() {
+    announceVisible(state.operatorMessage, kind: .operatorMessage)
+    announceVisible(state.persistentOperationGuidance, kind: .guidance)
+    announceVisible(state.notice, kind: .notice)
+    announceVisible(state.error, kind: .error)
+  }
+
+  private func announceVisible(
+    _ message: String?,
+    kind: AtlasAccessibilityAnnouncer.Kind
+  ) {
+    if let message {
+      AtlasAccessibilityAnnouncer.shared.announceVisible(message, kind: kind)
+    } else {
+      AtlasAccessibilityAnnouncer.shared.clear(kind)
+    }
+  }
+
+  private func announceEvent(
+    _ message: String?,
+    kind: AtlasAccessibilityAnnouncer.Kind
+  ) {
+    if let message {
+      AtlasAccessibilityAnnouncer.shared.announceEvent(message, kind: kind)
+    } else {
+      AtlasAccessibilityAnnouncer.shared.clear(kind)
+    }
   }
 }
 

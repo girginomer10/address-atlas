@@ -15,10 +15,16 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  LATEST_SYNC_MIGRATION_VERSION,
+  MAX_COMPATIBLE_SYNC_MIGRATION_VERSION,
+  SYNC_MIGRATION_CHAIN_CHECKSUMS
+} from "./postgres-migrations";
 
 const repoRoot = resolve(import.meta.dirname, "../../..");
 const manageScript = join(repoRoot, "server/sync/manage-prod.sh");
 const composeFile = join(repoRoot, "server/sync/compose.prod.yml");
+const dockerfile = join(repoRoot, "server/sync/Dockerfile");
 const nativeConfigStateTool = join(repoRoot, "server/sync/native-config-deploy-state.mjs");
 const nativeConfigJson = '{"schemaVersion":1,"configVersion":5,"updatedAt":"2026-07-20T00:00:00.000Z","refreshAfterSeconds":21600,"minSupportedAppVersion":"0.2.0","priceBaseUrl":"https://api.coingecko.com/api/v3/simple/price","chains":{"bitcoin":{"restUrl":"https://blockstream.info/api"}},"exchanges":{}}';
 const nativeConfigDigest = execFileSync(process.execPath, [nativeConfigStateTool, "fingerprint"], {
@@ -119,7 +125,7 @@ case "$1" in
   drill) exit "\${FAKE_BACKUP_DRILL_STATUS:-0}" ;;
   restore) exit "\${FAKE_BACKUP_RESTORE_STATUS:-0}" ;;
   inspect)
-    printf 'BACKUP_METADATA|4|%s|%s|%s|%s|%s|%s|%s|%s|3|2026-07-20T00:00:00Z\\n' \
+    printf 'BACKUP_METADATA|4|%s|%s|%s|%s|%s|%s|%s|%s|%s|2026-07-20T00:00:00Z\\n' \
       "\${FAKE_BACKUP_SHA256:-dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd}" \
       "\${FAKE_BACKUP_DATABASE:-address_atlas_sync}" \
       "\${FAKE_BACKUP_CONFIG_VERSION:-5}" \
@@ -127,7 +133,8 @@ case "$1" in
       "\${FAKE_BACKUP_CONFIG_UPDATED_AT:-1784505600000}" \
       "\${FAKE_BACKUP_CONFIG_REVISION:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" \
       "\${FAKE_BACKUP_SOURCE_WEB_IMAGE:-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}" \
-      "\${FAKE_BACKUP_SOURCE_POSTGRES_IMAGE:-sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc}"
+      "\${FAKE_BACKUP_SOURCE_POSTGRES_IMAGE:-sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc}" \
+      "\${FAKE_BACKUP_MIGRATION_HEAD:-3}"
     ;;
   bootstrap-restore)
     [ "\${FAKE_BACKUP_BOOTSTRAP_STATUS:-0}" = "0" ] || exit "$FAKE_BACKUP_BOOTSTRAP_STATUS"
@@ -321,6 +328,15 @@ if [ "$1" = "exec" ]; then
 fi
 if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
   case "$*" in
+    *"com.addressatlas.sync.compatible-schema-head-3-sha256"*)
+      printf '%s\n' "\${FAKE_DOCKER_PREVIOUS_SCHEMA_CHAIN:-47ad43aa7438c5c8969f7c01162bb73eab8d51066abef482a03fed86a7890ee3}"
+      ;;
+    *"com.addressatlas.sync.compatible-schema-head-4-sha256"*)
+      printf '%s\n' "\${FAKE_DOCKER_PREVIOUS_SCHEMA_CHAIN:-ceb0b725a162b5be512bf35e63ecaf178aa67e7c1335e2807a116f2ef7f65dfe}"
+      ;;
+    *"com.addressatlas.sync.max-compatible-schema-head"*)
+      printf '%s\n' "\${FAKE_DOCKER_PREVIOUS_SCHEMA_HEAD:-4}"
+      ;;
     *"org.opencontainers.image.revision"*)
       printf '%s|%s\n' \
         'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' \
@@ -408,6 +424,193 @@ exit 70
 
   it("uses a stable explicit volume for a first installation", () => {
     expect(detectVolume()).toBe("address-atlas-prod-postgres");
+  });
+
+  it("binds active and rollback-compatible schema heads into deploy artifacts", () => {
+    const manageSource = readFileSync(manageScript, "utf8");
+    const dockerfileSource = readFileSync(dockerfile, "utf8");
+    expect(manageSource.match(/^EXPECTED_RESTORE_MIGRATION_HEAD=(\d+)$/m)?.[1])
+      .toBe(String(LATEST_SYNC_MIGRATION_VERSION));
+    expect(
+      manageSource.match(/^MAX_COMPATIBLE_ROLLBACK_MIGRATION_HEAD=(\d+)$/m)?.[1]
+    ).toBe(String(MAX_COMPATIBLE_SYNC_MIGRATION_VERSION));
+    expect(
+      dockerfileSource.match(
+        /^LABEL com\.addressatlas\.sync\.max-compatible-schema-head=(\d+)$/m
+      )?.[1]
+    ).toBe(String(MAX_COMPATIBLE_SYNC_MIGRATION_VERSION));
+    for (
+      let version = LATEST_SYNC_MIGRATION_VERSION;
+      version <= MAX_COMPATIBLE_SYNC_MIGRATION_VERSION;
+      version += 1
+    ) {
+      const pattern = new RegExp(
+        `^LABEL com\\.addressatlas\\.sync\\.compatible-schema-head-${version}-sha256=([0-9a-f]{64})$`,
+        "m"
+      );
+      expect(dockerfileSource.match(pattern)?.[1])
+        .toBe(SYNC_MIGRATION_CHAIN_CHECKSUMS[version - 1]);
+      const managePattern = new RegExp(
+        `^EXPECTED_MIGRATION_CHAIN_SHA256_${version}="([0-9a-f]{64})"$`,
+        "m"
+      );
+      expect(manageSource.match(managePattern)?.[1])
+        .toBe(SYNC_MIGRATION_CHAIN_CHECKSUMS[version - 1]);
+    }
+  });
+
+  it("rejects a schema change before touching data when the rollback image is too old", () => {
+    const dockerLog = join(temporaryDirectory, "docker.log");
+    writeNativeConfigReceipt();
+    const result = spawnSync("bash", [manageScript, "up"], {
+      encoding: "utf8",
+      env: {
+        ...baseEnvironment(),
+        FAKE_DOCKER_LOG: dockerLog,
+        FAKE_DOCKER_PREVIOUS_WEB_CONTAINERS: "previous-web-container",
+        FAKE_DOCKER_PREVIOUS_SCHEMA_HEAD: "2"
+      }
+    });
+
+    expect(result.status).toBe(67);
+    expect(result.stderr).toContain("Deploy the missing adjacent release first");
+    const dockerCalls = readFileSync(dockerLog, "utf8");
+    expect(dockerCalls).not.toContain(" build web");
+    expect(dockerCalls).not.toContain(" run --rm --no-deps schema");
+  });
+
+  it("allows a prepared rollback image while applying the adjacent schema head", () => {
+    writeNativeConfigReceipt();
+    const result = spawnSync("bash", [manageScript, "up"], {
+      encoding: "utf8",
+      env: {
+        ...baseEnvironment(),
+        FAKE_BACKUP_MIGRATION_HEAD: "2",
+        FAKE_DOCKER_PREVIOUS_WEB_CONTAINERS: "previous-web-container"
+      }
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  });
+
+  it("accepts the exact prepared-head chain when the database is already ahead", () => {
+    writeNativeConfigReceipt();
+    const result = spawnSync("bash", [manageScript, "up"], {
+      encoding: "utf8",
+      env: {
+        ...baseEnvironment(),
+        FAKE_BACKUP_MIGRATION_HEAD: "4",
+        FAKE_DOCKER_PREVIOUS_WEB_CONTAINERS: "previous-web-container"
+      }
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  });
+
+  it("rejects a mismatched exact chain at the prepared database head", () => {
+    const dockerLog = join(temporaryDirectory, "docker.log");
+    writeNativeConfigReceipt();
+    const result = spawnSync("bash", [manageScript, "up"], {
+      encoding: "utf8",
+      env: {
+        ...baseEnvironment(),
+        FAKE_BACKUP_MIGRATION_HEAD: "4",
+        FAKE_DOCKER_LOG: dockerLog,
+        FAKE_DOCKER_PREVIOUS_SCHEMA_CHAIN: "f".repeat(64),
+        FAKE_DOCKER_PREVIOUS_WEB_CONTAINERS: "previous-web-container"
+      }
+    });
+
+    expect(result.status).toBe(67);
+    expect(result.stderr).toContain("required schema head 4");
+    const dockerCalls = readFileSync(dockerLog, "utf8");
+    expect(dockerCalls).not.toContain(" build web");
+    expect(dockerCalls).not.toContain(" run --rm --no-deps schema");
+  });
+
+  it("rejects a rollback image whose maximum head is below the prepared database head", () => {
+    writeNativeConfigReceipt();
+    const result = spawnSync("bash", [manageScript, "up"], {
+      encoding: "utf8",
+      env: {
+        ...baseEnvironment(),
+        FAKE_BACKUP_MIGRATION_HEAD: "4",
+        FAKE_DOCKER_PREVIOUS_SCHEMA_HEAD: "3",
+        FAKE_DOCKER_PREVIOUS_WEB_CONTAINERS: "previous-web-container"
+      }
+    });
+
+    expect(result.status).toBe(67);
+    expect(result.stderr).toContain("rollback requires head 4");
+  });
+
+  it("allows a legacy unlabeled rollback image only at the already-active schema head", () => {
+    writeNativeConfigReceipt();
+    const result = spawnSync("bash", [manageScript, "up"], {
+      encoding: "utf8",
+      env: {
+        ...baseEnvironment(),
+        FAKE_BACKUP_MIGRATION_HEAD: "3",
+        FAKE_DOCKER_PREVIOUS_SCHEMA_HEAD: "<no value>",
+        FAKE_DOCKER_PREVIOUS_SCHEMA_CHAIN: "<no value>",
+        FAKE_DOCKER_PREVIOUS_WEB_CONTAINERS: "previous-web-container"
+      }
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  });
+
+  it("rejects a legacy unlabeled rollback image before an adjacent schema advance", () => {
+    const dockerLog = join(temporaryDirectory, "docker.log");
+    writeNativeConfigReceipt();
+    const result = spawnSync("bash", [manageScript, "up"], {
+      encoding: "utf8",
+      env: {
+        ...baseEnvironment(),
+        FAKE_BACKUP_MIGRATION_HEAD: "2",
+        FAKE_DOCKER_LOG: dockerLog,
+        FAKE_DOCKER_PREVIOUS_SCHEMA_HEAD: "<no value>",
+        FAKE_DOCKER_PREVIOUS_SCHEMA_CHAIN: "<no value>",
+        FAKE_DOCKER_PREVIOUS_WEB_CONTAINERS: "previous-web-container"
+      }
+    });
+
+    expect(result.status).toBe(67);
+    expect(result.stderr).toContain("unlabeled rollback image");
+    const dockerCalls = readFileSync(dockerLog, "utf8");
+    expect(dockerCalls).not.toContain(" build web");
+    expect(dockerCalls).not.toContain(" run --rm --no-deps schema");
+  });
+
+  it("rejects a partial rollback schema-capability label set", () => {
+    writeNativeConfigReceipt();
+    const result = spawnSync("bash", [manageScript, "up"], {
+      encoding: "utf8",
+      env: {
+        ...baseEnvironment(),
+        FAKE_DOCKER_PREVIOUS_SCHEMA_CHAIN: "<no value>",
+        FAKE_DOCKER_PREVIOUS_WEB_CONTAINERS: "previous-web-container"
+      }
+    });
+
+    expect(result.status).toBe(67);
+    expect(result.stderr).toContain("incomplete schema-capability label set");
+  });
+
+  it("rejects a rollback image whose claimed head has a different migration chain", () => {
+    writeNativeConfigReceipt();
+    const result = spawnSync("bash", [manageScript, "up"], {
+      encoding: "utf8",
+      env: {
+        ...baseEnvironment(),
+        FAKE_DOCKER_PREVIOUS_WEB_CONTAINERS: "previous-web-container",
+        FAKE_DOCKER_PREVIOUS_SCHEMA_HEAD: "4",
+        FAKE_DOCKER_PREVIOUS_SCHEMA_CHAIN: "f".repeat(64)
+      }
+    });
+
+    expect(result.status).toBe(67);
+    expect(result.stderr).toContain("exact migration chain");
   });
 
   it("rejects missing, unknown, or extra wrapper arguments", () => {
@@ -1133,6 +1336,39 @@ exec "${process.execPath}" "$@"
     expect(existsSync(obsoleteCache)).toBe(false);
   }, 15_000);
 
+  it("rejects restore before build or replacement when an unlabeled rollback image cannot cover the current schema", () => {
+    writeNativeConfigReceipt();
+    const backupPath = join(temporaryDirectory, "selected.dump.age");
+    writeFileSync(backupPath, "opaque-test-fixture", { mode: 0o600 });
+    const backupLog = join(temporaryDirectory, "backup.log");
+    const dockerLog = join(temporaryDirectory, "docker.log");
+    const result = spawnSync("bash", [
+      manageScript,
+      "restore",
+      backupPath,
+      "--confirm",
+      "RESTORE:address_atlas_sync"
+    ], {
+      encoding: "utf8",
+      env: {
+        ...baseEnvironment(),
+        ADDRESS_ATLAS_ALLOW_PRODUCTION_RESTORE: "YES_I_UNDERSTAND_DATA_WILL_BE_REPLACED",
+        FAKE_BACKUP_LOG: backupLog,
+        FAKE_BACKUP_MIGRATION_HEAD: "2",
+        FAKE_DOCKER_LOG: dockerLog,
+        FAKE_DOCKER_PREVIOUS_SCHEMA_HEAD: "<no value>",
+        FAKE_DOCKER_PREVIOUS_SCHEMA_CHAIN: "<no value>",
+        FAKE_DOCKER_PREVIOUS_WEB_CONTAINERS: "previous-web-container"
+      }
+    });
+
+    expect(result.status).toBe(67);
+    expect(result.stderr).toContain("unlabeled rollback image");
+    expect(readFileSync(backupLog, "utf8").split("\n"))
+      .not.toContain(`restore ${backupPath} --confirm RESTORE:address_atlas_sync`);
+    expect(readFileSync(dockerLog, "utf8")).not.toContain(" build web");
+  });
+
   it("recovers a fresh cluster through signed inspection, two-phase policy checks, current-only deploy, and finalize", () => {
     const backupPath = join(temporaryDirectory, "offsite.dump.age");
     const backupLog = join(temporaryDirectory, "backup.log");
@@ -1361,6 +1597,45 @@ exec "${process.execPath}" "$@"
     const dockerCalls = readFileSync(dockerLog, "utf8");
     expect(dockerCalls).not.toContain(" build web");
     expect(dockerCalls).not.toContain(" run --rm --no-deps schema");
+  });
+
+  it("keeps the verified frontend serving through every pre-deploy gate", () => {
+    const dockerLog = join(temporaryDirectory, "docker.log");
+    const orderLog = join(temporaryDirectory, "order.log");
+    writeNativeConfigReceipt();
+
+    const result = spawnSync("bash", [manageScript, "up"], {
+      encoding: "utf8",
+      env: {
+        ...baseEnvironment(),
+        FAKE_DOCKER_LOG: dockerLog,
+        FAKE_ORDER_LOG: orderLog,
+        FAKE_DOCKER_PREVIOUS_WEB_CONTAINERS: "previous-web-container",
+        FAKE_DOCKER_WEB_CONTAINERS: "web-container",
+        FAKE_DOCKER_CADDY_CONTAINERS: "caddy-container"
+      }
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const dockerCalls = readFileSync(dockerLog, "utf8");
+    expect(dockerCalls.split("\n").some((line) => line.startsWith("stop "))).toBe(false);
+
+    const orderedCalls = readFileSync(orderLog, "utf8").split("\n");
+    const backupIndex = orderedCalls.findIndex((line) => line === "backup:create-predeploy");
+    const buildIndex = orderedCalls.findIndex((line) => line.includes(" build web"));
+    const schemaIndex = orderedCalls.findIndex((line) => line.includes(" run --rm --no-deps schema"));
+    const privatePreflights = orderedCalls
+      .map((line, index) => line.includes(" run --detach --name address-atlas-config-preflight-") ? index : -1)
+      .filter((index) => index >= 0);
+    const deployIndex = orderedCalls.findIndex((line) =>
+      line.includes(" up -d --no-build --wait --wait-timeout 120")
+    );
+    expect(backupIndex).toBeGreaterThanOrEqual(0);
+    expect(backupIndex).toBeLessThan(buildIndex);
+    expect(buildIndex).toBeLessThan(schemaIndex);
+    expect(privatePreflights).toHaveLength(2);
+    expect(schemaIndex).toBeLessThan(privatePreflights[0]!);
+    expect(privatePreflights[1]).toBeLessThan(deployIndex);
   });
 
   it("refuses to start or back up a stopped Postgres container mounted to a different volume", () => {

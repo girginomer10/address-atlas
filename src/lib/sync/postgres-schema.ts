@@ -10,6 +10,9 @@ import {
   assertKnownUnversionedSchema,
   assertSyncSchemaReady,
   assertSyncSchemaVersionReady,
+  assertVaultEnvelopeStoragePolicy,
+  assertVaultStoredValueStorageSafety,
+  getVaultEnvelopeStoragePolicy,
   migrationLedgerExists
 } from "./postgres-readiness";
 
@@ -47,7 +50,9 @@ export async function initializeSyncSchema(targetPool: Pool) {
       await applyPendingMigration(client, migration, migration.version - 1);
     }
 
-    await reconcileStorageUsageIfNeeded(client);
+    const durableVersion = Math.max(appliedCount, LATEST_SYNC_MIGRATION_VERSION);
+    await convergeVaultEnvelopeStoragePolicy(client, durableVersion);
+    await reconcileStorageUsageIfNeeded(client, durableVersion);
     await assertSyncSchemaReady(client, { verifyRuntimePrivileges: false });
   } catch (error) {
     discardClient = lockAcquisitionAmbiguous || !(await rollbackQuietly(client));
@@ -64,6 +69,34 @@ export async function initializeSyncSchema(targetPool: Pool) {
     if (discardClient) client.release(true);
     else client.release();
   }
+}
+
+/**
+ * Metadata-only expand step for the prepared v4 bound. PostgreSQL does not
+ * rewrite existing values for SET STORAGE, and the v3 application ignores this
+ * catalog attribute, so the currently serving N-1 image remains compatible.
+ * New writes become uncompressed immediately; reads additionally reject any
+ * legacy compressed value before detoasting it.
+ */
+async function convergeVaultEnvelopeStoragePolicy(
+  client: PoolClient,
+  appliedVersion: number
+) {
+  if (appliedVersion < 2) return;
+  await client.query("BEGIN");
+  await assertSyncSchemaVersionReady(client, appliedVersion);
+  if (await getVaultEnvelopeStoragePolicy(client) !== "e") {
+    await client.query(
+      "ALTER TABLE vault_snapshots ALTER COLUMN envelope SET STORAGE EXTERNAL"
+    );
+  }
+  await assertVaultEnvelopeStoragePolicy(client);
+  await client.query("COMMIT");
+
+  // Keep the expand-only catalog convergence even when legacy rows need
+  // operator repair. The still-serving N-1 binary tolerates this attribute,
+  // and every subsequent write is now uncompressed while cutover stays blocked.
+  await assertVaultStoredValueStorageSafety(client);
 }
 
 async function applyUnversionedBaseline(client: PoolClient) {
@@ -113,12 +146,15 @@ async function executeMigration(client: PoolClient, migration: SyncMigration) {
   );
 }
 
-async function reconcileStorageUsageIfNeeded(client: PoolClient) {
+async function reconcileStorageUsageIfNeeded(
+  client: PoolClient,
+  appliedVersion: number
+) {
   await client.query("BEGIN");
   // Owner bootstrap reconciliation is itself mutating. Revalidate the final
   // versioned surface in this transaction so drift cannot be altered before
   // the later diagnostic readiness pass rejects it.
-  await assertSyncSchemaVersionReady(client, LATEST_SYNC_MIGRATION_VERSION);
+  await assertSyncSchemaVersionReady(client, appliedVersion);
   const result = await client.query<{
     reconciled_contract_version: number;
     reconcile_required: boolean;

@@ -1,7 +1,8 @@
 import type { PoolClient } from "pg";
 import { OperationalError } from "./diagnostics";
 import {
-  LATEST_SYNC_MIGRATION_VERSION,
+  KNOWN_SYNC_MIGRATIONS,
+  MAX_COMPATIBLE_SYNC_MIGRATION_VERSION,
   STORAGE_RECONCILIATION_VERSION,
   SYNC_MIGRATIONS
 } from "./postgres-migrations";
@@ -18,6 +19,10 @@ import {
   SYNC_TABLES,
   SYNC_TABLES_BY_MIGRATION_VERSION
 } from "./postgres-schema-model";
+import {
+  MAX_STORED_CHECKSUM_BYTES,
+  MAX_STORED_ENVELOPE_JSONB_BYTES
+} from "./stored-vault-row";
 
 type Queryable = Pick<PoolClient, "query">;
 
@@ -92,14 +97,14 @@ export async function assertAppliedMigrationHistory(
   if (rows.length === 0) {
     throw schemaError("migration ledger is empty");
   }
-  if (rows.length > SYNC_MIGRATIONS.length
-      || rows.some((row) => row.version > LATEST_SYNC_MIGRATION_VERSION)) {
+  if (rows.length > KNOWN_SYNC_MIGRATIONS.length
+      || rows.some((row) => row.version > MAX_COMPATIBLE_SYNC_MIGRATION_VERSION)) {
     throw new Error("Address Atlas sync database schema is newer than this server supports.");
   }
 
   for (let index = 0; index < rows.length; index += 1) {
     const applied = rows[index];
-    const expected = SYNC_MIGRATIONS[index];
+    const expected = KNOWN_SYNC_MIGRATIONS[index];
     if (!applied || !expected
         || applied.version !== expected.version
         || applied.name !== expected.name
@@ -107,7 +112,7 @@ export async function assertAppliedMigrationHistory(
       throw schemaError("migration history is unknown or modified");
     }
   }
-  if (!options.allowPending && rows.length !== SYNC_MIGRATIONS.length) {
+  if (!options.allowPending && rows.length < SYNC_MIGRATIONS.length) {
     throw schemaError("database migrations are pending");
   }
   return rows.length;
@@ -133,7 +138,7 @@ export async function assertKnownUnversionedSchema(
   if (!knownLegacy && !knownPreLedger) {
     throw schemaError("unversioned schema is not a recognized release baseline");
   }
-  await assertSchemaSurface(database, present, null);
+  await assertSchemaSurface(database, present, null, 2);
   await assertStorageState(database, true);
   return knownLegacy ? "legacy" : "pre-ledger";
 }
@@ -152,8 +157,13 @@ export async function assertSyncSchemaReady(
   if (!(await migrationLedgerExists(database))) {
     throw schemaError("migration ledger is missing");
   }
-  await assertAppliedMigrationHistory(database, { allowPending: false });
-  await assertSchemaSurface(database, [...SYNC_TABLES], runtimeIdentity);
+  const appliedVersion = await assertAppliedMigrationHistory(database, { allowPending: false });
+  const tableNames = SYNC_TABLES_BY_MIGRATION_VERSION[appliedVersion];
+  if (!tableNames) {
+    throw schemaError(`migration version ${appliedVersion} has no schema contract`);
+  }
+  await assertSchemaSurface(database, tableNames, runtimeIdentity, appliedVersion);
+  if (appliedVersion >= 2) await assertVaultEnvelopeStoragePolicy(database);
   await assertStorageState(database, false);
 }
 
@@ -168,14 +178,15 @@ export async function assertSyncSchemaVersionReady(
   if (!tableNames) {
     throw schemaError(`migration version ${appliedVersion} has no schema contract`);
   }
-  await assertSchemaSurface(database, tableNames, null);
+  await assertSchemaSurface(database, tableNames, null, appliedVersion);
   await assertStorageState(database, true);
 }
 
 async function assertSchemaSurface(
   database: Queryable,
   tableNames: readonly string[],
-  runtimeIdentity: RuntimeDatabaseIdentity | null
+  runtimeIdentity: RuntimeDatabaseIdentity | null,
+  appliedVersion: number
 ) {
   const expectedTables = new Set(tableNames);
   const relations = await database.query<{
@@ -302,7 +313,10 @@ async function assertSchemaSurface(
     }
   }
 
-  const expectedConstraints = SYNC_CONSTRAINT_CONTRACT.filter((item) => expectedTables.has(item.table));
+  const expectedConstraints = SYNC_CONSTRAINT_CONTRACT.filter((item) =>
+    expectedTables.has(item.table)
+      && (item.introducedInVersion === undefined || item.introducedInVersion <= appliedVersion)
+  );
   const constraints = await database.query<{
     table_name: string;
     constraint_name: string;
@@ -377,10 +391,12 @@ async function assertSchemaSurface(
   }
   for (const expected of expectedConstraints) {
     const actual = actualConstraints.get(`${expected.table}.${expected.name}`);
+    const expectedValidated = expected.validatedInVersion === undefined
+      || expected.validatedInVersion <= appliedVersion;
     if (!actual
         || actual.constraint_type !== expected.type
         || !sameOrderedValues(actual.columns, expected.columns)
-        || !actual.validated
+        || actual.validated !== expectedValidated
         || actual.deferrable
         || actual.initially_deferred
         || actual.no_inherit !== (expected.type !== "c")
@@ -796,6 +812,64 @@ async function assertExactSchemaObjectSurface(
         `implicit types for table ${expected.table} differ from the migration contract`
       );
     }
+  }
+}
+
+/**
+ * The envelope column deliberately disables TOAST compression. That makes
+ * pg_column_size() a cheap upper bound on the logical jsonb datum before any
+ * cast or node-postgres deserialization can allocate attacker-sized memory.
+ * Changing the storage policy is transparent to the previous application
+ * release, so it is safe to converge one release ahead of the prepared check
+ * constraint.
+ */
+export async function getVaultEnvelopeStoragePolicy(database: Queryable) {
+  const result = await database.query<{ storage_policy: string }>(
+    `SELECT attribute.attstorage::text AS storage_policy
+     FROM pg_catalog.pg_class AS relation
+     JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+     JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = relation.oid
+     WHERE namespace.nspname = current_schema()
+       AND relation.relname = 'vault_snapshots'
+       AND relation.relkind = 'r'
+       AND attribute.attname = 'envelope'
+       AND attribute.attnum > 0
+       AND NOT attribute.attisdropped`
+  );
+  return result.rows.length === 1 ? result.rows[0]?.storage_policy ?? null : null;
+}
+
+export async function assertVaultEnvelopeStoragePolicy(database: Queryable) {
+  if (await getVaultEnvelopeStoragePolicy(database) !== "e") {
+    throw schemaError("vault envelope storage policy is not externally uncompressed");
+  }
+}
+
+/**
+ * SET STORAGE changes future writes only. Before deployment cutover, reject a
+ * legacy row that would make the bounded runtime projection intentionally
+ * return null. Both functions inspect TOAST metadata/raw size without casting,
+ * rendering, or returning either customer-controlled value to node-postgres.
+ *
+ * This is an owner-bootstrap gate, not a recurring health-probe check: it is a
+ * full table scan and the serving N-1 release can only add policy-compliant
+ * rows after the storage attribute has converged.
+ */
+export async function assertVaultStoredValueStorageSafety(database: Queryable) {
+  const result = await database.query<{ unsafe_stored_value_exists: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1
+       FROM vault_snapshots AS vault
+       WHERE pg_catalog.pg_column_compression(vault.envelope) IS NOT NULL
+          OR pg_catalog.pg_column_size(vault.envelope) NOT BETWEEN 1 AND $1
+          OR pg_catalog.pg_column_compression(vault.checksum) IS NOT NULL
+          OR pg_catalog.pg_column_size(vault.checksum) NOT BETWEEN 1 AND $2
+     ) AS unsafe_stored_value_exists`,
+    [MAX_STORED_ENVELOPE_JSONB_BYTES, MAX_STORED_CHECKSUM_BYTES]
+  );
+  if (result.rows.length !== 1
+      || result.rows[0]?.unsafe_stored_value_exists !== false) {
+    throw schemaError("stored vault variable-width data is not projection-safe");
   }
 }
 

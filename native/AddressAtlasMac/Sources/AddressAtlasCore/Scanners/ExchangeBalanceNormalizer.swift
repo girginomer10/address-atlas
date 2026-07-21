@@ -40,8 +40,14 @@ public enum ExchangeBalanceNormalizer {
     "XRP": "ripple", "XDAI": "xdai", "ZK": "zksync",
   ]
 
+  private struct BalanceEntry {
+    var symbol: String
+    var exactAmount: ExchangeAmount?
+    var approximateAmount: Double
+  }
+
   private struct BalanceEntryAggregation {
-    var entries: [(String, Double)]
+    var entries: [BalanceEntry]
     var overflowedSymbols: [String]
   }
 
@@ -61,13 +67,13 @@ public enum ExchangeBalanceNormalizer {
     let entries = aggregation.entries
     let ids = Array(
       Set(
-        entries.compactMap { symbol, _ in
-          fiatSymbols.contains(symbol) ? nil : coinGeckoIds[symbol]
+        entries.compactMap { entry in
+          fiatSymbols.contains(entry.symbol) ? nil : coinGeckoIds[entry.symbol]
         }))
     let requestedFiatSymbols = Array(
       Set(
-        entries.compactMap { symbol, _ in
-          fiatSymbols.contains(symbol) && symbol != "USD" ? symbol : nil
+        entries.compactMap { entry in
+          fiatSymbols.contains(entry.symbol) && entry.symbol != "USD" ? entry.symbol : nil
         }))
     var warnings = ScanWarningPolicy.bounded(balance.warnings)
     if !aggregation.overflowedSymbols.isEmpty {
@@ -137,7 +143,8 @@ public enum ExchangeBalanceNormalizer {
     }
 
     if !priceRequestFailed {
-      let missing = entries.compactMap { symbol, _ -> String? in
+      let missing = entries.compactMap { entry -> String? in
+        let symbol = entry.symbol
         if fiatSymbols.contains(symbol) { return nil }
         guard let id = coinGeckoIds[symbol] else { return symbol }
         guard let point = prices[id], point.usd.isFinite, point.usd >= 0 else { return symbol }
@@ -223,7 +230,7 @@ public enum ExchangeBalanceNormalizer {
   }
 
   private static func normalize(
-    entries: [(String, Double)],
+    entries: [BalanceEntry],
     id: UUID,
     provider: ExchangeProvider,
     label: String,
@@ -232,7 +239,9 @@ public enum ExchangeBalanceNormalizer {
   ) -> HoldingNormalization {
     var holdings: [TrackedAsset] = []
     var valuationOverflowSymbols: [String] = []
-    for (symbol, amount) in entries {
+    for entry in entries {
+      let symbol = entry.symbol
+      let amount = entry.approximateAmount
       let coinId = coinGeckoIds[symbol]
       let price = pricePoint(
         symbol: symbol, coinId: coinId, prices: prices, fiatUsdRates: fiatUsdRates)
@@ -249,6 +258,7 @@ public enum ExchangeBalanceNormalizer {
           symbol: symbol,
           name: symbol,
           amount: amount,
+          exactAmount: entry.exactAmount?.canonicalString,
           priceUsd: unitPrice,
           valueUsd: valueUsd ?? 0,
           change24h: FiniteValueMath.finiteOptional(price.usd24hChange),
@@ -266,27 +276,78 @@ public enum ExchangeBalanceNormalizer {
   }
 
   public static func balanceEntries(_ balance: ExchangeBalance) -> [(String, Double)] {
-    aggregateBalanceEntries(balance).entries
+    aggregateBalanceEntries(balance).entries.map { ($0.symbol, $0.approximateAmount) }
   }
 
   private static func aggregateBalanceEntries(_ balance: ExchangeBalance) -> BalanceEntryAggregation
   {
     let source = balance.total.isEmpty ? balance.free : balance.total
-    var aggregated: [String: Double] = [:]
+    let exactSource = balance.total.isEmpty ? balance.exactFree : balance.exactTotal
+    var exactAggregated: [String: ExchangeAmount] = [:]
+    var approximateAggregated: [String: Double] = [:]
     var overflowedSymbols = Set<String>()
     for (rawSymbol, amount) in source where amount.isFinite && amount > 0 {
       let symbol = normalizeSymbol(rawSymbol)
       guard !symbol.isEmpty, !overflowedSymbols.contains(symbol) else { continue }
-      guard let next = FiniteValueMath.addingNonnegative(aggregated[symbol, default: 0], amount)
-      else {
-        aggregated.removeValue(forKey: symbol)
+
+      if let exactAmount = exactSource[rawSymbol] {
+        if let approximate = approximateAggregated[symbol] {
+          guard let exactDouble = exactAmount.approximateDouble,
+            let next = FiniteValueMath.addingNonnegative(approximate, exactDouble)
+          else {
+            approximateAggregated.removeValue(forKey: symbol)
+            overflowedSymbols.insert(symbol)
+            continue
+          }
+          approximateAggregated[symbol] = next
+        } else {
+          let current = exactAggregated[symbol] ?? .zero
+          guard let next = current.adding(exactAmount) else {
+            exactAggregated.removeValue(forKey: symbol)
+            overflowedSymbols.insert(symbol)
+            continue
+          }
+          exactAggregated[symbol] = next
+        }
+        continue
+      }
+
+      var current = approximateAggregated[symbol, default: 0]
+      if let exact = exactAggregated.removeValue(forKey: symbol) {
+        guard let exactDouble = exact.approximateDouble,
+          let combined = FiniteValueMath.addingNonnegative(current, exactDouble)
+        else {
+          approximateAggregated.removeValue(forKey: symbol)
+          overflowedSymbols.insert(symbol)
+          continue
+        }
+        current = combined
+      }
+      guard let next = FiniteValueMath.addingNonnegative(current, amount) else {
+        approximateAggregated.removeValue(forKey: symbol)
         overflowedSymbols.insert(symbol)
         continue
       }
-      aggregated[symbol] = next
+      approximateAggregated[symbol] = next
     }
+
+    var entries: [BalanceEntry] = exactAggregated.compactMap { symbol, exact in
+      guard let approximate = exact.approximateDouble else {
+        overflowedSymbols.insert(symbol)
+        return nil
+      }
+      return BalanceEntry(
+        symbol: symbol,
+        exactAmount: exact,
+        approximateAmount: approximate
+      )
+    }
+    entries.append(
+      contentsOf: approximateAggregated.map { symbol, amount in
+        BalanceEntry(symbol: symbol, exactAmount: nil, approximateAmount: amount)
+      })
     return BalanceEntryAggregation(
-      entries: aggregated.sorted { $0.key < $1.key },
+      entries: entries.sorted { $0.symbol < $1.symbol },
       overflowedSymbols: overflowedSymbols.sorted()
     )
   }

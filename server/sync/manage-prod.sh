@@ -12,6 +12,7 @@ ENV_SNAPSHOT_FILE=""
 ENV_SNAPSHOT_ROOT=""
 PREDEPLOY_RECOVERY_ENABLED=false
 PREDEPLOY_COMPOSE_COMMAND=()
+PREDEPLOY_BACKUP_MIGRATION_HEAD=""
 IMMUTABLE_SOURCE_ROOT=""
 IMMUTABLE_SOURCE_BASE=""
 IMMUTABLE_SOURCE_STAGING=""
@@ -25,6 +26,9 @@ BACKUP_SCRIPT="${ADDRESS_ATLAS_BACKUP_SCRIPT:-${SCRIPT_DIR}/postgres-backup.sh}"
 NATIVE_CONFIG_STATE_TOOL="${SCRIPT_DIR}/native-config-deploy-state.mjs"
 PINNED_POSTGRES_IMAGE="postgres:16.14-alpine3.24@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777"
 EXPECTED_RESTORE_MIGRATION_HEAD=3
+MAX_COMPATIBLE_ROLLBACK_MIGRATION_HEAD=4
+EXPECTED_MIGRATION_CHAIN_SHA256_3="47ad43aa7438c5c8969f7c01162bb73eab8d51066abef482a03fed86a7890ee3"
+EXPECTED_MIGRATION_CHAIN_SHA256_4="ceb0b725a162b5be512bf35e63ecaf178aa67e7c1335e2807a116f2ef7f65dfe"
 usage() {
   cat >&2 <<EOF
 Usage:
@@ -153,6 +157,10 @@ capture_previous_web_release() {
   PREVIOUS_WEB_IMAGE_ID=""
   PREVIOUS_WEB_REVISION=""
   PREVIOUS_WEB_RUNNING="false"
+  PREVIOUS_WEB_MAX_COMPATIBLE_SCHEMA_HEAD=""
+  PREVIOUS_WEB_COMPATIBLE_SCHEMA_CHAIN_SHA256=""
+  PREVIOUS_WEB_SCHEMA_CAPABILITY_LEGACY=false
+  PREVIOUS_WEB_SCHEMA_MAX_LABEL_MISSING=false
   local containers container_count=0 container="" candidate metadata
   containers="$("$DOCKER_BIN" ps -aq \
     --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME_FIXED}" \
@@ -182,6 +190,98 @@ capture_previous_web_release() {
     echo "The existing web container lacks exact image/revision provenance; refusing a deployment without a safe rollback point." >&2
     exit 67
   }
+
+  PREVIOUS_WEB_MAX_COMPATIBLE_SCHEMA_HEAD="$({
+    "$DOCKER_BIN" image inspect --format \
+      '{{index .Config.Labels "com.addressatlas.sync.max-compatible-schema-head"}}' \
+      "$PREVIOUS_WEB_IMAGE_ID"
+  })" || {
+    echo "Unable to inspect the rollback image's schema capability." >&2
+    exit 69
+  }
+  if [[ -z "$PREVIOUS_WEB_MAX_COMPATIBLE_SCHEMA_HEAD" \
+      || "$PREVIOUS_WEB_MAX_COMPATIBLE_SCHEMA_HEAD" == "<no value>" ]]; then
+    PREVIOUS_WEB_SCHEMA_MAX_LABEL_MISSING=true
+    PREVIOUS_WEB_MAX_COMPATIBLE_SCHEMA_HEAD=""
+  else
+    [[ "$PREVIOUS_WEB_MAX_COMPATIBLE_SCHEMA_HEAD" =~ ^[1-9][0-9]*$ \
+       && "$PREVIOUS_WEB_MAX_COMPATIBLE_SCHEMA_HEAD" -le 2000000000 ]] || {
+      echo "The rollback image has a malformed schema-capability label." >&2
+      exit 67
+    }
+  fi
+}
+
+expected_migration_chain_sha256() {
+  case "$1" in
+    3) printf '%s\n' "$EXPECTED_MIGRATION_CHAIN_SHA256_3" ;;
+    4) printf '%s\n' "$EXPECTED_MIGRATION_CHAIN_SHA256_4" ;;
+    *) return 67 ;;
+  esac
+}
+
+assert_previous_web_schema_rollback_compatible() {
+  local current_migration_head="${1:-}"
+  [[ -n "${PREVIOUS_WEB_IMAGE_ID:-}" ]] || return 0
+  [[ "$current_migration_head" =~ ^[1-9][0-9]*$ \
+     && "$current_migration_head" -le 2000000000 ]] || return 67
+
+  local required_rollback_head="$EXPECTED_RESTORE_MIGRATION_HEAD"
+  if (( current_migration_head > required_rollback_head )); then
+    required_rollback_head="$current_migration_head"
+  fi
+  (( required_rollback_head <= MAX_COMPATIBLE_ROLLBACK_MIGRATION_HEAD )) || {
+    echo "The current database schema head ${current_migration_head} is newer than this release's rollback contract." >&2
+    return 67
+  }
+
+  local expected_chain_sha256
+  expected_chain_sha256="$(expected_migration_chain_sha256 "$required_rollback_head")" || {
+    echo "This release has no exact rollback-chain contract for schema head ${required_rollback_head}." >&2
+    return 67
+  }
+  local chain_label_key chain_label_missing=false
+  chain_label_key="com.addressatlas.sync.compatible-schema-head-${required_rollback_head}-sha256"
+  PREVIOUS_WEB_COMPATIBLE_SCHEMA_CHAIN_SHA256="$({
+    "$DOCKER_BIN" image inspect --format \
+      "{{index .Config.Labels \"${chain_label_key}\"}}" \
+      "$PREVIOUS_WEB_IMAGE_ID"
+  })" || {
+    echo "Unable to inspect the rollback image's exact schema-chain capability." >&2
+    return 69
+  }
+  if [[ -z "$PREVIOUS_WEB_COMPATIBLE_SCHEMA_CHAIN_SHA256" \
+      || "$PREVIOUS_WEB_COMPATIBLE_SCHEMA_CHAIN_SHA256" == "<no value>" ]]; then
+    chain_label_missing=true
+    PREVIOUS_WEB_COMPATIBLE_SCHEMA_CHAIN_SHA256=""
+  else
+    [[ "$PREVIOUS_WEB_COMPATIBLE_SCHEMA_CHAIN_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+      echo "The rollback image has a malformed schema-chain capability label." >&2
+      return 67
+    }
+  fi
+  [[ "$PREVIOUS_WEB_SCHEMA_MAX_LABEL_MISSING" == "$chain_label_missing" ]] || {
+    echo "The rollback image has an incomplete schema-capability label set." >&2
+    return 67
+  }
+  if [[ "$PREVIOUS_WEB_SCHEMA_MAX_LABEL_MISSING" == "true" ]]; then
+    PREVIOUS_WEB_SCHEMA_CAPABILITY_LEGACY=true
+    if [[ "$current_migration_head" != "$EXPECTED_RESTORE_MIGRATION_HEAD" ]]; then
+      echo "The unlabeled rollback image is only proven for an unchanged database at head ${EXPECTED_RESTORE_MIGRATION_HEAD}; the current database is at head ${current_migration_head}. Deploy the missing adjacent release first." >&2
+      return 67
+    fi
+    return 0
+  fi
+  [[ "${PREVIOUS_WEB_MAX_COMPATIBLE_SCHEMA_HEAD:-}" =~ ^[1-9][0-9]*$ ]] || return 67
+  if (( PREVIOUS_WEB_MAX_COMPATIBLE_SCHEMA_HEAD < required_rollback_head )); then
+    echo "The captured rollback image supports schema head ${PREVIOUS_WEB_MAX_COMPATIBLE_SCHEMA_HEAD}, but rollback requires head ${required_rollback_head}. Deploy the missing adjacent release first." >&2
+    return 67
+  fi
+  if [[ "$PREVIOUS_WEB_COMPATIBLE_SCHEMA_CHAIN_SHA256" \
+      != "$expected_chain_sha256" ]]; then
+    echo "The captured rollback image does not recognize the exact migration chain for required schema head ${required_rollback_head}. Deploy the missing adjacent release first." >&2
+    return 67
+  fi
 }
 
 native_config_state_file() {
@@ -535,7 +635,42 @@ prepare_verified_predeploy_backup() {
   })"
   ADDRESS_ATLAS_POSTGRES_CONTAINER="$READY_POSTGRES_CONTAINER" \
     bash "$BACKUP_SCRIPT" verify "$backup" >/dev/null
+  inspect_verified_backup_migration_head "$backup"
+  PREDEPLOY_BACKUP_MIGRATION_HEAD="$INSPECTED_BACKUP_MIGRATION_HEAD"
   echo "Verified encrypted pre-deploy backup: ${backup}"
+}
+
+inspect_verified_backup_migration_head() {
+  local backup="$1"
+  local output prefix schema artifact_sha database config_version config_digest
+  local config_updated_at config_revision source_web_image source_postgres_image
+  local migration_head snapshot_started extra
+  output="$({
+    ADDRESS_ATLAS_POSTGRES_CONTAINER="$READY_POSTGRES_CONTAINER" \
+      bash "$BACKUP_SCRIPT" inspect "$backup"
+  })" || return $?
+  [[ -n "$output" && "$output" != *$'\n'* ]] || {
+    echo "Backup inspection did not return one canonical metadata record." >&2
+    return 65
+  }
+  IFS='|' read -r prefix schema artifact_sha database config_version \
+    config_digest config_updated_at config_revision source_web_image \
+    source_postgres_image migration_head snapshot_started extra <<< "$output"
+  [[ -z "$extra" && "$prefix" == "BACKUP_METADATA" && "$schema" == "4" \
+     && "$artifact_sha" =~ ^[0-9a-f]{64}$ \
+     && "$database" =~ ^[A-Za-z_][A-Za-z0-9_]{0,62}$ \
+     && "$config_version" =~ ^[1-9][0-9]*$ \
+     && "$config_digest" =~ ^[0-9a-f]{64}$ \
+     && "$config_updated_at" =~ ^[1-9][0-9]*$ \
+     && "$config_revision" =~ ^[0-9a-f]{40}$ \
+     && "$source_web_image" =~ ^sha256:[0-9a-f]{64}$ \
+     && "$source_postgres_image" =~ ^sha256:[0-9a-f]{64}$ \
+     && "$migration_head" =~ ^[1-9][0-9]*$ \
+     && "$snapshot_started" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || {
+    echo "The verified backup metadata is malformed." >&2
+    return 65
+  }
+  INSPECTED_BACKUP_MIGRATION_HEAD="$migration_head"
 }
 
 validate_volume_name() {
@@ -2050,6 +2185,10 @@ case "$command" in
     }
     capture_native_config_baseline
     PREDEPLOY_COMPOSE_COMMAND=("${PRODUCTION_COMPOSE_ARGS[@]}")
+    prepare_verified_predeploy_backup \
+      "$SELECTED_POSTGRES_VOLUME" "${PRODUCTION_COMPOSE_ARGS[@]}"
+    assert_previous_web_schema_rollback_compatible \
+      "$PREDEPLOY_BACKUP_MIGRATION_HEAD" || exit $?
     "$DOCKER_BIN" "${PRODUCTION_COMPOSE_ARGS[@]}" build web
     configure_restore_contract "$ADDRESS_ATLAS_BUILD_REVISION"
     preflight_private_web_config \
@@ -2242,11 +2381,10 @@ case "$command" in
       capture_previous_web_release
       capture_native_config_baseline
       PREDEPLOY_COMPOSE_COMMAND=("${compose_args[@]}")
-      previous_frontend_was_running="$PREVIOUS_WEB_RUNNING"
-      stop_fixed_frontend
-      if [[ "$previous_frontend_was_running" == "true" ]]; then
-        PREDEPLOY_RECOVERY_ENABLED=true
-      fi
+      # Keep the verified frontend serving throughout backup, image build,
+      # additive migration, privilege convergence, and both private preflights.
+      # Compose performs only the final service replacement after every gate has
+      # passed; failures before that point leave the captured release untouched.
       ensure_postgres_container_ready \
         "$selected_postgres_volume" "${compose_args[@]}"
       source_classification="$({
@@ -2296,6 +2434,8 @@ case "$command" in
       else
         prepare_verified_predeploy_backup \
           "$selected_postgres_volume" "${compose_args[@]}"
+        assert_previous_web_schema_rollback_compatible \
+          "$PREDEPLOY_BACKUP_MIGRATION_HEAD" || exit $?
         "$DOCKER_BIN" "${compose_args[@]}" build web
       fi
 
@@ -2346,7 +2486,6 @@ case "$command" in
       # requires a fresh deployment from the new authoritative revision.
       assert_clean_deployment_checkout
       assert_authorized_deployment_revision "$deployment_authorization_mode"
-      PREDEPLOY_RECOVERY_ENABLED=false
       deploy_and_verify_or_rollback "${compose_args[@]}"
       complete_install_deployment_state
       prune_immutable_source_cache

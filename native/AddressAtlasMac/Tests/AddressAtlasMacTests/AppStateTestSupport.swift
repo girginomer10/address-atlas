@@ -30,6 +30,35 @@ struct FixedEndpointConfigClient: EndpointConfigFetching {
   }
 }
 
+final class AppStateTestVaultKeyStore: VaultKeyStore, @unchecked Sendable {
+  private let lock = NSLock()
+  private var key: Data?
+
+  init(key: Data? = nil) {
+    self.key = key
+  }
+
+  func loadVaultKey() throws -> Data? {
+    lock.withLock { key }
+  }
+
+  func saveVaultKey(_ key: Data) throws {
+    lock.withLock { self.key = key }
+  }
+
+  func saveVaultKeyIfAbsent(_ key: Data) throws -> Data {
+    lock.withLock {
+      if let existing = self.key { return existing }
+      self.key = key
+      return key
+    }
+  }
+
+  func deleteVaultKey() throws {
+    lock.withLock { key = nil }
+  }
+}
+
 actor RecoverableVaultHTTPState {
   enum PutBehavior: Sendable {
     case accept

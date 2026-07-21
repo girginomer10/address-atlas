@@ -68,7 +68,7 @@ public enum AddressAtlasExporter {
         csvEscape(asset.chainName),
         csvEscape(asset.symbol),
         csvEscape(asset.name),
-        String(asset.amount),
+        asset.canonicalAmount,
         String(asset.priceUsd),
         String(asset.valueUsd),
         csvEscape(asset.source.rawValue),

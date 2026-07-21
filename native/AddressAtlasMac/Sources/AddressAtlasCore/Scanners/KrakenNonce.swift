@@ -43,10 +43,27 @@ protocol KrakenInstallationSecretStore: Sendable {
 /// onto a different Mac. No per-request user-presence prompt is used because
 /// scans can run unattended while the user's login session is unlocked.
 private struct KeychainKrakenInstallationSecretStore: KrakenInstallationSecretStore {
-  private let backingStore = KeychainVaultKeyStore(
-    service: "com.addressatlas.mac.kraken-installation",
-    account: "nonce-state-binding-v1"
-  )
+  private static let productionService = "com.addressatlas.mac.kraken-installation"
+  private static let productionAccount = "nonce-state-binding-v1"
+  private static let isolatedTestServicePrefix = "com.addressatlas.tests.kraken-nonce."
+
+  private let backingStore: KeychainVaultKeyStore
+
+  init() {
+    backingStore = KeychainVaultKeyStore(
+      service: Self.productionService,
+      account: Self.productionAccount
+    )
+  }
+
+  init(isolatedTestService service: String, account: String) {
+    precondition(
+      service.hasPrefix(Self.isolatedTestServicePrefix),
+      "Kraken nonce tests must use an isolated test-only Keychain service."
+    )
+    precondition(!account.isEmpty, "Kraken nonce tests require an isolated Keychain account.")
+    backingStore = KeychainVaultKeyStore(service: service, account: account)
+  }
 
   func loadSecret() throws -> Data? {
     try backingStore.loadVaultKey()
@@ -122,6 +139,21 @@ public actor KrakenNonceGenerator {
   ) {
     self.storageURL = storageURL
     self.installationSecretStore = installationSecretStore
+  }
+
+  /// Package-internal seam for real multi-process verification. The service
+  /// prefix is enforced by `KeychainKrakenInstallationSecretStore`, preventing
+  /// a test helper from ever opening the production Kraken Keychain item.
+  init(
+    isolatedTestStorageURL storageURL: URL,
+    keychainService: String,
+    keychainAccount: String
+  ) {
+    self.storageURL = storageURL
+    self.installationSecretStore = KeychainKrakenInstallationSecretStore(
+      isolatedTestService: keychainService,
+      account: keychainAccount
+    )
   }
 
   public func deviceIdentifier() throws -> String {

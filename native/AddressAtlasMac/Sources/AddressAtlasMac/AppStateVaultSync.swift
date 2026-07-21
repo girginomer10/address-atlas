@@ -48,8 +48,11 @@ extension AppState {
       notice = "A sync operation is already running."
       return
     }
-    syncing = true
-    defer { syncing = false }
+    guard beginSyncActivity(.uploadingVault) else {
+      notice = "A sync operation is already running."
+      return
+    }
+    defer { finishSyncActivity(.uploadingVault) }
     guard await flushWalletLabelDraftsBeforeRemoteOperation() else { return }
     let startingRevision = documentRevision
     let baseDocument = document
@@ -205,8 +208,11 @@ extension AppState {
       return
     }
 
-    syncing = true
-    defer { syncing = false }
+    guard beginSyncActivity(.recoveringUpload) else {
+      notice = "A sync operation is already running."
+      return
+    }
+    defer { finishSyncActivity(.recoveringUpload) }
     let startingRevision = documentRevision
     do {
       guard
@@ -367,8 +373,11 @@ extension AppState {
       error = "Wait for the active vault operation before stopping upload recovery."
       return
     }
-    syncing = true
-    defer { syncing = false }
+    guard beginSyncActivity(.stoppingUploadRecovery) else {
+      error = "Wait for the active vault operation before stopping upload recovery."
+      return
+    }
+    defer { finishSyncActivity(.stoppingUploadRecovery) }
     do {
       let durable = try await persistence.abandonPendingVaultUpload(
         pendingUpload,
@@ -382,7 +391,7 @@ extension AppState {
       pendingVaultUploadHasRemoteConflict = false
       syncPersistencePending = pendingSyncPersistence != nil
       notice =
-        "Upload recovery stopped. The full local vault was kept. Export it before choosing whether to download the remote vault."
+        "Upload recovery stopped. The full local vault was kept. CSV and JSON exports are redacted reports, not backups; a destructive remote download will first create an automatic encrypted rollback point."
       error = ""
     } catch {
       presentPendingVaultUploadError(error)
@@ -439,14 +448,17 @@ extension AppState {
     }
     let discardedWalletLabelDrafts = discardingLocalChanges ? walletLabelDrafts : [:]
     var discardAcceptedByRemoteStateMachine = false
-    syncing = true
+    guard beginSyncActivity(.downloadingVault) else {
+      notice = "A sync operation is already running."
+      return
+    }
     defer {
       if discardingLocalChanges, !discardAcceptedByRemoteStateMachine {
         for (id, draft) in discardedWalletLabelDrafts where walletLabelDrafts[id] == nil {
           storeWalletLabelDraft(draft, for: id)
         }
       }
-      syncing = false
+      finishSyncActivity(.downloadingVault)
     }
     if discardingLocalChanges {
       // Stage drafts out of the active UI state while the remote candidate is
@@ -517,6 +529,16 @@ extension AppState {
         sessionToken: baseDocument.syncState.sessionToken
       )
       opened = try await persistence.markingSynced(opened, snapshot: snapshot)
+
+      // The authenticated remote candidate is safe to decode, but replacing
+      // local state is still destructive. Persist and cryptographically
+      // reopen a full-fidelity local rollback point before either the direct
+      // save or legacy-upgrade state machine can adopt the remote document.
+      _ = try await persistence.saveRollbackCheckpoint(baseDocument)
+      hasVaultRollbackCheckpoint = true
+      guard documentRevision == startingRevision else {
+        throw PendingVaultUploadError.localDocumentChanged
+      }
 
       if result.requiresV2Upgrade {
         let downloadedLegacy = opened
@@ -652,6 +674,44 @@ extension AppState {
     }
   }
 
+  func restoreVaultRollbackCheckpoint() async {
+    guard acceptsNewOperations else { return }
+    guard hasVaultRollbackCheckpoint, let persistence else {
+      error = "No local rollback checkpoint is available."
+      return
+    }
+    guard !syncPersistencePending, pendingSyncPersistence == nil, pendingVaultUpload == nil else {
+      error = "Finish the pending sync recovery before restoring the previous local vault."
+      return
+    }
+    guard !syncing, !scanning, !isPersisting, !isValidatingExchangeCredentials else {
+      error = "Wait for the active vault operation before restoring the previous local vault."
+      return
+    }
+    guard beginSyncActivity(.restoringRollbackCheckpoint) else {
+      error = "Wait for the active vault operation before restoring the previous local vault."
+      return
+    }
+    defer { finishSyncActivity(.restoringRollbackCheckpoint) }
+    guard await flushWalletLabelDraftsBeforeRemoteOperation() else { return }
+    do {
+      let restored = try await persistence.restoreRollbackCheckpoint()
+      document = normalizedLoadedDocument(restored.document)
+      documentRevision &+= 1
+      hasUnsyncedLocalChanges = restored.hasLocalChanges
+      hasVaultRollbackCheckpoint = false
+      pendingSyncPersistence = nil
+      pendingVaultUpload = nil
+      pendingVaultUploadHasRemoteConflict = false
+      syncPersistencePending = false
+      notice =
+        "The previous encrypted local vault content was restored. The current sync account and remote baseline were kept; review the changes before uploading."
+      error = ""
+    } catch {
+      presentUserFacingError(error)
+    }
+  }
+
   func exportRecoveryKit(to url: URL) throws -> String {
     guard let vaultKey else {
       throw RecoveryKitError.invalidVaultKey
@@ -693,6 +753,7 @@ extension AppState {
       let pendingUpload = try await coordinator.loadPendingVaultUpload(
         vaultKey: recovered.vaultKey
       )
+      let hasRollbackCheckpoint = try await coordinator.hasRollbackCheckpoint()
       let normalized = normalizedLoadedDocument(recovered.document)
       let durable =
         pendingUpload != nil || normalized == recovered.document
@@ -710,6 +771,7 @@ extension AppState {
       isUnlocked = true
       pendingSyncPersistence = nil
       pendingVaultUpload = pendingUpload
+      self.hasVaultRollbackCheckpoint = hasRollbackCheckpoint
       pendingVaultUploadHasRemoteConflict = false
       syncPersistencePending = pendingUpload != nil
       notice =

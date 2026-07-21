@@ -5,7 +5,10 @@ const mocks = vi.hoisted(() => ({
   assertAppliedMigrationHistory: vi.fn(),
   assertKnownUnversionedSchema: vi.fn(),
   assertSyncSchemaReady: vi.fn(),
-  assertSyncSchemaVersionReady: vi.fn()
+  assertSyncSchemaVersionReady: vi.fn(),
+  assertVaultEnvelopeStoragePolicy: vi.fn(),
+  assertVaultStoredValueStorageSafety: vi.fn(),
+  getVaultEnvelopeStoragePolicy: vi.fn()
 }));
 
 vi.mock("./postgres-readiness", () => ({
@@ -13,7 +16,10 @@ vi.mock("./postgres-readiness", () => ({
   assertAppliedMigrationHistory: mocks.assertAppliedMigrationHistory,
   assertKnownUnversionedSchema: mocks.assertKnownUnversionedSchema,
   assertSyncSchemaReady: mocks.assertSyncSchemaReady,
-  assertSyncSchemaVersionReady: mocks.assertSyncSchemaVersionReady
+  assertSyncSchemaVersionReady: mocks.assertSyncSchemaVersionReady,
+  assertVaultEnvelopeStoragePolicy: mocks.assertVaultEnvelopeStoragePolicy,
+  assertVaultStoredValueStorageSafety: mocks.assertVaultStoredValueStorageSafety,
+  getVaultEnvelopeStoragePolicy: mocks.getVaultEnvelopeStoragePolicy
 }));
 
 import { STORAGE_RECONCILIATION_VERSION, SYNC_MIGRATIONS } from "./postgres-migrations";
@@ -35,6 +41,9 @@ describe("versioned schema migration executor", () => {
     mocks.assertKnownUnversionedSchema.mockResolvedValue("empty");
     mocks.assertSyncSchemaReady.mockResolvedValue(undefined);
     mocks.assertSyncSchemaVersionReady.mockResolvedValue(undefined);
+    mocks.assertVaultEnvelopeStoragePolicy.mockResolvedValue(undefined);
+    mocks.assertVaultStoredValueStorageSafety.mockResolvedValue(undefined);
+    mocks.getVaultEnvelopeStoragePolicy.mockResolvedValue("x");
     query.mockImplementation(async (sql: string) => {
       if (sql.includes("SELECT reconciled_contract_version")) {
         return {
@@ -55,11 +64,13 @@ describe("versioned schema migration executor", () => {
     expect(ledgerWrites.map(([, parameters]) => parameters)).toEqual(
       SYNC_MIGRATIONS.map((migration) => [migration.version, migration.name, migration.checksum])
     );
-    expect(query.mock.calls.filter(([sql]) => sql === "BEGIN")).toHaveLength(4);
-    expect(query.mock.calls.filter(([sql]) => sql === "COMMIT")).toHaveLength(4);
+    expect(query.mock.calls.filter(([sql]) => sql === "BEGIN")).toHaveLength(5);
+    expect(query.mock.calls.filter(([sql]) => sql === "COMMIT")).toHaveLength(5);
     expect(mocks.assertKnownUnversionedSchema).toHaveBeenCalledOnce();
     expect(mocks.assertSyncSchemaVersionReady.mock.calls.map(([, version]) => version))
-      .toEqual([1, 1, 2, 2, 3, 3]);
+      .toEqual([1, 1, 2, 2, 3, 3, 3]);
+    expect(mocks.assertVaultEnvelopeStoragePolicy).toHaveBeenCalledOnce();
+    expect(mocks.assertVaultStoredValueStorageSafety).toHaveBeenCalledOnce();
     expect(mocks.assertSyncSchemaReady).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledWith();
   });
@@ -67,6 +78,7 @@ describe("versioned schema migration executor", () => {
   it("uses an authoritative complete ledger without replaying DDL", async () => {
     mocks.migrationLedgerExists.mockResolvedValue(true);
     mocks.assertAppliedMigrationHistory.mockResolvedValue(SYNC_MIGRATIONS.length);
+    mocks.getVaultEnvelopeStoragePolicy.mockResolvedValue("e");
     query.mockImplementation(async (sql: string) => {
       if (sql.includes("SELECT reconciled_contract_version")) {
         return {
@@ -81,7 +93,10 @@ describe("versioned schema migration executor", () => {
 
     expect(query.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO sync_schema_migrations")))
       .toBe(false);
-    expect(query.mock.calls.filter(([sql]) => sql === "BEGIN")).toHaveLength(1);
+    expect(query.mock.calls.filter(([sql]) => sql === "BEGIN")).toHaveLength(2);
+    expect(query.mock.calls.some(([sql]) =>
+      String(sql).includes("ALTER TABLE vault_snapshots ALTER COLUMN envelope SET STORAGE EXTERNAL")
+    )).toBe(false);
     expect(mocks.assertKnownUnversionedSchema).not.toHaveBeenCalled();
     const reconciliations = query.mock.calls.filter(([sql]) =>
       String(sql).includes("SET total_snapshot_bytes = totals.total_snapshot_bytes")

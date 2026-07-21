@@ -8,6 +8,41 @@ protocol EndpointConfigFetching: Sendable {
 
 extension NativeEndpointConfigClient: EndpointConfigFetching {}
 
+/// The single owner of the sync/account operation lane. Keeping the concrete
+/// activity instead of a Boolean lets the UI put progress on the control that
+/// started the work while preserving strict mutual exclusion.
+enum SyncActivity: String, CaseIterable, Equatable, Sendable {
+  case creatingPasskeyAccount
+  case signingIn
+  case uploadingVault
+  case downloadingVault
+  case recoveringUpload
+  case retryingLocalSave
+  case stoppingUploadRecovery
+  case revokingSession
+  case deletingAccount
+  case disconnectingAccount
+  case restoringRollbackCheckpoint
+
+  var progressTitle: String {
+    switch self {
+    case .creatingPasskeyAccount: "Creating passkey account"
+    case .signingIn: "Signing in with passkey"
+    case .uploadingVault: "Uploading encrypted vault"
+    case .downloadingVault: "Downloading encrypted vault"
+    case .recoveringUpload: "Recovering interrupted upload"
+    case .retryingLocalSave: "Retrying local save"
+    case .stoppingUploadRecovery: "Stopping upload recovery"
+    case .revokingSession: "Revoking this Mac's session"
+    case .deletingAccount: "Deleting sync account"
+    case .disconnectingAccount: "Disconnecting sync account"
+    case .restoringRollbackCheckpoint: "Restoring encrypted rollback point"
+    }
+  }
+
+  var accessibilityLabel: String { "\(progressTitle), in progress" }
+}
+
 @MainActor
 final class AppState: ObservableObject {
   @Published var document = VaultDocument() {
@@ -41,6 +76,7 @@ final class AppState: ObservableObject {
   @Published var isValidatingExchangeCredentials = false
   @Published var syncPersistencePending = false
   @Published var pendingVaultUploadHasRemoteConflict = false
+  @Published var hasVaultRollbackCheckpoint = false
   @Published var hasUnsyncedLocalChanges = true
   var lastSaveRemovedScanRunCount = 0
   @Published var notice = "" {
@@ -54,7 +90,8 @@ final class AppState: ObservableObject {
     }
   }
   @Published var scanning = false
-  @Published var syncing = false
+  @Published private(set) var syncActivity: SyncActivity?
+  var syncing: Bool { syncActivity != nil }
   @Published var endpointConfig = NativeEndpointConfig.bundled {
     didSet {
       operatorMessage = AppState.normalizedOperatorMessage(endpointConfig.message)
@@ -66,7 +103,8 @@ final class AppState: ObservableObject {
   @Published private(set) var operatorMessage: String?
 
   let crypto = VaultCrypto()
-  let keyStore = KeychainVaultKeyStore()
+  let keyStore: any VaultKeyStore
+  let appSupportDirectoryOverride: URL?
   let syncCodec = VaultSyncCodec()
   let syncSnapshotByteLimit: Int
   let recoveryKit = RecoveryKitCodec()
@@ -149,13 +187,17 @@ final class AppState: ObservableObject {
     passkeyAuthenticator: (any PasskeyAuthenticating)? = nil,
     krakenDeviceIdentifier: @escaping @Sendable () throws -> String = {
       try KrakenDeviceIdentity.currentIdentifier()
-    }
+    },
+    keyStore: any VaultKeyStore = KeychainVaultKeyStore(),
+    appSupportDirectoryOverride: URL? = nil
   ) {
     self.endpointConfigClient = endpointConfigClient
     self.endpointConfigTrustStore = endpointConfigTrustStore
     self.httpClient = httpClient
     self.passkeyAuthenticator = passkeyAuthenticator ?? PasskeyWebAuthenticator()
     self.krakenDeviceIdentifier = krakenDeviceIdentifier
+    self.keyStore = keyStore
+    self.appSupportDirectoryOverride = appSupportDirectoryOverride
     syncSnapshotByteLimit = VaultSyncCodec.maximumSnapshotByteCount
   }
 
@@ -181,6 +223,8 @@ final class AppState: ObservableObject {
     self.httpClient = httpClient
     self.passkeyAuthenticator = passkeyAuthenticator ?? PasskeyWebAuthenticator()
     self.krakenDeviceIdentifier = krakenDeviceIdentifier
+    self.keyStore = KeychainVaultKeyStore()
+    self.appSupportDirectoryOverride = nil
     self.syncSnapshotByteLimit = syncSnapshotByteLimit
     self.persistence = VaultPersistenceCoordinator(
       store: testStore,
@@ -192,6 +236,7 @@ final class AppState: ObservableObject {
     self.isUnlocked = true
     self.pendingVaultUpload = try? testStore.loadPendingVaultUpload()
     self.syncPersistencePending = pendingVaultUpload != nil
+    self.hasVaultRollbackCheckpoint = (try? testStore.containsRollbackCheckpoint()) ?? false
   }
 
   var latestScan: ScanRunRecord? {
@@ -226,8 +271,31 @@ final class AppState: ObservableObject {
     }
   }
 
-  var visibleLatestTotalUsd: Double {
-    AppState.validatedPortfolioTotal(visibleLatestHoldings) ?? 0
+  /// The headline always represents the complete validated snapshot. Dust is
+  /// a row-visibility preference and must never silently rewrite portfolio
+  /// value.
+  var latestTotalUsd: Double {
+    AppState.validatedPortfolioTotal(latestScan?.holdings ?? []) ?? 0
+  }
+
+  var hiddenDustHoldingCount: Int {
+    hiddenDustHoldings.count
+  }
+
+  var hiddenDustValueUsd: Double {
+    let valued = hiddenDustHoldings.filter { $0.valueUsd.isFinite && $0.valueUsd >= 0 }
+    return AppState.validatedPortfolioTotal(valued) ?? 0
+  }
+
+  private var hiddenDustHoldings: [TrackedAsset] {
+    guard document.preferences.hideDust else { return [] }
+    let threshold =
+      document.preferences.dustThreshold.isFinite
+      ? max(0, document.preferences.dustThreshold)
+      : 0
+    return (latestScan?.holdings ?? []).filter {
+      !$0.valueUsd.isFinite || $0.valueUsd < threshold
+    }
   }
 
   var hasScanSources: Bool {
@@ -286,6 +354,7 @@ final class AppState: ObservableObject {
   }
 
   var appSupportDirectory: URL {
+    if let appSupportDirectoryOverride { return appSupportDirectoryOverride }
     let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
       .first!
     return root.appending(path: "AddressAtlas")
@@ -335,8 +404,7 @@ final class AppState: ObservableObject {
   }
 
   func unlock() async {
-    guard !isUnlocked, !isUnlocking else { return }
-    isUnlocking = true
+    guard beginUnlockOperationIfAllowed() else { return }
     defer { isUnlocking = false }
     do {
       let vaultURL = appSupportDirectory.appending(path: "vault.sqlite")
@@ -348,6 +416,7 @@ final class AppState: ObservableObject {
       )
       let loaded = try await coordinator.load()
       let pendingUpload = try await coordinator.loadPendingVaultUpload(vaultKey: key)
+      let hasRollbackCheckpoint = try await coordinator.hasRollbackCheckpoint()
       let normalized = normalizedLoadedDocument(loaded.document)
       let durable =
         pendingUpload != nil || normalized == loaded.document
@@ -361,6 +430,7 @@ final class AppState: ObservableObject {
       isUnlocked = true
       pendingSyncPersistence = nil
       pendingVaultUpload = pendingUpload
+      self.hasVaultRollbackCheckpoint = hasRollbackCheckpoint
       pendingVaultUploadHasRemoteConflict = false
       syncPersistencePending = pendingUpload != nil
       notice = pendingUpload == nil ? "" : "Recovering an interrupted encrypted vault upload."
@@ -372,6 +442,17 @@ final class AppState: ObservableObject {
       presentUserFacingError(error)
       isUnlocked = false
     }
+  }
+
+  /// Claims the unlock lifecycle on the main actor. Keeping termination
+  /// admission in the same synchronous transition as `isUnlocking` prevents a
+  /// queued launch task from starting vault recovery after AppKit has frozen
+  /// new work for termination.
+  @discardableResult
+  func beginUnlockOperationIfAllowed() -> Bool {
+    guard acceptsNewOperations, !isUnlocked, !isUnlocking else { return false }
+    isUnlocking = true
+    return true
   }
 
   @discardableResult
@@ -448,6 +529,7 @@ final class AppState: ObservableObject {
   }
 
   func retryPendingSyncPersistence() async {
+    guard acceptsNewOperations else { return }
     guard syncPersistencePending else { return }
     if pendingVaultUpload != nil {
       await recoverPendingVaultUpload()
@@ -458,6 +540,11 @@ final class AppState: ObservableObject {
         "The pending local sync state cannot be retried safely. Reopen Address Atlas before making more changes."
       return
     }
+    guard beginSyncActivity(.retryingLocalSave) else {
+      notice = "A sync operation is already running."
+      return
+    }
+    defer { finishSyncActivity(.retryingLocalSave) }
     if await save(
       pendingSyncPersistence.document,
       projectedSyncVersion: pendingSyncPersistence.projectedSyncVersion,
@@ -466,6 +553,18 @@ final class AppState: ObservableObject {
     ) {
       notice = "Sync state saved locally." + pruningNoticeSuffix(lastSaveRemovedScanRunCount)
     }
+  }
+
+  @discardableResult
+  func beginSyncActivity(_ activity: SyncActivity) -> Bool {
+    guard acceptsNewOperations, syncActivity == nil else { return false }
+    syncActivity = activity
+    return true
+  }
+
+  func finishSyncActivity(_ activity: SyncActivity) {
+    guard syncActivity == activity else { return }
+    syncActivity = nil
   }
 
   /// Publish and retain the exact post-remote candidate while blocking every

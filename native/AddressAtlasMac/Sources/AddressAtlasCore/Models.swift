@@ -370,12 +370,33 @@ public struct TrackedAsset: Codable, Identifiable, Hashable, Sendable {
   public var family: ChainFamily
   public var symbol: String
   public var name: String
-  public var amount: Double
+  public var amount: Double {
+    didSet {
+      guard amount != oldValue else { return }
+      exactAmount = Self.validatedExactAmount(
+        nil,
+        approximateAmount: amount,
+        source: source
+      )
+    }
+  }
+  /// Canonical base-10 amount for exchange holdings. `amount` is retained as
+  /// the explicit binary-floating-point approximation used by valuation code.
+  public private(set) var exactAmount: String?
   public var priceUsd: Double
   public var valueUsd: Double
   public var change24h: Double?
   public var explorerUrl: String
-  public var source: AssetSource
+  public var source: AssetSource {
+    didSet {
+      guard source != oldValue else { return }
+      exactAmount = Self.validatedExactAmount(
+        exactAmount,
+        approximateAmount: amount,
+        source: source
+      )
+    }
+  }
   public var status: ScanStatus
   public var walletLabel: String?
   public var exchangeId: UUID?
@@ -390,6 +411,7 @@ public struct TrackedAsset: Codable, Identifiable, Hashable, Sendable {
     symbol: String,
     name: String,
     amount: Double,
+    exactAmount: String? = nil,
     priceUsd: Double,
     valueUsd: Double,
     change24h: Double? = nil,
@@ -408,6 +430,11 @@ public struct TrackedAsset: Codable, Identifiable, Hashable, Sendable {
     self.symbol = symbol
     self.name = name
     self.amount = amount
+    self.exactAmount = Self.validatedExactAmount(
+      exactAmount,
+      approximateAmount: amount,
+      source: source
+    )
     self.priceUsd = priceUsd
     self.valueUsd = valueUsd
     self.change24h = change24h
@@ -417,6 +444,103 @@ public struct TrackedAsset: Codable, Identifiable, Hashable, Sendable {
     self.walletLabel = walletLabel
     self.exchangeId = exchangeId
     self.exchangeProvider = exchangeProvider
+  }
+
+  /// Exact, locale-independent amount used by exports and exchange UI. Legacy
+  /// non-exchange records continue to use their existing Double representation.
+  public var canonicalAmount: String {
+    exactAmount ?? String(amount)
+  }
+
+  public var displayedAmount: String {
+    exactAmount ?? amount.formatted()
+  }
+
+  private static func validatedExactAmount(
+    _ candidate: String?,
+    approximateAmount: Double,
+    source: AssetSource
+  ) -> String? {
+    guard source == .exchange else { return nil }
+    if let candidate,
+      let exact = ExchangeAmount(providerString: candidate),
+      exact.approximateDouble == approximateAmount
+    {
+      return exact.canonicalString
+    }
+    return ExchangeAmount(legacyDouble: approximateAmount)?.canonicalString
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case id
+    case address
+    case chainId
+    case chainName
+    case family
+    case symbol
+    case name
+    case amount
+    case exactAmount
+    case priceUsd
+    case valueUsd
+    case change24h
+    case explorerUrl
+    case source
+    case status
+    case walletLabel
+    case exchangeId
+    case exchangeProvider
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(String.self, forKey: .id)
+    address = try container.decode(String.self, forKey: .address)
+    chainId = try container.decode(String.self, forKey: .chainId)
+    chainName = try container.decode(String.self, forKey: .chainName)
+    family = try container.decode(ChainFamily.self, forKey: .family)
+    symbol = try container.decode(String.self, forKey: .symbol)
+    name = try container.decode(String.self, forKey: .name)
+    amount = try container.decode(Double.self, forKey: .amount)
+    priceUsd = try container.decode(Double.self, forKey: .priceUsd)
+    valueUsd = try container.decode(Double.self, forKey: .valueUsd)
+    change24h = try container.decodeIfPresent(Double.self, forKey: .change24h)
+    explorerUrl = try container.decode(String.self, forKey: .explorerUrl)
+    source = try container.decode(AssetSource.self, forKey: .source)
+    status = try container.decode(ScanStatus.self, forKey: .status)
+    walletLabel = try container.decodeIfPresent(String.self, forKey: .walletLabel)
+    exchangeId = try container.decodeIfPresent(UUID.self, forKey: .exchangeId)
+    exchangeProvider = try container.decodeIfPresent(
+      ExchangeProvider.self,
+      forKey: .exchangeProvider
+    )
+    exactAmount = Self.validatedExactAmount(
+      try container.decodeIfPresent(String.self, forKey: .exactAmount),
+      approximateAmount: amount,
+      source: source
+    )
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(id, forKey: .id)
+    try container.encode(address, forKey: .address)
+    try container.encode(chainId, forKey: .chainId)
+    try container.encode(chainName, forKey: .chainName)
+    try container.encode(family, forKey: .family)
+    try container.encode(symbol, forKey: .symbol)
+    try container.encode(name, forKey: .name)
+    try container.encode(amount, forKey: .amount)
+    try container.encodeIfPresent(exactAmount, forKey: .exactAmount)
+    try container.encode(priceUsd, forKey: .priceUsd)
+    try container.encode(valueUsd, forKey: .valueUsd)
+    try container.encodeIfPresent(change24h, forKey: .change24h)
+    try container.encode(explorerUrl, forKey: .explorerUrl)
+    try container.encode(source, forKey: .source)
+    try container.encode(status, forKey: .status)
+    try container.encodeIfPresent(walletLabel, forKey: .walletLabel)
+    try container.encodeIfPresent(exchangeId, forKey: .exchangeId)
+    try container.encodeIfPresent(exchangeProvider, forKey: .exchangeProvider)
   }
 }
 

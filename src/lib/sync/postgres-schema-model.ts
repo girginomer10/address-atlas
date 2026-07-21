@@ -19,6 +19,8 @@ export interface ConstraintContract {
   readonly updateAction?: "a";
   readonly deleteAction?: "c";
   readonly matchType?: "s";
+  readonly introducedInVersion?: number;
+  readonly validatedInVersion?: number;
 }
 
 export interface IndexContract {
@@ -117,6 +119,7 @@ export const SYNC_TABLES_BY_MIGRATION_VERSION: readonly (
   null,
   VERSION_1_SYNC_TABLES,
   VERSION_2_SYNC_TABLES,
+  SYNC_TABLES,
   SYNC_TABLES
 ]);
 
@@ -278,6 +281,19 @@ export const SYNC_CONSTRAINT_CONTRACT = Object.freeze([
     ["byte_size"],
     "((byte_size >= 1) AND (byte_size <= 8000000))"
   ),
+  {
+    ...check(
+      "vault_snapshots",
+      "vault_snapshots_envelope_storage_bound_check",
+      ["envelope"],
+      "\nCASE\n    WHEN ((pg_column_compression(envelope) IS NULL) AND ((pg_column_size(envelope) >= 1) AND (pg_column_size(envelope) <= 8165536))) THEN ((octet_length((envelope)::text) >= 1) AND (octet_length((envelope)::text) <= 8100000))\n    ELSE false\nEND"
+    ),
+    introducedInVersion: 4,
+    // ADD CONSTRAINT NOT VALID takes a brief ACCESS EXCLUSIVE lock. Keep the
+    // full-table validation out of that transaction; prepared v5 will validate
+    // online under PostgreSQL's weaker SHARE UPDATE EXCLUSIVE lock.
+    validatedInVersion: 5
+  },
   primaryKey("account_deletion_receipts", "account_deletion_receipts_pkey", ["idempotency_key_digest"]),
   check(
     "account_deletion_receipts",

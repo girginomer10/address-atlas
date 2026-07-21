@@ -206,16 +206,43 @@ struct ExchangeRow: View {
   }
 }
 
+private struct SyncActionLabel: View {
+  var idleTitle: String
+  var systemImage: String?
+  var activity: SyncActivity
+  var activeActivity: SyncActivity?
+
+  @ViewBuilder
+  var body: some View {
+    if activeActivity == activity {
+      HStack(spacing: 8) {
+        ProgressView()
+          .controlSize(.small)
+        Text(activity.progressTitle)
+      }
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel(activity.accessibilityLabel)
+    } else if let systemImage {
+      Label(idleTitle, systemImage: systemImage)
+    } else {
+      Text(idleTitle)
+    }
+  }
+}
+
 struct SyncView: View {
   @EnvironmentObject private var state: AppState
   @State private var serverURL = ""
   @State private var confirmingDiscardDownload = false
   @State private var confirmingSessionRevocation = false
   @State private var confirmingAccountDeletion = false
+  @State private var confirmingAccountDisconnect = false
   @State private var confirmingStopUploadRecovery = false
+  @State private var confirmingRollbackRestore = false
   @State private var pendingDownloadServerURL: URL?
   @State private var pendingRevocationServerURL: URL?
   @State private var pendingDeletionServerURL: URL?
+  @State private var pendingDisconnectServerURL: URL?
 
   private var hasValidServerInput: Bool {
     AppState.validatedSyncURL(serverURL) != nil
@@ -225,6 +252,14 @@ struct SyncView: View {
     boundActionServerURL != nil
       && state.document.syncState.accountId != nil
       && !state.document.syncState.sessionToken.isEmpty
+  }
+
+  private var hasConnectedSyncAccount: Bool {
+    state.document.syncState.accountId.flatMap(SyncAccountIdentifier.normalized) != nil
+  }
+
+  private var pendingRetryActivity: SyncActivity {
+    state.pendingVaultUpload == nil ? .retryingLocalSave : .recoveringUpload
   }
 
   private var persistedServerURL: URL? {
@@ -261,32 +296,57 @@ struct SyncView: View {
             .textFieldStyle(AtlasTextFieldStyle())
             .disabled(
               state.syncing || state.scanning || state.syncPersistencePending
-                || state.hasPendingAccountDeletion
+                || state.hasPendingAccountDeletion || hasConnectedSyncAccount
             )
-          if hasValidServerInput, persistedServerURL != nil, boundActionServerURL == nil {
+          if hasConnectedSyncAccount {
             Text(
-              "This session remains bound to \(persistedServerOrigin). Save the edited server or restore that origin before using existing-session controls."
+              persistedServerURL == nil
+                ? "This vault has connected account metadata, but its saved server is invalid. Account switching is locked to protect the sync baseline; restore a valid local vault before continuing."
+                : "This vault is connected to \(persistedServerOrigin). Disconnect this Mac explicitly before changing the server or creating another account. Sign in remains available to refresh the current account's session."
+            )
+            .font(.callout)
+            .foregroundStyle(persistedServerURL == nil ? AtlasTheme.loss : AtlasTheme.ink2)
+          } else if hasValidServerInput, persistedServerURL != nil,
+            boundActionServerURL == nil
+          {
+            Text(
+              "The saved sync server remains \(persistedServerOrigin). Save the edited server or restore that origin before using existing-server controls."
             )
             .font(.callout)
             .foregroundStyle(AtlasTheme.loss)
           }
           AdaptiveStack {
-            Button("Create passkey account") {
+            Button {
               Task {
                 await state.createPasskeyAccount(serverURL: serverURL)
                 serverURL = state.document.syncState.serverURL
               }
+            } label: {
+              SyncActionLabel(
+                idleTitle: "Create passkey account",
+                systemImage: "key.badge.plus",
+                activity: .creatingPasskeyAccount,
+                activeActivity: state.syncActivity
+              )
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
             .disabled(
               state.syncing || state.scanning || state.syncPersistencePending
                 || state.hasPendingAccountDeletion || !hasValidServerInput
+                || hasConnectedSyncAccount
             )
-            Button("Sign in with passkey") {
+            Button {
               Task {
                 await state.signInWithPasskey(serverURL: serverURL)
                 serverURL = state.document.syncState.serverURL
               }
+            } label: {
+              SyncActionLabel(
+                idleTitle: "Sign in with passkey",
+                systemImage: "key.fill",
+                activity: .signingIn,
+                activeActivity: state.syncActivity
+              )
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
             .disabled(
@@ -306,6 +366,7 @@ struct SyncView: View {
             .disabled(
               state.syncing || state.scanning || state.syncPersistencePending
                 || state.hasPendingAccountDeletion || !hasValidServerInput
+                || hasConnectedSyncAccount
             )
             Button("Refresh endpoints") {
               Task {
@@ -322,18 +383,19 @@ struct SyncView: View {
               guard let target = boundActionServerURL else { return }
               Task { await state.uploadEncryptedVault(expectedServerURL: target) }
             } label: {
-              if state.syncing {
-                ProgressView()
-              } else {
-                Label("Upload encrypted vault", systemImage: "arrow.up.doc")
-              }
+              SyncActionLabel(
+                idleTitle: "Upload encrypted vault",
+                systemImage: "arrow.up.doc",
+                activity: .uploadingVault,
+                activeActivity: state.syncActivity
+              )
             }
             .buttonStyle(AtlasPrimaryButtonStyle())
             .disabled(
               state.syncing || state.scanning || state.syncPersistencePending
                 || state.hasPendingAccountDeletion || !hasActiveSyncSession
             )
-            Button("Download encrypted vault") {
+            Button {
               guard let target = boundActionServerURL else { return }
               if state.hasUnsyncedLocalChanges || state.hasPendingWalletLabelDrafts {
                 pendingDownloadServerURL = target
@@ -341,6 +403,13 @@ struct SyncView: View {
               } else {
                 Task { await state.downloadEncryptedVault(expectedServerURL: target) }
               }
+            } label: {
+              SyncActionLabel(
+                idleTitle: "Download encrypted vault",
+                systemImage: "arrow.down.doc",
+                activity: .downloadingVault,
+                activeActivity: state.syncActivity
+              )
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
             .disabled(
@@ -348,15 +417,30 @@ struct SyncView: View {
                 || state.hasPendingAccountDeletion || !hasActiveSyncSession
             )
             if state.syncPersistencePending {
-              Button(state.pendingVaultUpload == nil ? "Retry local save" : "Retry upload recovery")
-              {
+              Button {
                 Task { await state.retryPendingSyncPersistence() }
+              } label: {
+                SyncActionLabel(
+                  idleTitle: state.pendingVaultUpload == nil
+                    ? "Retry local save"
+                    : "Retry upload recovery",
+                  systemImage: "arrow.clockwise",
+                  activity: pendingRetryActivity,
+                  activeActivity: state.syncActivity
+                )
               }
               .buttonStyle(AtlasSecondaryButtonStyle())
               .disabled(state.syncing || state.scanning || state.isUnlocking)
               if state.pendingVaultUpload != nil {
-                Button("Stop upload recovery", role: .destructive) {
+                Button(role: .destructive) {
                   confirmingStopUploadRecovery = true
+                } label: {
+                  SyncActionLabel(
+                    idleTitle: "Stop upload recovery",
+                    systemImage: "stop.circle",
+                    activity: .stoppingUploadRecovery,
+                    activeActivity: state.syncActivity
+                  )
                 }
                 .buttonStyle(AtlasSecondaryButtonStyle())
                 .disabled(state.syncing || state.scanning || boundActionServerURL == nil)
@@ -414,32 +498,87 @@ struct SyncView: View {
 
       Surface {
         VStack(alignment: .leading, spacing: 12) {
+          SectionHeader(
+            title: "Automatic encrypted rollback",
+            meta: state.hasVaultRollbackCheckpoint ? "Ready to restore" : "No restore point"
+          )
+          Text(
+            "Before a remote download replaces local data, Address Atlas automatically saves the previous vault content and credentials as an encrypted rollback point. Restoring it keeps the current sync account and remote baseline, replaces the remaining local content, and consumes that point. CSV and JSON exports are redacted reports—not backups—and cannot restore credentials or serve as rollback points."
+          )
+          .font(.callout)
+          .foregroundStyle(AtlasTheme.ink2)
+          Button(role: .destructive) {
+            confirmingRollbackRestore = true
+          } label: {
+            SyncActionLabel(
+              idleTitle: "Restore previous encrypted local content",
+              systemImage: "arrow.uturn.backward.circle",
+              activity: .restoringRollbackCheckpoint,
+              activeActivity: state.syncActivity
+            )
+          }
+          .buttonStyle(AtlasSecondaryButtonStyle())
+          .disabled(
+            !state.hasVaultRollbackCheckpoint || state.vaultEditsDisabled
+          )
+        }
+      }
+
+      Surface {
+        VStack(alignment: .leading, spacing: 12) {
           SectionHeader(title: "Account controls", meta: persistedServerOrigin)
           Text(
-            "Revoking signs out only this Mac. Deleting the sync account removes the remote account and encrypted server snapshots, while keeping this Mac's encrypted local vault."
+            "Revoking signs out only this Mac. Disconnecting revokes this Mac's session and clears its local account binding so you can switch, while keeping the remote account and encrypted server vault. Deleting permanently removes the remote account and its server snapshots. Every option keeps this Mac's encrypted local vault."
           )
           .font(.callout)
           .foregroundStyle(AtlasTheme.ink2)
           AdaptiveStack {
-            Button("Revoke this Mac's session") {
+            Button {
               guard let target = boundActionServerURL else { return }
               pendingRevocationServerURL = target
               confirmingSessionRevocation = true
+            } label: {
+              SyncActionLabel(
+                idleTitle: "Revoke this Mac's session",
+                systemImage: "rectangle.portrait.and.arrow.right",
+                activity: .revokingSession,
+                activeActivity: state.syncActivity
+              )
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
             .disabled(
               state.vaultEditsDisabled || state.document.syncState.sessionToken.isEmpty
                 || boundActionServerURL == nil
             )
-            Button(
-              state.document.syncState.accountDeletionIdempotencyKey == nil
-                ? "Delete sync account"
-                : "Retry account deletion",
-              role: .destructive
-            ) {
+            Button(role: .destructive) {
+              guard let target = persistedServerURL else { return }
+              pendingDisconnectServerURL = target
+              confirmingAccountDisconnect = true
+            } label: {
+              SyncActionLabel(
+                idleTitle: "Disconnect to switch account or server",
+                systemImage: "arrow.triangle.branch",
+                activity: .disconnectingAccount,
+                activeActivity: state.syncActivity
+              )
+            }
+            .buttonStyle(AtlasSecondaryButtonStyle())
+            .disabled(
+              state.vaultEditsDisabled || !hasConnectedSyncAccount || persistedServerURL == nil
+            )
+            Button(role: .destructive) {
               guard let target = boundActionServerURL else { return }
               pendingDeletionServerURL = target
               confirmingAccountDeletion = true
+            } label: {
+              SyncActionLabel(
+                idleTitle: state.document.syncState.accountDeletionIdempotencyKey == nil
+                  ? "Delete sync account"
+                  : "Retry account deletion",
+                systemImage: "trash",
+                activity: .deletingAccount,
+                activeActivity: state.syncActivity
+              )
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
             .disabled(state.accountDeletionControlDisabled || boundActionServerURL == nil)
@@ -454,6 +593,46 @@ struct SyncView: View {
       }
     }
     .confirmationDialog(
+      "Restore the previous encrypted local content?",
+      isPresented: $confirmingRollbackRestore,
+      titleVisibility: .visible
+    ) {
+      Button("Restore previous local content", role: .destructive) {
+        Task { await state.restoreVaultRollbackCheckpoint() }
+      }
+      Button("Keep current local vault", role: .cancel) {}
+    } message: {
+      Text(
+        "This restores the rollback point's settings, wallets, holdings, scan history, exchange connections, and credentials while keeping the current sync account and remote baseline. It then consumes the restore point. The remote vault is not changed unless you upload afterward."
+      )
+    }
+    .confirmationDialog(
+      "Disconnect this Mac to switch sync accounts or servers?",
+      isPresented: $confirmingAccountDisconnect,
+      titleVisibility: .visible
+    ) {
+      Button("Disconnect and allow switching", role: .destructive) {
+        guard let target = pendingDisconnectServerURL else { return }
+        let requestedServerDraft = serverURL
+        Task {
+          await state.disconnectSyncAccountForSwitch(expectedServerURL: target)
+          if state.document.syncState.accountId == nil {
+            serverURL =
+              AppState.validatedSyncURL(requestedServerDraft) == nil
+              ? state.document.syncState.serverURL
+              : requestedServerDraft
+          } else {
+            serverURL = state.document.syncState.serverURL
+          }
+        }
+      }
+      Button("Keep current connection", role: .cancel) {}
+    } message: {
+      Text(
+        "This first permanently removes any automatic rollback point tied to the current account, then revokes this Mac's server session when possible and clears its local account binding and sync baseline. It does not delete the remote account, passkeys, encrypted remote vault, or this Mac's encrypted local vault."
+      )
+    }
+    .confirmationDialog(
       "Stop encrypted upload recovery?",
       isPresented: $confirmingStopUploadRecovery,
       titleVisibility: .visible
@@ -465,7 +644,7 @@ struct SyncView: View {
       Button("Continue recovery", role: .cancel) {}
     } message: {
       Text(
-        "The full local vault will be kept, but the server may already contain the interrupted upload. Export the local vault as JSON before downloading or otherwise discarding local data."
+        "The full local vault will be kept, but the server may already contain the interrupted upload. CSV and JSON exports are redacted reports, not backups. If a later remote download replaces this vault, Address Atlas will first create an automatic encrypted rollback point."
       )
     }
     .confirmationDialog(
@@ -485,7 +664,7 @@ struct SyncView: View {
       Button("Cancel", role: .cancel) {}
     } message: {
       Text(
-        "This replaces the local vault with the latest authenticated remote snapshot from \(pendingDownloadServerURL?.absoluteString ?? persistedServerOrigin). Export or upload anything you need first."
+        "This replaces the local vault with the latest authenticated remote snapshot from \(pendingDownloadServerURL?.absoluteString ?? persistedServerOrigin). Address Atlas first saves the current local content and credentials as an automatic encrypted rollback point; a later restore keeps the downloaded sync account and remote baseline. CSV and JSON exports are redacted reports, not backups. Upload anything you need on the server before continuing."
       )
     }
     .confirmationDialog(
@@ -515,7 +694,7 @@ struct SyncView: View {
       Button("Cancel", role: .cancel) {}
     } message: {
       Text(
-        "A passkey check confirms this destructive action on \(pendingDeletionServerURL?.absoluteString ?? persistedServerOrigin). If a previous attempt had an uncertain network outcome, Address Atlas safely resumes the same deletion operation. This permanently removes the remote account, passkeys, sessions, and encrypted server snapshots; your encrypted local vault on this Mac is kept."
+        "A passkey check confirms this destructive action on \(pendingDeletionServerURL?.absoluteString ?? persistedServerOrigin). If a previous attempt had an uncertain network outcome, Address Atlas safely resumes the same deletion operation. This permanently removes the remote account, passkeys, sessions, encrypted server snapshots, and any automatic rollback point tied to that account; your encrypted local vault on this Mac is kept."
       )
     }
   }
@@ -527,8 +706,8 @@ enum ExportPayload: Sendable {
 
   var suggestedName: String {
     switch self {
-    case .csv: "address-atlas-holdings.csv"
-    case .json: "address-atlas-vault.json"
+    case .csv: "address-atlas-holdings-report.csv"
+    case .json: "address-atlas-redacted-report.json"
     }
   }
 
@@ -541,8 +720,8 @@ enum ExportPayload: Sendable {
 
   var displayName: String {
     switch self {
-    case .csv: "CSV"
-    case .json: "JSON"
+    case .csv: "CSV report"
+    case .json: "JSON report"
     }
   }
 }
@@ -592,27 +771,28 @@ struct ExportView: View {
     Page(
       eyebrow: "Local reports",
       title: "Export",
-      subtitle: "Generate CSV or JSON from the encrypted vault after unlock.",
+      subtitle:
+        "Generate redacted CSV or JSON reports after unlock. They are not backups and cannot restore credentials or sync state; destructive sync downloads create an automatic encrypted rollback point first.",
       statTitle: "Latest assets",
       statValue: "\(state.latestScan?.holdings.count ?? 0)"
     ) {
       AdaptiveStack {
-        Button("Generate CSV") {
+        Button("Generate CSV report") {
           guard let payload = csvPayloadIncludingDrafts() else { return }
           generatePreview(for: payload)
         }
         .buttonStyle(AtlasSecondaryButtonStyle())
-        Button("Save CSV") {
+        Button("Save CSV report") {
           guard let payload = csvPayloadIncludingDrafts() else { return }
           save(payload)
         }
         .buttonStyle(AtlasPrimaryButtonStyle())
-        Button("Generate JSON") {
+        Button("Generate JSON report") {
           guard let payload = jsonPayloadIncludingDrafts() else { return }
           generatePreview(for: payload)
         }
         .buttonStyle(AtlasSecondaryButtonStyle())
-        Button("Save JSON") {
+        Button("Save JSON report") {
           guard let payload = jsonPayloadIncludingDrafts() else { return }
           save(payload)
         }
@@ -624,20 +804,7 @@ struct ExportView: View {
         }
       }
       .disabled(state.isExportOperationInProgress)
-      Surface {
-        ScrollView([.vertical, .horizontal]) {
-          Text(
-            exportedPreview.isEmpty
-              ? "Generate an export to inspect a bounded, read-only preview."
-              : exportedPreview
-          )
-          .font(.caption.monospaced())
-          .textSelection(.enabled)
-          .frame(maxWidth: .infinity, alignment: .topLeading)
-          .accessibilityLabel("Read-only export preview")
-        }
-        .frame(minHeight: 280, maxHeight: 520)
-      }
+      ExportPreview(exportedPreview: exportedPreview)
     }
   }
 
@@ -697,12 +864,47 @@ struct ExportView: View {
           exportedPreview = try await Task.detached(priority: .userInitiated) {
             try ExportPipeline.write(payload, to: url)
           }.value
-          state.notice = "\(payload.displayName) export saved."
+          state.notice = "\(payload.displayName) saved."
           state.error = ""
         } catch {
           state.presentUserFacingError(error)
         }
       }
+    }
+  }
+}
+
+struct ExportPreview: View {
+  static let contentAccessibilityIdentifier = "export-preview-content"
+
+  var exportedPreview: String
+
+  var displayedText: String {
+    exportedPreview.isEmpty
+      ? "Generate a redacted report to inspect a bounded, read-only preview."
+      : exportedPreview
+  }
+
+  var accessibilityContent: String { displayedText }
+
+  var body: some View {
+    Surface {
+      VStack(alignment: .leading, spacing: 10) {
+        AtlasLabel("Read-only redacted report preview")
+          .accessibilityAddTraits(.isHeader)
+        ScrollView([.vertical, .horizontal]) {
+          Text(displayedText)
+            .font(.caption.monospaced())
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            // The label is the generated content itself—not the section title—
+            // so VoiceOver can inspect the same bounded preview as sighted users.
+            .accessibilityLabel(accessibilityContent)
+            .accessibilityIdentifier(Self.contentAccessibilityIdentifier)
+        }
+        .frame(minHeight: 280, maxHeight: 520)
+      }
+      .accessibilityElement(children: .contain)
     }
   }
 }

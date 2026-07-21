@@ -6,8 +6,22 @@ export interface SyncMigrationDefinition {
   readonly statements: readonly string[];
 }
 
+export interface PreparedSyncMigrationDefinition extends SyncMigrationDefinition {
+  /**
+   * A prepared migration is shipped one release before it may be applied. The
+   * current binary knows its immutable checksum and exact resulting schema, so
+   * it can remain the verified N-1 rollback image after the next release
+   * commits the migration.
+   */
+  readonly prepared: true;
+}
+
 export interface SyncMigration extends SyncMigrationDefinition {
   readonly checksum: string;
+}
+
+export interface PreparedSyncMigration extends SyncMigration {
+  readonly prepared: true;
 }
 
 export function defineMigration(definition: SyncMigrationDefinition): SyncMigration {
@@ -29,4 +43,11 @@ export function defineMigration(definition: SyncMigrationDefinition): SyncMigrat
     }))
     .digest("hex");
   return Object.freeze({ ...definition, checksum });
+}
+
+export function definePreparedMigration(
+  definition: PreparedSyncMigrationDefinition
+): PreparedSyncMigration {
+  const migration = defineMigration(definition);
+  return Object.freeze({ ...migration, prepared: true as const });
 }

@@ -147,7 +147,7 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertTrue(state.error.contains("compatibility policy could not be verified"))
   }
 
-  func testCancelledPasskeyServerSwitchRestoresExistingServerPolicy() async throws {
+  func testConnectedAccountRejectsImplicitPasskeyServerSwitchBeforeAuthentication() async throws {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
     let existingServer = URL(string: "https://existing.example")!
@@ -164,6 +164,7 @@ extension AppStateNetworkBoundaryTests {
       )
     )
     let persisted = try fixture.store.saveReturningPersistedDocument(document)
+    let authenticator = RecordingPasskeyAuthenticator()
     let state = AppState(
       testStore: fixture.store,
       document: persisted,
@@ -171,7 +172,7 @@ extension AppStateNetworkBoundaryTests {
       endpointConfigClient: FixedEndpointConfigClient(
         config: NativeEndpointConfig(configVersion: 20, refreshAfterSeconds: 300)
       ),
-      passkeyAuthenticator: CancelledPasskeyAuthenticator()
+      passkeyAuthenticator: authenticator
     )
     state.endpointConfig = existingConfig
     state.endpointConfigStatus = "Remote v12"
@@ -179,13 +180,96 @@ extension AppStateNetworkBoundaryTests {
 
     await state.signInWithPasskey(serverURL: "https://candidate.example")
 
-    XCTAssertEqual(state.notice, "Passkey sign-in cancelled.")
+    XCTAssertEqual(authenticator.callCount, 0)
+    XCTAssertTrue(state.error.contains("Disconnect it explicitly"))
     XCTAssertEqual(state.document.syncState.serverURL, existingServer.absoluteString)
     XCTAssertEqual(state.document.syncState.sessionToken, "existing-session")
     XCTAssertEqual(state.endpointConfig, existingConfig)
     XCTAssertEqual(state.endpointConfigStatus, "Remote v12")
     XCTAssertEqual(state.acceptedEndpointConfigServerURL, existingServer)
     XCTAssertEqual(state.operatorMessage, "Existing authority")
+  }
+
+  func testConnectedAccountRejectsDifferentReturnedAccountWithoutChangingBaseline() async throws {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let originalAccount = "abababab-abab-4bab-8bab-abababababab"
+    let server = URL(string: "https://sync.example")!
+    var document = VaultDocument()
+    XCTAssertTrue(
+      document.syncState.connect(
+        accountId: originalAccount,
+        serverURL: server.absoluteString,
+        sessionToken: "original-session-token"
+      )
+    )
+    document.syncState.latestRemoteVersion = 7
+    let persisted = try fixture.store.saveReturningPersistedDocument(document)
+    let authenticator = StubPasskeyAuthenticator(
+      session: PasskeyWebSession(
+        userId: "cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd",
+        sessionToken: "different-account-session",
+        serverURL: server.absoluteString
+      )
+    )
+    let state = AppState(
+      testStore: fixture.store,
+      document: persisted,
+      testVaultKey: fixture.vaultKey,
+      endpointConfigClient: FixedEndpointConfigClient(
+        config: NativeEndpointConfig(configVersion: 9, refreshAfterSeconds: 300)
+      ),
+      passkeyAuthenticator: authenticator
+    )
+
+    await state.signInWithPasskey(serverURL: server.absoluteString)
+
+    XCTAssertEqual(authenticator.callCount, 1)
+    XCTAssertTrue(state.error.contains("different sync account"))
+    XCTAssertEqual(state.document.syncState.accountId, originalAccount)
+    XCTAssertEqual(state.document.syncState.sessionToken, "original-session-token")
+    XCTAssertEqual(state.document.syncState.latestRemoteVersion, 7)
+    let verifier = try EncryptedSQLiteVaultStore(
+      path: fixture.database,
+      vaultKey: fixture.vaultKey
+    )
+    XCTAssertEqual(try verifier.load().syncState.accountId, originalAccount)
+  }
+
+  func testConnectedAccountRejectsRegistrationAndServerSaveUntilExplicitDisconnect() async throws {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    var document = VaultDocument()
+    XCTAssertTrue(
+      document.syncState.connect(
+        accountId: "abababab-abab-4bab-8bab-abababababab",
+        serverURL: "https://sync.example",
+        sessionToken: "connected-session-token"
+      )
+    )
+    let persisted = try fixture.store.saveReturningPersistedDocument(document)
+    let authenticator = RecordingPasskeyAuthenticator()
+    let state = AppState(
+      testStore: fixture.store,
+      document: persisted,
+      testVaultKey: fixture.vaultKey,
+      endpointConfigClient: FixedEndpointConfigClient(
+        config: NativeEndpointConfig(configVersion: 9, refreshAfterSeconds: 300)
+      ),
+      passkeyAuthenticator: authenticator
+    )
+
+    await state.createPasskeyAccount(serverURL: "https://sync.example")
+    let saved = await state.saveSyncSettings(serverURL: "https://other.example")
+
+    XCTAssertEqual(authenticator.callCount, 0)
+    XCTAssertFalse(saved)
+    XCTAssertEqual(state.document.syncState.serverURL, "https://sync.example")
+    XCTAssertEqual(
+      state.document.syncState.accountId,
+      "abababab-abab-4bab-8bab-abababababab"
+    )
+    XCTAssertTrue(state.error.contains("Disconnect the current sync account"))
   }
 
   func testCancelledSameServerReauthenticationDoesNotPublishStagedPolicy() async throws {

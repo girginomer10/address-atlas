@@ -1462,7 +1462,9 @@ verify_backup() {
 }
 
 create_predeploy_backup() {
-  assert_web_service_stopped
+  # pg_dump owns a transaction-consistent snapshot while the advisory schema
+  # lock prevents migration drift. Keep the verified web tier available; only
+  # destructive restore cutovers require application quiescence.
   create_backup true false
 }
 

@@ -601,6 +601,11 @@ describe("vault latest route", () => {
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: "Vault snapshot could not be loaded." });
     const sql = String(mocks.dbQuery.mock.calls[0]?.[0]);
+    expect(sql).toContain("pg_column_compression(vault.envelope) IS NULL");
+    expect(sql).toContain("pg_column_size(vault.envelope)");
+    expect(sql).toContain("pg_column_compression(vault.checksum) IS NULL");
+    expect(sql).toContain("pg_column_size(vault.checksum)");
+    expect(sql).toMatch(/CASE[\s\S]+pg_column_size\(vault\.envelope\)[\s\S]+THEN \([\s\S]+octet_length\(vault\.envelope::pg_catalog\.text\)/);
     expect(sql).toContain("jsonb_typeof(vault.envelope) = 'object'");
     expect(sql).toContain("octet_length(vault.envelope::pg_catalog.text)");
     expect(sql).toContain("octet_length(vault.checksum) = 64");

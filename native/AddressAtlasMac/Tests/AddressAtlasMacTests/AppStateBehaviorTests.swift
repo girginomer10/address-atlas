@@ -5,6 +5,69 @@ import XCTest
 
 @MainActor
 final class AppStateBehaviorTests: XCTestCase {
+  func testSyncActivityOwnerPreservesMutualExclusionAndCannotBeClearedByAnotherActivity() {
+    let state = AppState()
+
+    XCTAssertFalse(state.syncing)
+    XCTAssertTrue(state.beginSyncActivity(.uploadingVault))
+    XCTAssertTrue(state.syncing)
+    XCTAssertEqual(state.syncActivity, .uploadingVault)
+    XCTAssertFalse(state.beginSyncActivity(.downloadingVault))
+
+    state.finishSyncActivity(.downloadingVault)
+    XCTAssertEqual(state.syncActivity, .uploadingVault)
+
+    state.finishSyncActivity(.uploadingVault)
+    XCTAssertNil(state.syncActivity)
+    XCTAssertFalse(state.syncing)
+  }
+
+  func testEverySyncActivityHasAUniqueMeaningfulProgressAndAccessibilityLabel() {
+    let progressTitles = SyncActivity.allCases.map(\.progressTitle)
+    let accessibilityLabels = SyncActivity.allCases.map(\.accessibilityLabel)
+
+    XCTAssertEqual(Set(progressTitles).count, SyncActivity.allCases.count)
+    XCTAssertTrue(progressTitles.allSatisfy { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
+    XCTAssertTrue(accessibilityLabels.allSatisfy { $0.hasSuffix(", in progress") })
+  }
+
+  func testPasskeyOperationPublishesAndClearsItsTypedActivity() async throws {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let authenticator = PausingPasskeyAuthenticator()
+    let state = AppState(
+      testStore: fixture.store,
+      document: VaultDocument(),
+      testVaultKey: fixture.vaultKey,
+      endpointConfigClient: FixedEndpointConfigClient(
+        config: NativeEndpointConfig(configVersion: 1, refreshAfterSeconds: 300)
+      ),
+      passkeyAuthenticator: authenticator
+    )
+    let server = URL(string: "https://sync.example")!
+    let operation = Task {
+      await state.createPasskeyAccount(serverURL: server.absoluteString)
+    }
+
+    await authenticator.waitUntilStarted()
+    XCTAssertEqual(state.syncActivity, .creatingPasskeyAccount)
+    XCTAssertTrue(state.syncing)
+    XCTAssertFalse(state.beginSyncActivity(.downloadingVault))
+
+    authenticator.complete(
+      with: PasskeyWebSession(
+        userId: "11111111-1111-4111-8111-111111111111",
+        sessionToken: "typed-activity-session",
+        serverURL: server.absoluteString
+      )
+    )
+    await operation.value
+
+    XCTAssertNil(state.syncActivity)
+    XCTAssertFalse(state.syncing)
+    XCTAssertEqual(state.error, "")
+  }
+
   func testNavigationClearsTheSourcePagesTransientNoticeOrError() {
     let state = AppState()
 
@@ -399,7 +462,7 @@ final class AppStateBehaviorTests: XCTestCase {
     XCTAssertEqual(reloaded.wallets.map(\.address), state.document.wallets.map(\.address))
   }
 
-  func testDustFilteringKeepsHeadlineTotalAndVisibleRowsInSync() {
+  func testDustFilteringNeverChangesHeadlineTotalAndDisclosesHiddenValue() {
     let state = AppState()
     state.document.scanRuns = [
       ScanRunRecord(
@@ -415,7 +478,9 @@ final class AppStateBehaviorTests: XCTestCase {
     state.document.preferences.dustThreshold = 1
 
     XCTAssertEqual(state.visibleLatestHoldings.map(\.id), ["visible"])
-    XCTAssertEqual(state.visibleLatestTotalUsd, 100, accuracy: 0.000_001)
+    XCTAssertEqual(state.latestTotalUsd, 100.50, accuracy: 0.000_001)
+    XCTAssertEqual(state.hiddenDustHoldingCount, 1)
+    XCTAssertEqual(state.hiddenDustValueUsd, 0.50, accuracy: 0.000_001)
   }
 
   func testTopHoldingsSortByValidatedValueWithDeterministicTieBreaks() {
@@ -465,8 +530,8 @@ final class AppStateBehaviorTests: XCTestCase {
     ]
 
     XCTAssertNil(AppState.validatedPortfolioTotal(holdings))
-    XCTAssertEqual(state.visibleLatestTotalUsd, 0)
-    XCTAssertTrue(state.visibleLatestTotalUsd.isFinite)
+    XCTAssertEqual(state.latestTotalUsd, 0)
+    XCTAssertTrue(state.latestTotalUsd.isFinite)
   }
 
   func testCompatibilityPolicyUsesBoundedVersionsAndFailsClosed() {
@@ -696,5 +761,34 @@ final class AppStateBehaviorTests: XCTestCase {
       valueUsd: valueUsd,
       source: .native
     )
+  }
+}
+
+@MainActor
+private final class PausingPasskeyAuthenticator: PasskeyAuthenticating {
+  private var didStart = false
+  private var startWaiters: [CheckedContinuation<Void, Never>] = []
+  private var authenticationContinuation: CheckedContinuation<PasskeyWebSession, Error>?
+
+  func authenticate(serverURL: URL, mode: PasskeyWebMode) async throws -> PasskeyWebSession {
+    didStart = true
+    let waiters = startWaiters
+    startWaiters.removeAll()
+    for waiter in waiters { waiter.resume() }
+    return try await withCheckedThrowingContinuation { continuation in
+      authenticationContinuation = continuation
+    }
+  }
+
+  func waitUntilStarted() async {
+    guard !didStart else { return }
+    await withCheckedContinuation { continuation in
+      startWaiters.append(continuation)
+    }
+  }
+
+  func complete(with session: PasskeyWebSession) {
+    authenticationContinuation?.resume(returning: session)
+    authenticationContinuation = nil
   }
 }

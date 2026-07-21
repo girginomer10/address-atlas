@@ -1008,10 +1008,12 @@ test_backup_create_predeploy() {
   new_case
   install_backup_fakes
   MOCK_WEB_RUNNING=1
+  backup="$BACKUP_DIR/address-atlas-20260720T160000Z.dump.age"
   run_backup_capture create-predeploy
-  assert_status "$CAPTURE_STATUS" 77 'running-web predeploy backup gate status'
-  assert_file_not_contains "$CASE_DIR/log/docker.argv" 'pg_dump' \
-    'predeploy backup dumped while web was running'
+  assert_status "$CAPTURE_STATUS" 0 'running-web predeploy backup status'
+  assert_file_equals "$CASE_DIR/stdout" "$backup" 'running-web predeploy backup output path'
+  assert_file_contains "$CASE_DIR/log/docker.argv" 'pg_dump' \
+    'predeploy backup did not take a transaction-consistent live snapshot'
 
   new_case
   install_backup_fakes
@@ -2785,7 +2787,7 @@ run_case 'backup rejects symlink destination' test_backup_rejects_symlink_destin
 run_case 'backup create' test_backup_create
 run_case 'backup rejects future native-config receipt' test_backup_rejects_future_native_config_receipt
 run_case 'backup rejects lost remote schema lock' test_backup_rejects_lost_remote_schema_lock
-run_case 'backup create-predeploy stopped-web provenance' test_backup_create_predeploy
+run_case 'backup create-predeploy live-or-stopped provenance' test_backup_create_predeploy
 run_case 'backup lock-run reentrant contract' test_backup_lock_run_reentrant_contract
 run_case 'backup lock-run fast-child handshake' test_backup_lock_run_fast_children
 run_case 'backup lock-run startup cancellation' test_backup_lock_run_honors_startup_cancellation

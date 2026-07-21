@@ -116,6 +116,7 @@ extension AppStateNetworkBoundaryTests {
       )
     )
     let persisted = try fixture.store.saveReturningPersistedDocument(document)
+    _ = try fixture.store.saveRollbackCheckpoint(persisted)
     let authenticator = StubPasskeyAuthenticator(
       session: PasskeyWebSession(
         userId: "34343434-3434-4434-8434-343434343434",
@@ -144,6 +145,7 @@ extension AppStateNetworkBoundaryTests {
       httpClient: http,
       passkeyAuthenticator: authenticator
     )
+    XCTAssertTrue(state.hasVaultRollbackCheckpoint)
     let expectedServerURL = try XCTUnwrap(
       AppState.validatedSyncURL(persisted.syncState.serverURL)
     )
@@ -151,7 +153,9 @@ extension AppStateNetworkBoundaryTests {
     await state.deleteSyncAccount(expectedServerURL: expectedServerURL)
 
     XCTAssertEqual(state.error, "")
-    XCTAssertEqual(state.notice, "Sync account deleted. Your encrypted local vault was kept.")
+    XCTAssertTrue(state.notice.hasPrefix("Sync account deleted."))
+    XCTAssertTrue(state.notice.contains("rollback point was removed"))
+    XCTAssertFalse(state.hasVaultRollbackCheckpoint)
     XCTAssertEqual(http.requests.count, 1)
     let request = try XCTUnwrap(http.requests.first)
     XCTAssertEqual(request.url?.path, "/account")
@@ -192,6 +196,12 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertEqual(reloaded.syncState.serverURL, "https://sync.example")
     XCTAssertEqual(reloaded.syncState.latestRemoteVersion, 0)
     XCTAssertNil(reloaded.syncState.accountDeletionIdempotencyKey)
+    XCTAssertFalse(try verifier.containsRollbackCheckpoint())
+
+    await state.restoreVaultRollbackCheckpoint()
+    XCTAssertEqual(state.error, "No local rollback checkpoint is available.")
+    XCTAssertNil(state.document.syncState.accountId)
+    XCTAssertTrue(state.document.syncState.sessionToken.isEmpty)
   }
 
   func testUncertainAccountDeletionReplaysPersistedOperationWithoutAnotherPasskey()
@@ -343,6 +353,77 @@ extension AppStateNetworkBoundaryTests {
     )
     let reloaded = try winningStore.load()
     XCTAssertEqual(reloaded.syncState.sessionToken, "revoked-server-token")
+  }
+
+  func testExplicitDisconnectRevokesThisMacAndDiscardsOldAccountRollbackPoint() async throws {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let wallet = WalletRecord(label: "Kept locally", address: "0x789", chainKind: .evm)
+    let document = VaultDocument(
+      wallets: [wallet],
+      syncState: SyncState(
+        accountId: "78787878-7878-4878-8878-787878787878",
+        serverURL: "https://sync.example",
+        sessionToken: "switch-session-token",
+        latestRemoteVersion: 17,
+        lastChecksum: String(repeating: "a", count: 64),
+        lastSyncedContentChecksum: String(repeating: "b", count: 64)
+      )
+    )
+    let persisted = try fixture.store.saveReturningPersistedDocument(document)
+    _ = try fixture.store.saveRollbackCheckpoint(persisted)
+    XCTAssertTrue(try fixture.store.containsRollbackCheckpoint())
+    let http = RecordingHTTPStub { request in
+      guard request.url?.path == "/account/session", request.httpMethod == "DELETE" else {
+        throw URLError(.unsupportedURL)
+      }
+      return stubJSONResponse(request, #"{"ok":true}"#)
+    }
+    let state = AppState(
+      testStore: fixture.store,
+      document: persisted,
+      testVaultKey: fixture.vaultKey,
+      httpClient: http
+    )
+    XCTAssertTrue(state.hasVaultRollbackCheckpoint)
+    let expectedServerURL = try XCTUnwrap(
+      AppState.validatedSyncURL(persisted.syncState.serverURL)
+    )
+
+    await state.disconnectSyncAccountForSwitch(expectedServerURL: expectedServerURL)
+
+    XCTAssertEqual(state.error, "")
+    XCTAssertTrue(state.notice.contains("disconnected from the sync account"))
+    XCTAssertNil(state.syncActivity)
+    XCTAssertFalse(state.hasVaultRollbackCheckpoint)
+    XCTAssertEqual(http.requests.count, 1)
+    XCTAssertEqual(
+      http.requests.first?.value(forHTTPHeaderField: "authorization"),
+      "Bearer switch-session-token"
+    )
+    XCTAssertEqual(state.document.wallets.map(\.id), [wallet.id])
+    XCTAssertNil(state.document.syncState.accountId)
+    XCTAssertEqual(state.document.syncState.serverURL, expectedServerURL.absoluteString)
+    XCTAssertTrue(state.document.syncState.sessionToken.isEmpty)
+    XCTAssertEqual(state.document.syncState.latestRemoteVersion, 0)
+    XCTAssertNil(state.document.syncState.lastChecksum)
+    XCTAssertNil(state.document.syncState.lastSyncedContentChecksum)
+
+    let verifier = try EncryptedSQLiteVaultStore(
+      path: fixture.database,
+      vaultKey: fixture.vaultKey
+    )
+    let reloaded = try verifier.load()
+    XCTAssertEqual(reloaded.wallets.map(\.id), [wallet.id])
+    XCTAssertNil(reloaded.syncState.accountId)
+    XCTAssertEqual(reloaded.syncState.serverURL, expectedServerURL.absoluteString)
+    XCTAssertEqual(reloaded.syncState.latestRemoteVersion, 0)
+    XCTAssertFalse(try verifier.containsRollbackCheckpoint())
+
+    await state.restoreVaultRollbackCheckpoint()
+    XCTAssertEqual(state.error, "No local rollback checkpoint is available.")
+    XCTAssertNil(state.document.syncState.accountId)
+    XCTAssertTrue(state.document.syncState.sessionToken.isEmpty)
   }
 
 }

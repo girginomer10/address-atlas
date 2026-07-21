@@ -6,6 +6,16 @@ import XCTest
 
 @MainActor
 extension AppStateNetworkBoundaryTests {
+  func testTerminationFreezeRejectsQueuedUnlockBeforeVaultRecoveryStarts() {
+    let state = AppState()
+
+    XCTAssertTrue(state.beginTerminationRequest())
+    XCTAssertFalse(state.beginUnlockOperationIfAllowed())
+
+    XCTAssertFalse(state.isUnlocking)
+    XCTAssertFalse(state.isUnlocked)
+  }
+
   func testTerminationFreezeRejectsQueuedScanAndEndpointRefreshBeforeNetwork() async throws {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
@@ -80,6 +90,37 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertFalse(state.syncing)
     XCTAssertNil(state.pendingVaultUpload)
     XCTAssertTrue(http.requests.isEmpty)
+  }
+
+  func testTerminationFreezeRejectsQueuedPendingLocalSaveRetry() async throws {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let persisted = try fixture.store.saveReturningPersistedDocument(VaultDocument())
+    let state = AppState(
+      testStore: fixture.store,
+      document: persisted,
+      testVaultKey: fixture.vaultKey
+    )
+    var pendingCandidate = persisted
+    pendingCandidate.preferences.hideDust = true
+    state.requirePendingSyncPersistence(
+      pendingCandidate,
+      projectedSyncVersion: nil,
+      saveExactly: true
+    )
+
+    XCTAssertTrue(state.beginTerminationRequest())
+    await state.retryPendingSyncPersistence()
+
+    XCTAssertNil(state.syncActivity)
+    XCTAssertFalse(state.syncing)
+    XCTAssertFalse(state.isPersisting)
+    XCTAssertTrue(state.syncPersistencePending)
+    let verifier = try EncryptedSQLiteVaultStore(
+      path: fixture.database,
+      vaultKey: fixture.vaultKey
+    )
+    XCTAssertFalse(try verifier.load().preferences.hideDust)
   }
 
   func testTerminationFreezeRejectsQueuedPasskeyFlowBeforePolicyOrAuthentication() async {

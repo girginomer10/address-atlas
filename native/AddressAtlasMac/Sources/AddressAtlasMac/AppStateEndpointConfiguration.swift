@@ -75,6 +75,11 @@ extension AppState {
     }
     let canonical = canonicalURL.absoluteString
     let serverChanged = document.syncState.serverURL != canonical
+    guard !serverChanged || document.syncState.accountId == nil else {
+      error =
+        "Disconnect the current sync account explicitly before changing its server. The existing account and remote baseline were kept."
+      return false
+    }
     guard await mutateDocument({ $0.syncState.changeServer(to: canonical) }) else { return false }
     if serverChanged {
       endpointConfig = .bundled

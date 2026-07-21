@@ -1,10 +1,104 @@
 import AddressAtlasCore
+import AppKit
 import Foundation
+import SwiftUI
 import XCTest
 
 @testable import AddressAtlasMac
 
 final class AtlasDesignSystemTests: XCTestCase {
+  @MainActor
+  func testLaunchLayoutsProduceOnlyFiniteNonnegativeAppKitGeometry() throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = try EncryptedSQLiteVaultStore(
+      path: directory.appending(path: "vault.sqlite"),
+      vaultKey: try VaultCrypto().generateVaultKey()
+    )
+    _ = try store.load()
+    let unlockedState = AppState(testStore: store, document: VaultDocument())
+
+    assertValidLayout(
+      UnlockView().environmentObject(AppState()),
+      size: NSSize(width: 800, height: 560),
+      context: "locked launch"
+    )
+    assertValidLayout(
+      MainView().environmentObject(unlockedState),
+      size: NSSize(width: 900, height: 600),
+      context: "unlocked launch"
+    )
+  }
+
+  @MainActor
+  func testAccessibilityAnnouncementsCoalesceDuplicateViewsButAllowFreshEvents() {
+    var clock = 10.0
+    var announcements: [(message: String, priority: Int)] = []
+    let announcer = AtlasAccessibilityAnnouncer(
+      duplicateCoalescingInterval: 0.75,
+      now: { clock },
+      poster: { message, priority in
+        announcements.append((message, priority.rawValue))
+      }
+    )
+
+    announcer.announceVisible("Vault saved.", kind: .notice)
+    announcer.announceVisible("Vault saved.", kind: .notice)
+    announcer.announceEvent("Vault saved.", kind: .notice)
+
+    XCTAssertEqual(announcements.map(\.message), ["Status: Vault saved."])
+    XCTAssertEqual(announcements.map(\.priority), [NSAccessibilityPriorityLevel.medium.rawValue])
+
+    clock += 1
+    announcer.announceEvent("Vault saved.", kind: .notice)
+    announcer.clear(.notice)
+    announcer.announceEvent("Vault saved.", kind: .notice)
+
+    XCTAssertEqual(
+      announcements.map(\.message),
+      ["Status: Vault saved.", "Status: Vault saved.", "Status: Vault saved."]
+    )
+  }
+
+  @MainActor
+  func testAccessibilityAnnouncementsClearEmptyStateAndPrioritizeErrors() {
+    var announcements: [(message: String, priority: Int)] = []
+    let announcer = AtlasAccessibilityAnnouncer(
+      now: { 20 },
+      poster: { message, priority in
+        announcements.append((message, priority.rawValue))
+      }
+    )
+
+    announcer.announceEvent("  Storage failed.  ", kind: .error)
+    announcer.announceEvent("   ", kind: .error)
+    announcer.announceVisible("Storage failed.", kind: .error)
+
+    XCTAssertEqual(
+      announcements.map(\.message),
+      ["Error: Storage failed.", "Error: Storage failed."]
+    )
+    XCTAssertEqual(
+      announcements.map(\.priority),
+      [NSAccessibilityPriorityLevel.high.rawValue, NSAccessibilityPriorityLevel.high.rawValue]
+    )
+  }
+
+  @MainActor
+  func testExportPreviewAccessibilityContentMatchesGeneratedPreview() {
+    let generated = "VOICEOVER_EXPORT_MARKER,{\"wallet\":\"visible\"}"
+    let preview = ExportPreview(exportedPreview: generated)
+    let displayedText = preview.displayedText
+    let accessibilityContent = preview.accessibilityContent
+    let accessibilityIdentifier = ExportPreview.contentAccessibilityIdentifier
+
+    XCTAssertEqual(displayedText, generated)
+    XCTAssertEqual(accessibilityContent, generated)
+    XCTAssertNotEqual(displayedText, "Read-only export preview")
+    XCTAssertEqual(accessibilityIdentifier, "export-preview-content")
+  }
+
   func testSecondaryTextMeetsNormalTextContrastOnBothPaperSurfaces() {
     let foreground = AtlasTheme.ink3RGB
 
@@ -54,6 +148,16 @@ final class AtlasDesignSystemTests: XCTestCase {
 
     XCTAssertEqual(try Data(contentsOf: destination), expected)
     XCTAssertEqual(preview, String(decoding: expected, as: UTF8.self))
+  }
+
+  func testExportFilenamesDescribeRedactedReportsInsteadOfVaultBackups() {
+    let csvName = ExportPayload.csv([]).suggestedName
+    let jsonName = ExportPayload.json(VaultDocument()).suggestedName
+
+    XCTAssertTrue(csvName.contains("report"))
+    XCTAssertTrue(jsonName.contains("report"))
+    XCTAssertFalse(jsonName.contains("vault"))
+    XCTAssertFalse(jsonName.contains("backup"))
   }
 
   func testAccessibilityIdentitiesDisambiguateDuplicateVisibleLabels() {
@@ -125,5 +229,34 @@ final class AtlasDesignSystemTests: XCTestCase {
     component <= 0.04045
       ? component / 12.92
       : pow((component + 0.055) / 1.055, 2.4)
+  }
+
+  @MainActor
+  private func assertValidLayout<Content: View>(
+    _ content: Content,
+    size: NSSize,
+    context: String
+  ) {
+    let hostingView = NSHostingView(rootView: content)
+    hostingView.frame = NSRect(origin: .zero, size: size)
+    hostingView.layoutSubtreeIfNeeded()
+    assertValidGeometry(in: hostingView, path: context)
+  }
+
+  @MainActor
+  private func assertValidGeometry(in view: NSView, path: String) {
+    let frame = view.frame
+    XCTAssertTrue(frame.origin.x.isFinite, "\(path) has a non-finite x origin")
+    XCTAssertTrue(frame.origin.y.isFinite, "\(path) has a non-finite y origin")
+    XCTAssertTrue(frame.width.isFinite, "\(path) has a non-finite width")
+    XCTAssertTrue(frame.height.isFinite, "\(path) has a non-finite height")
+    XCTAssertGreaterThanOrEqual(frame.width, 0, "\(path) has a negative width")
+    XCTAssertGreaterThanOrEqual(frame.height, 0, "\(path) has a negative height")
+    for (index, subview) in view.subviews.enumerated() {
+      assertValidGeometry(
+        in: subview,
+        path: "\(path)/\(type(of: subview))[\(index)]"
+      )
+    }
   }
 }
