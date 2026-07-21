@@ -6,6 +6,40 @@ import XCTest
 
 @MainActor
 extension AppStateNetworkBoundaryTests {
+  func testPasskeyBindingRejectsVisibleButNotDurableEndpointTrust() async throws {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let accountId = "18181818-1818-4818-8818-181818181818"
+    let authenticator = StubPasskeyAuthenticator(
+      session: PasskeyWebSession(
+        userId: accountId,
+        sessionToken: "uncertain-trust-session",
+        serverURL: "https://sync.example"
+      )
+    )
+    let state = AppState(
+      testStore: fixture.store,
+      document: VaultDocument(),
+      testVaultKey: fixture.vaultKey,
+      endpointConfigClient: FixedEndpointConfigClient(
+        config: NativeEndpointConfig(configVersion: 30, refreshAfterSeconds: 300)
+      ),
+      endpointConfigTrustStore: ScriptedEndpointConfigTrustStore([
+        .committedDurabilityUncertain
+      ]),
+      passkeyAuthenticator: authenticator
+    )
+
+    await state.createPasskeyAccount(serverURL: "https://sync.example")
+
+    XCTAssertEqual(authenticator.callCount, 1)
+    XCTAssertNil(state.document.syncState.accountId)
+    XCTAssertTrue(state.document.syncState.sessionToken.isEmpty)
+    XCTAssertEqual(state.endpointConfig, .bundled)
+    XCTAssertFalse(state.endpointConfigTrustDurabilityDegraded)
+    XCTAssertTrue(state.error.contains("crash-durability check failed"))
+  }
+
   func testIntentionalPasskeyCancellationIsNeutralAndDoesNotChangeVault() async throws {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }

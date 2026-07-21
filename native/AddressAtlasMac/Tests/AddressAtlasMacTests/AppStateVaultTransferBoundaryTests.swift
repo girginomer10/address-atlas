@@ -7,6 +7,46 @@ import XCTest
 
 @MainActor
 extension AppStateNetworkBoundaryTests {
+  func testUploadBlocksBeforeVaultHTTPWhenEndpointTrustDurabilityIsUncertain() async throws {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    var document = VaultDocument()
+    XCTAssertTrue(
+      document.syncState.connect(
+        accountId: "67676767-6767-4767-8767-676767676767",
+        serverURL: "https://sync.example",
+        sessionToken: "uncertain-trust-upload-session"
+      )
+    )
+    let persisted = try fixture.store.saveReturningPersistedDocument(document)
+    let expectedServerURL = try XCTUnwrap(
+      AppState.validatedSyncURL(persisted.syncState.serverURL)
+    )
+    let http = RecordingHTTPStub { request in
+      XCTFail("Uncertain endpoint trust must block vault HTTP: \(request)")
+      throw URLError(.cancelled)
+    }
+    let state = AppState(
+      testStore: fixture.store,
+      document: persisted,
+      testVaultKey: fixture.vaultKey,
+      endpointConfigClient: FixedEndpointConfigClient(
+        config: NativeEndpointConfig(configVersion: 30, refreshAfterSeconds: 300)
+      ),
+      endpointConfigTrustStore: ScriptedEndpointConfigTrustStore([
+        .committedDurabilityUncertain
+      ]),
+      httpClient: http
+    )
+
+    await state.uploadEncryptedVault(expectedServerURL: expectedServerURL)
+
+    XCTAssertTrue(http.requests.isEmpty)
+    XCTAssertTrue(state.endpointConfigTrustDurabilityDegraded)
+    XCTAssertTrue(state.error.contains("not crash-durable"))
+    XCTAssertNil(state.pendingVaultUpload)
+  }
+
   func testUploadEncryptedVaultSealsEncryptsAndPUTsWithBearerAuthorization() async throws {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }

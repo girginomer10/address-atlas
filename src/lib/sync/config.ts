@@ -48,13 +48,10 @@ const PRODUCTION_RUNTIME_ROLE = "address_atlas_runtime";
 const PRODUCTION_SCHEMA_OWNER_ROLE = "address_atlas";
 const RESTORE_MIGRATION_DATABASE_RE = /^atlas_(?:drill|restore|bootstrap)_[A-Za-z0-9_]+$/;
 const SAFE_PRODUCTION_DATABASE_URL_PARAMETERS = new Set([
-  "channel_binding",
   "sslcert",
-  "sslcrl",
   "sslkey",
   "sslmode",
   "sslnegotiation",
-  "sslpassword",
   "sslrootcert"
 ]);
 
@@ -147,6 +144,13 @@ export function getSyncDatabaseConfig(): SyncDatabaseConfig {
   return parseDatabaseConfig(connectionString, "SYNC_DATABASE_URL");
 }
 
+/** Read the shared runtime-pool ceiling without parsing or exposing its URL. */
+export function getSyncDatabasePoolSize() {
+  // Public verification may use at most half the pool. Requiring two clients
+  // keeps at least one slot available for readiness, vault, and account work.
+  return boundedIntegerFromEnv("SYNC_DB_POOL_SIZE", 10, 2, 50);
+}
+
 /**
  * Returns the privileged, one-shot bootstrap connection. Production bootstrap
  * deliberately requires a distinct URL so the request-serving role can remain
@@ -215,13 +219,33 @@ function parseDatabaseConfig(connectionString: string, sourceName: string): Sync
       );
     }
     const seenParameters = new Set<string>();
-    for (const [name] of databaseURL.searchParams) {
+    for (const [name, value] of databaseURL.searchParams) {
       if (seenParameters.has(name) || !SAFE_PRODUCTION_DATABASE_URL_PARAMETERS.has(name)) {
         throw new SyncConfigurationError(
           `${sourceName} contains a forbidden or duplicate production URL parameter: ${name}.`
         );
       }
+      if (name === "sslmode" && value !== "verify-full") {
+        throw new SyncConfigurationError(
+          `${sourceName} must use sslmode=verify-full when PostgreSQL TLS is configured.`
+        );
+      }
+      if (name === "sslnegotiation" && value !== "postgres" && value !== "direct") {
+        throw new SyncConfigurationError(
+          `${sourceName} contains an unsupported PostgreSQL TLS negotiation mode.`
+        );
+      }
+      if (!value || value.length > 4_096 || /[\u0000-\u001f\u007f]/.test(value)) {
+        throw new SyncConfigurationError(
+          `${sourceName} contains an invalid production URL parameter value: ${name}.`
+        );
+      }
       seenParameters.add(name);
+    }
+    if (seenParameters.size > 0 && !seenParameters.has("sslmode")) {
+      throw new SyncConfigurationError(
+        `${sourceName} must include sslmode=verify-full whenever PostgreSQL TLS parameters are present.`
+      );
     }
   }
 
@@ -235,7 +259,7 @@ function parseDatabaseConfig(connectionString: string, sourceName: string): Sync
 
   return {
     connectionString,
-    poolSize: boundedIntegerFromEnv("SYNC_DB_POOL_SIZE", 10, 1, 50),
+    poolSize: getSyncDatabasePoolSize(),
     connectTimeoutMs: boundedIntegerFromEnv("SYNC_DB_CONNECT_TIMEOUT_MS", 5_000, 500, 60_000),
     idleTimeoutMs: boundedIntegerFromEnv("SYNC_DB_IDLE_TIMEOUT_MS", 30_000, 1_000, 300_000),
     statementTimeoutMs,

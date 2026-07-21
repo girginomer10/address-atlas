@@ -13,6 +13,12 @@ import {
 } from "./postgres-readiness";
 import { STORAGE_RECONCILIATION_VERSION } from "./postgres-migrations";
 import { SYNC_RUNTIME_PRIVILEGES } from "./postgres-schema-model";
+import { assertStoredPasskeyCredentialIntegrity } from "./passkey-credential-integrity";
+import { StoredPasskeyCredentialIntegrityError } from "./stored-passkey-credential";
+import {
+  checkStorageLedgerIntegrity,
+  resetStorageLedgerIntegrityForTests
+} from "./storage-ledger-integrity";
 
 const maybeDescribe = process.env.TEST_SYNC_DATABASE_URL ? describe : describe.skip;
 
@@ -198,7 +204,7 @@ maybeDescribe("diagnostic Postgres runtime readiness", () => {
     }, false);
   });
 
-  it("keeps runtime readiness constant-time while owner bootstrap reconciles aggregates", async () => {
+  it("keeps schema readiness constant-time while periodic integrity detects aggregate drift", async () => {
     await withIsolatedSchema(async () => {
       await ensureSyncSchema();
       const userId = randomUUID();
@@ -217,21 +223,64 @@ maybeDescribe("diagnostic Postgres runtime readiness", () => {
         [STORAGE_RECONCILIATION_VERSION]
       );
       await expect(checkSyncSchemaReadiness()).resolves.toBeUndefined();
+      resetStorageLedgerIntegrityForTests();
+      await expect(checkStorageLedgerIntegrity()).resolves.toBeUndefined();
 
       await getSyncPool().query(
-        "UPDATE sync_storage_usage SET total_snapshot_bytes = 320 WHERE singleton = true"
+        `UPDATE sync_storage_usage
+         SET total_snapshot_bytes = 320, reconcile_required = false
+         WHERE singleton = true`
       );
       await expect(checkSyncSchemaReadiness()).resolves.toBeUndefined();
+      resetStorageLedgerIntegrityForTests();
+      await expect(checkStorageLedgerIntegrity()).rejects.toMatchObject({
+        operationalCode: "storage_ledger_invalid"
+      });
 
       await getSyncPool().query(
-        "UPDATE sync_storage_usage SET total_snapshot_bytes = 322 WHERE singleton = true"
+        `UPDATE sync_storage_usage
+         SET total_snapshot_bytes = 322, reconcile_required = false
+         WHERE singleton = true`
       );
       await expect(checkSyncSchemaReadiness()).resolves.toBeUndefined();
+      resetStorageLedgerIntegrityForTests();
+      await expect(checkStorageLedgerIntegrity()).rejects.toMatchObject({
+        operationalCode: "storage_ledger_invalid"
+      });
 
       await getSyncPool().query(
-        "UPDATE sync_storage_usage SET total_snapshot_bytes = 321 WHERE singleton = true"
+        `UPDATE sync_storage_usage
+         SET total_snapshot_bytes = 321, reconcile_required = false
+         WHERE singleton = true`
       );
       await expect(checkSyncSchemaReadiness()).resolves.toBeUndefined();
+      resetStorageLedgerIntegrityForTests();
+      await expect(checkStorageLedgerIntegrity()).resolves.toBeUndefined();
+    });
+  });
+
+  it("rejects a restored account that has no credential capable of recovering it", async () => {
+    await withIsolatedSchema(async () => {
+      await ensureSyncSchema();
+      const userId = randomUUID();
+      await getSyncPool().query("INSERT INTO users (id) VALUES ($1)", [userId]);
+
+      await expect(assertStoredPasskeyCredentialIntegrity(getSyncPool()))
+        .rejects.toBeInstanceOf(StoredPasskeyCredentialIntegrityError);
+
+      const credentialId = Buffer.from(`credential:${userId}`).toString("base64url");
+      const publicKey = Buffer.from(
+        "a50102032620012158206b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2962258204fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5",
+        "hex"
+      ).toString("base64url");
+      await getSyncPool().query(
+        `INSERT INTO passkey_credentials (id, user_id, public_key_base64url)
+         VALUES ($1, $2, $3)`,
+        [credentialId, userId, publicKey]
+      );
+
+      await expect(assertStoredPasskeyCredentialIntegrity(getSyncPool()))
+        .resolves.toBeUndefined();
     });
   });
 

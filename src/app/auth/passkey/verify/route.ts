@@ -5,8 +5,10 @@ import {
   PasskeyVerificationError,
   verifyPasskey
 } from "@/lib/sync/passkeys";
+import { getSyncDatabasePoolSize } from "@/lib/sync/config";
 import {
   diagnosticHeaders,
+  operationalErrorCode,
   recordSecurityEvent,
   requestDiagnostics
 } from "@/lib/sync/diagnostics";
@@ -21,6 +23,7 @@ import {
   acquirePasskeyBodyConcurrency,
   PASSKEY_BODY_DEADLINE_MS
 } from "../body-concurrency";
+import { acquirePasskeyVerificationConcurrency } from "../verification-concurrency";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -48,7 +51,7 @@ export async function POST(request: NextRequest) {
         status: 429,
         reason: "auth_body_concurrency_limit"
       });
-      return rateLimitedResponse(diagnostics);
+      return rateLimitedResponse(diagnostics, 1);
     }
     let value: unknown;
     try {
@@ -76,9 +79,29 @@ export async function POST(request: NextRequest) {
         reason: input.mode === "register" ? "registration_verify_rate_limit" : "authentication_rate_limit",
         mode: input.mode
       });
-      return rateLimitedResponse(diagnostics);
+      return rateLimitedResponse(diagnostics, input.mode === "register" ? 3_600 : 60);
     }
-    const result = await verifyPasskey(input);
+    if (request.signal.aborted) return cancelledResponse(diagnostics);
+    const verificationPermit = acquirePasskeyVerificationConcurrency(
+      client,
+      input.response.id,
+      getSyncDatabasePoolSize()
+    );
+    if (!verificationPermit) {
+      recordSecurityEvent("auth.rate_limited", diagnostics, {
+        status: 429,
+        reason: "auth_verification_concurrency_limit",
+        mode: input.mode
+      });
+      return rateLimitedResponse(diagnostics, 1);
+    }
+    let result: Awaited<ReturnType<typeof verifyPasskey>>;
+    try {
+      if (request.signal.aborted) return cancelledResponse(diagnostics);
+      result = await verifyPasskey(input);
+    } finally {
+      verificationPermit();
+    }
     recordSecurityEvent(
       input.mode === "register" ? "auth.registration_succeeded" : "auth.authentication_succeeded",
       diagnostics,
@@ -122,6 +145,9 @@ export async function POST(request: NextRequest) {
               ? "verification_rejected"
               : "internal_error",
         ...(mode ? { mode } : {}),
+        ...(status >= 500
+          ? { errorCode: operationalErrorCode(error, "unknown_internal_error") }
+          : {}),
         severity: status >= 500 ? "error" : "warn"
       }
     );
@@ -142,12 +168,28 @@ export async function POST(request: NextRequest) {
   }
 }
 
-function rateLimitedResponse(diagnostics: ReturnType<typeof requestDiagnostics>) {
+function rateLimitedResponse(
+  diagnostics: ReturnType<typeof requestDiagnostics>,
+  retryAfterSeconds = 60
+) {
   return NextResponse.json(
     { error: "Too many requests." },
     {
       status: 429,
-      headers: diagnosticHeaders(diagnostics, { ...NO_STORE_HEADERS, "retry-after": "60" })
+      headers: diagnosticHeaders(diagnostics, {
+        ...NO_STORE_HEADERS,
+        "retry-after": String(retryAfterSeconds)
+      })
+    }
+  );
+}
+
+function cancelledResponse(diagnostics: ReturnType<typeof requestDiagnostics>) {
+  return NextResponse.json(
+    { error: "Request cancelled." },
+    {
+      status: 408,
+      headers: diagnosticHeaders(diagnostics, NO_STORE_HEADERS)
     }
   );
 }

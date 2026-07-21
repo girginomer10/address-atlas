@@ -74,9 +74,10 @@ extension NativeScanner {
             as: CosmosRewardsResponse.self
           )
           try Self.validateCosmosHeight(fetched.response, expected: snapshotHeight)
+          let parsedRewards = Self.parseCosmosRewardsResult(
+            fetched.value, denom: denom, decimals: chain.decimals)
           guard
-            let amount = Self.parseCosmosRewards(
-              fetched.value, denom: denom, decimals: chain.decimals)
+            let amount = parsedRewards.amount
           else {
             throw Self.messageError(
               domain: "Cosmos", message: "Rewards contained an invalid amount.")
@@ -89,7 +90,7 @@ extension NativeScanner {
               prices: prices,
               name: "\(chain.name) Rewards",
               source: .rewards
-            ))
+            ), warnings: parsedRewards.warnings)
         }
       } catch {
         try throwIfCancellation(error)
@@ -131,9 +132,10 @@ extension NativeScanner {
         )
         let returnedHeight = try Self.optionalCosmosHeight(from: fetched.response)
         if let snapshotHeight {
-          guard returnedHeight == nil || returnedHeight == snapshotHeight else {
+          guard returnedHeight == snapshotHeight else {
             throw Self.messageError(
-              domain: "Cosmos", message: "Cosmos liquid-balance pages changed block height.")
+              domain: "Cosmos",
+              message: "Cosmos liquid-balance response omitted or changed block height.")
           }
         } else {
           guard let returnedHeight else {
@@ -257,14 +259,29 @@ extension NativeScanner {
   public static func parseCosmosRewards(
     _ response: CosmosRewardsResponse, denom: String, decimals: Int
   ) -> Double? {
-    guard (0...36).contains(decimals) else { return nil }
-    var total = 0.0
-    for balance in response.total ?? [] where balance.denom == denom {
-      guard let raw = Double(balance.amount), raw.isFinite, raw >= 0 else { return nil }
-      total += raw
-      guard total.isFinite else { return nil }
+    let result = parseCosmosRewardsResult(response, denom: denom, decimals: decimals)
+    return result.targetDenomConflicted ? nil : result.amount
+  }
+
+  static func parseCosmosRewardsResult(
+    _ response: CosmosRewardsResponse, denom: String, decimals: Int
+  ) -> (amount: Double?, warnings: [String], targetDenomConflicted: Bool) {
+    guard (0...36).contains(decimals) else { return (nil, [], false) }
+    let deduplicated = deduplicateCosmosRewards(response.total ?? [])
+    if deduplicated.conflictingDenoms.contains(denom) {
+      // The product scan needs a warning-only, no-holding result, represented
+      // by zero here. The public parser separately exposes the ambiguity as nil
+      // so callers cannot mistake quarantined provider data for a true zero.
+      return (0, deduplicated.warnings, true)
     }
-    return total / pow(10, Double(decimals))
+    guard let balance = deduplicated.balances.first(where: { $0.denom == denom }) else {
+      return (0, deduplicated.warnings, false)
+    }
+    return (
+      scaledNonnegativeAmount(balance.amount, decimals: decimals),
+      deduplicated.warnings,
+      false
+    )
   }
 
   private func fetchCosmosSnapshotHeight(rest: URL, chain: ChainConfig) async throws -> Int64 {
@@ -316,13 +333,24 @@ extension NativeScanner {
   }
 
   private static func optionalCosmosHeight(from response: HTTPURLResponse) throws -> Int64? {
-    guard
-      let rawHeader = response.value(forHTTPHeaderField: "x-cosmos-block-height")
-    else { return nil }
-    let rawHeight = rawHeader.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard let height = Int64(rawHeight), height > 0 else {
+    let rawHeights = [
+      response.value(forHTTPHeaderField: "x-cosmos-block-height"),
+      response.value(forHTTPHeaderField: "grpc-metadata-x-cosmos-block-height")
+    ].compactMap { $0 }
+    guard !rawHeights.isEmpty else { return nil }
+
+    var parsedHeights = Set<Int64>()
+    for rawHeader in rawHeights {
+      let rawHeight = rawHeader.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard let height = Int64(rawHeight), height > 0 else {
+        throw Self.messageError(
+          domain: "Cosmos", message: "Cosmos response returned an invalid block height.")
+      }
+      parsedHeights.insert(height)
+    }
+    guard parsedHeights.count == 1, let height = parsedHeights.first else {
       throw Self.messageError(
-        domain: "Cosmos", message: "Cosmos response returned an invalid block height.")
+        domain: "Cosmos", message: "Cosmos response returned conflicting block heights.")
     }
     return height
   }
@@ -331,10 +359,9 @@ extension NativeScanner {
     _ response: HTTPURLResponse,
     expected: Int64
   ) throws {
-    guard let returned = try optionalCosmosHeight(from: response) else { return }
-    guard returned == expected else {
+    guard let returned = try optionalCosmosHeight(from: response), returned == expected else {
       throw Self.messageError(
-        domain: "Cosmos", message: "Cosmos response changed block height.")
+        domain: "Cosmos", message: "Cosmos response omitted or changed block height.")
     }
   }
 
@@ -382,6 +409,46 @@ extension NativeScanner {
       )
     }
     return (balancesByDenom.values.sorted { $0.denom < $1.denom }, warnings)
+  }
+
+  private static func deduplicateCosmosRewards(
+    _ balances: [CosmosBalance]
+  ) -> (balances: [CosmosBalance], conflictingDenoms: Set<String>, warnings: [String]) {
+    var balancesByDenom: [String: CosmosBalance] = [:]
+    var conflictingDenoms = Set<String>()
+    var identicalDuplicateCount = 0
+    for balance in balances {
+      let denom = balance.denom
+      guard !conflictingDenoms.contains(denom) else { continue }
+      if let existing = balancesByDenom[denom] {
+        if existing == balance {
+          identicalDuplicateCount += 1
+        } else {
+          balancesByDenom.removeValue(forKey: denom)
+          conflictingDenoms.insert(denom)
+        }
+      } else {
+        balancesByDenom[denom] = balance
+      }
+    }
+    var warnings: [String] = []
+    if identicalDuplicateCount > 0 {
+      warnings.append(
+        identicalDuplicateCount == 1
+          ? "Cosmos repeated one identical reward-balance record; the duplicate was skipped."
+          : "Cosmos repeated \(identicalDuplicateCount) identical reward-balance records; the duplicates were skipped."
+      )
+    }
+    if !conflictingDenoms.isEmpty {
+      warnings.append(
+        "Cosmos returned conflicting reward-balance records for \(conflictingDenoms.count) denomination(s); every conflicting version was skipped."
+      )
+    }
+    return (
+      balancesByDenom.values.sorted { $0.denom < $1.denom },
+      conflictingDenoms,
+      warnings
+    )
   }
 
   private static func deduplicateCosmosDelegations(

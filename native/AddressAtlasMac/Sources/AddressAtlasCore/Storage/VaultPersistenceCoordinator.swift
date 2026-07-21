@@ -137,6 +137,17 @@ public actor VaultPersistenceCoordinator {
     try store.discardRollbackCheckpoint()
   }
 
+  public func saveAndDiscardRollbackCheckpoint(
+    _ document: VaultDocument
+  ) throws -> VaultPersistenceResult {
+    let persisted = try store.saveAndDiscardRollbackCheckpoint(document)
+    return VaultPersistenceResult(
+      document: persisted,
+      removedScanRunCount: 0,
+      hasLocalChanges: try syncCodec.hasLocalChanges(in: persisted)
+    )
+  }
+
   public func restoreRollbackCheckpoint() throws -> VaultPersistenceResult {
     let restored = try store.restoreRollbackCheckpoint()
     return VaultPersistenceResult(

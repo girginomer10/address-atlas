@@ -100,7 +100,15 @@ The Postgres integration suite additionally requires `TEST_SYNC_DATABASE_URL`. L
 - A remotely enforced minimum app version blocks passkey ceremonies, network
   scans, upload, and download before provider/auth traffic. Local viewing,
   export, and recovery remain available, and the UI must expose the hard-pinned
-  GitHub release page.
+  GitHub release page. With a sync server configured, a policy-refresh failure
+  may use only the last policy accepted for that exact authority in the current
+  process, and only while it supports the running app version. A fresh process
+  must not use bundled endpoints because the version+digest high-water record
+  cannot reconstruct a previously accepted minimum-version rule.
+- A policy file that is visible after atomic rename but whose directory sync
+  fails remains applied for read-only scans, with a degraded status. Passkey
+  binding and every vault upload/download (including interrupted-upload replay)
+  remain blocked until a later refresh proves the trust record crash-durable.
 - Snapshot version, account ID, schema version, nonce, and ciphertext are authenticated together. Relabeling an old ciphertext with a higher version must fail.
 - Scan history is bounded so the encrypted envelope cannot grow forever.
 

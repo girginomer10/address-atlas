@@ -64,9 +64,9 @@ describe("public passkey body throttling", () => {
     vi.useRealTimers();
     const pending = [
       heldRequest("options", '{"mode":"authenticate"'),
-      heldRequest("verify", '{"mode":"authenticate","challengeToken":"token","response":{"id":"credential"}'),
+      heldRequest("verify", '{"mode":"authenticate","challengeToken":"token","response":{"id":"credential-1"}'),
       heldRequest("options", '{"mode":"authenticate"'),
-      heldRequest("verify", '{"mode":"authenticate","challengeToken":"token","response":{"id":"credential"}')
+      heldRequest("verify", '{"mode":"authenticate","challengeToken":"token","response":{"id":"credential-2"}')
     ];
     const inFlight = pending.map(({ request }, index) => index % 2 === 0
       ? POST(request)

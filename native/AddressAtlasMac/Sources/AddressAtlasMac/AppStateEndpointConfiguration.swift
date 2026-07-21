@@ -4,18 +4,23 @@ import Foundation
 /// Gives each caller an independently cancellable wait on one shared fetch.
 /// Cancelling a waiter resumes only that waiter; AppState's lease registry
 /// decides when the underlying fetch has no owners left and may be cancelled.
-actor EndpointConfigRefreshWaiterPool {
-  nonisolated let task: Task<NativeEndpointConfig, Error>
+struct TrustedEndpointConfig: Sendable {
+  var config: NativeEndpointConfig
+  var trustOutcome: EndpointConfigTrustCommitOutcome
+}
 
-  private var result: Result<NativeEndpointConfig, Error>?
-  private var waiters: [UUID: CheckedContinuation<NativeEndpointConfig, Error>] = [:]
+actor EndpointConfigRefreshWaiterPool {
+  nonisolated let task: Task<TrustedEndpointConfig, Error>
+
+  private var result: Result<TrustedEndpointConfig, Error>?
+  private var waiters: [UUID: CheckedContinuation<TrustedEndpointConfig, Error>] = [:]
   private var isObservingTask = false
 
-  init(task: Task<NativeEndpointConfig, Error>) {
+  init(task: Task<TrustedEndpointConfig, Error>) {
     self.task = task
   }
 
-  func value(for waiterID: UUID) async throws -> NativeEndpointConfig {
+  func value(for waiterID: UUID) async throws -> TrustedEndpointConfig {
     try Task.checkCancellation()
     observeTaskIfNeeded()
     if let result {
@@ -50,7 +55,7 @@ actor EndpointConfigRefreshWaiterPool {
     waiters.removeValue(forKey: waiterID)?.resume(throwing: CancellationError())
   }
 
-  private func complete(with result: Result<NativeEndpointConfig, Error>) {
+  private func complete(with result: Result<TrustedEndpointConfig, Error>) {
     self.result = result
     let continuations = waiters.values
     waiters.removeAll()
@@ -85,6 +90,7 @@ extension AppState {
       endpointConfig = .bundled
       endpointConfigStatus = "Bundled endpoints"
       acceptedEndpointConfigServerURL = nil
+      setEndpointConfigTrustDurabilityDegraded(false)
     }
     return true
   }
@@ -99,6 +105,7 @@ extension AppState {
       endpointConfig = .bundled
       endpointConfigStatus = "Bundled endpoints"
       acceptedEndpointConfigServerURL = nil
+      setEndpointConfigTrustDurabilityDegraded(false)
       if !silent {
         notice = "Using bundled endpoints."
       }
@@ -114,6 +121,7 @@ extension AppState {
       endpointConfig = .bundled
       endpointConfigStatus = "Bundled endpoints"
       acceptedEndpointConfigServerURL = nil
+      setEndpointConfigTrustDurabilityDegraded(false)
     }
 
     let waiterID = UUID()
@@ -140,14 +148,14 @@ extension AppState {
         // Trust advancement belongs to the shared request, not to an
         // individual waiter. Generation/server invalidation cancels this task;
         // the store independently checks cancellation at its write boundary.
-        try await trustStore.validateAndRecord(config, for: serverURL)
+        let trustOutcome = try await trustStore.validateAndRecord(config, for: serverURL)
         try Task.checkCancellation()
         guard generation == endpointConfigRefreshGeneration,
           AppState.validatedSyncURL(document.syncState.serverURL) == serverURL
         else {
           throw CancellationError()
         }
-        return config
+        return TrustedEndpointConfig(config: config, trustOutcome: trustOutcome)
       }
       request = EndpointConfigRefreshRequest(
         generation: generation,
@@ -163,7 +171,8 @@ extension AppState {
     }
 
     do {
-      let config = try await request.waiterPool.value(for: waiterID)
+      let trusted = try await request.waiterPool.value(for: waiterID)
+      let config = trusted.config
       try Task.checkCancellation()
       guard request.generation == endpointConfigRefreshGeneration,
         AppState.validatedSyncURL(document.syncState.serverURL) == serverURL
@@ -173,16 +182,20 @@ extension AppState {
       // publishing because this waiter may have been cancelled after commit.
       endpointConfig = config
       acceptedEndpointConfigServerURL = serverURL
+      setEndpointConfigTrustDurabilityDegraded(!trusted.trustOutcome.isDurable)
       if !isAppVersionSupported {
-        endpointConfigStatus = "Update required"
+        endpointConfigStatus = acceptedEndpointStatus("Remote v\(config.configVersion)")
         if !silent {
           self.error =
             "This app version is no longer supported. Update Address Atlas to keep syncing."
         }
       } else {
-        endpointConfigStatus = "Remote v\(config.configVersion)"
+        endpointConfigStatus = acceptedEndpointStatus("Remote v\(config.configVersion)")
         if !silent {
-          notice = "Endpoint config refreshed."
+          notice =
+            trusted.trustOutcome.isDurable
+            ? "Endpoint config refreshed."
+            : "Endpoint config was applied, but its crash-durability check failed. Sync and sign-in remain blocked until a refresh succeeds."
         }
       }
       return true
@@ -215,6 +228,7 @@ extension AppState {
         endpointConfig = .bundled
         endpointConfigStatus = "Bundled endpoints (remote unavailable)"
         acceptedEndpointConfigServerURL = nil
+        setEndpointConfigTrustDurabilityDegraded(false)
       }
       if !silent {
         presentUserFacingError(error)
@@ -249,8 +263,10 @@ extension AppState {
       acceptsNewOperations,
       AppState.validatedSyncURL(document.syncState.serverURL) != nil
     {
-      // Scan and sync flows already perform a fail-closed refresh before using
-      // remote policy, so avoid starting another request while they are active.
+      // Sync and authentication perform a fail-closed refresh before using
+      // remote policy. Local scans may survive a refresh transport failure by
+      // using the last trusted or bundled provider endpoints, but still enforce
+      // any accepted minimum-version policy before provider traffic.
       if !scanning, !syncing {
         _ = await refreshEndpointConfig(silent: true)
       }

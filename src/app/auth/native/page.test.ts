@@ -16,6 +16,11 @@ describe("native passkey mode binding", () => {
     }));
     expect(html).toContain("Create passkey");
     expect(html).toContain("Account label");
+    expect(html).not.toContain("<form");
+    expect(html).toContain('aria-busy="false"');
+    expect(html).toContain('aria-labelledby="passkey-heading"');
+    expect(html).toContain('type="button"');
+    expect(html).not.toContain('type="submit"');
     expect(html).not.toContain(">Sign in<");
   });
 
@@ -36,6 +41,16 @@ describe("native passkey mode binding", () => {
     });
     const bridge = page.props.children;
     expect(bridge.props.mode).toBeNull();
+
+    const invalidModeHTML = renderToStaticMarkup(createElement(NativePasskeyBridge, {
+      callback: CALLBACK,
+      state: STATE,
+      mode: null
+    }));
+    expect(invalidModeHTML).toContain('role="alert"');
+    expect(invalidModeHTML).toContain('aria-live="assertive"');
+    expect(invalidModeHTML).toContain('aria-atomic="true"');
+    expect(invalidModeHTML).toContain('aria-describedby="passkey-status"');
 
     const html = renderToStaticMarkup(createElement(NativePasskeyBridge, {
       callback: "address-atlas://attacker",

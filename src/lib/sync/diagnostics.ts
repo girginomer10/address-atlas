@@ -11,6 +11,7 @@ export type SecurityEvent =
   | "account.deletion_rate_limited"
   | "auth.authentication_failed"
   | "auth.authentication_succeeded"
+  | "auth.challenge_prune_failed"
   | "auth.rate_limited"
   | "auth.registration_denied"
   | "auth.registration_failed"
@@ -24,11 +25,15 @@ export type SecurityEvent =
   | "session.revoked"
   | "schema.bootstrap_failed"
   | "schema.bootstrap_succeeded"
+  | "storage.ledger_audit_failed"
+  | "storage.ledger_drift_detected"
+  | "storage.ledger_integrity_restored"
   | "vault.conflict"
   | "vault.load_failed"
   | "vault.quota_exceeded"
   | "vault.request_rejected"
   | "vault.storage_exhausted"
+  | "vault.storage_integrity_blocked"
   | "vault.write_failed";
 
 export type OperationalErrorCode =
@@ -37,8 +42,10 @@ export type OperationalErrorCode =
   | "database_query_failed"
   | "migration_failed"
   | "native_config_invalid"
+  | "passkey_credential_invalid"
   | "restore_context_invalid"
   | "schema_contract_invalid"
+  | "storage_ledger_invalid"
   | "unknown_internal_error"
   | "vault_snapshot_invalid";
 
@@ -48,8 +55,10 @@ const OPERATIONAL_ERROR_CODES = new Set<OperationalErrorCode>([
   "database_query_failed",
   "migration_failed",
   "native_config_invalid",
+  "passkey_credential_invalid",
   "restore_context_invalid",
   "schema_contract_invalid",
+  "storage_ledger_invalid",
   "unknown_internal_error",
   "vault_snapshot_invalid"
 ]);

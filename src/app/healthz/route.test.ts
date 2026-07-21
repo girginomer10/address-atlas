@@ -5,7 +5,9 @@ const mocks = vi.hoisted(() => ({
   validateSyncRuntimeConfig: vi.fn(),
   getNativeEndpointConfig: vi.fn(),
   ensureSyncSchema: vi.fn(),
-  checkSyncSchemaReadiness: vi.fn()
+  checkSyncSchemaReadiness: vi.fn(),
+  scheduleStorageLedgerIntegrityAudit: vi.fn(),
+  resetStorageLedgerIntegrityForTests: vi.fn()
 }));
 
 vi.mock("@/lib/sync/config", () => ({
@@ -19,6 +21,11 @@ vi.mock("@/lib/sync/native-config", () => ({
 vi.mock("@/lib/sync/postgres", () => ({
   ensureSyncSchema: mocks.ensureSyncSchema,
   checkSyncSchemaReadiness: mocks.checkSyncSchemaReadiness
+}));
+
+vi.mock("@/lib/sync/storage-ledger-integrity", () => ({
+  scheduleStorageLedgerIntegrityAudit: mocks.scheduleStorageLedgerIntegrityAudit,
+  resetStorageLedgerIntegrityForTests: mocks.resetStorageLedgerIntegrityForTests
 }));
 
 import { GET, resetHealthReadinessForTests } from "./route";
@@ -37,6 +44,7 @@ describe("sync readiness", () => {
     mocks.getNativeEndpointConfig.mockReturnValue({});
     mocks.ensureSyncSchema.mockResolvedValue(undefined);
     mocks.checkSyncSchemaReadiness.mockResolvedValue(undefined);
+    mocks.scheduleStorageLedgerIntegrityAudit.mockReturnValue(true);
   });
 
   it("reports ready only after schema and database checks succeed", async () => {
@@ -45,6 +53,7 @@ describe("sync readiness", () => {
     expect(await response.json()).toEqual({ ok: true, service: "address-atlas-sync" });
     expect(mocks.checkSyncSchemaReadiness).toHaveBeenCalledOnce();
     expect(mocks.ensureSyncSchema).toHaveBeenCalledOnce();
+    expect(mocks.scheduleStorageLedgerIntegrityAudit).toHaveBeenCalledOnce();
     expect(mocks.validateSyncRuntimeConfig).toHaveBeenCalledOnce();
     expect(mocks.getNativeEndpointConfig).toHaveBeenCalledOnce();
     expect(response.headers.get("cache-control")).toBe("no-store");
@@ -97,6 +106,15 @@ describe("sync readiness", () => {
     expect(third.status).toBe(200);
     expect(mocks.checkSyncSchemaReadiness).toHaveBeenCalledTimes(2);
     expect(console.error).toHaveBeenCalledOnce();
+  });
+
+  it("keeps exact storage auditing off the readiness response path", async () => {
+    const response = await GET();
+
+    expect(response.status).toBe(200);
+    expect(mocks.checkSyncSchemaReadiness).toHaveBeenCalledOnce();
+    expect(mocks.scheduleStorageLedgerIntegrityAudit).toHaveBeenCalledOnce();
+    expect(console.error).not.toHaveBeenCalled();
   });
 
   it("caches ensureSyncSchema failures and retries the whole pipeline after expiry", async () => {

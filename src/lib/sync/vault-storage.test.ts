@@ -19,7 +19,8 @@ import {
   VaultConflictError,
   VaultGlobalIngressQuotaError,
   VaultQuotaError,
-  VaultStorageCapacityError
+  VaultStorageCapacityError,
+  VaultStorageIntegrityError
 } from "./vault-storage";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
@@ -80,6 +81,17 @@ describe("vault storage abuse controls", () => {
       .rejects.toBeInstanceOf(VaultGlobalIngressQuotaError);
 
     expect(mocks.query).toHaveBeenCalledWith("ROLLBACK");
+  });
+
+  it("blocks request bodies when an exact audit marked storage accounting invalid", async () => {
+    mockIngressQueries({ storageReady: false });
+
+    await expect(assertVaultIngressCapacity(USER_ID))
+      .rejects.toBeInstanceOf(VaultStorageIntegrityError);
+
+    const statements = mocks.query.mock.calls.map(([sql]) => String(sql));
+    expect(statements.some((sql) => sql.includes("SELECT id FROM users"))).toBe(false);
+    expect(statements).toContain("ROLLBACK");
   });
 
   it("charges account and global ingress before request semantics", async () => {
@@ -231,7 +243,7 @@ describe("vault storage abuse controls", () => {
       USER_ID, 100
     ]);
     expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("UPDATE sync_storage_usage"), [
-      200, 10_000_000_000
+      200, 10_000_000_000, 1
     ]);
     const dailySQL = String(mocks.query.mock.calls.find(([sql]) => String(sql).includes("INSERT INTO vault_write_usage"))?.[0]);
     expect(dailySQL).toContain("VALUES ($1, (now() AT TIME ZONE 'UTC')::date, 1, 0)");
@@ -255,6 +267,12 @@ describe("vault storage abuse controls", () => {
       if (sql.includes("SELECT id FROM users")) return { rowCount: 1, rows: [] };
       if (sql.includes("FROM vault_snapshots")) return { rowCount: 0, rows: [] };
       if (sql.includes("UPDATE sync_storage_usage")) return { rowCount: 0, rows: [] };
+      if (sql.includes("FROM sync_storage_usage")) {
+        return {
+          rowCount: 1,
+          rows: [{ reconciled_contract_version: 1, reconcile_required: false }]
+        };
+      }
       return { rowCount: 1, rows: [{ version: 2 }] };
     });
 
@@ -266,13 +284,24 @@ describe("vault storage abuse controls", () => {
 function mockIngressQueries({
   accountExists = true,
   accountBytes = "0",
-  globalBytes = "0"
+  globalBytes = "0",
+  storageReady = true
 }: {
   accountExists?: boolean;
   accountBytes?: string;
   globalBytes?: string;
+  storageReady?: boolean;
 } = {}) {
   mocks.query.mockImplementation(async (sql: string) => {
+    if (sql.includes("FROM sync_storage_usage")) {
+      return {
+        rowCount: 1,
+        rows: [{
+          reconciled_contract_version: 1,
+          reconcile_required: !storageReady
+        }]
+      };
+    }
     if (sql.includes("SELECT id FROM users")) {
       return accountExists
         ? { rowCount: 1, rows: [{ id: USER_ID }] }

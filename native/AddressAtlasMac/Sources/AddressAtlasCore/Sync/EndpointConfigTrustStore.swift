@@ -12,10 +12,22 @@ public protocol EndpointConfigTrustPersisting: Sendable {
   func validate(_ config: NativeEndpointConfig, for serverOrigin: URL) async throws
 
   /// Atomically verifies and advances the per-origin endpoint-config high-water
-  /// mark. A return means the config may be applied; every storage, rollback,
-  /// equivocation, or pre-commit task cancellation must be treated as a
-  /// fail-closed rejection without advancing the record.
-  func validateAndRecord(_ config: NativeEndpointConfig, for serverOrigin: URL) async throws
+  /// mark. The result distinguishes a crash-durable commit from a rename that is
+  /// visible to this process but whose directory durability barrier failed.
+  /// Callers may keep the visible policy applied in the latter state, but must
+  /// fail closed for sync/auth until a later retry returns `.durable`.
+  @discardableResult
+  func validateAndRecord(
+    _ config: NativeEndpointConfig,
+    for serverOrigin: URL
+  ) async throws -> EndpointConfigTrustCommitOutcome
+}
+
+public enum EndpointConfigTrustCommitOutcome: Equatable, Sendable {
+  case durable
+  case committedDurabilityUncertain
+
+  public var isDurable: Bool { self == .durable }
 }
 
 public enum EndpointConfigTrustStoreError: Error, Equatable, LocalizedError {
@@ -64,9 +76,21 @@ public actor EndpointConfigTrustStore: EndpointConfigTrustPersisting {
 
   private static let maximumOrigins = 32
   private let fileURL: URL
+  private let postRenameDirectorySync: @Sendable (Int32) -> Bool
 
   public init(fileURL: URL) {
     self.fileURL = fileURL
+    self.postRenameDirectorySync = { descriptor in
+      Self.synchronizeDirectory(descriptor)
+    }
+  }
+
+  init(
+    fileURL: URL,
+    postRenameDirectorySync: @escaping @Sendable (Int32) -> Bool
+  ) {
+    self.fileURL = fileURL
+    self.postRenameDirectorySync = postRenameDirectorySync
   }
 
   public func validate(
@@ -74,26 +98,30 @@ public actor EndpointConfigTrustStore: EndpointConfigTrustPersisting {
     for serverOrigin: URL
   ) throws {
     let candidate = try Self.candidate(config, for: serverOrigin)
-    try withExclusiveFileLock {
+    return try withExclusiveFileLock {
       let document = try load()
       try Self.validate(candidate, against: document.records[candidate.origin])
     }
   }
 
+  @discardableResult
   public func validateAndRecord(
     _ config: NativeEndpointConfig,
     for serverOrigin: URL
-  ) throws {
+  ) throws -> EndpointConfigTrustCommitOutcome {
     try Task.checkCancellation()
     let candidate = try Self.candidate(config, for: serverOrigin)
 
-    try withExclusiveFileLock {
+    return try withExclusiveFileLock {
       try Task.checkCancellation()
       var document = try load()
       if let previous = document.records[candidate.origin] {
         try Self.validate(candidate, against: previous)
         if candidate.version == previous.version {
-          return
+          // Visibility is not proof that the rename survived a crash. Always
+          // re-run the directory barrier for an exact-record retry, including
+          // after process relaunch when no in-memory uncertainty marker exists.
+          return try synchronizeCurrentDirectory()
         }
       } else {
         guard document.records.count < Self.maximumOrigins else {
@@ -109,7 +137,7 @@ public actor EndpointConfigTrustStore: EndpointConfigTrustPersisting {
         version: candidate.version,
         digest: candidate.digest
       )
-      try persist(document)
+      return try persist(document)
     }
   }
 
@@ -207,7 +235,7 @@ public actor EndpointConfigTrustStore: EndpointConfigTrustPersisting {
     }
   }
 
-  private func persist(_ document: Document) throws {
+  private func persist(_ document: Document) throws -> EndpointConfigTrustCommitOutcome {
     do {
       let directory = fileURL.deletingLastPathComponent()
       try FileManager.default.createDirectory(
@@ -219,6 +247,12 @@ public actor EndpointConfigTrustStore: EndpointConfigTrustPersisting {
         [.posixPermissions: NSNumber(value: Int16(0o700))],
         ofItemAtPath: directory.path
       )
+      let directoryDescriptor = Darwin.open(
+        directory.path,
+        O_RDONLY | O_CLOEXEC | O_NOFOLLOW
+      )
+      guard directoryDescriptor >= 0 else { throw EndpointConfigTrustStoreError.unavailable }
+      defer { Darwin.close(directoryDescriptor) }
       let data = try JSONEncoder.addressAtlas.encode(document)
       let temporaryURL = directory.appending(
         path: ".endpoint-config-trust.\(UUID().uuidString).tmp"
@@ -254,18 +288,36 @@ public actor EndpointConfigTrustStore: EndpointConfigTrustPersisting {
         throw EndpointConfigTrustStoreError.unavailable
       }
       shouldRemoveTemporary = false
-      let directoryDescriptor = Darwin.open(
-        directory.path,
-        O_RDONLY | O_CLOEXEC | O_NOFOLLOW
-      )
-      guard directoryDescriptor >= 0 else { throw EndpointConfigTrustStoreError.unavailable }
-      defer { Darwin.close(directoryDescriptor) }
-      guard Darwin.fsync(directoryDescriptor) == 0 || errno == EINVAL else {
-        throw EndpointConfigTrustStoreError.unavailable
-      }
+      // rename(2) is the visibility commit point. The separate result prevents
+      // callers from mistaking visibility for crash durability while also
+      // avoiding the false claim that the already-published record rolled back.
+      return postRenameDirectorySync(directoryDescriptor)
+        ? .durable
+        : .committedDurabilityUncertain
     } catch {
       throw EndpointConfigTrustStoreError.unavailable
     }
+  }
+
+  private func synchronizeCurrentDirectory() throws -> EndpointConfigTrustCommitOutcome {
+    let directory = fileURL.deletingLastPathComponent()
+    let descriptor = Darwin.open(
+      directory.path,
+      O_RDONLY | O_CLOEXEC | O_NOFOLLOW
+    )
+    guard descriptor >= 0 else { throw EndpointConfigTrustStoreError.unavailable }
+    defer { Darwin.close(descriptor) }
+    return postRenameDirectorySync(descriptor)
+      ? .durable
+      : .committedDurabilityUncertain
+  }
+
+  private static func synchronizeDirectory(_ descriptor: Int32) -> Bool {
+    while Darwin.fsync(descriptor) != 0 {
+      if errno == EINTR { continue }
+      return errno == EINVAL
+    }
+    return true
   }
 
   private static func digest(_ config: NativeEndpointConfig) throws -> String {
@@ -319,15 +371,17 @@ public actor EphemeralEndpointConfigTrustStore: EndpointConfigTrustPersisting {
     try Self.validate(candidate, against: records[candidate.origin])
   }
 
+  @discardableResult
   public func validateAndRecord(
     _ config: NativeEndpointConfig,
     for serverOrigin: URL
-  ) throws {
+  ) throws -> EndpointConfigTrustCommitOutcome {
     try Task.checkCancellation()
     let candidate = try Self.candidate(config, for: serverOrigin)
     try Self.validate(candidate, against: records[candidate.origin])
     try Task.checkCancellation()
     records[candidate.origin] = (candidate.version, candidate.digest)
+    return .durable
   }
 
   private static func candidate(

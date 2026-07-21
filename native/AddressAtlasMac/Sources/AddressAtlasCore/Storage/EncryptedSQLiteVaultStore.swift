@@ -280,6 +280,33 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
     return prepared.document
   }
 
+  /// Commit a new primary document and consume the account-bound rollback
+  /// checkpoint in one SQLite transaction. Neither half is visible unless the
+  /// document CAS, checkpoint deletion, and commit all succeed.
+  public func saveAndDiscardRollbackCheckpoint(
+    _ document: VaultDocument
+  ) throws -> VaultDocument {
+    operationLock.lock()
+    defer { operationLock.unlock() }
+    try initializeLocked()
+    let prepared = try prepareDocument(document)
+    let db = try openDatabase()
+    defer { sqlite3_close(db) }
+    try beginImmediate(db)
+    var committed = false
+    defer {
+      if !committed { rollback(db) }
+    }
+    try validateCurrentDocumentBaseline(db)
+    let storedRevision = try persistPreparedDocument(prepared, db: db)
+    try deleteRollbackCheckpointIfPresent(db: db)
+    try commit(db)
+    committed = true
+    expectedRevision = storedRevision
+    expectedEnvelopeBytes = prepared.envelopeBytes
+    return prepared.document
+  }
+
   /// Insert a durable upload intent before the first PUT. Existing intent is
   /// never overwritten: two processes must reconcile the same operation rather
   /// than silently replacing one exact snapshot with another.

@@ -64,6 +64,12 @@ extension AppState {
           "The sync server's compatibility policy could not be verified. Try again when endpoint config is available."
         )
       }
+      guard !endpointConfigTrustDurabilityDegraded else {
+        throw SyncClientError.requestFailed(
+          503,
+          "The endpoint policy is applied, but its local trust record is not crash-durable. Refresh endpoints before syncing."
+        )
+      }
       guard isAppVersionSupported else {
         throw SyncClientError.requestFailed(
           426, "This app version is no longer supported. Update Address Atlas to keep syncing.")
@@ -215,6 +221,25 @@ extension AppState {
     defer { finishSyncActivity(.recoveringUpload) }
     let startingRevision = documentRevision
     do {
+      // Recovery can run automatically immediately after unlock. It must pass
+      // the same current compatibility and durable-trust gates as a new upload
+      // before replaying any authenticated GET or PUT.
+      guard await refreshEndpointConfig(silent: true) else {
+        throw SyncClientError.requestFailed(
+          503,
+          "The sync server's compatibility policy could not be verified. Try again when endpoint config is available."
+        )
+      }
+      guard !endpointConfigTrustDurabilityDegraded else {
+        throw SyncClientError.requestFailed(
+          503,
+          "The endpoint policy is applied, but its local trust record is not crash-durable. Refresh endpoints before syncing."
+        )
+      }
+      guard isAppVersionSupported else {
+        throw SyncClientError.requestFailed(
+          426, "This app version is no longer supported. Update Address Atlas to keep syncing.")
+      }
       guard
         let durablePendingUpload = try await persistence.loadPendingVaultUpload(
           vaultKey: vaultKey
@@ -478,6 +503,12 @@ extension AppState {
         throw SyncClientError.requestFailed(
           503,
           "The sync server's compatibility policy could not be verified. Try again when endpoint config is available."
+        )
+      }
+      guard !endpointConfigTrustDurabilityDegraded else {
+        throw SyncClientError.requestFailed(
+          503,
+          "The endpoint policy is applied, but its local trust record is not crash-durable. Refresh endpoints before syncing."
         )
       }
       guard isAppVersionSupported else {

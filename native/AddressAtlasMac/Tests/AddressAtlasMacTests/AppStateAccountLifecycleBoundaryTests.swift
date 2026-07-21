@@ -426,4 +426,134 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertTrue(state.document.syncState.sessionToken.isEmpty)
   }
 
+  func testFailedRemoteDisconnectKeepsBindingAndRollbackPointForOfflineRecovery() async throws {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let document = VaultDocument(
+      syncState: SyncState(
+        accountId: "89898989-8989-4989-8989-898989898989",
+        serverURL: "https://sync.example",
+        sessionToken: "offline-session-token"
+      )
+    )
+    let persisted = try fixture.store.saveReturningPersistedDocument(document)
+    _ = try fixture.store.saveRollbackCheckpoint(persisted)
+    let http = RecordingHTTPStub { _ in throw URLError(.cannotConnectToHost) }
+    let state = AppState(
+      testStore: fixture.store,
+      document: persisted,
+      testVaultKey: fixture.vaultKey,
+      httpClient: http
+    )
+    let expectedServerURL = try XCTUnwrap(
+      AppState.validatedSyncURL(persisted.syncState.serverURL)
+    )
+
+    await state.disconnectSyncAccountForSwitch(expectedServerURL: expectedServerURL)
+
+    XCTAssertEqual(state.document.syncState.accountId, document.syncState.accountId)
+    XCTAssertEqual(state.document.syncState.sessionToken, "offline-session-token")
+    XCTAssertTrue(state.hasVaultRollbackCheckpoint)
+    XCTAssertTrue(state.error.contains("Disconnect locally without contacting server"))
+    let verifier = try EncryptedSQLiteVaultStore(
+      path: fixture.database,
+      vaultKey: fixture.vaultKey
+    )
+    XCTAssertEqual(try verifier.load().syncState.accountId, document.syncState.accountId)
+    XCTAssertTrue(try verifier.containsRollbackCheckpoint())
+  }
+
+  func testExplicitLocalOnlyDisconnectMakesNoRequestAndCommitsIdentityCleanupAtomically()
+    async throws
+  {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let document = VaultDocument(
+      syncState: SyncState(
+        accountId: "90909090-9090-4090-8090-909090909090",
+        serverURL: "https://sync.example",
+        sessionToken: "unreachable-server-token",
+        latestRemoteVersion: 8,
+        lastChecksum: String(repeating: "a", count: 64)
+      )
+    )
+    let persisted = try fixture.store.saveReturningPersistedDocument(document)
+    _ = try fixture.store.saveRollbackCheckpoint(persisted)
+    let http = RecordingHTTPStub { request in
+      XCTFail("Local-only disconnect must not send HTTP: \(request)")
+      throw URLError(.cancelled)
+    }
+    let state = AppState(
+      testStore: fixture.store,
+      document: persisted,
+      testVaultKey: fixture.vaultKey,
+      httpClient: http
+    )
+    let expectedServerURL = try XCTUnwrap(
+      AppState.validatedSyncURL(persisted.syncState.serverURL)
+    )
+
+    await state.disconnectSyncAccountLocallyForSwitch(expectedServerURL: expectedServerURL)
+
+    XCTAssertEqual(state.error, "")
+    XCTAssertTrue(state.notice.contains("No server request was made"))
+    XCTAssertNil(state.document.syncState.accountId)
+    XCTAssertTrue(state.document.syncState.sessionToken.isEmpty)
+    XCTAssertEqual(state.document.syncState.latestRemoteVersion, 0)
+    XCTAssertFalse(state.hasVaultRollbackCheckpoint)
+    XCTAssertTrue(http.requests.isEmpty)
+    let verifier = try EncryptedSQLiteVaultStore(
+      path: fixture.database,
+      vaultKey: fixture.vaultKey
+    )
+    XCTAssertNil(try verifier.load().syncState.accountId)
+    XCTAssertFalse(try verifier.containsRollbackCheckpoint())
+  }
+
+  func testLocalPersistenceConflictAfterRemoteRevocationKeepsBindingAndRollbackTogether()
+    async throws
+  {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let document = VaultDocument(
+      syncState: SyncState(
+        accountId: "91919191-9191-4191-8191-919191919191",
+        serverURL: "https://sync.example",
+        sessionToken: "revoked-before-local-conflict"
+      )
+    )
+    let persisted = try fixture.store.saveReturningPersistedDocument(document)
+    _ = try fixture.store.saveRollbackCheckpoint(persisted)
+    let state = AppState(
+      testStore: fixture.store,
+      document: persisted,
+      testVaultKey: fixture.vaultKey,
+      httpClient: RecordingHTTPStub { request in
+        stubJSONResponse(request, #"{"ok":true}"#)
+      }
+    )
+    let competingStore = try EncryptedSQLiteVaultStore(
+      path: fixture.database,
+      vaultKey: fixture.vaultKey
+    )
+    var competingDocument = try competingStore.load()
+    competingDocument.preferences.hideDust.toggle()
+    try competingStore.save(competingDocument)
+    let expectedServerURL = try XCTUnwrap(
+      AppState.validatedSyncURL(persisted.syncState.serverURL)
+    )
+
+    await state.disconnectSyncAccountForSwitch(expectedServerURL: expectedServerURL)
+
+    XCTAssertEqual(state.document.syncState.accountId, document.syncState.accountId)
+    XCTAssertTrue(state.hasVaultRollbackCheckpoint)
+    XCTAssertTrue(state.error.contains("could not be cleared atomically"))
+    let verifier = try EncryptedSQLiteVaultStore(
+      path: fixture.database,
+      vaultKey: fixture.vaultKey
+    )
+    XCTAssertEqual(try verifier.load().syncState.accountId, document.syncState.accountId)
+    XCTAssertTrue(try verifier.containsRollbackCheckpoint())
+  }
+
 }

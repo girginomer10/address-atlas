@@ -87,6 +87,23 @@ final class NativeScannerTokenTests: XCTestCase {
     XCTAssertEqual(NativeScanner.parseCosmosRewards(rewards, denom: "uatom", decimals: 6), 0.34)
   }
 
+  func testCosmosRewardsParserDistinguishesConflictingTargetFromTrueZero() throws {
+    let conflicting = try JSONDecoder.addressAtlas.decode(
+      CosmosRewardsResponse.self,
+      from: Data(
+        #"{"total":[{"denom":"uatom","amount":"0"},{"denom":"uatom","amount":"1"}]}"#
+          .utf8
+      )
+    )
+    let zero = try JSONDecoder.addressAtlas.decode(
+      CosmosRewardsResponse.self,
+      from: Data(#"{"total":[{"denom":"uatom","amount":"0"}]}"#.utf8)
+    )
+
+    XCTAssertNil(NativeScanner.parseCosmosRewards(conflicting, denom: "uatom", decimals: 6))
+    XCTAssertEqual(NativeScanner.parseCosmosRewards(zero, denom: "uatom", decimals: 6), 0)
+  }
+
   func testTronTrc20ParserReadsRegisteredBalances() {
     let token = TokenConfig(
       symbol: "USDT",

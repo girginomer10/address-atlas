@@ -74,16 +74,30 @@ extension AppState {
     error = ""
     defer { scanning = false }
     do {
-      if AppState.validatedSyncURL(document.syncState.serverURL) != nil {
+      var endpointPolicyWarning: String?
+      if let serverURL = AppState.validatedSyncURL(document.syncState.serverURL) {
         let refreshed = await refreshEndpointConfig(silent: true)
         try Task.checkCancellation()
-        guard refreshed else {
-          throw UserFacingAppError(
-            message:
-              "The sync server's compatibility policy could not be verified. Scanning was not started."
-          )
+        if !refreshed {
+          // A fresh process has only the bundled policy and a version/digest
+          // high-water record; it cannot reconstruct a previously accepted
+          // remote minimum-version rule. Only a policy accepted for this exact
+          // authority in this process is safe as an outage fallback.
+          guard acceptedEndpointConfigServerURL == serverURL else {
+            throw UserFacingAppError(
+              message:
+                "The sync endpoint policy could not be verified. Scanning stayed offline so a previously accepted minimum-version rule cannot be bypassed."
+            )
+          }
+          endpointPolicyWarning =
+            "The sync endpoint policy could not be refreshed; this local snapshot used the last policy trusted for this server in the current app session."
         }
       }
+      // A transport failure may fall back to an already trusted policy, but a
+      // successfully accepted minimum-version policy remains a global network
+      // kill switch. This distinction keeps local scans available during a sync
+      // outage without letting an obsolete client bypass a deliberate safety
+      // cutoff for provider and exchange traffic.
       guard isAppVersionSupported else {
         throw UserFacingAppError(
           message:
@@ -133,6 +147,9 @@ extension AppState {
       scan.holdings.append(contentsOf: exchangeScan.holdings)
       scan.holdings.append(contentsOf: manualAssets)
       scan.warnings.append(contentsOf: exchangeScan.warnings)
+      if let endpointPolicyWarning {
+        scan.warnings.append(endpointPolicyWarning)
+      }
       for index in scan.holdings.indices {
         scan.holdings[index].change24h = FiniteValueMath.finiteOptional(
           scan.holdings[index].change24h)

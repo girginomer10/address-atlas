@@ -154,6 +154,9 @@ describe("sync runtime configuration", () => {
     vi.stubEnv("SYNC_DB_POOL_SIZE", "0");
     expect(() => getSyncDatabaseConfig()).toThrow(/SYNC_DB_POOL_SIZE/);
 
+    vi.stubEnv("SYNC_DB_POOL_SIZE", "1");
+    expect(() => getSyncDatabaseConfig()).toThrow(/SYNC_DB_POOL_SIZE/);
+
     vi.stubEnv("SYNC_DB_POOL_SIZE", "17");
     vi.stubEnv("SYNC_DB_IDLE_TIMEOUT_MS", "");
     expect(() => getSyncDatabaseConfig()).toThrow(/SYNC_DB_IDLE_TIMEOUT_MS/);
@@ -272,19 +275,44 @@ describe("sync runtime configuration", () => {
     expect(() => getSyncDatabaseConfig()).toThrow(/forbidden or duplicate production URL parameter/i);
   });
 
-  it("allows a single TLS-only production URL parameter and rejects duplicates", () => {
+  it("allows only authenticated PostgreSQL TLS parameters and rejects duplicates", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv(
       "SYNC_DATABASE_URL",
-      "postgres://address_atlas_runtime:runtime-secret-value@postgres:5432/address_atlas_sync?sslmode=require"
+      "postgres://address_atlas_runtime:runtime-secret-value@postgres:5432/address_atlas_sync?sslmode=verify-full&sslnegotiation=direct"
     );
-    expect(getSyncDatabaseConfig().connectionString).toContain("sslmode=require");
+    expect(getSyncDatabaseConfig().connectionString).toContain("sslmode=verify-full");
 
     vi.stubEnv(
       "SYNC_DATABASE_URL",
-      "postgres://address_atlas_runtime:runtime-secret-value@postgres:5432/address_atlas_sync?sslmode=require&sslmode=verify-full"
+      "postgres://address_atlas_runtime:runtime-secret-value@postgres:5432/address_atlas_sync?sslmode=verify-full&sslmode=verify-full"
     );
     expect(() => getSyncDatabaseConfig()).toThrow(/forbidden or duplicate production URL parameter/i);
+  });
+
+  it.each([
+    "sslmode=disable",
+    "sslmode=no-verify",
+    "sslmode=prefer",
+    "sslmode=require",
+    "sslmode=verify-ca",
+    "sslnegotiation=starttls",
+    "channel_binding=disable",
+    "sslcrl=%2Ftmp%2Fpostgres.crl",
+    "sslpassword=secret",
+    "sslrootcert=",
+    "sslrootcert=%2Ftmp%2Fpostgres-ca.pem",
+    "sslcert=%2Ftmp%2Fpostgres-client.pem",
+    "sslkey=%2Ftmp%2Fpostgres-client.key",
+    "sslnegotiation=postgres",
+    "sslnegotiation=direct"
+  ])("rejects a downgraded or unsupported production TLS parameter: %s", (parameter) => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv(
+      "SYNC_DATABASE_URL",
+      `postgres://address_atlas_runtime:runtime-secret-value@postgres:5432/address_atlas_sync?${parameter}`
+    );
+    expect(() => getSyncDatabaseConfig()).toThrow(/production|PostgreSQL TLS/i);
   });
 
   it.each([

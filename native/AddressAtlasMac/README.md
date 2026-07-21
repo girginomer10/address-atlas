@@ -26,7 +26,7 @@ open "dist/Address Atlas.app"
 ```
 
 The app bundle registers the `address-atlas://sync-auth` callback URL used by the encrypted sync passkey flow.
-It is built as a universal `arm64` + `x86_64` binary with hardened runtime and ad-hoc signed for local testing by default. Set `ADDRESS_ATLAS_CODESIGN_IDENTITY` to a Developer ID Application identity when building a distribution candidate. Set `ADDRESS_ATLAS_ARCHS=arm64` only for an explicitly local single-architecture build.
+It is built as a universal `arm64` + `x86_64` binary with hardened runtime and ad-hoc signed for local testing by default. Set `ADDRESS_ATLAS_CODESIGN_IDENTITY` to a Developer ID Application identity when building a distribution candidate. Set `ADDRESS_ATLAS_ARCHS=arm64` only for an explicitly local single-architecture build; Developer ID and notarization flows reject artifacts unless their executable contains exactly both supported architectures.
 `CFBundleVersion` defaults to the full Git commit count. A shallow checkout must set a unique `ADDRESS_ATLAS_BUILD_NUMBER`; run `bash Tests/build-mac-app-version-tests.sh` before packaging.
 
 The app stores its encrypted local vault at:

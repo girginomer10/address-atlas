@@ -87,6 +87,7 @@ fi
 SDK_PATH="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}"
 ARCH_LIST="${ADDRESS_ATLAS_ARCHS:-arm64,x86_64}"
 IFS=',' read -r -a ARCHITECTURES <<< "$ARCH_LIST"
+SIGN_IDENTITY="${ADDRESS_ATLAS_CODESIGN_IDENTITY:--}"
 BINARIES=()
 for architecture in "${ARCHITECTURES[@]}"; do
   case "$architecture" in
@@ -96,6 +97,17 @@ for architecture in "${ARCHITECTURES[@]}"; do
       exit 1
       ;;
   esac
+done
+if [[ "$SIGN_IDENTITY" != "-" ]]; then
+  if [[ "${#ARCHITECTURES[@]}" -ne 2 ]] ||
+    ! { [[ "${ARCHITECTURES[0]}" == "arm64" && "${ARCHITECTURES[1]}" == "x86_64" ]] ||
+      [[ "${ARCHITECTURES[0]}" == "x86_64" && "${ARCHITECTURES[1]}" == "arm64" ]]; }
+  then
+    echo "Developer ID distribution builds require exactly arm64 and x86_64 architectures." >&2
+    exit 64
+  fi
+fi
+for architecture in "${ARCHITECTURES[@]}"; do
   triple="${architecture}-apple-macosx14.0"
   swift build -c release --product AddressAtlasMac --triple "$triple" --sdk "$SDK_PATH"
   bin_dir="$(swift build -c release --show-bin-path --triple "$triple" --sdk "$SDK_PATH")"
@@ -193,14 +205,24 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-SIGN_IDENTITY="${ADDRESS_ATLAS_CODESIGN_IDENTITY:--}"
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
   codesign --force --options runtime --timestamp=none --sign "$SIGN_IDENTITY" "$APP_DIR" >/dev/null
 else
   codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_DIR" >/dev/null
 fi
 codesign --verify --deep --strict --verbose=2 "$APP_DIR"
-xcrun lipo -archs "$APP_DIR/Contents/MacOS/$APP_NAME"
+built_arch_list="$(xcrun lipo -archs "$APP_DIR/Contents/MacOS/$APP_NAME")"
+printf '%s\n' "$built_arch_list"
+if [[ "$SIGN_IDENTITY" != "-" ]]; then
+  read -r -a built_architectures <<< "$built_arch_list"
+  if [[ "${#built_architectures[@]}" -ne 2 ]] ||
+    ! { [[ "${built_architectures[0]}" == "arm64" && "${built_architectures[1]}" == "x86_64" ]] ||
+      [[ "${built_architectures[0]}" == "x86_64" && "${built_architectures[1]}" == "arm64" ]]; }
+  then
+    echo "Developer ID artifact is not an exact arm64 + x86_64 universal binary." >&2
+    exit 65
+  fi
+fi
 codesign_details="$(codesign --display --verbose=4 "$APP_DIR" 2>&1)"
 grep -q "flags=.*runtime" <<< "$codesign_details" \
   || { echo "Hardened runtime flag missing after signing" >&2; exit 1; }

@@ -6,6 +6,36 @@ import XCTest
 
 @MainActor
 final class EndpointConfigRefreshTests: XCTestCase {
+  func testVisibleButNotDurableTrustRemainsDegradedUntilExactRefreshRetry() async {
+    let trustStore = ScriptedEndpointConfigTrustStore([
+      .committedDurabilityUncertain,
+      .durable,
+    ])
+    let state = AppState(
+      endpointConfigClient: FixedEndpointConfigClient(
+        config: NativeEndpointConfig(configVersion: 31, refreshAfterSeconds: 300)
+      ),
+      endpointConfigTrustStore: trustStore
+    )
+    state.document.syncState.serverURL = "https://sync.example"
+
+    let firstAccepted = await state.refreshEndpointConfig()
+
+    XCTAssertTrue(firstAccepted)
+    XCTAssertEqual(state.endpointConfig.configVersion, 31)
+    XCTAssertTrue(state.endpointConfigTrustDurabilityDegraded)
+    XCTAssertTrue(state.endpointConfigStatus.contains("trust durability retry required"))
+    XCTAssertTrue(state.notice.contains("Sync and sign-in remain blocked"))
+
+    let retryAccepted = await state.refreshEndpointConfig(silent: true)
+
+    XCTAssertTrue(retryAccepted)
+    XCTAssertFalse(state.endpointConfigTrustDurabilityDegraded)
+    XCTAssertEqual(state.endpointConfigStatus, "Remote v31")
+    let recordCount = await trustStore.recordCount
+    XCTAssertEqual(recordCount, 2)
+  }
+
   func testPersistedHighWaterRejectsRollbackAndEquivocationAfterRelaunch() async throws {
     let directory = FileManager.default.temporaryDirectory
       .appending(path: "AppStateEndpointRelaunch-\(UUID().uuidString)")
@@ -440,7 +470,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
     let initialResult = await initial.value
     XCTAssertTrue(initialResult)
     XCTAssertFalse(state.isAppVersionSupported)
-    XCTAssertEqual(state.endpointConfigStatus, "Update required")
+    XCTAssertEqual(state.endpointConfigStatus, "Update required (Remote v7)")
 
     let rollback = Task { await state.refreshEndpointConfig(silent: true) }
     await client.waitUntilRequested("https://sync.example")
@@ -572,9 +602,12 @@ private actor FirstRecordBlockingEndpointConfigTrustStore: EndpointConfigTrustPe
 
   func validate(_: NativeEndpointConfig, for _: URL) async throws {}
 
-  func validateAndRecord(_: NativeEndpointConfig, for _: URL) async throws {
+  func validateAndRecord(
+    _: NativeEndpointConfig,
+    for _: URL
+  ) async throws -> EndpointConfigTrustCommitOutcome {
     recordCount += 1
-    guard recordCount == 1 else { return }
+    guard recordCount == 1 else { return .durable }
     firstRecordStarted = true
     let waiters = firstRecordStartWaiters
     firstRecordStartWaiters.removeAll()
@@ -584,6 +617,7 @@ private actor FirstRecordBlockingEndpointConfigTrustStore: EndpointConfigTrustPe
     await withCheckedContinuation { continuation in
       firstRecordContinuation = continuation
     }
+    return .durable
   }
 
   func waitUntilFirstRecordStarted() async {

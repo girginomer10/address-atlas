@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import {
   generateAuthenticationOptions,
   generateRegistrationOptions,
@@ -8,8 +9,24 @@ import {
 import { base64urlDecode, base64urlEncode } from "./base64url";
 import { getSyncLimitConfig, getSyncPasskeyConfig, type SyncPasskeyConfig } from "./config";
 import { ensureSyncSchema, getSyncPool } from "./postgres";
+import {
+  generatedDiagnostics,
+  operationalErrorCode,
+  recordSecurityEvent
+} from "./diagnostics";
 import { assertRegistrationEnabled, reserveRegistrationAdmission } from "./registration";
 import { createSessionGrant } from "./sessions";
+import {
+  GUARDED_STORED_PASSKEY_CREDENTIAL_PROJECTION_SQL,
+  MAX_PASSKEY_CREDENTIAL_ID_TEXT_LENGTH,
+  PASSKEY_SUPPORTED_COSE_ALGORITHM_IDS,
+  STORED_PASSKEY_CREDENTIAL_SAFETY_LATERAL_SQL,
+  StoredPasskeyCredentialIntegrityError,
+  validateGuardedStoredPasskeyCredentialRow,
+  validatePasskeyCredentialId,
+  validatePasskeyPublicKey,
+  type GuardedStoredPasskeyCredentialRow
+} from "./stored-passkey-credential";
 import { ChallengeToken, issueChallengeToken, readChallengeToken } from "./tokens";
 
 type RegistrationResponseJSON = Parameters<typeof verifyRegistrationResponse>[0]["response"];
@@ -44,6 +61,9 @@ export interface PasskeyVerifyInput {
 
 const MAX_ACCOUNT_NAME_LENGTH = 80;
 const MAX_CHALLENGE_TOKEN_LENGTH = 4_096;
+const CONSUMED_CHALLENGE_PRUNE_BATCH_SIZE = 10_000;
+const CONSUMED_CHALLENGE_PRUNE_MAX_BATCHES = 10;
+const CONSUMED_CHALLENGE_PRUNE_MAX_RUNTIME_MS = 2_000;
 const CONSUMED_CHALLENGE_PRUNE_INTERVAL_MS = 60_000;
 
 let consumedChallengePruneInFlight: Promise<void> | null = null;
@@ -88,6 +108,14 @@ export function parsePasskeyVerifyInput(body: unknown): PasskeyVerifyInput {
   if (!input.response || typeof input.response !== "object" || Array.isArray(input.response)) {
     throw new PasskeyInputError("A passkey response is required.");
   }
+  const response = input.response as { id?: unknown };
+  if (
+    typeof response.id !== "string"
+    || response.id.length < 1
+    || response.id.length > MAX_PASSKEY_CREDENTIAL_ID_TEXT_LENGTH
+  ) {
+    throw new PasskeyInputError("A valid passkey credential ID is required.");
+  }
   return {
     mode: input.mode,
     challengeToken: input.challengeToken,
@@ -113,7 +141,8 @@ export async function createPasskeyOptions(body: unknown) {
       authenticatorSelection: {
         residentKey: "required",
         userVerification: "required"
-      }
+      },
+      supportedAlgorithmIDs: [...PASSKEY_SUPPORTED_COSE_ALGORITHM_IDS]
     });
     return {
       mode: "register",
@@ -202,11 +231,39 @@ function scheduleConsumedChallengePrune() {
 
 async function pruneConsumedChallenges() {
   try {
-    await getSyncPool().query(
-      "DELETE FROM consumed_challenges WHERE consumed_at < now() - interval '15 minutes'"
+    const deadline = performance.now() + CONSUMED_CHALLENGE_PRUNE_MAX_RUNTIME_MS;
+    for (
+      let batch = 0;
+      batch < CONSUMED_CHALLENGE_PRUNE_MAX_BATCHES && performance.now() < deadline;
+      batch += 1
+    ) {
+      const result = await getSyncPool().query(
+        `DELETE FROM consumed_challenges
+         WHERE ctid IN (
+           SELECT ctid
+           FROM consumed_challenges
+           WHERE consumed_at < now() - interval '15 minutes'
+           ORDER BY consumed_at
+           FOR UPDATE SKIP LOCKED
+           LIMIT $1
+         )`,
+        [CONSUMED_CHALLENGE_PRUNE_BATCH_SIZE]
+      );
+      if ((result.rowCount ?? 0) < CONSUMED_CHALLENGE_PRUNE_BATCH_SIZE) break;
+    }
+  } catch (error) {
+    // Authentication remains available, but emit one privacy-safe signal per
+    // scheduled attempt so a persistent timeout/backlog cannot stay invisible.
+    recordSecurityEvent(
+      "auth.challenge_prune_failed",
+      generatedDiagnostics("passkeys.maintenance"),
+      {
+        status: 500,
+        reason: "expired_challenge_prune_failed",
+        errorCode: operationalErrorCode(error, "database_query_failed"),
+        severity: "error"
+      }
     );
-  } catch {
-    // Ignore: pruning is opportunistic.
   }
 }
 
@@ -229,7 +286,8 @@ async function verifyRegistration(
       expectedChallenge: challenge.challenge,
       expectedOrigin: config.expectedOrigin,
       expectedRPID: config.rpID,
-      requireUserVerification: true
+      requireUserVerification: true,
+      supportedAlgorithmIDs: [...PASSKEY_SUPPORTED_COSE_ALGORITHM_IDS]
     });
   } catch {
     throw new PasskeyVerificationError();
@@ -237,6 +295,20 @@ async function verifyRegistration(
   if (!verification.verified) throw new PasskeyVerificationError();
 
   const credential = verification.registrationInfo.credential;
+  try {
+    validatePasskeyCredentialId(credential.id);
+    validatePasskeyPublicKey(base64urlEncode(credential.publicKey));
+  } catch (error) {
+    if (error instanceof StoredPasskeyCredentialIntegrityError) {
+      throw new PasskeyVerificationError();
+    }
+    throw error;
+  }
+  if (!Number.isInteger(credential.counter)
+      || credential.counter < 0
+      || credential.counter > 4_294_967_295) {
+    throw new PasskeyVerificationError();
+  }
   const client = await getSyncPool().connect();
   let discardClient = false;
   let sessionToken: string | undefined;
@@ -305,6 +377,15 @@ async function verifyAuthentication(
   response: AuthenticationResponseJSON,
   config: SyncPasskeyConfig
 ) {
+  let credentialId: string;
+  try {
+    credentialId = validatePasskeyCredentialId(response.id);
+  } catch (error) {
+    if (error instanceof StoredPasskeyCredentialIntegrityError) {
+      throw new PasskeyVerificationError();
+    }
+    throw error;
+  }
   const client = await getSyncPool().connect();
   let discardClient = false;
   try {
@@ -312,23 +393,21 @@ async function verifyAuthentication(
     // Lock before verification so concurrent assertions cannot both validate
     // against the same counter. The monotonic UPDATE is a second line of defense
     // for authenticators that always report counter zero.
-    const credentialRow = await client.query<{
-      id: string;
-      user_id: string;
-      public_key_base64url: string;
-      counter: string;
-    }>(
-      `SELECT id, user_id, public_key_base64url, counter
-       FROM passkey_credentials WHERE id = $1 FOR UPDATE`,
-      [response.id]
+    const credentialRow = await client.query<GuardedStoredPasskeyCredentialRow>(
+      `SELECT ${GUARDED_STORED_PASSKEY_CREDENTIAL_PROJECTION_SQL}
+       FROM passkey_credentials AS credential
+       ${STORED_PASSKEY_CREDENTIAL_SAFETY_LATERAL_SQL}
+       WHERE credential.id = $1
+       FOR UPDATE OF credential`,
+      [credentialId]
     );
     const row = credentialRow.rows[0];
     if (!row) throw new PasskeyVerificationError();
-
+    const storedCredential = validateGuardedStoredPasskeyCredentialRow(row);
     const credential: WebAuthnCredential = {
-      id: row.id,
-      publicKey: base64urlDecode(row.public_key_base64url),
-      counter: Number(row.counter)
+      id: storedCredential.id,
+      publicKey: storedCredential.publicKey,
+      counter: storedCredential.counter
     };
     let verification: Awaited<ReturnType<typeof verifyAuthenticationResponse>>;
     try {
@@ -354,14 +433,14 @@ async function verifyAuthentication(
       `UPDATE passkey_credentials
        SET counter = GREATEST(counter, $2), updated_at = now()
        WHERE id = $1`,
-      [row.id, verification.authenticationInfo.newCounter]
+      [storedCredential.id, verification.authenticationInfo.newCounter]
     );
-    const sessionToken = (await createSessionGrant(client, row.user_id)).sessionToken;
+    const sessionToken = (await createSessionGrant(client, storedCredential.userId)).sessionToken;
     await client.query("COMMIT");
 
     return {
       verified: true,
-      userId: row.user_id,
+      userId: storedCredential.userId,
       sessionToken
     };
   } catch (error) {

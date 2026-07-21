@@ -36,7 +36,8 @@ import {
   VaultAccountMissingError,
   VaultConflictError,
   VaultQuotaError,
-  VaultStorageCapacityError
+  VaultStorageCapacityError,
+  VaultStorageIntegrityError
 } from "@/lib/sync/vault-storage";
 
 export const dynamic = "force-dynamic";
@@ -174,6 +175,21 @@ export async function GET(request: NextRequest) {
   } finally {
     releaseConcurrency?.();
   }
+}
+
+/**
+ * Next otherwise implements HEAD by invoking GET and discarding its body.
+ * A successful GET stream owns its concurrency permit until drain/cancel, so
+ * explicitly cancel it before returning a bodyless response.
+ */
+export async function HEAD(request: NextRequest) {
+  const response = await GET(request);
+  await response.body?.cancel();
+  return new Response(null, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers
+  });
 }
 
 const VAULT_RESPONSE_CHUNK_BYTES = 64 * 1024;
@@ -346,7 +362,11 @@ export async function PUT(request: NextRequest) {
         status,
         headers: diagnosticHeaders(diagnostics, {
           "cache-control": "no-store",
-          ...(error instanceof VaultQuotaError ? { "retry-after": "3600" } : {})
+          ...(error instanceof VaultQuotaError
+            ? { "retry-after": String(secondsUntilNextUTCDay()) }
+            : error instanceof VaultStorageIntegrityError
+              ? { "retry-after": "60" }
+            : {})
         })
       }
     );
@@ -356,6 +376,16 @@ export async function PUT(request: NextRequest) {
 }
 
 class VaultValidationError extends Error {}
+
+function secondsUntilNextUTCDay(now = Date.now()) {
+  const current = new Date(now);
+  const nextUTCDay = Date.UTC(
+    current.getUTCFullYear(),
+    current.getUTCMonth(),
+    current.getUTCDate() + 1
+  );
+  return Math.max(1, Math.ceil((nextUTCDay - now) / 1_000));
+}
 
 function validateUploadedSnapshot(input: unknown): RemoteVaultSnapshot {
   try {
@@ -380,6 +410,7 @@ function vaultErrorStatus(error: unknown) {
   if (error instanceof VaultConflictError) return 409;
   if (error instanceof VaultQuotaError) return 429;
   if (error instanceof VaultStorageCapacityError) return 507;
+  if (error instanceof VaultStorageIntegrityError) return 503;
   return 500;
 }
 
@@ -393,6 +424,7 @@ function vaultErrorMessage(error: unknown) {
     || error instanceof VaultConflictError
     || error instanceof VaultQuotaError
     || error instanceof VaultStorageCapacityError
+    || error instanceof VaultStorageIntegrityError
   ) {
     return error.message;
   }
@@ -424,6 +456,13 @@ function recordVaultFailure(
     recordSecurityEvent("vault.storage_exhausted", diagnostics, {
       status,
       reason: "storage_capacity"
+    });
+  } else if (error instanceof VaultStorageIntegrityError) {
+    recordSecurityEvent("vault.storage_integrity_blocked", diagnostics, {
+      status,
+      reason: "storage_ledger_invalid",
+      errorCode: "storage_ledger_invalid",
+      severity: "error"
     });
   } else if (error instanceof RequestBodyError || error instanceof VaultValidationError) {
     recordSecurityEvent("vault.request_rejected", diagnostics, {

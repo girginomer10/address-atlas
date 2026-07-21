@@ -42,6 +42,8 @@ export interface RuntimeDatabaseIdentity {
 
 export interface SyncSchemaReadinessOptions {
   readonly verifyRuntimePrivileges?: boolean;
+  /** Runtime reads/auth may continue while the durable marker blocks vault writes. */
+  readonly allowStorageReconciliationPending?: boolean;
   /** Test-only seam for isolated database roles/schemas. Production uses the fixed contract. */
   readonly expectedRuntimeIdentity?: RuntimeDatabaseIdentity;
 }
@@ -164,7 +166,7 @@ export async function assertSyncSchemaReady(
   }
   await assertSchemaSurface(database, tableNames, runtimeIdentity, appliedVersion);
   if (appliedVersion >= 2) await assertVaultEnvelopeStoragePolicy(database);
-  await assertStorageState(database, false);
+  await assertStorageState(database, options.allowStorageReconciliationPending === true);
 }
 
 /** Validate the exact durable surface produced by one applied migration. */

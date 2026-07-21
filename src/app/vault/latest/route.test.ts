@@ -50,9 +50,13 @@ vi.mock("@/lib/sync/vault-storage", async (importOriginal) => ({
   saveVaultSnapshot: mocks.saveVaultSnapshot
 }));
 
-import { GET, PUT } from "./route";
+import { GET, HEAD, PUT } from "./route";
 import { TokenValidationError } from "@/lib/sync/tokens";
-import { VaultConflictError, VaultQuotaError } from "@/lib/sync/vault-storage";
+import {
+  VaultConflictError,
+  VaultQuotaError,
+  VaultStorageIntegrityError
+} from "@/lib/sync/vault-storage";
 
 function snapshot(schemaVersion: 1 | 2 = 2, version = 2): RemoteVaultSnapshot {
   const nonce = Buffer.alloc(12, 3);
@@ -234,6 +238,38 @@ describe("vault latest route", () => {
     expect(mocks.releaseConcurrency).toHaveBeenCalledOnce();
   });
 
+  it("returns a retryable 503 before reading a body when ledger integrity blocks writes", async () => {
+    mocks.assertVaultIngressCapacity.mockRejectedValue(new VaultStorageIntegrityError());
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new TextEncoder().encode("{}"));
+        controller.close();
+      }
+    });
+    const upload = new NextRequest("http://localhost/vault/latest", {
+      method: "PUT",
+      headers: {
+        authorization: "Bearer token",
+        "content-type": "application/json"
+      },
+      body,
+      duplex: "half"
+    } as NonNullable<ConstructorParameters<typeof NextRequest>[1]> & { duplex: "half" });
+    const getReader = vi.spyOn(upload.body!, "getReader");
+
+    const response = await PUT(upload);
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("retry-after")).toBe("60");
+    expect(await response.json()).toEqual({
+      error: "Encrypted vault writes are temporarily unavailable while storage accounting is repaired."
+    });
+    expect(getReader).not.toHaveBeenCalled();
+    expect(mocks.chargeVaultIngress).not.toHaveBeenCalled();
+    expect(mocks.saveVaultSnapshot).not.toHaveBeenCalled();
+    expect(mocks.releaseConcurrency).toHaveBeenCalledOnce();
+  });
+
   it("releases active upload capacity after a durable quota failure", async () => {
     mocks.chargeVaultIngress.mockRejectedValue(new VaultQuotaError());
 
@@ -300,10 +336,17 @@ describe("vault latest route", () => {
   it("returns durable quota exhaustion before replay or conflict semantics", async () => {
     mocks.chargeVaultIngress.mockRejectedValue(new VaultQuotaError());
     mocks.saveVaultSnapshot.mockRejectedValue(new VaultConflictError());
-    const response = await PUT(request(snapshot()));
-    expect(response.status).toBe(429);
-    expect(response.headers.get("retry-after")).toBe("3600");
-    expect(mocks.saveVaultSnapshot).not.toHaveBeenCalled();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(
+      Date.parse("2026-07-13T23:59:30.250Z")
+    );
+    try {
+      const response = await PUT(request(snapshot()));
+      expect(response.status).toBe(429);
+      expect(response.headers.get("retry-after")).toBe("30");
+      expect(mocks.saveVaultSnapshot).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("reports exact idempotent replays without rewriting storage", async () => {
@@ -365,6 +408,31 @@ describe("vault latest route", () => {
     expect(mocks.dbQuery).toHaveBeenCalledWith(expect.stringContaining("LEFT JOIN vault_snapshots"), [
       "11111111-1111-4111-8111-111111111111"
     ]);
+    expect(mocks.releaseConcurrency).toHaveBeenCalledOnce();
+  });
+
+  it("returns a bodyless HEAD response without leaking the GET stream permit", async () => {
+    const stored = snapshot(2, 7);
+    mocks.dbQuery.mockResolvedValue({
+      rows: [{
+        snapshot_present: true,
+        stored_row_valid: true,
+        version: stored.version,
+        envelope: stored.envelope,
+        byte_size: stored.byteSize,
+        checksum: stored.checksum,
+        updated_at: new Date("2026-07-13T08:30:00.123Z")
+      }]
+    });
+
+    const response = await HEAD(new NextRequest("http://localhost/vault/latest", {
+      method: "HEAD",
+      headers: { authorization: "Bearer token" }
+    }));
+
+    expect(response.status).toBe(200);
+    expect(response.body).toBeNull();
+    expect(response.headers.get("content-type")).toBe("application/json; charset=utf-8");
     expect(mocks.releaseConcurrency).toHaveBeenCalledOnce();
   });
 

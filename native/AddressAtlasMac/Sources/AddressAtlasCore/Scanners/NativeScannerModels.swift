@@ -58,6 +58,7 @@ struct SolanaAccountParseResult {
 struct TronTokenBalanceParseResult {
   var balances: [(token: TokenConfig, amount: Double)] = []
   var invalidSymbols: [String] = []
+  var warnings: [String] = []
 }
 
 enum CosmosScanPart: Sendable {

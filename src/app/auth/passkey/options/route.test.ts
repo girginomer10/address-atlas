@@ -144,6 +144,22 @@ describe("passkey options request ordering", () => {
     ]);
   });
 
+  it("advertises the full registration retry window when its edge quota is exhausted", async () => {
+    mocks.rateLimitMany
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false);
+
+    const response = await POST(new NextRequest("https://sync.example/auth/passkey/options", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode: "register", accountName: "Atlas" })
+    }));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("3600");
+    expect(mocks.createPasskeyOptions).not.toHaveBeenCalled();
+  });
+
   it("marks rate-limit responses as non-cacheable", async () => {
     mocks.rateLimitMany.mockReturnValue(false);
     const response = await POST(new NextRequest("https://sync.example/auth/passkey/options", {

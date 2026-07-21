@@ -106,6 +106,23 @@ trap cleanup EXIT INT TERM
   echo "The signed app and DMG were not produced." >&2
   exit 74
 }
+APP_EXECUTABLE="$APP_PATH/Contents/MacOS/Address Atlas"
+[[ -x "$APP_EXECUTABLE" ]] || {
+  echo "The signed app executable was not produced." >&2
+  exit 74
+}
+app_arch_list="$("$XCRUN_BIN" lipo -archs "$APP_EXECUTABLE")" || {
+  echo "The signed app architectures could not be inspected." >&2
+  exit 74
+}
+read -r -a app_architectures <<< "$app_arch_list"
+if [[ "${#app_architectures[@]}" -ne 2 ]] ||
+  ! { [[ "${app_architectures[0]}" == "arm64" && "${app_architectures[1]}" == "x86_64" ]] ||
+    [[ "${app_architectures[0]}" == "x86_64" && "${app_architectures[1]}" == "arm64" ]]; }
+then
+  echo "Public notarization requires an exact arm64 + x86_64 universal app binary." >&2
+  exit 65
+fi
 
 "$CODESIGN_BIN" --verify --deep --strict --verbose=4 "$APP_PATH"
 "$CODESIGN_BIN" --verify --strict --verbose=4 "$DMG_PATH"

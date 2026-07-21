@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
         status: 429,
         reason: "auth_body_concurrency_limit"
       });
-      return rateLimitedResponse(diagnostics);
+      return rateLimitedResponse(diagnostics, 1);
     }
     // Apply the public quota before touching the body. Invalid content types,
     // malformed JSON, oversized streams, and shape-invalid inputs must not get
@@ -70,7 +70,7 @@ export async function POST(request: NextRequest) {
         reason: input.mode === "register" ? "registration_edge_rate_limit" : "auth_options_rate_limit",
         mode: input.mode
       });
-      return rateLimitedResponse(diagnostics);
+      return rateLimitedResponse(diagnostics, input.mode === "register" ? 3_600 : 60);
     }
     return NextResponse.json(await createPasskeyOptions(input), {
       headers: diagnosticHeaders(diagnostics, NO_STORE_HEADERS)
@@ -115,12 +115,18 @@ export async function POST(request: NextRequest) {
   }
 }
 
-function rateLimitedResponse(diagnostics: ReturnType<typeof requestDiagnostics>) {
+function rateLimitedResponse(
+  diagnostics: ReturnType<typeof requestDiagnostics>,
+  retryAfterSeconds = 60
+) {
   return NextResponse.json(
     { error: "Too many requests." },
     {
       status: 429,
-      headers: diagnosticHeaders(diagnostics, { ...NO_STORE_HEADERS, "retry-after": "60" })
+      headers: diagnosticHeaders(diagnostics, {
+        ...NO_STORE_HEADERS,
+        "retry-after": String(retryAfterSeconds)
+      })
     }
   );
 }

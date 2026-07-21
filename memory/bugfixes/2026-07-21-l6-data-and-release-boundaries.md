@@ -2,8 +2,8 @@
 title: L6 data boundaries must bind identity, snapshot, durability, and release evidence
 date: 2026-07-21
 status: active
-tags: [bugfix, macos, sync, postgres, release, solana, xrpl, evm, passkeys, sqlite, exchange, kraken, accessibility]
-related_files: [native/AddressAtlasMac/Sources/AddressAtlasCore/Sync/PendingVaultUpload.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Storage/EncryptedSQLiteVaultStore.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/ExchangeAmount.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/KrakenNonce.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerSolana.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerXRP.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerBitcoinEVM.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/AppStateTermination.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/AppStateAccountLifecycle.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/AppStateEndpointConfiguration.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/AppStateVaultSync.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/ExchangeSyncViews.swift, src/lib/sync/postgres-readiness.ts, src/lib/sync/postgres-schema.ts, src/lib/sync/postgres-search-path.ts, src/lib/sync/restore-readiness.ts, src/lib/sync/stored-vault-row.ts, src/lib/sync/rate-limit.ts, src/lib/sync/postgres-migrations/index.ts, src/lib/sync/postgres-migrations/004-vault-envelope-storage-bound.ts, src/app/auth/passkey/body-concurrency.ts, src/app/vault/latest/route.ts, server/sync/Dockerfile, server/sync/manage-prod.sh, server/sync/postgres-backup.sh, .github/workflows/release.yml]
+tags: [bugfix, macos, sync, postgres, release, solana, xrpl, evm, passkeys, webauthn, cose, sqlite, exchange, kraken, cosmos, tron, accessibility]
+related_files: [native/AddressAtlasMac/Sources/AddressAtlasCore/Sync/PendingVaultUpload.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Sync/EndpointConfigTrustStore.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Storage/EncryptedSQLiteVaultStore.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/ExchangeAmount.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/KrakenNonce.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerSolana.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerXRP.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerBitcoinEVM.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerCosmos.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerTron.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/AppStateTermination.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/AppStateAccountLifecycle.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/AppStateEndpointConfiguration.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/AppStateVaultSync.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/ExchangeSyncViews.swift, src/lib/sync/postgres-readiness.ts, src/lib/sync/postgres-schema.ts, src/lib/sync/postgres-search-path.ts, src/lib/sync/restore-readiness.ts, src/lib/sync/stored-vault-row.ts, src/lib/sync/stored-passkey-credential.ts, src/lib/sync/passkey-credential-integrity.ts, src/lib/sync/storage-ledger-integrity.ts, src/lib/sync/rate-limit.ts, src/lib/sync/postgres-migrations/index.ts, src/lib/sync/postgres-migrations/004-vault-envelope-storage-bound.ts, src/app/auth/passkey/body-concurrency.ts, src/app/auth/passkey/verification-concurrency.ts, src/app/auth/native/NativePasskeyBridge.tsx, src/app/vault/latest/route.ts, server/sync/Dockerfile, server/sync/manage-prod.sh, server/sync/postgres-backup.sh, .github/workflows/release.yml]
 ---
 
 ## Durable invariants
@@ -108,6 +108,10 @@ related_files: [native/AddressAtlasMac/Sources/AddressAtlasCore/Sync/PendingVaul
   The restore probe must validate exact current/session identity, configured,
   explicit, and effective paths with catalog-qualified functions/operators, and
   a real PostgreSQL integration test must exercise both safe and unsafe order.
+- Production connection URLs may be plaintext only when they contain no TLS
+  query parameters, as in the private Compose network. Once any certificate,
+  key, root, or negotiation parameter is present, require an explicit
+  `sslmode=verify-full`; reject partial or downgrade-prone TLS combinations.
 - Public auth capacity starts before reading request bytes. Bound global and
   per-client concurrent body readers, impose a body deadline, release the permit
   before WebAuthn/database work, and never expose raw framework/server errors to
@@ -139,6 +143,41 @@ related_files: [native/AddressAtlasMac/Sources/AddressAtlasCore/Sync/PendingVaul
   encoded response bytes atomically against account, client, and global egress
   windows before streaming; bind request aborts to the lease transfer and keep
   a finite reverse-proxy write deadline so slow readers cannot pin capacity.
+- A stored passkey is executable cryptographic state, not trusted text. Guard
+  compressed and oversized PostgreSQL values before projection, accept only the
+  application's explicit ES256/P-256 and RS256/RSA 2048-4096 policy, require the
+  exact COSE field set and cryptographic key import, and reject every restored
+  account that has no valid credential. Registration options, attestation
+  verification, authentication, reads, and restore readiness must share that
+  same frozen policy.
+- Bound WebAuthn verification independently from request-body admission. Reserve
+  database-pool capacity for non-auth work, cap global, client, and credential
+  verification concurrency, and return a privacy-safe retryable overload result
+  without letting credential IDs allocate unbounded state.
+- Expensive storage-ledger reconciliation is a periodic integrity audit, not a
+  synchronous health probe. Compare ledger and snapshot totals in one bounded
+  repeatable-read snapshot; on drift, persist a sticky reconcile marker that
+  blocks future vault writes while reads and authentication remain available.
+  Do not hold the singleton ledger row across the aggregate scan.
+- Endpoint configuration has separate visible and durable outcomes. A rename
+  followed by an uncertain directory durability barrier may be usable for
+  read-only display, but must block passkey, sync, recovery, and provider traffic
+  until the exact record is re-fsynced. After relaunch, a remembered policy
+  high-water value is not a fallback policy document; unavailable refreshes may
+  reuse only an exact-authority policy accepted in the current process.
+- Account detach is one lifecycle transaction: complete remote revocation first
+  unless the user explicitly chooses local-only detach, then atomically persist
+  identity cleanup and rollback-checkpoint removal. Pending upload recovery must
+  refresh and validate endpoint trust and minimum-client policy before any GET
+  or PUT.
+- Paged provider records require snapshot and duplicate identity. Cosmos parts
+  must echo one bound height through an accepted header, and Cosmos rewards or
+  TRON contracts that repeat with conflicting values are quarantined instead of
+  partially counted. Notarized distribution must prove both arm64 and x86_64;
+  architecture order is irrelevant.
+- A native-auth return page must be inert before hydration. Use an explicit
+  button instead of implicit form submission, preserve callback/state in the
+  URL, and expose bounded actionable status through semantic busy/live regions.
 - Release evidence is an identity set, not a green context label. Bind the exact
   source SHA, workflow run ID, attempt, required job names, check-run IDs/URLs,
   and producing GitHub App; re-fetch and compare them immediately before
@@ -147,16 +186,15 @@ related_files: [native/AddressAtlasMac/Sources/AddressAtlasCore/Sync/PendingVaul
 
 ## Verification baseline
 
-- Web unit and contract suite: 447 passed, 50 environment or live tests
-  skipped; operations passed 58/58. Focused PostgreSQL 16.14 migration/vault
-  and readiness suites passed 27/27 and 6/6.
-- Native suite: 385 tests, 2 opt-in live tests skipped; strict concurrency and
-  warnings-as-errors passed. Thread Sanitizer passed the same suite with one
-  additional, explicitly documented nested-process harness skip and no race
-  report.
-- Operations: 58 passed. Notary credential/timeout and build-version harnesses
-  passed. The universal x86_64/arm64 app bundle passed plist, icon, hardened
-  runtime, and signature verification.
+- Web and database suite: 50 files and 562 tests passed twice against disposable
+  PostgreSQL 16, including one shuffled run; no tests were skipped. TypeScript,
+  production build, and dependency audit passed; operations passed 58/58.
+- Native suite: 399 tests passed with 2 opt-in live tests skipped under strict
+  concurrency and warnings-as-errors. Thread Sanitizer passed all 399 tests
+  with one additional documented nested-process skip and no race report.
+- Notary credential, timeout, rejection, and universal-architecture harness
+  passed 11/11. A release product compiled successfully; public signing and
+  notarization remain external credential gates.
 
 ## External boundary
 

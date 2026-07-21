@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   acquireConcurrencyMany: vi.fn(),
   releaseBodyConcurrency: vi.fn(),
+  releaseVerificationConcurrency: vi.fn(),
   verifyPasskey: vi.fn(),
   rateLimitMany: vi.fn()
 }));
@@ -38,7 +39,11 @@ function request() {
 describe("passkey verification error boundary", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.acquireConcurrencyMany.mockReturnValue(mocks.releaseBodyConcurrency);
+    mocks.acquireConcurrencyMany.mockImplementation((rules: Array<{ key: string }>) =>
+      rules[0]?.key === "auth-body-active:global"
+        ? mocks.releaseBodyConcurrency
+        : mocks.releaseVerificationConcurrency
+    );
     mocks.rateLimitMany.mockReturnValue(true);
     mocks.verifyPasskey.mockResolvedValue({
       verified: true,
@@ -56,6 +61,7 @@ describe("passkey verification error boundary", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(mocks.releaseBodyConcurrency).toHaveBeenCalledOnce();
+    expect(mocks.releaseVerificationConcurrency).toHaveBeenCalledOnce();
     expect(PASSKEY_BODY_DEADLINE_MS).toBe(15_000);
   });
 
@@ -96,6 +102,7 @@ describe("passkey verification error boundary", () => {
     expect(body).toContain("Passkey verification failed");
     expect(body).not.toContain("secret");
     expect(mocks.releaseBodyConcurrency).toHaveBeenCalledOnce();
+    expect(mocks.releaseVerificationConcurrency).toHaveBeenCalledOnce();
   });
 
   it("marks rate-limit responses as non-cacheable", async () => {
@@ -104,6 +111,72 @@ describe("passkey verification error boundary", () => {
 
     expect(response.status).toBe(429);
     expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(mocks.verifyPasskey).not.toHaveBeenCalled();
+  });
+
+  it("rejects before database verification when active verification capacity is full", async () => {
+    mocks.acquireConcurrencyMany
+      .mockReturnValueOnce(mocks.releaseBodyConcurrency)
+      .mockReturnValueOnce(null);
+
+    const response = await POST(request());
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("1");
+    expect(mocks.releaseBodyConcurrency).toHaveBeenCalledOnce();
+    expect(mocks.releaseVerificationConcurrency).not.toHaveBeenCalled();
+    expect(mocks.verifyPasskey).not.toHaveBeenCalled();
+    expect(mocks.acquireConcurrencyMany).toHaveBeenNthCalledWith(2, [
+      { key: "auth-verify-active:global", limit: 5 },
+      { key: "auth-verify-active:client:client", limit: 2 },
+      { key: "auth-verify-active:credential:credential", limit: 1 }
+    ]);
+  });
+
+  it("holds verification capacity until passkey verification settles", async () => {
+    let finishVerification!: (value: {
+      verified: boolean;
+      userId: string;
+      sessionToken: string;
+    }) => void;
+    mocks.verifyPasskey.mockReturnValueOnce(new Promise((resolve) => {
+      finishVerification = resolve;
+    }));
+
+    const pending = POST(request());
+    await vi.waitFor(() => expect(mocks.verifyPasskey).toHaveBeenCalledOnce());
+    expect(mocks.releaseBodyConcurrency).toHaveBeenCalledOnce();
+    expect(mocks.releaseVerificationConcurrency).not.toHaveBeenCalled();
+
+    finishVerification({ verified: true, userId: "user-1", sessionToken: "session-token" });
+    expect((await pending).status).toBe(200);
+    expect(mocks.releaseVerificationConcurrency).toHaveBeenCalledOnce();
+  });
+
+  it("stops an aborted request before acquiring verification capacity", async () => {
+    const controller = new AbortController();
+    mocks.rateLimitMany
+      .mockReturnValueOnce(true)
+      .mockImplementationOnce(() => {
+        controller.abort();
+        return true;
+      });
+    const aborted = new NextRequest("https://sync.example/auth/passkey/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        mode: "authenticate",
+        challengeToken: "token",
+        response: { id: "credential" }
+      }),
+      signal: controller.signal
+    });
+
+    const response = await POST(aborted);
+
+    expect(response.status).toBe(408);
+    expect(mocks.acquireConcurrencyMany).toHaveBeenCalledOnce();
+    expect(mocks.releaseBodyConcurrency).toHaveBeenCalledOnce();
     expect(mocks.verifyPasskey).not.toHaveBeenCalled();
   });
 
@@ -163,6 +236,28 @@ describe("passkey verification error boundary", () => {
       { key: "auth-register-verify:global", limit: 100, windowMs: 3_600_000 },
       { key: "auth-register-verify:client:client", limit: 5, windowMs: 3_600_000 }
     ]);
+  });
+
+  it("advertises the full registration retry window when verification edge quota is exhausted", async () => {
+    mocks.rateLimitMany
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false);
+
+    const response = await POST(new NextRequest("https://sync.example/auth/passkey/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        mode: "register",
+        challengeToken: "token",
+        response: { id: "credential" }
+      })
+    }));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("3600");
+    expect(mocks.verifyPasskey).not.toHaveBeenCalled();
+    expect(mocks.releaseBodyConcurrency).toHaveBeenCalledOnce();
+    expect(mocks.releaseVerificationConcurrency).not.toHaveBeenCalled();
   });
 
   it("maps durable registration capacity only at verified account creation", async () => {

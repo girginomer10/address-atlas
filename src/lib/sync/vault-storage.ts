@@ -1,7 +1,9 @@
 import type { PoolClient } from "pg";
 import { getSyncLimitConfig } from "./config";
+import { OperationalError } from "./diagnostics";
 import type { RemoteVaultSnapshot } from "./envelope";
 import { getSyncPool } from "./postgres";
+import { STORAGE_RECONCILIATION_VERSION } from "./postgres-migrations";
 
 export class VaultConflictError extends Error {
   constructor() {
@@ -29,6 +31,16 @@ export class VaultStorageCapacityError extends Error {
   constructor() {
     super("Encrypted vault storage capacity has been reached.");
     this.name = "VaultStorageCapacityError";
+  }
+}
+
+export class VaultStorageIntegrityError extends OperationalError {
+  constructor() {
+    super(
+      "storage_ledger_invalid",
+      "Encrypted vault writes are temporarily unavailable while storage accounting is repaired."
+    );
+    this.name = "VaultStorageIntegrityError";
   }
 }
 
@@ -71,6 +83,7 @@ export async function assertVaultIngressCapacity(userId: string): Promise<VaultI
 
     transactionOpen = true;
     await client.query("BEGIN");
+    await assertStorageLedgerWriteReady(client);
     const accountBytes = await lockAccountIngressUsage(client, userId);
     if (accountBytes >= limits.dailyVaultByteLimit) throw new VaultQuotaError();
 
@@ -309,18 +322,42 @@ export async function saveVaultSnapshot(
 
 async function chargeGlobalStorageCapacity(client: PoolClient, byteDelta: number) {
   if (!Number.isSafeInteger(byteDelta)) throw new VaultStorageCapacityError();
-  if (byteDelta === 0) return;
   const maxBytes = getSyncLimitConfig().globalVaultStorageLimit;
   const charged = await client.query(
     `UPDATE sync_storage_usage
      SET total_snapshot_bytes = total_snapshot_bytes + $1, updated_at = now()
      WHERE singleton = true
+       AND reconcile_required = false
+       AND reconciled_contract_version = $3
        AND total_snapshot_bytes + $1 >= 0
        AND ($1 <= 0 OR total_snapshot_bytes + $1 <= $2)
      RETURNING total_snapshot_bytes`,
-    [byteDelta, maxBytes]
+    [byteDelta, maxBytes, STORAGE_RECONCILIATION_VERSION]
   );
-  if (charged.rowCount === 0) throw new VaultStorageCapacityError();
+  if (charged.rowCount !== 0) return;
+  await assertStorageLedgerWriteReady(client);
+  throw new VaultStorageCapacityError();
+}
+
+async function assertStorageLedgerWriteReady(client: PoolClient) {
+  const result = await client.query<{
+    reconciled_contract_version: number;
+    reconcile_required: boolean;
+  }>(
+    `SELECT reconciled_contract_version, reconcile_required
+     FROM sync_storage_usage
+     WHERE singleton = true
+     LIMIT 2`
+  );
+  const row = result.rows[0];
+  if (
+    result.rows.length !== 1
+    || !row
+    || row.reconciled_contract_version !== STORAGE_RECONCILIATION_VERSION
+    || row.reconcile_required
+  ) {
+    throw new VaultStorageIntegrityError();
+  }
 }
 
 async function chargeDailyWrite(client: PoolClient, userId: string) {

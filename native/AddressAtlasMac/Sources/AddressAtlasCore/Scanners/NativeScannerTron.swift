@@ -55,6 +55,7 @@ extension NativeScanner {
         "TRC-20 token balance data was invalid for \(Self.formattedSymbols(tokenScan.invalidSymbols)); balances may be incomplete."
       )
     }
+    warnings.append(contentsOf: tokenScan.warnings)
     return NativeScanResult(assets: assets, warnings: warnings)
   }
 
@@ -69,33 +70,44 @@ extension NativeScanner {
     tokens: [TokenConfig]
   ) -> TronTokenBalanceParseResult {
     var result = TronTokenBalanceParseResult()
+    var identicalDuplicateCount = 0
+    var conflictingSymbols: [String] = []
     for token in tokens {
       guard (0...36).contains(token.decimals) else {
         result.invalidSymbols.append(token.symbol)
         continue
       }
-      var rawTotal = 0.0
-      var isInvalid = false
-      for entry in balances {
-        guard let rawValue = entry[token.address] else { continue }
-        guard let raw = Double(rawValue), raw.isFinite, raw >= 0 else {
-          isInvalid = true
-          break
-        }
-        rawTotal += raw
-        guard rawTotal.isFinite else {
-          isInvalid = true
-          break
-        }
+      let rawValues = balances.compactMap { $0[token.address] }
+      guard let firstRawValue = rawValues.first else { continue }
+      let parsedValues = rawValues.compactMap { rawValue -> Double? in
+        guard let raw = Double(rawValue), raw.isFinite, raw >= 0 else { return nil }
+        return raw
       }
-      guard !isInvalid else {
+      guard parsedValues.count == rawValues.count, let rawAmount = parsedValues.first else {
         result.invalidSymbols.append(token.symbol)
         continue
       }
-      let amount = rawTotal / pow(10, Double(token.decimals))
+      guard rawValues.dropFirst().allSatisfy({ $0 == firstRawValue }) else {
+        conflictingSymbols.append(token.symbol)
+        continue
+      }
+      identicalDuplicateCount += rawValues.count - 1
+      let amount = rawAmount / pow(10, Double(token.decimals))
       if amount.isFinite, amount > 0 {
         result.balances.append((token, amount))
       }
+    }
+    if identicalDuplicateCount > 0 {
+      result.warnings.append(
+        identicalDuplicateCount == 1
+          ? "TRON repeated one identical TRC-20 contract balance record; the duplicate was skipped to avoid double-counting."
+          : "TRON repeated \(identicalDuplicateCount) identical TRC-20 contract balance records; the duplicates were skipped to avoid double-counting."
+      )
+    }
+    if !conflictingSymbols.isEmpty {
+      result.warnings.append(
+        "TRON returned conflicting TRC-20 balance records for \(Self.formattedSymbols(conflictingSymbols)); every conflicting version was skipped."
+      )
     }
     return result
   }

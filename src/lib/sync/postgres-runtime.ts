@@ -15,7 +15,9 @@ export async function ensureSyncSchema() {
     // convenient bootstrap behavior through its explicit mode default.
     const attempt = getSyncSchemaMode() === "bootstrap"
       ? initializeSyncSchema(getSyncPool())
-      : assertSyncSchemaReady(getSyncPool());
+      : assertSyncSchemaReady(getSyncPool(), {
+        allowStorageReconciliationPending: true
+      });
     schemaReady = attempt;
     // A transient startup failure must not permanently poison this process.
     // Clear only our own attempt so a later caller can retry safely.
@@ -35,7 +37,8 @@ export async function bootstrapSyncSchema() {
 /** Probe current runtime readiness independently of the cached startup path. */
 export async function checkSyncSchemaReadiness() {
   await assertSyncSchemaReady(getSyncPool(), {
-    verifyRuntimePrivileges: getSyncSchemaMode() === "validate"
+    verifyRuntimePrivileges: getSyncSchemaMode() === "validate",
+    allowStorageReconciliationPending: true
   });
 }
 

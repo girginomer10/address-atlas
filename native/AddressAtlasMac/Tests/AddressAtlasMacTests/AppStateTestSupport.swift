@@ -30,6 +30,48 @@ struct FixedEndpointConfigClient: EndpointConfigFetching {
   }
 }
 
+struct FailingEndpointConfigClient: EndpointConfigFetching {
+  var code: URLError.Code = .cannotConnectToHost
+
+  func fetch(from serverURL: URL) async throws -> NativeEndpointConfig {
+    throw URLError(code)
+  }
+}
+
+actor FirstSuccessThenFailureEndpointConfigClient: EndpointConfigFetching {
+  private let config: NativeEndpointConfig
+  private var returnedConfig = false
+
+  init(config: NativeEndpointConfig) {
+    self.config = config
+  }
+
+  func fetch(from _: URL) async throws -> NativeEndpointConfig {
+    guard !returnedConfig else { throw URLError(.cannotConnectToHost) }
+    returnedConfig = true
+    return config
+  }
+}
+
+actor ScriptedEndpointConfigTrustStore: EndpointConfigTrustPersisting {
+  private var outcomes: [EndpointConfigTrustCommitOutcome]
+  private(set) var recordCount = 0
+
+  init(_ outcomes: [EndpointConfigTrustCommitOutcome]) {
+    self.outcomes = outcomes
+  }
+
+  func validate(_: NativeEndpointConfig, for _: URL) async throws {}
+
+  func validateAndRecord(
+    _: NativeEndpointConfig,
+    for _: URL
+  ) async throws -> EndpointConfigTrustCommitOutcome {
+    recordCount += 1
+    return outcomes.isEmpty ? .durable : outcomes.removeFirst()
+  }
+}
+
 final class AppStateTestVaultKeyStore: VaultKeyStore, @unchecked Sendable {
   private let lock = NSLock()
   private var key: Data?

@@ -13,6 +13,7 @@ import {
 } from "./postgres-search-path";
 import { bootstrapSyncSchema, closeSyncPools } from "./postgres";
 import { assertStoredVaultIntegrity } from "./vault-integrity";
+import { assertStoredPasskeyCredentialIntegrity } from "./passkey-credential-integrity";
 
 async function main() {
   const diagnostics = generatedDiagnostics("restore.readiness");
@@ -28,6 +29,8 @@ async function main() {
     await bootstrapSyncSchema();
     failureCode = "vault_snapshot_invalid";
     await assertStoredVaultIntegrity(pool);
+    failureCode = "passkey_credential_invalid";
+    await assertStoredPasskeyCredentialIntegrity(pool);
     recordSecurityEvent("restore.readiness_succeeded", diagnostics, {
       status: 200,
       reason: "restored_schema_ready",

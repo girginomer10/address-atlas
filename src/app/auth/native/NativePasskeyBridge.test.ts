@@ -7,10 +7,12 @@ const STATE = "11111111-1111-4111-8111-111111111111";
 const ORIGIN = "https://sync.example.com";
 const USER_ID = "22222222-2222-4222-8222-222222222222";
 
-function jsonResponse(body: unknown, status = 200) {
+function jsonResponse(body: unknown, status = 200, headers: HeadersInit = {}) {
+  const responseHeaders = new Headers(headers);
+  responseHeaders.set("content-type", "application/json");
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json" }
+    headers: responseHeaders
   });
 }
 
@@ -130,9 +132,13 @@ describe("native passkey ceremony", () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
-  it("maps a failed options request to a reviewed rate-limit message", async () => {
+  it("uses the options response retry window in the rate-limit message", async () => {
     const fetchImpl = fetchStub({
-      options: () => jsonResponse({ error: "Too many requests." }, 429)
+      options: () => jsonResponse(
+        { error: "Too many requests." },
+        429,
+        { "retry-after": "3600" }
+      )
     });
     const startRegistrationImpl = vi.fn(async () => ({}));
     const navigate = vi.fn();
@@ -146,10 +152,99 @@ describe("native passkey ceremony", () => {
         locationOrigin: ORIGIN,
         navigate
       }
-    )).rejects.toThrow("Too many passkey attempts. Wait a moment, then try again.");
+    )).rejects.toThrow("Too many passkey attempts. Try again in 1 hour.");
 
     expect(startRegistrationImpl).not.toHaveBeenCalled();
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("uses Retry-After even when a rate-limit body is not readable", async () => {
+    const fetchImpl = fetchStub({
+      options: () => new Response("not-json", {
+        status: 429,
+        headers: { "retry-after": "45" }
+      })
+    });
+
+    await expect(runPasskeyCeremony(
+      { mode: "register", callback: CALLBACK, state: STATE, accountName: "", canReturn: true },
+      {
+        fetchImpl,
+        startRegistrationImpl: vi.fn(async () => ({})),
+        startAuthenticationImpl: vi.fn(async () => ({})),
+        locationOrigin: ORIGIN,
+        navigate: vi.fn()
+      }
+    )).rejects.toThrow("Too many passkey attempts. Try again in 45 seconds.");
+  });
+
+  it("keeps sync-server preparation failures separate from authenticator failures", async () => {
+    const fetchImpl = fetchStub({
+      options: () => {
+        throw new TypeError("network unavailable");
+      }
+    });
+
+    await expect(runPasskeyCeremony(
+      { mode: "authenticate", callback: CALLBACK, state: STATE, accountName: "", canReturn: true },
+      {
+        fetchImpl,
+        startRegistrationImpl: vi.fn(async () => ({})),
+        startAuthenticationImpl: vi.fn(async () => ({})),
+        locationOrigin: ORIGIN,
+        navigate: vi.fn()
+      }
+    )).rejects.toThrow("Passkey sign-in could not be prepared. Check the sync server and try again.");
+  });
+
+  it("uses the verification response retry window without retrying early", async () => {
+    const fetchImpl = fetchStub({
+      options: () => jsonResponse({
+        mode: "authenticate",
+        challengeToken: "challenge-token-rate-limit",
+        publicKey: {}
+      }),
+      verify: () => jsonResponse(
+        { error: "Too many requests." },
+        429,
+        { "retry-after": "90" }
+      )
+    });
+    const navigate = vi.fn();
+
+    await expect(runPasskeyCeremony(
+      { mode: "authenticate", callback: CALLBACK, state: STATE, accountName: "", canReturn: true },
+      {
+        fetchImpl,
+        startRegistrationImpl: vi.fn(async () => ({})),
+        startAuthenticationImpl: vi.fn(async () => ({ id: "credential-rate-limit" })),
+        locationOrigin: ORIGIN,
+        navigate
+      }
+    )).rejects.toThrow("Too many passkey attempts. Try again in 2 minutes.");
+
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("ignores an unbounded Retry-After value instead of rendering it", async () => {
+    const fetchImpl = fetchStub({
+      options: () => jsonResponse(
+        { error: "Too many requests." },
+        429,
+        { "retry-after": "999999999999999999999" }
+      )
+    });
+
+    await expect(runPasskeyCeremony(
+      { mode: "register", callback: CALLBACK, state: STATE, accountName: "", canReturn: true },
+      {
+        fetchImpl,
+        startRegistrationImpl: vi.fn(async () => ({})),
+        startAuthenticationImpl: vi.fn(async () => ({})),
+        locationOrigin: ORIGIN,
+        navigate: vi.fn()
+      }
+    )).rejects.toThrow("Too many passkey attempts. Try again later.");
   });
 
   it("explains a closed registration window without rendering server text", async () => {
@@ -288,7 +383,7 @@ describe("native passkey ceremony", () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
-  it("maps an authenticator failure without exposing its implementation message", async () => {
+  it("maps an authenticator failure to local recovery guidance without exposing implementation details", async () => {
     const fetchImpl = fetchStub({
       options: () => jsonResponse({ mode: "register", challengeToken: "challenge-token-5", publicKey: {} })
     });
@@ -305,10 +400,64 @@ describe("native passkey ceremony", () => {
         locationOrigin: ORIGIN,
         navigate
       }
-    )).rejects.toThrow("Passkey sign-in could not be completed. Check the sync server and try again.");
+    )).rejects.toThrow(
+      "The device could not use a passkey. Make sure Touch ID or a passkey-compatible security key is available, then try again."
+    );
 
     expect(fetchImpl).toHaveBeenCalledExactlyOnceWith("/auth/passkey/options", expect.anything());
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("gives actionable guidance for an authenticator missing required passkey capabilities", async () => {
+    const fetchImpl = fetchStub({
+      options: () => jsonResponse({ mode: "register", challengeToken: "challenge-token-capability", publicKey: {} })
+    });
+    const capabilityFailure = new WebAuthnError({
+      message: "browser-controlled capability detail",
+      code: "ERROR_AUTHENTICATOR_MISSING_DISCOVERABLE_CREDENTIAL_SUPPORT",
+      cause: new DOMException("Discoverable credentials are unsupported.", "ConstraintError")
+    });
+
+    await expect(runPasskeyCeremony(
+      { mode: "register", callback: CALLBACK, state: STATE, accountName: "", canReturn: true },
+      {
+        fetchImpl,
+        startRegistrationImpl: vi.fn(async () => {
+          throw capabilityFailure;
+        }),
+        startAuthenticationImpl: vi.fn(async () => ({})),
+        locationOrigin: ORIGIN,
+        navigate: vi.fn()
+      }
+    )).rejects.toThrow(
+      "This authenticator does not support the required passkey features. Use Touch ID or a passkey-compatible security key, then try again."
+    );
+  });
+
+  it("directs an already-registered passkey to sign in instead", async () => {
+    const fetchImpl = fetchStub({
+      options: () => jsonResponse({ mode: "register", challengeToken: "challenge-token-existing", publicKey: {} })
+    });
+    const existingPasskey = new WebAuthnError({
+      message: "browser-controlled existing credential detail",
+      code: "ERROR_AUTHENTICATOR_PREVIOUSLY_REGISTERED",
+      cause: new DOMException("Credential already exists.", "InvalidStateError")
+    });
+
+    await expect(runPasskeyCeremony(
+      { mode: "register", callback: CALLBACK, state: STATE, accountName: "", canReturn: true },
+      {
+        fetchImpl,
+        startRegistrationImpl: vi.fn(async () => {
+          throw existingPasskey;
+        }),
+        startAuthenticationImpl: vi.fn(async () => ({})),
+        locationOrigin: ORIGIN,
+        navigate: vi.fn()
+      }
+    )).rejects.toThrow(
+      "This passkey is already linked to an account. Choose Sign in, or use a different passkey to create a new account."
+    );
   });
 
   it("maps SimpleWebAuthn's wrapped NotAllowedError to a neutral cancellation", async () => {
@@ -395,6 +544,6 @@ describe("native passkey ceremony", () => {
 
   it("never renders an unclassified implementation error verbatim", () => {
     expect(passkeyCeremonyUserMessage(new Error("secret internal host and stack detail")))
-      .toBe("Passkey sign-in could not be completed. Check the sync server and try again.");
+      .toBe("Passkey sign-in could not be completed. Close this page and restart sync from Address Atlas Mac.");
   });
 });

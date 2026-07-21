@@ -11,6 +11,10 @@ import {
 } from "@/lib/sync/diagnostics";
 import { getNativeEndpointConfig } from "@/lib/sync/native-config";
 import { checkSyncSchemaReadiness, ensureSyncSchema } from "@/lib/sync/postgres";
+import {
+  scheduleStorageLedgerIntegrityAudit,
+  resetStorageLedgerIntegrityForTests
+} from "@/lib/sync/storage-ledger-integrity";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -62,6 +66,10 @@ async function checkReadiness(diagnostics: ReturnType<typeof requestDiagnostics>
       await ensureSyncSchema();
       failureCode = "schema_contract_invalid";
       await checkSyncSchemaReadiness();
+      // The exact ledger scan is deliberately off the readiness latency path.
+      // A confirmed drift persists a marker that blocks vault writes without
+      // taking authentication or encrypted reads out of service.
+      scheduleStorageLedgerIntegrityAudit(diagnostics);
       readinessCache = {
         ready: true,
         expiresAt: performance.now() + READY_TTL_MS
@@ -94,4 +102,5 @@ async function checkReadiness(diagnostics: ReturnType<typeof requestDiagnostics>
 export function resetHealthReadinessForTests() {
   readinessInFlight = null;
   readinessCache = null;
+  resetStorageLedgerIntegrityForTests();
 }

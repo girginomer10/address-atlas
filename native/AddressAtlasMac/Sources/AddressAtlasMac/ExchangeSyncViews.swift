@@ -237,12 +237,14 @@ struct SyncView: View {
   @State private var confirmingSessionRevocation = false
   @State private var confirmingAccountDeletion = false
   @State private var confirmingAccountDisconnect = false
+  @State private var confirmingLocalAccountDisconnect = false
   @State private var confirmingStopUploadRecovery = false
   @State private var confirmingRollbackRestore = false
   @State private var pendingDownloadServerURL: URL?
   @State private var pendingRevocationServerURL: URL?
   @State private var pendingDeletionServerURL: URL?
   @State private var pendingDisconnectServerURL: URL?
+  @State private var pendingLocalDisconnectServerURL: URL?
 
   private var hasValidServerInput: Bool {
     AppState.validatedSyncURL(serverURL) != nil
@@ -528,7 +530,7 @@ struct SyncView: View {
         VStack(alignment: .leading, spacing: 12) {
           SectionHeader(title: "Account controls", meta: persistedServerOrigin)
           Text(
-            "Revoking signs out only this Mac. Disconnecting revokes this Mac's session and clears its local account binding so you can switch, while keeping the remote account and encrypted server vault. Deleting permanently removes the remote account and its server snapshots. Every option keeps this Mac's encrypted local vault."
+            "Revoking signs out only this Mac. Disconnecting revokes this Mac's session and clears its local account binding so you can switch, while keeping the remote account and encrypted server vault. If the server is unavailable, an explicit local-only disconnect remains available. Deleting permanently removes the remote account and its server snapshots. Every option keeps this Mac's encrypted local vault."
           )
           .font(.callout)
           .foregroundStyle(AtlasTheme.ink2)
@@ -561,6 +563,17 @@ struct SyncView: View {
                 activity: .disconnectingAccount,
                 activeActivity: state.syncActivity
               )
+            }
+            .buttonStyle(AtlasSecondaryButtonStyle())
+            .disabled(
+              state.vaultEditsDisabled || !hasConnectedSyncAccount || persistedServerURL == nil
+            )
+            Button(role: .destructive) {
+              guard let target = persistedServerURL else { return }
+              pendingLocalDisconnectServerURL = target
+              confirmingLocalAccountDisconnect = true
+            } label: {
+              Label("Disconnect locally without contacting server", systemImage: "wifi.slash")
             }
             .buttonStyle(AtlasSecondaryButtonStyle())
             .disabled(
@@ -629,7 +642,33 @@ struct SyncView: View {
       Button("Keep current connection", role: .cancel) {}
     } message: {
       Text(
-        "This first permanently removes any automatic rollback point tied to the current account, then revokes this Mac's server session when possible and clears its local account binding and sync baseline. It does not delete the remote account, passkeys, encrypted remote vault, or this Mac's encrypted local vault."
+        "This revokes this Mac's server session, then atomically clears its local account binding, sync baseline, and any automatic rollback point tied to the current account. If the server cannot be reached, nothing local is removed. It does not delete the remote account, passkeys, encrypted remote vault, or this Mac's encrypted local vault."
+      )
+    }
+    .confirmationDialog(
+      "Disconnect locally without contacting the sync server?",
+      isPresented: $confirmingLocalAccountDisconnect,
+      titleVisibility: .visible
+    ) {
+      Button("Disconnect locally", role: .destructive) {
+        guard let target = pendingLocalDisconnectServerURL else { return }
+        let requestedServerDraft = serverURL
+        Task {
+          await state.disconnectSyncAccountLocallyForSwitch(expectedServerURL: target)
+          if state.document.syncState.accountId == nil {
+            serverURL =
+              AppState.validatedSyncURL(requestedServerDraft) == nil
+              ? state.document.syncState.serverURL
+              : requestedServerDraft
+          } else {
+            serverURL = state.document.syncState.serverURL
+          }
+        }
+      }
+      Button("Keep current connection", role: .cancel) {}
+    } message: {
+      Text(
+        "Use this only when the saved server cannot be reached. Address Atlas will atomically remove this Mac's local account binding, bearer token, sync baseline, and account-bound rollback point without making a server request. The remote account and encrypted vault remain, and this Mac's old server session may remain valid until it expires or is revoked elsewhere."
       )
     }
     .confirmationDialog(

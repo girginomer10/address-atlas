@@ -54,12 +54,32 @@ vi.mock("./tokens", () => ({
 import {
   createPasskeyOptions,
   parsePasskeyOptionsInput,
+  parsePasskeyVerifyInput,
   resetPasskeyMaintenanceForTests,
   verifyPasskey
 } from "./passkeys";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const CHALLENGE = "c".repeat(43);
+const CREDENTIAL_ID = Buffer.from("credential-1").toString("base64url");
+const DUPLICATE_CREDENTIAL_ID = Buffer.from("duplicate-id").toString("base64url");
+const VALID_CREDENTIAL_PUBLIC_KEY = Buffer.from(
+  "a50102032620012158206b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2962258204fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5",
+  "hex"
+);
+const VALID_CREDENTIAL_PUBLIC_KEY_BASE64URL = VALID_CREDENTIAL_PUBLIC_KEY.toString("base64url");
+
+function storedCredentialRow(id = CREDENTIAL_ID) {
+  return {
+    id,
+    user_id: USER_ID,
+    public_key_base64url: VALID_CREDENTIAL_PUBLIC_KEY_BASE64URL,
+    counter: "8",
+    created_at: new Date("2026-07-13T12:00:00Z"),
+    updated_at: new Date("2026-07-13T12:00:00Z"),
+    stored_row_valid: true
+  };
+}
 
 describe("passkey account safety", () => {
   beforeEach(() => {
@@ -82,6 +102,19 @@ describe("passkey account safety", () => {
     expect(() => parsePasskeyOptionsInput({ mode: "authenticate", accountName: "unexpected" })).toThrow(/only accepted/i);
   });
 
+  it("bounds credential IDs before concurrency or database work", () => {
+    expect(() => parsePasskeyVerifyInput({
+      mode: "authenticate",
+      challengeToken: "token",
+      response: { id: "x".repeat(1_365) }
+    })).toThrow(/credential ID/i);
+    expect(() => parsePasskeyVerifyInput({
+      mode: "authenticate",
+      challengeToken: "token",
+      response: { id: { nested: true } }
+    })).toThrow(/credential ID/i);
+  });
+
   it.each(["register", "authenticate"] as const)(
     "binds the %s token to the exact challenge returned to the browser",
     async (mode) => {
@@ -95,9 +128,17 @@ describe("passkey account safety", () => {
   );
 
   it("issues registration options without consuming durable admission", async () => {
-    await expect(createPasskeyOptions({ mode: "register" })).resolves.toMatchObject({
+    const options = await createPasskeyOptions({ mode: "register" });
+    expect(options).toMatchObject({
       mode: "register"
     });
+    if (!("pubKeyCredParams" in options.publicKey)) {
+      throw new Error("Expected registration options.");
+    }
+    expect(options.publicKey.pubKeyCredParams).toEqual([
+      { alg: -7, type: "public-key" },
+      { alg: -257, type: "public-key" }
+    ]);
 
     expect(mocks.ensureSyncSchema).not.toHaveBeenCalled();
     expect(mocks.poolQuery.mock.calls.some(([sql]) => String(sql).includes("registration_usage")))
@@ -114,7 +155,11 @@ describe("passkey account safety", () => {
     mocks.verifyRegistrationResponse.mockResolvedValue({
       verified: true,
       registrationInfo: {
-        credential: { id: "duplicate-id", publicKey: new Uint8Array([1, 2, 3]), counter: 0 }
+        credential: {
+          id: DUPLICATE_CREDENTIAL_ID,
+          publicKey: VALID_CREDENTIAL_PUBLIC_KEY,
+          counter: 0
+        }
       }
     });
     mocks.clientQuery.mockImplementation(async (sql: string) => {
@@ -127,7 +172,10 @@ describe("passkey account safety", () => {
     await expect(verifyPasskey({
       mode: "register",
       challengeToken: "token",
-      response: { response: { transports: ["attacker-controlled".repeat(10_000)] } }
+      response: {
+        id: DUPLICATE_CREDENTIAL_ID,
+        response: { transports: ["attacker-controlled".repeat(10_000)] }
+      }
     })).rejects.toThrow(/verification failed/i);
 
     const credentialCall = mocks.clientQuery.mock.calls
@@ -160,7 +208,11 @@ describe("passkey account safety", () => {
     mocks.verifyRegistrationResponse.mockResolvedValue({
       verified: true,
       registrationInfo: {
-        credential: { id: "duplicate-id", publicKey: new Uint8Array([1, 2, 3]), counter: 0 }
+        credential: {
+          id: DUPLICATE_CREDENTIAL_ID,
+          publicKey: VALID_CREDENTIAL_PUBLIC_KEY,
+          counter: 0
+        }
       }
     });
     mocks.clientQuery.mockImplementation(async (sql: string) => {
@@ -189,7 +241,11 @@ describe("passkey account safety", () => {
     mocks.verifyRegistrationResponse.mockResolvedValue({
       verified: true,
       registrationInfo: {
-        credential: { id: "credential-1", publicKey: new Uint8Array([1, 2, 3]), counter: 0 }
+        credential: {
+          id: CREDENTIAL_ID,
+          publicKey: VALID_CREDENTIAL_PUBLIC_KEY,
+          counter: 0
+        }
       }
     });
     mocks.clientQuery.mockImplementation(async (sql: string) => {
@@ -204,6 +260,9 @@ describe("passkey account safety", () => {
     })).rejects.toThrow(/verification failed/i);
 
     expect(mocks.verifyRegistrationResponse).toHaveBeenCalledOnce();
+    expect(mocks.verifyRegistrationResponse).toHaveBeenCalledWith(expect.objectContaining({
+      supportedAlgorithmIDs: [-7, -257]
+    }));
     expect(mocks.clientQuery).toHaveBeenCalledWith("ROLLBACK");
     expect(mocks.clientQuery.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO users"))).toBe(false);
     expect(mocks.createSessionGrant).not.toHaveBeenCalled();
@@ -223,13 +282,7 @@ describe("passkey account safety", () => {
       if (sql.includes("FROM passkey_credentials")) {
         return {
           rowCount: 1,
-          rows: [{
-            id: "credential-1",
-            user_id: USER_ID,
-            public_key_base64url: "AQIDBA",
-            counter: "8",
-            transports: []
-          }]
+          rows: [storedCredentialRow()]
         };
       }
       if (sql.includes("consumed_challenges")) return { rowCount: 1, rows: [] };
@@ -239,7 +292,7 @@ describe("passkey account safety", () => {
     await expect(verifyPasskey({
       mode: "authenticate",
       challengeToken: "token",
-      response: { id: "credential-1" }
+      response: { id: CREDENTIAL_ID }
     })).resolves.toEqual({ verified: true, userId: USER_ID, sessionToken: "session-token" });
 
     const statements = mocks.clientQuery.mock.calls.map(([sql]) => String(sql));
@@ -249,7 +302,10 @@ describe("passkey account safety", () => {
     expect(selectIndex).toBeGreaterThan(-1);
     expect(verifyUpdateIndex).toBeGreaterThan(selectIndex);
     expect(commitIndex).toBeGreaterThan(verifyUpdateIndex);
-    expect(mocks.clientQuery).toHaveBeenCalledWith(expect.stringContaining("GREATEST(counter, $2)"), ["credential-1", 9]);
+    expect(mocks.clientQuery).toHaveBeenCalledWith(
+      expect.stringContaining("GREATEST(counter, $2)"),
+      [CREDENTIAL_ID, 9]
+    );
     const verificationInput = mocks.verifyAuthenticationResponse.mock.calls[0]?.[0];
     expect(verificationInput.credential).not.toHaveProperty("transports");
     expect(mocks.release).toHaveBeenCalledOnce();
@@ -269,12 +325,7 @@ describe("passkey account safety", () => {
       if (sql.includes("FROM passkey_credentials")) {
         return {
           rowCount: 1,
-          rows: [{
-            id: "credential-1",
-            user_id: USER_ID,
-            public_key_base64url: "AQIDBA",
-            counter: "8"
-          }]
+          rows: [storedCredentialRow()]
         };
       }
       if (sql.includes("consumed_challenges")) return { rowCount: 0, rows: [] };
@@ -284,13 +335,48 @@ describe("passkey account safety", () => {
     await expect(verifyPasskey({
       mode: "authenticate",
       challengeToken: "token",
-      response: { id: "credential-1" }
+      response: { id: CREDENTIAL_ID }
     })).rejects.toThrow(/verification failed/i);
 
     expect(mocks.verifyAuthenticationResponse).toHaveBeenCalledOnce();
     expect(mocks.clientQuery).toHaveBeenCalledWith("ROLLBACK");
     expect(mocks.clientQuery.mock.calls.some(([sql]) => String(sql).includes("UPDATE passkey_credentials"))).toBe(false);
     expect(mocks.createSessionGrant).not.toHaveBeenCalled();
+  });
+
+  it("rejects a stored credential sentinel without decoding unsafe fields", async () => {
+    mocks.readChallengeToken.mockReturnValue({
+      mode: "authenticate",
+      challenge: CHALLENGE,
+      expiresAt: Date.now() + 60_000
+    });
+    mocks.clientQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM passkey_credentials")) {
+        return {
+          rowCount: 1,
+          rows: [{
+            id: null,
+            user_id: USER_ID,
+            public_key_base64url: null,
+            counter: "8",
+            created_at: null,
+            updated_at: null,
+            stored_row_valid: false
+          }]
+        };
+      }
+      return { rowCount: 1, rows: [] };
+    });
+
+    const failure = await verifyPasskey({
+      mode: "authenticate",
+      challengeToken: "token",
+      response: { id: CREDENTIAL_ID }
+    }).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ operationalCode: "passkey_credential_invalid" });
+    expect(mocks.verifyAuthenticationResponse).not.toHaveBeenCalled();
+    expect(mocks.clientQuery).toHaveBeenCalledWith("ROLLBACK");
   });
 
   it("keeps best-effort challenge pruning single-flight and rate limited", async () => {
@@ -307,37 +393,116 @@ describe("passkey account safety", () => {
       if (sql.includes("FROM passkey_credentials")) {
         return {
           rowCount: 1,
-          rows: [{
-            id: "credential-1",
-            user_id: USER_ID,
-            public_key_base64url: "AQIDBA",
-            counter: "8"
-          }]
+          rows: [storedCredentialRow()]
         };
       }
       if (sql.includes("consumed_challenges")) return { rowCount: 1, rows: [] };
       return { rowCount: 1, rows: [] };
     });
 
-    let finishPrune: (() => void) | undefined;
-    mocks.poolQuery.mockReturnValue(new Promise<void>((resolve) => {
+    let finishPrune: ((value: { rowCount: number; rows: never[] }) => void) | undefined;
+    mocks.poolQuery.mockReturnValue(new Promise((resolve) => {
       finishPrune = resolve;
     }));
     const input = {
       mode: "authenticate" as const,
       challengeToken: "token",
-      response: { id: "credential-1" }
+      response: { id: CREDENTIAL_ID }
     };
 
     await expect(Promise.all([verifyPasskey(input), verifyPasskey(input)])).resolves.toHaveLength(2);
     expect(mocks.poolQuery).toHaveBeenCalledTimes(1);
     expect(mocks.poolQuery).toHaveBeenCalledWith(
-      "DELETE FROM consumed_challenges WHERE consumed_at < now() - interval '15 minutes'"
+      expect.stringContaining("FOR UPDATE SKIP LOCKED"),
+      [10_000]
     );
 
-    finishPrune?.();
+    finishPrune?.({ rowCount: 0, rows: [] });
     await Promise.resolve();
     await expect(verifyPasskey(input)).resolves.toMatchObject({ verified: true });
     expect(mocks.poolQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("prunes expired consumed challenges in bounded batches", async () => {
+    mocks.readChallengeToken.mockReturnValue({
+      mode: "authenticate",
+      challenge: CHALLENGE,
+      expiresAt: Date.now() + 60_000
+    });
+    mocks.verifyAuthenticationResponse.mockResolvedValue({
+      verified: true,
+      authenticationInfo: { newCounter: 9 }
+    });
+    mocks.clientQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM passkey_credentials")) {
+        return {
+          rowCount: 1,
+          rows: [storedCredentialRow()]
+        };
+      }
+      if (sql.includes("consumed_challenges")) return { rowCount: 1, rows: [] };
+      return { rowCount: 1, rows: [] };
+    });
+    mocks.poolQuery
+      .mockResolvedValueOnce({ rowCount: 10_000, rows: [] })
+      .mockResolvedValueOnce({ rowCount: 17, rows: [] });
+
+    await expect(verifyPasskey({
+      mode: "authenticate",
+      challengeToken: "token",
+      response: { id: CREDENTIAL_ID }
+    })).resolves.toMatchObject({ verified: true });
+
+    await vi.waitFor(() => expect(mocks.poolQuery).toHaveBeenCalledTimes(2));
+    expect(mocks.poolQuery).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("LIMIT $1"),
+      [10_000]
+    );
+    expect(mocks.poolQuery).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("LIMIT $1"),
+      [10_000]
+    );
+  });
+
+  it("reports a privacy-safe maintenance signal without failing authentication", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.readChallengeToken.mockReturnValue({
+      mode: "authenticate",
+      challenge: CHALLENGE,
+      expiresAt: Date.now() + 60_000
+    });
+    mocks.verifyAuthenticationResponse.mockResolvedValue({
+      verified: true,
+      authenticationInfo: { newCounter: 9 }
+    });
+    mocks.clientQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM passkey_credentials")) {
+        return { rowCount: 1, rows: [storedCredentialRow()] };
+      }
+      if (sql.includes("consumed_challenges")) return { rowCount: 1, rows: [] };
+      return { rowCount: 1, rows: [] };
+    });
+    mocks.poolQuery.mockRejectedValueOnce(
+      Object.assign(new Error("postgres://admin:secret@private-db"), { code: "57014" })
+    );
+
+    await expect(verifyPasskey({
+      mode: "authenticate",
+      challengeToken: "token",
+      response: { id: CREDENTIAL_ID }
+    })).resolves.toMatchObject({ verified: true });
+
+    await vi.waitFor(() => expect(errorLog).toHaveBeenCalledOnce());
+    const serialized = String(errorLog.mock.calls[0]?.[0]);
+    expect(JSON.parse(serialized)).toMatchObject({
+      event: "auth.challenge_prune_failed",
+      reason: "expired_challenge_prune_failed",
+      errorCode: "database_query_failed"
+    });
+    expect(serialized).not.toContain("secret");
+    expect(serialized).not.toContain("private-db");
+    errorLog.mockRestore();
   });
 });

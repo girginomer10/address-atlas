@@ -1,5 +1,6 @@
-import AddressAtlasCore
+import Foundation
 import XCTest
+@testable import AddressAtlasCore
 
 final class EndpointConfigTrustStoreTests: XCTestCase {
   func testSuccessfulVersion20SurvivesStoreRecreationAndRejectsVersion19() async throws {
@@ -199,6 +200,48 @@ final class EndpointConfigTrustStoreTests: XCTestCase {
     XCTAssertEqual(outcomes.filter { $0 }.count, 1)
   }
 
+  func testPostRenameDirectorySyncFailureReportsUncertainUntilRetryIsDurable() async throws {
+    let fixture = try makeFixture()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let origin = URL(string: "https://sync.example")!
+    let directorySync = DirectorySyncResultSequence([false, true])
+    let store = EndpointConfigTrustStore(
+      fileURL: fixture.file,
+      postRenameDirectorySync: { _ in directorySync.next() }
+    )
+
+    // Once rename has published the new file, a later durability-barrier error
+    // cannot truthfully be surfaced as rollback. Report the distinct state so
+    // callers keep sensitive network work fail-closed while preserving the
+    // visible high-water mark.
+    let firstOutcome = try await store.validateAndRecord(config(version: 20), for: origin)
+    XCTAssertEqual(firstOutcome, .committedDurabilityUncertain)
+
+    do {
+      try await EndpointConfigTrustStore(fileURL: fixture.file)
+        .validateAndRecord(config(version: 19), for: origin)
+      XCTFail("Expected the post-rename version 20 record to remain authoritative")
+    } catch {
+      XCTAssertEqual(
+        error as? EndpointConfigTrustStoreError,
+        .rollback(previous: 20, received: 19)
+      )
+    }
+
+    // An exact same-record retry performs the missing directory barrier rather
+    // than incorrectly treating mere visibility as proof of durability.
+    let relaunchedStore = EndpointConfigTrustStore(
+      fileURL: fixture.file,
+      postRenameDirectorySync: { _ in directorySync.next() }
+    )
+    let retryOutcome = try await relaunchedStore.validateAndRecord(
+      config(version: 20),
+      for: origin
+    )
+    XCTAssertEqual(retryOutcome, .durable)
+    XCTAssertEqual(directorySync.callCount, 2)
+  }
+
   private func config(version: Int, message: String? = nil) -> NativeEndpointConfig {
     var config = NativeEndpointConfig.bundled
     config.configVersion = version
@@ -226,5 +269,26 @@ final class EndpointConfigTrustStoreTests: XCTestCase {
     } catch {
       return false
     }
+  }
+}
+
+private final class DirectorySyncResultSequence: @unchecked Sendable {
+  private let lock = NSLock()
+  private var results: [Bool]
+  private var count = 0
+
+  init(_ results: [Bool]) {
+    self.results = results
+  }
+
+  func next() -> Bool {
+    lock.withLock {
+      count += 1
+      return results.isEmpty ? true : results.removeFirst()
+    }
+  }
+
+  var callCount: Int {
+    lock.withLock { count }
   }
 }

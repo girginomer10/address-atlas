@@ -18,7 +18,7 @@ vi.mock("@simplewebauthn/server", async (importOriginal) => ({
 
 import { POST as postPasskeyOptions } from "@/app/auth/passkey/options/route";
 import { POST as postPasskeyVerify } from "@/app/auth/passkey/verify/route";
-import { base64urlDecode } from "./base64url";
+import { base64urlDecode, base64urlEncode } from "./base64url";
 import { getSyncPasskeyConfig } from "./config";
 import { verifyPasskey } from "./passkeys";
 import { closeSyncPoolForTests, ensureSyncSchema, getSyncPool } from "./postgres";
@@ -30,6 +30,15 @@ import {
 import { issueChallengeToken, readBearerToken, readChallengeToken } from "./tokens";
 
 const maybeDescribe = process.env.TEST_SYNC_DATABASE_URL ? describe : describe.skip;
+const VALID_CREDENTIAL_PUBLIC_KEY = Buffer.from(
+  "a50102032620012158206b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2962258204fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5",
+  "hex"
+);
+const VALID_CREDENTIAL_PUBLIC_KEY_BASE64URL = VALID_CREDENTIAL_PUBLIC_KEY.toString("base64url");
+
+function newCredentialId(prefix: string) {
+  return base64urlEncode(`${prefix}:${randomUUID()}`);
+}
 
 maybeDescribe("passkey invariants against real Postgres", () => {
   const testUserIds = new Set<string>();
@@ -120,6 +129,10 @@ maybeDescribe("passkey invariants against real Postgres", () => {
       residentKey: "required",
       userVerification: "required"
     });
+    expect(body.publicKey.pubKeyCredParams).toEqual([
+      { alg: -7, type: "public-key" },
+      { alg: -257, type: "public-key" }
+    ]);
     // 32 bytes of raw entropy encode to 43 base64url characters.
     expect(body.publicKey.challenge).toMatch(/^[A-Za-z0-9_-]{43}$/);
 
@@ -160,11 +173,11 @@ maybeDescribe("passkey invariants against real Postgres", () => {
     testChallenges.add(issued.challenge);
     testUserIds.add(issued.pendingUserId!);
 
-    const credentialId = `route-registration-${randomUUID()}`;
+    const credentialId = newCredentialId("route-registration");
     mocks.verifyRegistrationResponse.mockResolvedValue({
       verified: true,
       registrationInfo: {
-        credential: { id: credentialId, publicKey: new Uint8Array([1, 2, 3, 4]), counter: 0 }
+        credential: { id: credentialId, publicKey: VALID_CREDENTIAL_PUBLIC_KEY, counter: 0 }
       }
     });
 
@@ -187,7 +200,8 @@ maybeDescribe("passkey invariants against real Postgres", () => {
       expectedChallenge: issued.challenge,
       expectedOrigin: config.expectedOrigin,
       expectedRPID: config.rpID,
-      requireUserVerification: true
+      requireUserVerification: true,
+      supportedAlgorithmIDs: [-7, -257]
     });
 
     const credentials = await getSyncPool().query(
@@ -226,7 +240,7 @@ maybeDescribe("passkey invariants against real Postgres", () => {
 
   it("consumes a registration challenge once and rejects its replay", async () => {
     const pendingUserId = randomUUID();
-    const credentialId = `registration-${randomUUID()}`;
+    const credentialId = newCredentialId("registration");
     const challengeValue = challenge("register");
     testUserIds.add(pendingUserId);
     const challengeToken = issueChallengeToken({
@@ -238,7 +252,7 @@ maybeDescribe("passkey invariants against real Postgres", () => {
     mocks.verifyRegistrationResponse.mockResolvedValue({
       verified: true,
       registrationInfo: {
-        credential: { id: credentialId, publicKey: new Uint8Array([1, 2, 3, 4]), counter: 0 }
+        credential: { id: credentialId, publicKey: VALID_CREDENTIAL_PUBLIC_KEY, counter: 0 }
       }
     });
     const input = {
@@ -268,7 +282,7 @@ maybeDescribe("passkey invariants against real Postgres", () => {
     process.env.SYNC_MAX_ACCOUNTS = "1";
     const existingUserId = randomUUID();
     const pendingUserId = randomUUID();
-    const credentialId = `ceiling-${randomUUID()}`;
+    const credentialId = newCredentialId("ceiling");
     const challengeValue = challenge("ceiling");
     testUserIds.add(existingUserId);
     testUserIds.add(pendingUserId);
@@ -282,7 +296,7 @@ maybeDescribe("passkey invariants against real Postgres", () => {
     mocks.verifyRegistrationResponse.mockResolvedValue({
       verified: true,
       registrationInfo: {
-        credential: { id: credentialId, publicKey: new Uint8Array([1, 2, 3, 4]), counter: 0 }
+        credential: { id: credentialId, publicKey: VALID_CREDENTIAL_PUBLIC_KEY, counter: 0 }
       }
     });
 
@@ -304,14 +318,14 @@ maybeDescribe("passkey invariants against real Postgres", () => {
   it("updates a credential once and rejects an authentication challenge replay", async () => {
     const config = getSyncPasskeyConfig();
     const userId = randomUUID();
-    const credentialId = `authentication-${randomUUID()}`;
+    const credentialId = newCredentialId("authentication");
     const challengeValue = challenge("authenticate");
     testUserIds.add(userId);
     await getSyncPool().query("INSERT INTO users (id) VALUES ($1)", [userId]);
     await getSyncPool().query(
       `INSERT INTO passkey_credentials (id, user_id, public_key_base64url, counter)
        VALUES ($1, $2, $3, $4)`,
-      [credentialId, userId, "AQIDBA", 8]
+      [credentialId, userId, VALID_CREDENTIAL_PUBLIC_KEY_BASE64URL, 8]
     );
     const challengeToken = issueChallengeToken({
       mode: "authenticate",
@@ -356,7 +370,7 @@ maybeDescribe("passkey invariants against real Postgres", () => {
 
   it("allows exactly one concurrent consumer of a real registration challenge", async () => {
     const pendingUserId = randomUUID();
-    const credentialId = `concurrent-registration-${randomUUID()}`;
+    const credentialId = newCredentialId("concurrent-registration");
     const challengeValue = challenge("concurrent-registration");
     testUserIds.add(pendingUserId);
     const challengeToken = issueChallengeToken({
@@ -368,7 +382,7 @@ maybeDescribe("passkey invariants against real Postgres", () => {
     mocks.verifyRegistrationResponse.mockResolvedValue({
       verified: true,
       registrationInfo: {
-        credential: { id: credentialId, publicKey: new Uint8Array([1, 2, 3, 4]), counter: 0 }
+        credential: { id: credentialId, publicKey: VALID_CREDENTIAL_PUBLIC_KEY, counter: 0 }
       }
     });
     const input = {
@@ -399,12 +413,12 @@ maybeDescribe("passkey invariants against real Postgres", () => {
     const attempts = [0, 1].map((index) => {
       const pendingUserId = randomUUID();
       const challengeValue = challenge(`account-cap-${index}`);
-      const credentialId = `account-cap-${index}-${randomUUID()}`;
+      const attemptCredentialId = newCredentialId(`account-cap-${index}`);
       testUserIds.add(pendingUserId);
       return {
         pendingUserId,
         challengeValue,
-        credentialId,
+        credentialId: attemptCredentialId,
         input: {
           mode: "register",
           challengeToken: issueChallengeToken({
@@ -413,7 +427,7 @@ maybeDescribe("passkey invariants against real Postgres", () => {
             pendingUserId,
             expiresAt: Date.now() + 60_000
           }),
-          response: { id: credentialId }
+          response: { id: attemptCredentialId }
         }
       };
     });
@@ -422,7 +436,7 @@ maybeDescribe("passkey invariants against real Postgres", () => {
       registrationInfo: {
         credential: {
           id: response.id,
-          publicKey: new Uint8Array([1, 2, 3, 4]),
+          publicKey: VALID_CREDENTIAL_PUBLIC_KEY,
           counter: 0
         }
       }
@@ -440,13 +454,13 @@ maybeDescribe("passkey invariants against real Postgres", () => {
 
   it("locks the real credential row across concurrent counter verifications", async () => {
     const userId = randomUUID();
-    const credentialId = `counter-race-${randomUUID()}`;
+    const credentialId = newCredentialId("counter-race");
     testUserIds.add(userId);
     await getSyncPool().query("INSERT INTO users (id) VALUES ($1)", [userId]);
     await getSyncPool().query(
       `INSERT INTO passkey_credentials (id, user_id, public_key_base64url, counter)
-       VALUES ($1, $2, 'AQIDBA', 8)`,
-      [credentialId, userId]
+       VALUES ($1, $2, $3, 8)`,
+      [credentialId, userId, VALID_CREDENTIAL_PUBLIC_KEY_BASE64URL]
     );
     const inputs = [0, 1].map((index) => ({
       mode: "authenticate",

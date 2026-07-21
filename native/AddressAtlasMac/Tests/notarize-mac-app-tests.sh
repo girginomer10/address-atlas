@@ -56,7 +56,9 @@ new_case() {
 #!/usr/bin/env bash
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-mkdir -p "$root/dist/Address Atlas.app"
+mkdir -p "$root/dist/Address Atlas.app/Contents/MacOS"
+printf 'app fixture\n' > "$root/dist/Address Atlas.app/Contents/MacOS/Address Atlas"
+chmod 0700 "$root/dist/Address Atlas.app/Contents/MacOS/Address Atlas"
 printf 'signed dmg fixture\n' > "$root/dist/Address Atlas.dmg"
 printf 'built\n' >> "$root/events.log"
 EOF
@@ -67,6 +69,10 @@ set -euo pipefail
 printf 'xcrun' >> "$CASE_DIR/events.log"
 printf ' <%s>' "$@" >> "$CASE_DIR/events.log"
 printf '\n' >> "$CASE_DIR/events.log"
+if [[ "${1:-}" == "lipo" && "${2:-}" == "-archs" ]]; then
+  printf '%s\n' "${FAKE_APP_ARCHS:-arm64 x86_64}"
+  exit 0
+fi
 if [[ "${1:-}" == "notarytool" && "${2:-}" == "submit" ]]; then
   printf '%s\n' "${FAKE_SUBMISSION_JSON:-{\"id\":\"12345678-1234-1234-1234-123456789abc\",\"status\":\"Accepted\"}}"
   exit "${FAKE_SUBMIT_STATUS:-0}"
@@ -116,6 +122,7 @@ run_notarize() {
     FAKE_SUBMISSION_JSON="${FAKE_SUBMISSION_JSON:-}" \
     FAKE_SUBMIT_STATUS="${FAKE_SUBMIT_STATUS:-0}" \
     FAKE_LOG_JSON="${FAKE_LOG_JSON:-}" \
+    FAKE_APP_ARCHS="${FAKE_APP_ARCHS:-arm64 x86_64}" \
     ADDRESS_ATLAS_CODESIGN_IDENTITY='Developer ID Application: Test (TEAMID1234)' \
     ADDRESS_ATLAS_NOTARY_PROFILE="$profile" \
     ADDRESS_ATLAS_NOTARY_KEY_PATH="$key_path" \
@@ -236,6 +243,34 @@ test_rejected_submission() {
   pass 'rejected notarization handling'
 }
 
+test_non_universal_app_is_rejected_before_submission() {
+  local invalid_arches
+  for invalid_arches in 'arm64' 'x86_64' 'arm64 arm64' 'arm64 x86_64 ppc'; do
+    new_case
+    FAKE_APP_ARCHS="$invalid_arches"
+    run_notarize
+    unset FAKE_APP_ARCHS
+    assert_status "$RUN_STATUS" 65 "invalid architectures '$invalid_arches' exit status" \
+      || return
+    assert_contains "$CASE_DIR/stderr" 'exact arm64 + x86_64 universal' \
+      "invalid architectures '$invalid_arches' rejection message missing" || return
+    assert_not_contains "$CASE_DIR/events.log" '<notarytool> <submit>' \
+      "invalid architectures '$invalid_arches' reached notarization submission" || return
+  done
+  pass 'non-universal app rejection'
+}
+
+test_universal_app_accepts_reverse_lipo_order() {
+  new_case
+  FAKE_APP_ARCHS='x86_64 arm64'
+  run_notarize
+  unset FAKE_APP_ARCHS
+  assert_status "$RUN_STATUS" 0 'reverse universal architecture order exit status' || return
+  assert_contains "$CASE_DIR/events.log" '<notarytool> <submit>' \
+    'reverse universal architecture order did not reach submission' || return
+  pass 'universal architecture order independence'
+}
+
 run_test() {
   "$1" || true
 }
@@ -249,6 +284,8 @@ run_test test_mixed_credentials_rejected
 run_test test_incomplete_credentials_rejected
 run_test test_key_permissions_rejected
 run_test test_rejected_submission
+run_test test_non_universal_app_is_rejected_before_submission
+run_test test_universal_app_accepts_reverse_lipo_order
 
 printf '%d passed, %d failed\n' "$passed" "$failed"
 [[ "$failed" -eq 0 ]]

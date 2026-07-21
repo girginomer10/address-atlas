@@ -521,7 +521,7 @@ final class ScannerWorkflowTests: XCTestCase {
     XCTAssertEqual(requests.snapshot().count, 3)
   }
 
-  func testCosmosFallsBackToLatestBlockAndPinsProvidersThatDoNotEchoHeight() async throws {
+  func testCosmosRejectsProvidersThatDoNotEchoBoundHeight() async throws {
     let address = "cosmos1qqqtduhx4t2xvgcxrqfmrz0heq00vlvjqhuz93nwt6d2y0quqlqqxxec22"
     let requests = ScannerRequestLog()
     let http = ScannerHTTPStub { request in
@@ -559,9 +559,92 @@ final class ScannerWorkflowTests: XCTestCase {
 
     let result = try await scanner.scan(addresses: address)
 
+    XCTAssertTrue(result.holdings.isEmpty)
+    XCTAssertEqual(requests.snapshot().count, 3)
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("height-bound Cosmos snapshot") }))
+  }
+
+  func testCosmosAcceptsGrpcMetadataHeightAndPinsEveryFallbackPart() async throws {
+    let address = "cosmos1qqqtduhx4t2xvgcxrqfmrz0heq00vlvjqhuz93nwt6d2y0quqlqqxxec22"
+    let requests = ScannerRequestLog()
+    let http = ScannerHTTPStub { request in
+      _ = requests.append(request)
+      let pinnedHeight = request.value(forHTTPHeaderField: "x-cosmos-block-height")
+      switch request.url?.path {
+      case "/cosmos/base/tendermint/v1beta1/blocks/latest":
+        XCTAssertNil(pinnedHeight)
+        return scannerResponse(
+          request,
+          #"{"block":{"header":{"chain_id":"cosmoshub-4","height":"700"}}}"#
+        )
+      case let path? where path.contains("/cosmos/bank/"):
+        if pinnedHeight == nil {
+          return scannerResponse(
+            request, #"{"balances":[{"denom":"uatom","amount":"9000000"}]}"#)
+        }
+        XCTAssertEqual(pinnedHeight, "700")
+        return scannerResponse(
+          request,
+          #"{"balances":[{"denom":"uatom","amount":"1000000"}]}"#,
+          headerFields: ["grpc-metadata-x-cosmos-block-height": "700"]
+        )
+      case let path? where path.contains("/cosmos/staking/"):
+        XCTAssertEqual(pinnedHeight, "700")
+        return scannerResponse(
+          request,
+          #"{"delegation_responses":[]}"#,
+          headerFields: ["grpc-metadata-x-cosmos-block-height": "700"]
+        )
+      default:
+        XCTAssertEqual(pinnedHeight, "700")
+        return scannerResponse(
+          request,
+          #"{"total":[]}"#,
+          headerFields: ["grpc-metadata-x-cosmos-block-height": "700"]
+        )
+      }
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: ScannerStaticPriceProvider(values: [:])
+    )
+
+    let result = try await scanner.scan(addresses: address)
+
     XCTAssertEqual(result.holdings.first(where: { $0.source == .native })?.amount, 1)
     XCTAssertEqual(requests.snapshot().count, 5)
     XCTAssertFalse(result.warnings.contains(where: { $0.contains("height-bound Cosmos snapshot") }))
+    XCTAssertFalse(result.warnings.contains(where: { $0.contains("could not be read") }))
+  }
+
+  func testCosmosSkipsBoundPartsThatOmitBothHeightHeaders() async throws {
+    let address = "cosmos1qqqtduhx4t2xvgcxrqfmrz0heq00vlvjqhuz93nwt6d2y0quqlqqxxec22"
+    let http = ScannerHTTPStub { request in
+      switch request.url?.path {
+      case let path? where path.contains("/cosmos/bank/"):
+        return scannerResponse(
+          request,
+          #"{"balances":[{"denom":"uatom","amount":"1000000"}]}"#,
+          headerFields: ["x-cosmos-block-height": "700"]
+        )
+      case let path? where path.contains("/cosmos/staking/"):
+        return scannerResponse(request, #"{"delegation_responses":[]}"#)
+      default:
+        return scannerResponse(request, #"{"total":[]}"#)
+      }
+    }
+    let scanner = NativeScanner(
+      http: JSONHTTPClient(http: http),
+      priceProvider: ScannerStaticPriceProvider(values: [:])
+    )
+
+    let result = try await scanner.scan(addresses: address)
+
+    XCTAssertEqual(result.holdings.first(where: { $0.source == .native })?.amount, 1)
+    XCTAssertFalse(result.holdings.contains(where: { $0.source == .staked }))
+    XCTAssertFalse(result.holdings.contains(where: { $0.source == .rewards }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("Delegations could not be read") }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("Rewards could not be read") }))
   }
 
   func testCosmosRejectsLatestBlockFromTheWrongNetwork() async throws {
@@ -644,6 +727,115 @@ final class ScannerWorkflowTests: XCTestCase {
     XCTAssertTrue(result.warnings.contains(where: { $0.contains("identical delegation") }))
     XCTAssertTrue(result.warnings.contains(where: { $0.contains("conflicting delegation") }))
     XCTAssertTrue(result.warnings.contains(where: { $0.contains("validator identity") }))
+  }
+
+  func testCosmosRewardRecordsDeduplicateOrQuarantineByDenomination() async throws {
+    let address = "cosmos1qqqtduhx4t2xvgcxrqfmrz0heq00vlvjqhuz93nwt6d2y0quqlqqxxec22"
+    let scenarios: [(total: String, expectedAmount: Double?, expectedWarning: String)] = [
+      (
+        """
+        [{"denom":"uatom","amount":"1000000"},{"denom":"uatom","amount":"1000000"}]
+        """,
+        1,
+        "Cosmos repeated one identical reward-balance record; the duplicate was skipped."
+      ),
+      (
+        """
+        [{"denom":"uatom","amount":"1000000"},{"denom":"uatom","amount":"2000000"}]
+        """,
+        nil,
+        "Cosmos returned conflicting reward-balance records for 1 denomination(s); every conflicting version was skipped."
+      ),
+    ]
+
+    for scenario in scenarios {
+      let http = ScannerHTTPStub { request in
+        switch request.url?.path {
+        case let path? where path.contains("/cosmos/bank/"):
+          return scannerResponse(
+            request,
+            #"{"balances":[]}"#,
+            headerFields: ["x-cosmos-block-height": "123"]
+          )
+        case let path? where path.contains("/cosmos/staking/"):
+          return scannerResponse(
+            request,
+            #"{"delegation_responses":[]}"#,
+            headerFields: ["x-cosmos-block-height": "123"]
+          )
+        default:
+          return scannerResponse(
+            request,
+            """
+            {"total":\(scenario.total)}
+            """,
+            headerFields: ["x-cosmos-block-height": "123"]
+          )
+        }
+      }
+      let scanner = NativeScanner(
+        http: JSONHTTPClient(http: http),
+        priceProvider: ScannerStaticPriceProvider(values: [:])
+      )
+
+      let result = try await scanner.scan(addresses: address)
+      let rewardAmount = result.holdings.first(where: { $0.source == .rewards })?.amount
+
+      XCTAssertEqual(rewardAmount, scenario.expectedAmount)
+      XCTAssertTrue(
+        result.warnings.contains(where: { $0.contains(scenario.expectedWarning) }),
+        "Expected \(scenario.expectedWarning), got \(result.warnings)"
+      )
+      XCTAssertEqual(result.warnings.filter { $0.contains("reward-balance record") }.count, 1)
+      XCTAssertFalse(
+        result.warnings.contains(where: { $0.contains(CosmosScanPart.rewards.failureWarning) }))
+    }
+  }
+
+  func testTronContractRowsDeduplicateOrQuarantineByContractAddress() async throws {
+    let address = "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7"
+    let contract = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+    let scenarios: [(rows: String, expectedAmount: Double?, expectedWarning: String)] = [
+      (
+        """
+        [{"\(contract)":"1250000"},{"\(contract)":"1250000"}]
+        """,
+        1.25,
+        "TRON repeated one identical TRC-20 contract balance record; the duplicate was skipped to avoid double-counting."
+      ),
+      (
+        """
+        [{"\(contract)":"1250000"},{"\(contract)":"2500000"}]
+        """,
+        nil,
+        "TRON returned conflicting TRC-20 balance records for USDT; every conflicting version was skipped."
+      ),
+    ]
+
+    for scenario in scenarios {
+      let http = ScannerHTTPStub { request in
+        scannerResponse(
+          request,
+          """
+          {"success":true,"data":[{"address":"4174472e7d35395a6b5add427eecb7f4b62ad2b071","balance":0,"trc20":\(scenario.rows)}]}
+          """
+        )
+      }
+      let scanner = NativeScanner(
+        http: JSONHTTPClient(http: http),
+        priceProvider: ScannerStaticPriceProvider(values: [:])
+      )
+
+      let result = try await scanner.scan(addresses: address)
+      let tokenAmount = result.holdings.first(where: { $0.symbol == "USDT" })?.amount
+
+      XCTAssertEqual(tokenAmount, scenario.expectedAmount)
+      XCTAssertTrue(
+        result.warnings.contains(where: { $0.contains(scenario.expectedWarning) }),
+        "Expected \(scenario.expectedWarning), got \(result.warnings)"
+      )
+      XCTAssertEqual(result.warnings.filter { $0.contains("TRC-20") }.count, 1)
+    }
   }
 
   func testMalformedTronTokenAmountProducesVisibleWarning() async throws {

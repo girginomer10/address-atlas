@@ -62,7 +62,7 @@ extension AppState {
   /// remote-baseline metadata are cleared and persisted locally.
   func deleteSyncAccount(expectedServerURL: URL) async {
     guard canMutateVault(allowPendingAccountDeletion: true) else { return }
-    guard let persistence, isUnlocked else {
+    guard persistence != nil, isUnlocked else {
       error = "Unlock the vault before deleting the sync account."
       return
     }
@@ -146,19 +146,16 @@ extension AppState {
         try await client.deleteAccount(idempotencyKey: operationKey)
       }
 
-      // The deleted account's rollback point contains its historical account
-      // and session metadata. Remove it before persisting the disconnected
-      // state; on failure the idempotency key remains durable so retry can
-      // replay the server receipt and finish this local privacy cleanup.
-      try await persistence.discardRollbackCheckpoint()
-      hasVaultRollbackCheckpoint = false
       var disconnected = document
       disconnected.syncState.disconnectAccount()
-      guard await save(disconnected, projectedSyncVersion: nil) else {
+      // Commit the disconnected primary document and removal of the old
+      // account's rollback point together. If local storage rejects either
+      // half, the durable idempotency key remains available to replay the
+      // server receipt and retry the entire privacy cleanup.
+      guard await saveAndDiscardRollbackCheckpoint(disconnected) else {
         let persistenceError = error
-        requirePendingSyncPersistence(disconnected, projectedSyncVersion: nil)
         error =
-          "The sync account was deleted, but clearing its local metadata is pending persistence. Use Retry local save after fixing storage: \(persistenceError)"
+          "The sync account was deleted, but its local metadata and rollback point could not be cleared atomically. Fix local storage, then retry Delete sync account to replay the saved deletion receipt: \(persistenceError)"
         return
       }
       notice =
@@ -268,6 +265,8 @@ extension AppState {
     let priorEndpointConfig = endpointConfig
     let priorEndpointConfigStatus = endpointConfigStatus
     let priorAcceptedEndpointConfigServerURL = acceptedEndpointConfigServerURL
+    let priorEndpointConfigTrustDurabilityDegraded =
+      endpointConfigTrustDurabilityDegraded
     do {
       let stagedEndpointConfig = try await compatibilityPolicyCandidate(for: url)
       let session = try await passkeyAuthenticator.authenticate(serverURL: url, mode: mode)
@@ -297,11 +296,23 @@ extension AppState {
       // The passkey ceremony authenticates this authority. Revalidate under
       // the durable store's lock in case another process advanced trust while
       // the sheet was open, then commit before saving the server binding.
-      try await endpointConfigTrustStore.validateAndRecord(stagedEndpointConfig, for: url)
+      let trustOutcome = try await endpointConfigTrustStore.validateAndRecord(
+        stagedEndpointConfig,
+        for: url
+      )
+      guard trustOutcome.isDurable else {
+        throw UserFacingAppError(
+          message:
+            "The endpoint policy became visible, but its crash-durability check failed. Passkey sign-in was not saved; refresh endpoints and try again after local storage recovers."
+        )
+      }
       guard await save(connected, projectedSyncVersion: nil) else {
         endpointConfig = priorEndpointConfig
         endpointConfigStatus = priorEndpointConfigStatus
         acceptedEndpointConfigServerURL = priorAcceptedEndpointConfigServerURL
+        setEndpointConfigTrustDurabilityDegraded(
+          priorEndpointConfigTrustDurabilityDegraded
+        )
         return
       }
       // The policy becomes active only after the authenticated server binding
@@ -309,7 +320,10 @@ extension AppState {
       // rejection all restore the exact policy that preceded this attempt.
       endpointConfig = stagedEndpointConfig
       acceptedEndpointConfigServerURL = url
-      endpointConfigStatus = "Remote v\(stagedEndpointConfig.configVersion)"
+      setEndpointConfigTrustDurabilityDegraded(false)
+      endpointConfigStatus = acceptedEndpointStatus(
+        "Remote v\(stagedEndpointConfig.configVersion)"
+      )
       let removedScanRunCount = lastSaveRemovedScanRunCount
       notice =
         (mode == .register ? "Passkey account connected." : "Passkey sign-in complete.")
@@ -319,6 +333,9 @@ extension AppState {
       endpointConfig = priorEndpointConfig
       endpointConfigStatus = priorEndpointConfigStatus
       acceptedEndpointConfigServerURL = priorAcceptedEndpointConfigServerURL
+      setEndpointConfigTrustDurabilityDegraded(
+        priorEndpointConfigTrustDurabilityDegraded
+      )
       presentUserFacingError(error, cancellationNotice: "Passkey sign-in cancelled.")
     }
   }
@@ -328,7 +345,7 @@ extension AppState {
   /// makes account creation or a different sync authority available again.
   func disconnectSyncAccountForSwitch(expectedServerURL: URL) async {
     guard canMutateVault() else { return }
-    guard let persistence, isUnlocked else {
+    guard persistence != nil, isUnlocked else {
       error = "Unlock the vault before disconnecting the sync account."
       return
     }
@@ -349,20 +366,6 @@ extension AppState {
     defer { finishSyncActivity(.disconnectingAccount) }
     guard await flushWalletLabelDraftsBeforeRemoteOperation() else { return }
     do {
-      // A rollback point contains a full historical SyncState, including its
-      // account and bearer grant. Delete it durably before account switching
-      // is admitted so a crash or relaunch cannot resurrect the old identity.
-      try await persistence.discardRollbackCheckpoint()
-      hasVaultRollbackCheckpoint = false
-    } catch {
-      let detail =
-        UserFacingErrorMapper.message(for: error)
-        ?? "The encrypted rollback point could not be removed."
-      self.error =
-        "The automatic encrypted rollback point could not be cleared safely, so this Mac was not disconnected. \(detail)"
-      return
-    }
-    do {
       if !document.syncState.sessionToken.isEmpty {
         let client = ZeroKnowledgeSyncClient(baseURL: serverURL, http: httpClient)
         await client.setBearerToken(document.syncState.sessionToken)
@@ -370,11 +373,10 @@ extension AppState {
       }
       var disconnected = document
       disconnected.syncState.disconnectAccount()
-      guard await save(disconnected, projectedSyncVersion: nil) else {
+      guard await saveAndDiscardRollbackCheckpoint(disconnected) else {
         let persistenceError = error
-        requirePendingSyncPersistence(disconnected, projectedSyncVersion: nil)
         error =
-          "Clearing this Mac's local sync-account binding is pending persistence. Use Retry local save after fixing storage: \(persistenceError)"
+          "This Mac's server session was revoked, but its local account binding and rollback point could not be cleared atomically. Fix local storage, then use Disconnect locally without contacting server: \(persistenceError)"
         return
       }
       notice =
@@ -382,7 +384,53 @@ extension AppState {
       error = ""
     } catch {
       await handleSyncError(error)
+      let recovery =
+        " The local account binding and encrypted rollback point were kept. If the server remains unavailable, use Disconnect locally without contacting server."
+      if self.error.isEmpty {
+        notice += recovery
+      } else {
+        self.error += recovery
+      }
     }
+  }
+
+  /// Explicit offline escape hatch for switching authorities when the saved
+  /// server cannot revoke this Mac's bearer grant. The confirmation belongs in
+  /// the UI because a server-side session may remain valid until it expires.
+  func disconnectSyncAccountLocallyForSwitch(expectedServerURL: URL) async {
+    guard canMutateVault() else { return }
+    guard persistence != nil, isUnlocked else {
+      error = "Unlock the vault before disconnecting the sync account."
+      return
+    }
+    guard let serverURL = AppState.validatedSyncURL(document.syncState.serverURL),
+      document.syncState.accountId.flatMap(SyncAccountIdentifier.normalized) != nil
+    else {
+      error = "No sync account is connected."
+      return
+    }
+    guard serverURL == expectedServerURL else {
+      error = "The saved sync server changed. Review it before disconnecting the account."
+      return
+    }
+    guard beginSyncActivity(.disconnectingAccount) else {
+      notice = "A sync operation is already running."
+      return
+    }
+    defer { finishSyncActivity(.disconnectingAccount) }
+    guard await flushWalletLabelDraftsBeforeRemoteOperation() else { return }
+
+    var disconnected = document
+    disconnected.syncState.disconnectAccount()
+    guard await saveAndDiscardRollbackCheckpoint(disconnected) else {
+      let persistenceError = error
+      error =
+        "The local account binding and rollback point were kept because they could not be cleared atomically: \(persistenceError)"
+      return
+    }
+    notice =
+      "This Mac disconnected locally from the sync account. No server request was made; the remote account and vault were kept, and the old server session may remain valid until it expires."
+    error = ""
   }
 
   private func authenticateForPendingVaultUploadRecovery(
@@ -425,6 +473,8 @@ extension AppState {
     let priorEndpointConfig = endpointConfig
     let priorEndpointConfigStatus = endpointConfigStatus
     let priorAcceptedEndpointConfigServerURL = acceptedEndpointConfigServerURL
+    let priorEndpointConfigTrustDurabilityDegraded =
+      endpointConfigTrustDurabilityDegraded
     guard beginSyncActivity(.signingIn) else {
       notice = "A sync operation is already running."
       return
@@ -446,7 +496,16 @@ extension AppState {
             "Passkey sign-in did not match the account bound to the interrupted upload. Recovery was not started."
         )
       }
-      try await endpointConfigTrustStore.validateAndRecord(stagedEndpointConfig, for: serverURL)
+      let trustOutcome = try await endpointConfigTrustStore.validateAndRecord(
+        stagedEndpointConfig,
+        for: serverURL
+      )
+      guard trustOutcome.isDurable else {
+        throw UserFacingAppError(
+          message:
+            "The endpoint policy became visible, but its crash-durability check failed. Passkey sign-in was not saved; refresh endpoints and try again after local storage recovers."
+        )
+      }
 
       // The pending-upload trigger intentionally blocks an ordinary document
       // save. Keep only the freshly authenticated token in memory; successful
@@ -455,7 +514,10 @@ extension AppState {
       document.syncState.sessionToken = session.sessionToken
       endpointConfig = stagedEndpointConfig
       acceptedEndpointConfigServerURL = serverURL
-      endpointConfigStatus = "Remote v\(stagedEndpointConfig.configVersion)"
+      setEndpointConfigTrustDurabilityDegraded(false)
+      endpointConfigStatus = acceptedEndpointStatus(
+        "Remote v\(stagedEndpointConfig.configVersion)"
+      )
       error = ""
       // Hand the single operation lane from authentication to replay so the
       // UI moves progress from Sign in to Retry upload recovery.
@@ -465,6 +527,9 @@ extension AppState {
       endpointConfig = priorEndpointConfig
       endpointConfigStatus = priorEndpointConfigStatus
       acceptedEndpointConfigServerURL = priorAcceptedEndpointConfigServerURL
+      setEndpointConfigTrustDurabilityDegraded(
+        priorEndpointConfigTrustDurabilityDegraded
+      )
       presentUserFacingError(error, cancellationNotice: "Passkey sign-in cancelled.")
     }
   }

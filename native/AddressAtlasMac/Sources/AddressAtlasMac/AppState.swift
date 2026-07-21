@@ -60,6 +60,7 @@ final class AppState: ObservableObject {
         endpointConfig = .bundled
         endpointConfigStatus = "Bundled endpoints"
         acceptedEndpointConfigServerURL = nil
+        endpointConfigTrustDurabilityDegraded = false
       }
       // Never risk a false-clean UI after a future call site mutates the value
       // directly. A successful actor save replaces this conservative value
@@ -98,6 +99,11 @@ final class AppState: ObservableObject {
     }
   }
   @Published var endpointConfigStatus = "Bundled endpoints"
+  /// True only when an accepted policy's rename is visible but its containing
+  /// directory durability barrier failed. Read-only scans may continue with the
+  /// applied policy, while every sync/auth path remains fail-closed until a
+  /// refresh retries and proves the barrier.
+  @Published private(set) var endpointConfigTrustDurabilityDegraded = false
   /// Operator broadcast carried by the currently applied endpoint config.
   /// Nil whenever the server supplied no message or only whitespace.
   @Published private(set) var operatorMessage: String?
@@ -153,7 +159,7 @@ final class AppState: ObservableObject {
   struct EndpointConfigRefreshRequest {
     var generation: Int
     var serverURL: URL
-    var task: Task<NativeEndpointConfig, Error>
+    var task: Task<TrustedEndpointConfig, Error>
     var waiterPool: EndpointConfigRefreshWaiterPool
     var waiterIDs: Set<UUID>
   }
@@ -400,7 +406,15 @@ final class AppState: ObservableObject {
     AppState.supportsAppVersion(appVersion, minimum: endpointConfig.minSupportedAppVersion)
   }
   func acceptedEndpointStatus(_ detail: String) -> String {
-    isAppVersionSupported ? detail : "Update required (\(detail))"
+    let durableDetail =
+      endpointConfigTrustDurabilityDegraded
+      ? "\(detail); trust durability retry required"
+      : detail
+    return isAppVersionSupported ? durableDetail : "Update required (\(durableDetail))"
+  }
+
+  func setEndpointConfigTrustDurabilityDegraded(_ isDegraded: Bool) {
+    endpointConfigTrustDurabilityDegraded = isDegraded
   }
 
   func unlock() async {
@@ -518,6 +532,60 @@ final class AppState: ObservableObject {
         syncPersistencePending = false
       }
       notice = "Saved locally." + pruningNoticeSuffix(result.removedScanRunCount)
+      error = ""
+      persistenceSucceeded = true
+      return true
+    } catch {
+      notice = ""
+      presentUserFacingError(error)
+      return false
+    }
+  }
+
+  /// Persist an account-disconnected document and remove its historical
+  /// rollback point as one durable operation. This prevents a crash or disk
+  /// error from leaving only one side of the identity transition committed.
+  @discardableResult
+  func saveAndDiscardRollbackCheckpoint(_ candidate: VaultDocument) async -> Bool {
+    lastSaveRemovedScanRunCount = 0
+    guard !isTerminationInProgress else {
+      notice = ""
+      error = "Address Atlas is finishing a local save before quitting."
+      return false
+    }
+    guard let persistence else {
+      notice = ""
+      error = "Unlock the vault before saving."
+      return false
+    }
+    guard !isPersisting else {
+      error = "Wait for the current local save to finish."
+      return false
+    }
+    let startingRevision = documentRevision
+    isPersisting = true
+    var persistenceSucceeded = false
+    defer { finishPersistenceOperation(succeeded: persistenceSucceeded) }
+    if let persistenceStartedHook {
+      self.persistenceStartedHook = nil
+      await persistenceStartedHook()
+    }
+    do {
+      let result = try await persistence.saveAndDiscardRollbackCheckpoint(candidate)
+      hasVaultRollbackCheckpoint = false
+      guard startingRevision == documentRevision else {
+        syncPersistencePending = true
+        error =
+          "The vault changed while a local account transition was finishing. Reopen Address Atlas before making more changes."
+        return false
+      }
+      document = result.document
+      documentRevision &+= 1
+      hasUnsyncedLocalChanges = result.hasLocalChanges
+      if pendingSyncPersistence == nil, pendingVaultUpload == nil {
+        syncPersistencePending = false
+      }
+      notice = "Saved locally."
       error = ""
       persistenceSucceeded = true
       return true

@@ -144,6 +144,98 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertEqual(state.safeUpdateDownloadURL.scheme, "https")
   }
 
+  func testRelaunchWithOnlyPolicyHighWaterFailsClosedWhenRefreshIsUnavailable() async throws {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    let serverURL = URL(string: "https://sync.example")!
+    let trustFile = fixture.directory.appending(path: "endpoint-config-trust.json")
+    _ = try await EndpointConfigTrustStore(fileURL: trustFile).validateAndRecord(
+      NativeEndpointConfig(
+        configVersion: 30,
+        refreshAfterSeconds: 300,
+        minSupportedAppVersion: "999.0"
+      ),
+      for: serverURL
+    )
+    var document = VaultDocument(
+      wallets: [
+        WalletRecord(
+          label: "Wallet",
+          address: "1BoatSLRHtKNngkdXEeobR76b53LETtpyT",
+          chainKind: .bitcoin
+        )
+      ]
+    )
+    document.syncState.serverURL = serverURL.absoluteString
+    let http = RecordingHTTPStub { request in
+      XCTFail("A fresh process without the accepted policy must stay offline: \(request)")
+      throw URLError(.cancelled)
+    }
+    let state = AppState(
+      testStore: fixture.store,
+      document: document,
+      testVaultKey: fixture.vaultKey,
+      endpointConfigClient: FailingEndpointConfigClient(),
+      endpointConfigTrustStore: EndpointConfigTrustStore(fileURL: trustFile),
+      httpClient: http
+    )
+
+    await state.scanSavedWallets()
+
+    XCTAssertTrue(state.error.contains("Scanning stayed offline"))
+    XCTAssertTrue(state.document.scanRuns.isEmpty)
+    XCTAssertEqual(state.endpointConfigStatus, "Bundled endpoints (remote unavailable)")
+    XCTAssertTrue(http.requests.isEmpty)
+  }
+
+  func testUnavailableRefreshUsesOnlySameProcessPolicyForReadOnlyScan() async throws {
+    let fixture = try makeTemporaryStore()
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    var document = VaultDocument(
+      wallets: [
+        WalletRecord(
+          label: "Wallet",
+          address: "1BoatSLRHtKNngkdXEeobR76b53LETtpyT",
+          chainKind: .bitcoin
+        )
+      ]
+    )
+    document.syncState.serverURL = "https://sync.example"
+    let endpointClient = FirstSuccessThenFailureEndpointConfigClient(
+      config: NativeEndpointConfig(configVersion: 30, refreshAfterSeconds: 300)
+    )
+    let http = RecordingHTTPStub { request in
+      switch request.url?.host {
+      case "blockstream.info":
+        return stubJSONResponse(
+          request,
+          #"{"address":"1BoatSLRHtKNngkdXEeobR76b53LETtpyT","chain_stats":{"funded_txo_sum":100000000,"spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0}}"#
+        )
+      case "api.coingecko.com":
+        return stubJSONResponse(request, #"{"bitcoin":{"usd":100000}}"#)
+      default:
+        throw URLError(.unsupportedURL)
+      }
+    }
+    let state = AppState(
+      testStore: fixture.store,
+      document: document,
+      testVaultKey: fixture.vaultKey,
+      endpointConfigClient: endpointClient,
+      httpClient: http
+    )
+    let initialRefreshAccepted = await state.refreshEndpointConfig(silent: true)
+    XCTAssertTrue(initialRefreshAccepted)
+
+    await state.scanSavedWallets()
+
+    XCTAssertEqual(state.error, "")
+    let run = try XCTUnwrap(state.document.scanRuns.first)
+    XCTAssertTrue(run.warnings.contains { $0.contains("current app session") })
+    XCTAssertTrue(state.endpointConfigStatus.contains("refresh unavailable"))
+    XCTAssertTrue(http.requests.contains { $0.url?.host == "blockstream.info" })
+  }
+
   func testScanSavedWalletsMergesStubbedChainAndExchangeResultsIntoState() async throws {
     let fixture = try makeTemporaryStore()
     defer { try? FileManager.default.removeItem(at: fixture.directory) }
