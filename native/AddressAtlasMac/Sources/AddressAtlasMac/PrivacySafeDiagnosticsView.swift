@@ -5,15 +5,22 @@ struct PrivacySafeDiagnosticsControls: View {
   @EnvironmentObject private var state: AppState
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      SectionHeader(title: "Support diagnostics", meta: "Privacy-safe by construction")
-      Text(
-        "Copies app, macOS, vault-schema and endpoint-config versions; coarse state flags and count buckets; and stable failure codes. It never copies wallet addresses, URLs, labels, notes, amounts, identifiers, credentials, session material, file paths, or raw error text."
+    VStack(alignment: .leading, spacing: 16) {
+      PanelHeader(
+        title: "Privacy-safe diagnostics",
+        subtitle: "Useful support context without portfolio content",
+        systemImage: "stethoscope"
       )
-      .font(.callout)
-      .foregroundStyle(AtlasTheme.ink2)
-      Button("Copy privacy-safe diagnostics") {
+      InfoCallout(
+        title: "Designed to exclude sensitive data",
+        copy:
+          "Includes app and schema versions, coarse state flags, count ranges, and stable failure codes. Excludes addresses, labels, amounts, credentials, sessions, URLs, file paths, and raw errors.",
+        tone: .success
+      )
+      Button {
         copyDiagnostics()
+      } label: {
+        Label("Copy diagnostics", systemImage: "doc.on.doc")
       }
       .buttonStyle(AtlasSecondaryButtonStyle())
       .accessibilityHint(

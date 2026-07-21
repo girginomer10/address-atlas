@@ -12,31 +12,49 @@ struct AssetList: View {
         title: "No assets yet", systemImage: "wallet.pass", copy: "Add a wallet and run a scan.")
     } else {
       Surface(padding: 0) {
-        ScrollView(.horizontal) {
-          VStack(spacing: 0) {
-            HStack {
-              TableHeader("Asset", width: 210)
-              TableHeader("Chain / source")
-              TableHeader("Amount", alignment: .trailing, width: 150)
-              TableHeader("Value", alignment: .trailing, width: 150)
-            }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 8)
-            .frame(minHeight: 38)
-            .background(AtlasTheme.paper2)
-            .accessibilityHidden(true)
-            Divider().overlay(AtlasTheme.rule)
-            ForEach(assets) { asset in
-              AssetRow(asset: asset)
-              if asset.id != assets.last?.id {
-                Divider().overlay(AtlasTheme.ruleSoft)
-              }
-            }
-          }
-          .frame(minWidth: 760)
+        ViewThatFits(in: .horizontal) {
+          wideTable
+            .frame(minWidth: 760)
+          compactList
         }
       }
     }
+  }
+
+  private var wideTable: some View {
+    VStack(spacing: 0) {
+      HStack {
+        TableHeader("Asset", width: 210)
+        TableHeader("Chain / source")
+        TableHeader("Amount", alignment: .trailing, width: 150)
+        TableHeader("Value", alignment: .trailing, width: 150)
+      }
+      .padding(.horizontal, 18)
+      .padding(.vertical, 10)
+      .frame(minHeight: 40)
+      .background(AtlasTheme.surfaceMuted.opacity(0.44))
+      .accessibilityHidden(true)
+      Divider().overlay(AtlasTheme.rule)
+      ForEach(assets) { asset in
+        AssetRow(asset: asset)
+        if asset.id != assets.last?.id {
+          Divider().overlay(AtlasTheme.ruleSoft)
+        }
+      }
+    }
+    .frame(maxWidth: .infinity)
+  }
+
+  private var compactList: some View {
+    VStack(spacing: 0) {
+      ForEach(assets) { asset in
+        CompactAssetRow(asset: asset)
+        if asset.id != assets.last?.id {
+          Divider().overlay(AtlasTheme.ruleSoft)
+        }
+      }
+    }
+    .frame(maxWidth: .infinity)
   }
 }
 
@@ -44,7 +62,7 @@ struct ScanWarningsView: View {
   var warnings: [String]
 
   var body: some View {
-    Surface {
+    Surface(style: .warning) {
       VStack(alignment: .leading, spacing: 10) {
         SectionHeader(
           title: "Partial scan warnings",
@@ -75,24 +93,33 @@ struct AssetRow: View {
 
   var body: some View {
     HStack(spacing: 14) {
-      VStack(alignment: .leading, spacing: 4) {
-        HStack(spacing: 8) {
-          Text(asset.symbol)
-            .font(.body.weight(.semibold))
-            .lineLimit(1)
-            .truncationMode(.middle)
-            .help(asset.symbol)
-          if asset.pricingStatus != .priced {
-            Badge(
-              asset.pricingStatus == .unpriced ? "UNPRICED" : "VALUE UNKNOWN",
-              color: AtlasTheme.warning
-            )
+      HStack(spacing: 11) {
+        Text(String(asset.symbol.prefix(1)).uppercased())
+          .font(.caption.weight(.bold))
+          .foregroundStyle(AtlasTheme.accent)
+          .frame(width: 34, height: 34)
+          .background(AtlasTheme.accent.opacity(0.10))
+          .clipShape(Circle())
+          .accessibilityHidden(true)
+        VStack(alignment: .leading, spacing: 4) {
+          HStack(spacing: 8) {
+            Text(asset.symbol)
+              .font(.body.weight(.semibold))
+              .lineLimit(1)
+              .truncationMode(.middle)
+              .help(asset.symbol)
+            if asset.pricingStatus != .priced {
+              Badge(
+                asset.pricingStatus == .unpriced ? "Unpriced" : "Value unavailable",
+                color: AtlasTheme.warning
+              )
+            }
           }
+          Text(asset.name)
+            .font(.caption)
+            .foregroundStyle(AtlasTheme.ink3)
+            .lineLimit(1)
         }
-        Text(asset.name)
-          .font(.caption)
-          .foregroundStyle(AtlasTheme.ink3)
-          .lineLimit(1)
       }
       .frame(width: 210, alignment: .leading)
 
@@ -126,65 +153,134 @@ struct AssetRow: View {
   }
 }
 
+private struct CompactAssetRow: View {
+  var asset: TrackedAsset
+
+  var body: some View {
+    HStack(spacing: 12) {
+      Text(String(asset.symbol.prefix(1)).uppercased())
+        .font(.caption.weight(.bold))
+        .foregroundStyle(AtlasTheme.accent)
+        .frame(width: 36, height: 36)
+        .background(AtlasTheme.accent.opacity(0.10))
+        .clipShape(Circle())
+        .accessibilityHidden(true)
+
+      VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: 7) {
+          Text(asset.symbol)
+            .font(.body.weight(.semibold))
+          if asset.pricingStatus != .priced {
+            Badge(
+              asset.pricingStatus == .unpriced ? "Unpriced" : "Value unavailable",
+              color: AtlasTheme.warning
+            )
+          }
+        }
+        Text("\(asset.chainName) · \(asset.walletLabel ?? asset.address)")
+          .font(.caption)
+          .foregroundStyle(AtlasTheme.ink3)
+          .lineLimit(1)
+          .truncationMode(.middle)
+      }
+
+      Spacer(minLength: 12)
+
+      VStack(alignment: .trailing, spacing: 4) {
+        Text(asset.pricingStatus == .priced ? money(asset.valueUsd) : "—")
+          .font(.callout.monospacedDigit().weight(.semibold))
+        Text(asset.displayedAmount)
+          .font(.caption.monospaced())
+          .foregroundStyle(AtlasTheme.ink3)
+          .lineLimit(1)
+          .help(asset.canonicalAmount)
+      }
+    }
+    .padding(.horizontal, 16)
+    .padding(.vertical, 12)
+    .frame(minHeight: 66)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(AtlasAccessibility.assetRowIdentity(asset))
+    .accessibilityIdentifier(AssetRow.accessibilityIdentifier(for: asset))
+  }
+}
+
 struct QuickActionsPanel: View {
   @EnvironmentObject private var state: AppState
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      SectionHeader(title: "Quick actions", meta: "Local")
-      Button {
-        if state.scanning {
-          state.cancelScan()
-        } else {
-          state.startScan()
+    Surface(style: .accent) {
+      VStack(alignment: .leading, spacing: 16) {
+        PanelHeader(
+          title: "Refresh portfolio",
+          subtitle: "Scan every saved wallet and exchange",
+          systemImage: "arrow.clockwise"
+        )
+        Button {
+          if state.scanning {
+            state.cancelScan()
+          } else {
+            state.startScan()
+          }
+        } label: {
+          if state.scanning {
+            Label("Cancel scan", systemImage: "xmark.circle")
+          } else {
+            Label("Scan all sources", systemImage: "arrow.clockwise")
+          }
         }
-      } label: {
-        if state.scanning {
-          Label("Cancel scan", systemImage: "xmark.circle")
-        } else {
-          Label("Scan all sources", systemImage: "arrow.clockwise")
+        .buttonStyle(AtlasPrimaryButtonStyle())
+        .disabled(
+          !state.scanning
+            && (state.syncing || state.syncPersistencePending || !state.hasScanSources))
+        VStack(alignment: .leading, spacing: 12) {
+          SidebarTrustLine(title: "Encrypted storage", copy: "Protected on this device")
+          SidebarTrustLine(title: "Private sync", copy: "Only encrypted snapshots leave this Mac")
+          SidebarTrustLine(
+            title: "Direct connections", copy: "RPC and exchange requests run locally")
         }
       }
-      .buttonStyle(AtlasPrimaryButtonStyle())
-      .disabled(
-        !state.scanning && (state.syncing || state.syncPersistencePending || !state.hasScanSources))
-      SidebarTrustLine(title: "Storage", copy: "Encrypted on device")
-      SidebarTrustLine(title: "Sync", copy: "Encrypted blobs only")
-      SidebarTrustLine(title: "Network", copy: "RPC/API from Mac")
     }
-    .padding(18)
-    .background(AtlasTheme.paper2)
-    .overlay(Rectangle().stroke(AtlasTheme.rule, lineWidth: 1))
   }
 }
 
 struct TotalBlock: View {
-  @ScaledMetric(relativeTo: .largeTitle) private var totalSize: CGFloat = 62
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @ScaledMetric(relativeTo: .largeTitle) private var totalSize: CGFloat = 52
   var total: Double
   var generatedAt: Date?
   var assetCount: Int
   var unpricedCount: Int = 0
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      AtlasLabel(unpricedCount > 0 ? "PRICED SUBTOTAL (PARTIAL)" : "KNOWN VALUE")
+    VStack(alignment: .leading, spacing: 10) {
+      HStack(spacing: 8) {
+        Text(unpricedCount > 0 ? "Priced subtotal" : "Known portfolio value")
+          .font(.callout.weight(.medium))
+          .foregroundStyle(AtlasTheme.ink3)
+        if unpricedCount > 0 {
+          Badge("Partial", color: AtlasTheme.warning)
+        }
+      }
       Text(money(total))
-        .font(.system(size: totalSize, weight: .regular, design: .serif))
-        .italic()
+        .font(.system(size: totalSize, weight: .bold, design: .rounded))
+        .tracking(-1.2)
         .lineLimit(1)
         .minimumScaleFactor(0.6)
+        .contentTransition(.numericText(value: total))
+        .animation(
+          AtlasMotion.animation(AtlasMotion.standard, reduceMotion: reduceMotion),
+          value: total
+        )
       Text(
         unpricedCount > 0
-          ? "\(assetCount) assets - \(unpricedCount) without a known USD value - \(generatedAt?.formatted(date: .abbreviated, time: .shortened) ?? "no snapshot")"
-          : "\(assetCount) assets - \(generatedAt?.formatted(date: .abbreviated, time: .shortened) ?? "no snapshot")"
+          ? "\(assetCount) assets · \(unpricedCount) awaiting a USD value · \(generatedAt?.formatted(date: .abbreviated, time: .shortened) ?? "No snapshot yet")"
+          : "\(assetCount) assets · \(generatedAt?.formatted(date: .abbreviated, time: .shortened) ?? "No snapshot yet")"
       )
-      .font(.caption.monospaced())
+      .font(.caption)
       .foregroundStyle(AtlasTheme.ink3)
     }
-    .padding(.bottom, 22)
-    .overlay(alignment: .bottom) {
-      Rectangle().fill(AtlasTheme.rule).frame(height: 1)
-    }
+    .padding(.bottom, 6)
   }
 }
 
@@ -192,19 +288,22 @@ struct MetricStrip: View {
   var items: [(String, String)]
 
   var body: some View {
-    HStack(spacing: 0) {
-      ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+    HStack(spacing: 10) {
+      ForEach(Array(items.enumerated()), id: \.offset) { _, item in
         VStack(alignment: .leading, spacing: 5) {
-          AtlasLabel(item.0)
+          Text(item.0)
+            .font(.caption.weight(.medium))
+            .foregroundStyle(AtlasTheme.ink3)
           Text(item.1)
-            .font(.system(.largeTitle, design: .serif))
+            .font(.title2.monospacedDigit().weight(.semibold))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.leading, index == 0 ? 0 : 18)
-        .overlay(alignment: .leading) {
-          if index != 0 {
-            Rectangle().fill(AtlasTheme.rule).frame(width: 1)
-          }
+        .padding(14)
+        .background(AtlasTheme.surface)
+        .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
+        .overlay {
+          RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
+            .stroke(AtlasTheme.ruleSoft, lineWidth: 1)
         }
       }
     }

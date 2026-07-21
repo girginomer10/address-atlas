@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 
 struct MainView: View {
   @EnvironmentObject private var state: AppState
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   enum Section: String, CaseIterable, Identifiable {
     case portfolio = "Portfolio"
@@ -33,10 +34,6 @@ struct MainView: View {
       }
     }
 
-    var ordinal: String {
-      let index = Self.allCases.firstIndex(of: self) ?? 0
-      return String(format: "%02d", index + 1)
-    }
   }
 
   @State private var selected: Section = .portfolio
@@ -48,7 +45,7 @@ struct MainView: View {
         onNavigate: {
           state.clearTransientMessagesForNavigation()
         })
-      Rectangle().fill(AtlasTheme.rule).frame(width: 1)
+      Rectangle().fill(AtlasTheme.ruleSoft).frame(width: 1)
       Group {
         switch selected {
         case .portfolio: PortfolioView()
@@ -62,10 +59,20 @@ struct MainView: View {
         case .settings: SettingsView()
         }
       }
+      .id(selected)
+      .transition(
+        reduceMotion
+          ? .opacity
+          : .opacity.combined(with: .move(edge: .trailing))
+      )
+      .animation(
+        AtlasMotion.animation(AtlasMotion.standard, reduceMotion: reduceMotion),
+        value: selected
+      )
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     .frame(minWidth: 900, minHeight: 600)
-    .background(AtlasTheme.paper)
+    .background(AtlasTheme.canvas)
   }
 }
 
@@ -74,15 +81,13 @@ struct Sidebar: View {
   var onNavigate: () -> Void
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 20) {
+    VStack(alignment: .leading, spacing: 18) {
       BrandLockup()
-        .padding(.bottom, 20)
-        .overlay(alignment: .bottom) {
-          Rectangle().fill(AtlasTheme.rule).frame(height: 1)
-        }
+        .padding(.horizontal, 4)
+        .padding(.bottom, 4)
 
       ScrollView {
-        VStack(spacing: 2) {
+        VStack(spacing: 4) {
           ForEach(MainView.Section.allCases) { item in
             Button {
               guard selection != item else { return }
@@ -93,20 +98,23 @@ struct Sidebar: View {
               onNavigate()
               selection = item
             } label: {
-              HStack(spacing: 12) {
+              HStack(spacing: 11) {
                 Image(systemName: item.systemImage)
-                  .frame(width: 18)
+                  .font(.callout.weight(selection == item ? .semibold : .regular))
+                  .frame(width: 20)
                 Text(item.rawValue)
                   .frame(maxWidth: .infinity, alignment: .leading)
-                Text(item.ordinal)
-                  .font(.system(.caption, design: .serif))
-                  .italic()
-                  .opacity(0.72)
+                if selection == item {
+                  Circle()
+                    .fill(AtlasTheme.paper.opacity(0.88))
+                    .frame(width: 5, height: 5)
+                    .accessibilityHidden(true)
+                }
               }
-              .padding(.horizontal, 12)
-              .padding(.vertical, 10)
-              .frame(minHeight: 42)
-              .contentShape(Rectangle())
+              .padding(.horizontal, 11)
+              .padding(.vertical, 9)
+              .frame(minHeight: 38)
+              .contentShape(RoundedRectangle(cornerRadius: AtlasRadius.control))
             }
             .buttonStyle(SidebarButtonStyle(active: selection == item))
             .accessibilityAddTraits(selection == item ? .isSelected : [])
@@ -114,28 +122,13 @@ struct Sidebar: View {
           }
         }
       }
-      .scrollIndicators(.visible)
+      .scrollIndicators(.hidden)
 
-      VStack(alignment: .leading, spacing: 8) {
-        HStack(spacing: 8) {
-          Circle().stroke(AtlasTheme.gain, lineWidth: 1).frame(width: 8, height: 8)
-          Text("LOCAL VAULT")
-        }
-        Text("Encrypted locally")
-        Text("RPC/API from Mac")
-        Text("Server cannot decrypt")
-      }
-      .font(.caption2.monospaced())
-      .textCase(.uppercase)
-      .foregroundStyle(AtlasTheme.ink3)
-      .padding(.top, 18)
-      .overlay(alignment: .top) {
-        Rectangle().fill(AtlasTheme.rule).frame(height: 1)
-      }
+      PrivacyCard()
     }
-    .padding(22)
-    .frame(width: 228)
+    .padding(18)
+    .frame(width: 238)
     .frame(maxHeight: .infinity, alignment: .topLeading)
-    .background(AtlasTheme.paper)
+    .background(AtlasTheme.surface)
   }
 }

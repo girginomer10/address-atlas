@@ -12,9 +12,10 @@ final class AtlasDesignSystemTests: XCTestCase {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
+    let vaultKey = try VaultCrypto().generateVaultKey()
     let store = try EncryptedSQLiteVaultStore(
       path: directory.appending(path: "vault.sqlite"),
-      vaultKey: try VaultCrypto().generateVaultKey()
+      vaultKey: vaultKey
     )
     _ = try store.load()
     let unlockedState = AppState(testStore: store, document: VaultDocument())
@@ -28,6 +29,132 @@ final class AtlasDesignSystemTests: XCTestCase {
       MainView().environmentObject(unlockedState),
       size: NSSize(width: 900, height: 600),
       context: "unlocked launch"
+    )
+  }
+
+  @MainActor
+  func testEveryPrimaryProductScreenLaysOutAtMinimumSupportedWindowSize() throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let vaultKey = try VaultCrypto().generateVaultKey()
+    let store = try EncryptedSQLiteVaultStore(
+      path: directory.appending(path: "vault.sqlite"),
+      vaultKey: vaultKey
+    )
+    _ = try store.load()
+    let state = AppState(testStore: store, document: VaultDocument())
+    let populatedState = AppState(
+      testStore: store,
+      document: try populatedDocument(vaultKey: vaultKey)
+    )
+    let screens: [(String, AnyView)] = [
+      ("portfolio", AnyView(PortfolioView().environmentObject(state))),
+      ("wallets", AnyView(WalletsView().environmentObject(state))),
+      ("assets", AnyView(AssetsView().environmentObject(state))),
+      ("tokens", AnyView(TokenAllowlistView().environmentObject(state))),
+      ("snapshots", AnyView(SnapshotsView().environmentObject(state))),
+      ("exchanges", AnyView(ExchangesView().environmentObject(state))),
+      ("sync", AnyView(SyncView().environmentObject(state))),
+      ("export", AnyView(ExportView().environmentObject(state))),
+      ("settings", AnyView(SettingsView().environmentObject(state))),
+    ]
+
+    for (name, screen) in screens {
+      assertValidLayout(
+        screen,
+        size: NSSize(width: 900 - 238, height: 600),
+        context: name
+      )
+    }
+
+    let populatedScreens: [(String, AnyView)] = [
+      ("portfolio-populated", AnyView(PortfolioView().environmentObject(populatedState))),
+      ("wallets-populated", AnyView(WalletsView().environmentObject(populatedState))),
+      ("assets-populated", AnyView(AssetsView().environmentObject(populatedState))),
+      ("tokens-populated", AnyView(TokenAllowlistView().environmentObject(populatedState))),
+      ("snapshots-populated", AnyView(SnapshotsView().environmentObject(populatedState))),
+      ("exchanges-populated", AnyView(ExchangesView().environmentObject(populatedState))),
+    ]
+    for (name, screen) in populatedScreens {
+      assertValidLayout(
+        screen,
+        size: NSSize(width: 900 - 238, height: 600),
+        context: name
+      )
+    }
+
+    guard
+      let capturePath = ProcessInfo.processInfo.environment["ADDRESS_ATLAS_UI_CAPTURE_DIR"],
+      !capturePath.isEmpty
+    else { return }
+
+    let captureDirectory = URL(fileURLWithPath: capturePath, isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: captureDirectory,
+      withIntermediateDirectories: true
+    )
+    for (name, screen) in screens {
+      let data = try XCTUnwrap(
+        renderedPNG(
+          screen.preferredColorScheme(.dark),
+          size: NSSize(width: 1_000, height: 760),
+          appearanceName: .darkAqua
+        )
+      )
+      XCTAssertGreaterThan(data.count, 1_024)
+      try data.write(to: captureDirectory.appending(path: "\(name).png"), options: .atomic)
+    }
+    if let compactAssets = populatedScreens.first(where: { $0.0 == "assets-populated" })?.1 {
+      let data = try XCTUnwrap(
+        renderedPNG(
+          compactAssets.preferredColorScheme(.dark),
+          size: NSSize(width: 900 - 238, height: 600),
+          appearanceName: .darkAqua
+        )
+      )
+      try data.write(
+        to: captureDirectory.appending(path: "assets-compact.png"),
+        options: .atomic
+      )
+    }
+    for (name, screen) in populatedScreens {
+      let data = try XCTUnwrap(
+        renderedPNG(
+          screen.preferredColorScheme(.dark),
+          size: NSSize(width: 1_000, height: 760),
+          appearanceName: .darkAqua
+        )
+      )
+      XCTAssertGreaterThan(data.count, 1_024)
+      try data.write(to: captureDirectory.appending(path: "\(name).png"), options: .atomic)
+    }
+
+    let shellData = try XCTUnwrap(
+      renderedPNG(
+        MainView()
+          .environmentObject(state)
+          .preferredColorScheme(.dark),
+        size: NSSize(width: 1_200, height: 800),
+        appearanceName: .darkAqua
+      )
+    )
+    XCTAssertGreaterThan(shellData.count, 1_024)
+    try shellData.write(to: captureDirectory.appending(path: "app-shell.png"), options: .atomic)
+
+    let lightShellData = try XCTUnwrap(
+      renderedPNG(
+        MainView()
+          .environmentObject(state)
+          .preferredColorScheme(.light),
+        size: NSSize(width: 1_200, height: 800),
+        appearanceName: .aqua
+      )
+    )
+    XCTAssertGreaterThan(lightShellData.count, 1_024)
+    try lightShellData.write(
+      to: captureDirectory.appending(path: "app-shell-light.png"),
+      options: .atomic
     )
   }
 
@@ -58,6 +185,93 @@ final class AtlasDesignSystemTests: XCTestCase {
     XCTAssertEqual(
       announcements.map(\.message),
       ["Status: Vault saved.", "Status: Vault saved.", "Status: Vault saved."]
+    )
+  }
+
+  private func populatedDocument(vaultKey: Data) throws -> VaultDocument {
+    let connectionID = UUID(uuidString: "11111111-2222-4333-8444-555555555555")!
+    let encryptedCredentials = try ExchangeCredentialVault().seal(
+      ExchangeCredentials(apiKey: "fixture-key", secret: "fixture-secret"),
+      vaultKey: vaultKey,
+      connectionId: connectionID
+    )
+    let ether = TrackedAsset(
+      id: "sample-eth",
+      address: "0x0000000000000000000000000000000000000001",
+      chainId: "ethereum",
+      chainName: "Ethereum",
+      family: .evm,
+      symbol: "ETH",
+      name: "Ether",
+      amount: 2.5,
+      priceUsd: 3_200,
+      valueUsd: 8_000,
+      source: .native,
+      walletLabel: "Main wallet"
+    )
+    let unpricedToken = TrackedAsset(
+      id: "sample-token",
+      address: "0x0000000000000000000000000000000000000002",
+      chainId: "base",
+      chainName: "Base",
+      family: .evm,
+      symbol: "NEW",
+      name: "New Token",
+      amount: 42,
+      priceUsd: 0,
+      valueUsd: 0,
+      pricingStatus: .unpriced,
+      source: .erc20,
+      walletLabel: "Main wallet"
+    )
+    let scan = ScanRunRecord(
+      generatedAt: Date(timeIntervalSince1970: 1_700_000_000),
+      totalUsd: 8_000,
+      inputCount: 2,
+      holdings: [ether, unpricedToken],
+      warnings: ["A price source was temporarily unavailable for one token."]
+    )
+    return VaultDocument(
+      wallets: [
+        WalletRecord(
+          label: "Main wallet",
+          address: "0x0000000000000000000000000000000000000001",
+          chainKind: .evm
+        )
+      ],
+      customTokens: [
+        CustomTokenRecord(
+          chainKind: .evm,
+          chainId: "base",
+          address: "0x0000000000000000000000000000000000000002",
+          symbol: "NEW",
+          name: "New Token",
+          decimals: 18
+        )
+      ],
+      manualHoldings: [
+        ManualHoldingRecord(
+          label: "Cold storage",
+          provider: "manual",
+          symbol: "BTC",
+          name: "Bitcoin",
+          amount: 0.25,
+          priceUsd: 60_000,
+          valueUsd: 15_000
+        )
+      ],
+      exchangeConnections: [
+        ExchangeConnectionRecord(
+          id: connectionID,
+          provider: .binance,
+          label: "Binance main",
+          encryptedCredentials: encryptedCredentials,
+          credentialScopeAssurance: .verifiedReadOnly,
+          status: .ok,
+          lastSyncAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+      ],
+      scanRuns: [scan]
     )
   }
 
@@ -193,6 +407,22 @@ final class AtlasDesignSystemTests: XCTestCase {
       contrastRatio(AtlasTheme.warningRGB, AtlasTheme.paper2RGB),
       4.5
     )
+  }
+
+  func testPrimaryActionLabelMeetsNormalTextContrastInEveryAppearance() {
+    for appearance in AtlasAppearanceVariant.allCases {
+      let palette = AtlasTheme.palette(for: appearance)
+      XCTAssertGreaterThanOrEqual(
+        contrastRatio(palette.paper, palette.accent),
+        4.5,
+        "\(appearance) primary action text must remain readable"
+      )
+    }
+  }
+
+  func testMotionTokensDisableAnimationWhenReduceMotionIsEnabled() {
+    XCTAssertNil(AtlasMotion.animation(AtlasMotion.standard, reduceMotion: true))
+    XCTAssertNotNil(AtlasMotion.animation(AtlasMotion.standard, reduceMotion: false))
   }
 
   @MainActor
@@ -503,5 +733,22 @@ final class AtlasDesignSystemTests: XCTestCase {
         path: "\(path)/\(type(of: subview))[\(index)]"
       )
     }
+  }
+
+  @MainActor
+  private func renderedPNG<Content: View>(
+    _ content: Content,
+    size: NSSize,
+    appearanceName: NSAppearance.Name
+  ) -> Data? {
+    let hostingView = NSHostingView(rootView: content)
+    hostingView.appearance = NSAppearance(named: appearanceName)
+    hostingView.frame = NSRect(origin: .zero, size: size)
+    hostingView.layoutSubtreeIfNeeded()
+    guard let bitmap = hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds) else {
+      return nil
+    }
+    hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
+    return bitmap.representation(using: .png, properties: [:])
   }
 }
