@@ -30,5 +30,5 @@ COSE public key that a WebAuthn verifier could import.
 - Full local Vitest suite: 44 files / 517 tests passed; 6 environment-gated
   files / 51 tests skipped.
 - TypeScript typecheck and diff whitespace checks passed.
-- The replacement GitHub Actions backup/drill/restore run remains the
-  authoritative end-to-end proof.
+- GitHub Actions run `29812356527` passed the encrypted backup/drill/atomic
+  restore, destructive fresh-volume recovery, and every other CI job.
