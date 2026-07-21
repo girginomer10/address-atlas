@@ -1,6 +1,7 @@
 import { Pool } from "pg";
 import { getSyncDatabaseConfig, getSyncSchemaDatabaseConfig } from "./config";
 import { generatedDiagnostics, recordSecurityEvent } from "./diagnostics";
+import { PRODUCTION_POOL_OPTIONS } from "./postgres-search-path";
 
 let runtimePool: Pool | null = null;
 let schemaPool: Pool | null = null;
@@ -15,7 +16,7 @@ function createPool(
   const created = new Pool({
     connectionString: config.connectionString,
     application_name: applicationName,
-    ...(process.env.NODE_ENV === "production" ? { options: "-csearch_path=public" } : {}),
+    ...(process.env.NODE_ENV === "production" ? { options: PRODUCTION_POOL_OPTIONS } : {}),
     max,
     connectionTimeoutMillis: config.connectTimeoutMs,
     idleTimeoutMillis: config.idleTimeoutMs,

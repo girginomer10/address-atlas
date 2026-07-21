@@ -100,14 +100,17 @@ describe("Postgres runtime orchestration", () => {
   });
 
   it("uses a distinct max-one owner pool for explicit bootstrap", async () => {
+    vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv(
       "SYNC_SCHEMA_DATABASE_URL",
-      "postgres://schema:owner-password@localhost:5432/address_atlas"
+      "postgres://address_atlas:owner-secret-value@localhost:5432/address_atlas_sync"
     );
     await expect(bootstrapSyncSchema()).resolves.toBeUndefined();
     expect(mocks.configs).toContainEqual(expect.objectContaining({
       application_name: "address-atlas-schema-bootstrap",
-      connectionString: "postgres://schema:owner-password@localhost:5432/address_atlas",
+      connectionString:
+        "postgres://address_atlas:owner-secret-value@localhost:5432/address_atlas_sync",
+      options: "-csearch_path=public",
       max: 1
     }));
   });

@@ -3,7 +3,7 @@ title: L6 data boundaries must bind identity, snapshot, durability, and release 
 date: 2026-07-21
 status: active
 tags: [bugfix, macos, sync, postgres, release, solana, xrpl, evm, passkeys]
-related_files: [native/AddressAtlasMac/Sources/AddressAtlasCore/Sync/PendingVaultUpload.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Storage/EncryptedSQLiteVaultStore.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerSolana.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerXRP.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerBitcoinEVM.swift, src/lib/sync/postgres-readiness.ts, src/lib/sync/postgres-schema.ts, src/app/auth/passkey/body-concurrency.ts, .github/workflows/release.yml]
+related_files: [native/AddressAtlasMac/Sources/AddressAtlasCore/Sync/PendingVaultUpload.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Storage/EncryptedSQLiteVaultStore.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerSolana.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerXRP.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/NativeScannerBitcoinEVM.swift, src/lib/sync/postgres-readiness.ts, src/lib/sync/postgres-schema.ts, src/lib/sync/postgres-search-path.ts, src/lib/sync/restore-readiness.ts, src/app/auth/passkey/body-concurrency.ts, .github/workflows/release.yml]
 ---
 
 ## Durable invariants
@@ -34,6 +34,14 @@ related_files: [native/AddressAtlasMac/Sources/AddressAtlasCore/Sync/PendingVaul
   before testing a no-op bootstrap. Production-mode migrations against allowed
   `atlas_drill_*` or `atlas_restore_*` databases must set the explicit
   restore-migration flag; never weaken the fixed production database rule.
+- Production pools must configure exactly `search_path=public` and leave
+  `pg_catalog` implicit. PostgreSQL then resolves built-ins through
+  `pg_catalog` first while retaining `public` as the creation schema. Never
+  change this to `public,pg_catalog`: that makes owner-writable public
+  functions, types, and operators shadow built-ins during restore migration.
+  The restore probe must validate exact current/session identity, configured,
+  explicit, and effective paths with catalog-qualified functions/operators, and
+  a real PostgreSQL integration test must exercise both safe and unsafe order.
 - Public auth capacity starts before reading request bytes. Bound global and
   per-client concurrent body readers, impose a body deadline, release the permit
   before WebAuthn/database work, and never expose raw framework/server errors to
@@ -47,7 +55,7 @@ related_files: [native/AddressAtlasMac/Sources/AddressAtlasCore/Sync/PendingVaul
 
 ## Verification baseline
 
-- Real PostgreSQL 16 plus the full web suite: 411 tests passed.
+- Real PostgreSQL 16 plus the full web suite: 425 tests passed.
 - Native suite: 304 passed, 2 opt-in live tests skipped; strict concurrency and
   full Thread Sanitizer passed with no race finding.
 - Operations: 58 passed. Notary harness: 9 passed. Build-version harness: 61
