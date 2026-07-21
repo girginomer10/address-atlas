@@ -1,171 +1,151 @@
-# Address Atlas
+<p align="center">
+  <img src="docs/assets/github-social-preview.png" alt="Address Atlas — private portfolio map" width="100%">
+</p>
 
-Address Atlas is a local-first, read-only crypto portfolio tracker for macOS. Paste public wallet addresses, connect read-only exchange API keys, and keep a private, encrypted portfolio ledger on your own Mac.
+<h1 align="center">Address Atlas</h1>
 
-The repo is organized as a small monorepo:
+<p align="center">
+  <strong>The private crypto portfolio tracker that sees what others miss.</strong><br>
+  Wallets, exchanges, tokens, staking, and rewards in one encrypted macOS app.
+</p>
 
-- `native/AddressAtlasMac` is the macOS app — the product users run. It uses a random vault key stored in macOS Keychain, writes only encrypted vault documents to local SQLite, runs RPC/API requests from the Mac app, and syncs only opaque encrypted vault snapshots to the server.
-- The Next.js project at the repo root, together with `server/sync`, is the **encrypted sync-only server** — the backend the Mac app talks to for passkey auth and cross-device vault sync. It exposes only the native auth/config, vault, health, session-revocation, and account-deletion surface; stores opaque encrypted snapshots; and never sees plaintext. `server/sync` packages it with Docker, Caddy TLS, and Postgres.
+<p align="center">
+  <a href="https://github.com/girginomer10/address-atlas/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/girginomer10/address-atlas/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="macOS 14 or newer" src="https://img.shields.io/badge/macOS-14%2B-11120f?logo=apple">
+  <img alt="Swift 5.10" src="https://img.shields.io/badge/Swift-5.10-F05138?logo=swift&logoColor=white">
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-668fb5"></a>
+</p>
 
-## Why this exists
+Address Atlas is a local-first, read-only portfolio tracker for public wallet addresses and supported exchanges. It maps assets across **20 active networks** without taking custody, asking for a seed phrase, or requesting signing, trading, or withdrawal permission.
 
-This repo is a cleaner follow-up to earlier hackathon experiments:
+> [!IMPORTANT]
+> Address Atlas is currently a **source-first preview**. There is no signed and notarized public download yet. Build it from source, and treat every result as portfolio visibility—not accounting-grade proof or financial advice.
 
-- HodlTrack had useful balance fetching, chain config, CoinGecko pricing, and local portfolio UI ideas.
-- FluxTranche had useful portfolio modeling ideas, a coin-to-chain registry direction, and a strong no-custody framing.
-- Address Atlas keeps the reusable parts and drops fund-management, trading, auth, and AI claims.
+## Why Address Atlas
 
-## Current scope
+- **One map, more signal.** See native assets, registered tokens, exchange balances, Cosmos delegations, and rewards together.
+- **Read-only by design.** Add public addresses or balance-only exchange credentials. Address Atlas never asks for private keys or seed phrases.
+- **Private where it matters.** The portfolio vault is encrypted locally with a Keychain-backed key; only request data required by the providers you use leaves the app.
+- **Honest about partial data.** Provider, token, staking, reward, trustline, price, and pagination failures remain visible instead of silently producing a false all-clear.
+- **Optional encrypted sync.** A self-hostable sync service stores opaque ciphertext for cross-device continuity; it is not required for local use.
 
-- Bitcoin native balance via Blockstream.
-- Solana native SOL balance plus common SPL tokens via public Solana RPC.
-- EVM native balances across Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, Avalanche, Gnosis, Linea, Mantle, Scroll, and ZKsync Era.
-- Common ERC-20 stablecoins, wrapped assets, and blue-chip/ecosystem tokens on supported EVM chains.
-- TRON native TRX plus tracked TRC20 tokens.
-- XRP Ledger native XRP plus positive issued-currency trustline balances.
-- Cosmos liquid, delegated, and reward balances for Cosmos Hub, Osmosis, Celestia, and Stride. Legacy Stargaze records remain readable but are retained without scanning because that network is retired.
-- Read-only exchange balances through Binance, Coinbase Advanced Trade (CDP ES256 JWT), and Kraken via native Swift REST clients.
-- A local encrypted SQLite vault for watched wallets, holdings, exchange connections, and preferences.
-- AES-256-GCM encryption for the vault, using a Keychain-backed vault subkey.
-- Crypto USD prices and BTC-relative fiat conversion rates through CoinGecko; unsupported or unavailable rates remain visibly unpriced.
-- Credential-free CSV and JSON portfolio export. These reports include identifying public wallet addresses, labels, balances, asset identifiers, and (for JSON) stored history; sync sessions and encrypted exchange credentials are omitted. Treat exports as sensitive unless you intend to share that portfolio data.
-- Visible partial-scan warnings when optional token, price, staking, reward, trustline, or pagination requests fail.
-- Working 15-minute in-app auto-refresh and an optional USD dust filter.
-- Native macOS UI: Portfolio, Wallets, Assets, Snapshots, Export, and Settings.
+## Current coverage
 
-## Sync server (local) development
+| Surface | Support |
+| --- | --- |
+| EVM | Ethereum, Base, Arbitrum One, Optimism, Polygon PoS, BNB Chain, Avalanche C-Chain, Gnosis Chain, Linea, Mantle, Scroll, ZKsync Era |
+| Other networks | Bitcoin, Solana, TRON, XRP Ledger |
+| Cosmos | Cosmos Hub, Osmosis, Celestia, Stride—including liquid, delegated, and reward balances |
+| Tokens | Registered ERC-20, SPL, and TRC20 assets; positive XRPL issued-currency trustlines |
+| Exchanges | Binance, Coinbase Advanced Trade, and Kraken through native read-only clients |
+| Portfolio tools | USD pricing, BTC-relative fiat conversion, snapshots, dust filtering, partial-scan warnings, and CSV/JSON export |
 
-The repo root is the encrypted sync-only server (Next.js). For local development, start the bundled Postgres, set the env, and run the server:
+The active network list comes from the native [chain registry](native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/ChainRegistry.swift). A provider failure can make coverage temporarily incomplete; Address Atlas surfaces that state in the scan result.
 
-```bash
-npm install
-cp .env.example .env   # set SYNC_SESSION_SECRET and the Postgres URL
-npm run sync:db:up
-npm run dev
+## Privacy model
+
+Address Atlas does not pretend that querying a public blockchain is invisible. Its trust boundaries are explicit:
+
+| Boundary | What it receives |
+| --- | --- |
+| Your Mac | Plaintext portfolio data while the app is unlocked; the local SQLite vault stores one AES-256-GCM encrypted document |
+| macOS Keychain | A random, this-device-only vault key |
+| Chain RPC and REST providers | The public addresses and network requests needed to scan supported chains |
+| Supported exchanges | Signed, read-only balance requests made directly by the Mac app |
+| CoinGecko | Asset and fiat-rate lookup requests; no exchange credentials or vault snapshot |
+| Optional sync service | Passkey public credentials, operational metadata, and encrypted vault snapshots—not plaintext portfolio contents, plaintext exchange credentials, recovery material, or a decryptable vault key |
+
+The recommended **share-safer** CSV and JSON summaries omit addresses, labels, exact balances, and history in favor of coarse groups and ranges. They reduce disclosure but are not anonymous. Full identifying reports remain available behind an explicit warning and are not vault backups.
+
+See [PRIVACY.md](PRIVACY.md) for the complete user-facing boundary and [.github/SECURITY.md](.github/SECURITY.md) for private vulnerability reporting.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    U["User"] --> M["Native SwiftUI app"]
+    M --> K["macOS Keychain"]
+    M --> L["Encrypted local SQLite vault"]
+    M --> P["Chain, price, and exchange providers"]
+    M -->|"Passkey auth and operational metadata"| S["Optional self-hosted sync"]
+    M -->|"AES-256-GCM vault snapshots"| S
+    S --> D["PostgreSQL"]
 ```
 
-`npm test` runs the server unit tests and `npm run typecheck` runs the TypeScript checks. The macOS app (below) is what end users actually run.
+- [`native/AddressAtlasMac`](native/AddressAtlasMac) is the product: a native SwiftUI app with the portfolio model, scanners, encryption, recovery, export, and sync client.
+- The root Next.js service and [`server/sync`](server/sync) provide the narrow passkey-authenticated, client-encrypted sync surface.
+- [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) records architectural invariants and the full verification gate.
+- [`docs/OPERATIONS.md`](docs/OPERATIONS.md) and [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) cover production operations and signed distribution.
 
-## Native macOS development
+## Run the macOS app
 
-The native app lives in `native/AddressAtlasMac` as a Swift Package with an executable SwiftUI target and testable core library:
+Requirements: macOS 14 or newer and a Swift 5.10-compatible toolchain. Full Xcode is required for XCTest.
 
 ```bash
-cd native/AddressAtlasMac
+git clone https://github.com/girginomer10/address-atlas.git
+cd address-atlas/native/AddressAtlasMac
 ./check-toolchain.sh
-PATH="/opt/homebrew/opt/swift/bin:$PATH" swift run AddressAtlasMac
+swift run AddressAtlasMac
 ```
 
-`swift test` requires full Xcode for XCTest. The local `.app` bundle is universal (`arm64` + `x86_64`), hardened-runtime, and ad-hoc signed by default; it can be built with either full Xcode or the Homebrew Swift.org toolchain:
+To build a local universal app bundle:
 
 ```bash
-cd native/AddressAtlasMac
 ./build-mac-app.sh
 open "dist/Address Atlas.app"
 ```
 
-Set `ADDRESS_ATLAS_CODESIGN_IDENTITY` before running `./build-mac-app.sh` when a Developer ID Application identity is available for distribution signing.
-The script derives `CFBundleVersion` from the full Git commit count. Shallow CI/release checkouts must supply a unique `ADDRESS_ATLAS_BUILD_NUMBER`; the script fails closed instead of reusing an ambiguous build number.
+Local builds use hardened runtime and ad-hoc signing by default. They are not public distribution artifacts. See the [native app guide](native/AddressAtlasMac/README.md) for signing, toolchain, storage, and packaging details.
 
-Public macOS distribution uses a signed, notarized, create-once GitHub Release.
-The release workflow accepts only a version tag whose commit is already on
-`main`, imports signing material into an ephemeral Keychain, verifies Apple's
-notarization/stapling result, and publishes a DMG with checksums and a provenance
-manifest. GitHub release immutability must be enabled, and the protected
-`release` environment must contain the Apple signing secrets, the narrowly
-scoped Administration-write governance token, and the exact ruleset-bypass
-allowlist described in `docs/RELEASE_CHECKLIST.md`.
+## Run optional encrypted sync
 
-For an operator-driven local notarization, use a Keychain profile without
-placing credentials in arguments:
+The macOS app works locally without a sync server. To run the self-hostable development service, install Node.js `>=22.17 <23`, npm `>=10.9.2 <11`, and Docker with Compose:
 
 ```bash
-cd native/AddressAtlasMac
-xcrun notarytool store-credentials address-atlas-notary
-ADDRESS_ATLAS_CODESIGN_IDENTITY="Developer ID Application: ..." \
-ADDRESS_ATLAS_NOTARY_PROFILE="address-atlas-notary" \
-./notarize-mac-app.sh
-```
-
-CI uses the script's alternative App Store Connect key-file contract. Run
-`bash Tests/notarize-mac-app-tests.sh` after changing release tooling.
-
-The app stores its local vault in `~/Library/Application Support/AddressAtlas/vault.sqlite`. The SQLite table stores encrypted envelope JSON only; wallet addresses, exchange credentials, scan history, token lists, and preferences are encrypted before persistence.
-
-Settings includes a recovery kit flow. Export creates a `.atlas-recovery` file plus a high-entropy recovery code shown once. The file and code are both required to unwrap the Mac vault key; neither is uploaded to the sync server. If the Keychain key is missing, recovery is available directly from the locked screen and the app does not create an unrelated replacement key.
-
-The encrypted sync server uses a schema-owner connection only during the
-one-shot bootstrap and a separate DML-only connection while serving requests:
-
-```bash
-SYNC_SCHEMA_DATABASE_URL="postgres://address_atlas:owner-password@..."
-SYNC_DATABASE_URL="postgres://address_atlas_runtime:runtime-password@..."
-SYNC_SESSION_SECRET="long-random-secret"
-PASSKEY_RP_ID="example.com"
-PASSKEY_RP_NAME="Address Atlas"
-PASSKEY_ORIGIN="https://example.com"
-```
-
-For local sync development, start the bundled Postgres service first:
-
-```bash
+cd "$(git rev-parse --show-toplevel)"
+npm ci
+install -m 0600 .env.example .env
+node -e '
+  const fs = require("node:fs"), crypto = require("node:crypto"), path = ".env";
+  const source = fs.readFileSync(path, "utf8");
+  fs.writeFileSync(path, source.replace(
+    "replace-with-a-long-random-secret",
+    crypto.randomBytes(32).toString("base64url"),
+  ));
+'
 npm run sync:db:up
+npm run dev
 ```
 
-For a production VPS, install `.env.production.example` as an operator-owned
-`0600` file, fill the production domain and secrets, configure the age backup
-recipient/identity, and then start the sync-only stack. Generate three distinct
-32-byte URL-safe PostgreSQL secrets: one each for the owner, isolated admin, and
-runtime roles. Never reuse one value across roles.
+The setup creates `.env` with owner-only permissions and replaces the deliberately rejected session-secret placeholder before startup. Never reuse published placeholders or commit `.env`. Deployment, backup, restore, and monitoring procedures live in the [sync service guide](server/sync/README.md).
+
+## Verify changes
+
+Run the checks relevant to the area you changed. The complete local gate is documented in [Development Notes](docs/DEVELOPMENT.md).
 
 ```bash
-umask 077
-install -m 0600 server/sync/.env.production.example server/sync/.env.production
-# Run three times and assign each output to a different POSTGRES_* field:
-openssl rand -hex 32
-npm run sync:prod:up
-curl https://your-domain.example/healthz
-```
+# Web and sync service
+npm test
+npm run typecheck
+npm run build
 
-Always deploy through `npm run sync:prod:up`. Its preflight reconnects the authoritative PostgreSQL and Caddy volumes across historical Compose project names and refuses ambiguous selections; invoking the production Compose file directly bypasses that safeguard.
-
-The same gate requires a fresh encrypted and decrypt-verified database backup,
-builds an image tagged with the exact clean Git SHA, bootstraps schema through
-the owner-only job, verifies the DML-only runtime role, and then replaces the
-web service. Scheduled backup, restore drill, monitoring, rollback, and incident
-procedures live in [docs/OPERATIONS.md](docs/OPERATIONS.md). Its separately
-gated fresh-cluster path restores only signed schema-v4 artifacts, resumes
-across power loss, and does not declare success until the current web release
-passes public smoke and persists its native-config receipt.
-
-`server/sync/compose.prod.yml` runs Caddy, the Next sync/auth server, and Postgres. `ADDRESS_ATLAS_SYNC_ONLY=true` limits the public VPS to `/auth/native`, `/auth/passkey/*`, `/config/native`, `/vault/latest`, and `/healthz`.
-
-Startup readiness validates the session secret, Postgres URL and timeouts, passkey RP/origin, capacity limits, and explicit native endpoint configuration. Missing required values or malformed explicit overrides keep `/healthz` at 503 instead of silently using production fallbacks.
-
-Sync endpoints are intentionally narrow: passkey options/verification,
-encrypted vault GET/PUT, bearer-session revocation, and confirmed account
-deletion. The server stores passkey public keys plus encrypted vault snapshot
-metadata; it does not store decryptable keys or plaintext portfolio data.
-
-The Mac app opens `/auth/native` in a system web authentication session for passkey account creation/sign-in. The `address-atlas://sync-auth` callback carries only a one-time authorization code, request state, and canonical server origin; the app exchanges that code with an S256 PKCE verifier for the short-lived sync session token in a cookie-free `POST`.
-
-`GET /config/native` returns public endpoint config for approved blockchain RPC and price providers. Exchange origins, credential-bearing routes, and request methods are pinned in the native binary and cannot be redirected by the sync server. The Mac app still sends scan requests client-side; the config endpoint does not receive wallet addresses or vault data.
-
-Opt-in live exchange smoke tests are available for release QA. They run only when explicitly enabled and credentials are supplied out of band:
-
-```bash
+# Native app (requires full Xcode)
 cd native/AddressAtlasMac
-ADDRESS_ATLAS_LIVE_EXCHANGE_TESTS=1 \
-ADDRESS_ATLAS_BINANCE_API_KEY="..." \
-ADDRESS_ATLAS_BINANCE_SECRET="..." \
-ADDRESS_ATLAS_COINBASE_API_KEY="..." \
-ADDRESS_ATLAS_COINBASE_SECRET="..." \
-ADDRESS_ATLAS_COINBASE_PASSPHRASE="..." \
-ADDRESS_ATLAS_KRAKEN_API_KEY="..." \
-ADDRESS_ATLAS_KRAKEN_SECRET="..." \
 swift test
 ```
 
-## Security notes
+GitHub Actions also verifies repository hygiene, dependency security, server behavior, native tests, production operations, and release governance.
 
-Address Atlas never asks for seed phrases, private keys, signing permissions, trading permissions, or withdrawal permissions. Exchange API keys should be created with balance/read permission only. In the native app, credentials are encrypted with a vault subkey before local persistence and sync. Public RPC, exchange, and price endpoints can rate-limit or fail, so scan results should be treated as portfolio visibility, not accounting-grade proof.
+## Built with OpenAI Codex
+
+OpenAI Codex has been used as an engineering collaborator for architecture review, implementation, security hardening, tests, and repository QA. **Codex is not a product feature:** Address Atlas has no OpenAI runtime dependency and does not send portfolio data to OpenAI.
+
+## Contributing
+
+Start with [CONTRIBUTING.md](CONTRIBUTING.md), then open a focused issue or pull request. The core boundary is non-negotiable: no custody, no seed phrases, no signing, no trading, and no withdrawal permissions.
+
+Security issues do not belong in public issues. Use [GitHub private vulnerability reporting](https://github.com/girginomer10/address-atlas/security/advisories/new).
+
+## License
+
+Address Atlas is available under the [MIT License](LICENSE).

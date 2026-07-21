@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability privately
+    url: https://github.com/girginomer10/address-atlas/security/advisories/new
+    about: Never publish suspected vulnerabilities, leaked credentials, or user-data exposure in an issue.
+  - name: Read support guidance
+    url: https://github.com/girginomer10/address-atlas/blob/main/SUPPORT.md
+    about: Check setup, provider-failure, and safe-reporting guidance before filing an issue.

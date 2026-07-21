@@ -1,9 +1,10 @@
 # Address Atlas Production Operations
 
 This runbook is the production contract for the encrypted sync service. The
-service is zero-knowledge, but its passkey records, opaque vault availability,
-and account lifecycle still require normal production-grade recovery and
-incident discipline.
+service is blind to plaintext vault contents and decryptable vault keys, but
+its passkey records, operational metadata, opaque vault availability, and
+account lifecycle still require normal production-grade recovery and incident
+discipline.
 
 ## Reliability Objectives
 

@@ -2,9 +2,11 @@
 
 ## Supported versions
 
-Only the latest signed and notarized Address Atlas release and the currently
-deployed sync service receive security fixes. Upgrade promptly; older builds are
-not supported once a replacement is published.
+Address Atlas is currently a source-first preview with no signed and notarized
+public release. Security fixes land on `main`. Once public releases begin, only
+the latest signed and notarized release and the currently deployed sync service
+will receive fixes; older builds will not be supported after a replacement is
+published.
 
 ## Reporting a vulnerability
 

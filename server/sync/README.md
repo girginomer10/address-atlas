@@ -1,8 +1,9 @@
 # Address Atlas Sync Server
 
-This folder is the production deployment target for the public native macOS app.
+This folder packages the optional, self-hostable sync service for the native
+macOS app.
 
-It runs only the zero-knowledge sync/auth surface:
+It runs only the server-blind encrypted sync and authentication surface:
 
 - `GET /config/native`
 - `GET /livez`
