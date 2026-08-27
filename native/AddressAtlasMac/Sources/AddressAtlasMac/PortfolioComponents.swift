@@ -134,7 +134,7 @@ struct AssetRow: View {
       }
       .frame(maxWidth: .infinity, alignment: .leading)
 
-      Text(asset.displayedAmount)
+      Text(asset.displayedAmount(locale: AtlasFormatting.locale))
         .font(.callout.monospaced())
         .lineLimit(1)
         .minimumScaleFactor(0.65)
@@ -189,7 +189,7 @@ private struct CompactAssetRow: View {
       VStack(alignment: .trailing, spacing: 4) {
         Text(asset.pricingStatus == .priced ? money(asset.valueUsd) : "—")
           .font(.callout.monospacedDigit().weight(.semibold))
-        Text(asset.displayedAmount)
+        Text(asset.displayedAmount(locale: AtlasFormatting.locale))
           .font(.caption.monospaced())
           .foregroundStyle(AtlasTheme.ink3)
           .lineLimit(1)
@@ -235,9 +235,10 @@ struct QuickActionsPanel: View {
             && (state.syncing || state.syncPersistencePending || !state.hasScanSources))
         VStack(alignment: .leading, spacing: 12) {
           SidebarTrustLine(title: "Encrypted storage", copy: "Protected on this device")
-          SidebarTrustLine(title: "Private sync", copy: "Only encrypted snapshots leave this Mac")
           SidebarTrustLine(
-            title: "Direct connections", copy: "RPC and exchange requests run locally")
+            title: "Private sync", copy: "Only encrypted snapshots go to your sync server")
+          SidebarTrustLine(
+            title: "Direct connections", copy: "Addresses and balance requests go to providers")
         }
       }
     }
@@ -274,8 +275,8 @@ struct TotalBlock: View {
         )
       Text(
         unpricedCount > 0
-          ? "\(assetCount) assets · \(unpricedCount) awaiting a USD value · \(generatedAt?.formatted(date: .abbreviated, time: .shortened) ?? "No snapshot yet")"
-          : "\(assetCount) assets · \(generatedAt?.formatted(date: .abbreviated, time: .shortened) ?? "No snapshot yet")"
+          ? "\(assetCount) assets · \(unpricedCount) awaiting a USD value · \(generatedAt.map(AtlasFormatting.dateTime) ?? "No snapshot yet")"
+          : "\(assetCount) assets · \(generatedAt.map(AtlasFormatting.dateTime) ?? "No snapshot yet")"
       )
       .font(.caption)
       .foregroundStyle(AtlasTheme.ink3)

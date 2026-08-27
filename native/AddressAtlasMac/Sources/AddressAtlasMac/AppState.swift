@@ -203,10 +203,26 @@ final class AppState: ObservableObject {
   /// SwiftPM's `swift run` executable has no Info.plist, so it also needs the
   /// compiled release version for the server compatibility check.
   static let currentAppVersion = "0.2.0"
-  /// Hard-pinned, HTTPS update route. Compatibility policy is remote, but the
-  /// destination that can replace executable code is not remotely mutable.
-  static let updateDownloadURL = URL(
+  /// Hard-pinned, HTTPS direct-distribution update route. Mac App Store builds
+  /// override this with their immutable apps.apple.com product URL in Info.plist.
+  static let directUpdateDownloadURL = URL(
     string: "https://github.com/girginomer10/address-atlas/releases/latest"
+  )!
+  /// A malformed App Store product URL must never make a sandboxed build send
+  /// users to the separately distributed GitHub binary. The generic storefront
+  /// is a safe fail-closed destination until the numeric product ID is set.
+  static let macAppStoreFallbackURL = URL(string: "https://apps.apple.com")!
+  static let privacyPolicyURL = URL(
+    string: "https://github.com/girginomer10/address-atlas/blob/main/PRIVACY.md"
+  )!
+  static let supportURL = URL(
+    string: "https://github.com/girginomer10/address-atlas/blob/main/SUPPORT.md"
+  )!
+  static let termsOfUseURL = URL(
+    string: "https://github.com/girginomer10/address-atlas/blob/main/TERMS.md"
+  )!
+  static let coinGeckoAttributionURL = URL(
+    string: "https://www.coingecko.com/en/api"
   )!
 
   init(
@@ -480,7 +496,47 @@ final class AppState: ObservableObject {
     )
   }
 
-  var safeUpdateDownloadURL: URL { Self.updateDownloadURL }
+  var usesMacAppStoreUpdates: Bool {
+    Bundle.main.infoDictionary?["AddressAtlasDistributionChannel"] as? String == "app-store"
+  }
+
+  var safeUpdateDownloadURL: URL {
+    Self.resolvedUpdateDownloadURL(
+      distributionChannel: Bundle.main.infoDictionary?["AddressAtlasDistributionChannel"]
+        as? String,
+      rawURL: Bundle.main.infoDictionary?["AddressAtlasUpdateURL"] as? String
+    )
+  }
+
+  static func resolvedUpdateDownloadURL(
+    distributionChannel: String?,
+    rawURL: String?
+  ) -> URL {
+    guard distributionChannel == "app-store" else {
+      return directUpdateDownloadURL
+    }
+    guard
+      let rawURL,
+      let url = URL(string: rawURL),
+      url.scheme == "https",
+      url.host == "apps.apple.com"
+    else {
+      return macAppStoreFallbackURL
+    }
+    return url
+  }
+
+  var updateActionTitle: String {
+    usesMacAppStoreUpdates
+      ? "Open Address Atlas in the Mac App Store"
+      : "Download the latest signed Address Atlas release"
+  }
+
+  var updateActionHint: String {
+    usesMacAppStoreUpdates
+      ? "Opens the hard-pinned Address Atlas product page in the Mac App Store"
+      : "Opens the hard-pinned Address Atlas releases page in your browser"
+  }
 
   /// False when the server's `minSupportedAppVersion` is newer than this build.
   /// A present but malformed policy or app version fails closed.

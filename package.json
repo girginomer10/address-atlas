@@ -36,6 +36,11 @@
     "native:test:tsan": "cd native/AddressAtlasMac && swift test --sanitize=thread",
     "native:dmg": "cd native/AddressAtlasMac && ./build-dmg.sh",
     "native:notarize": "cd native/AddressAtlasMac && ./notarize-mac-app.sh",
+    "native:mas:contracts": "cd native/AddressAtlasMac && bash Tests/mas-release-contract-tests.sh",
+    "native:mas:screenshots": "cd native/AddressAtlasMac && ./generate-app-store-screenshots.sh",
+    "native:mas:package": "cd native/AddressAtlasMac && ./build-mas-pkg.sh",
+    "native:mas:validate": "cd native/AddressAtlasMac && ./upload-mas-build.sh --validate-only",
+    "native:mas:upload": "cd native/AddressAtlasMac && ./upload-mas-build.sh --upload",
     "release:doctor": "./scripts/release-doctor.sh",
     "release:governance:test": "bash scripts/check-ruleset-governance-tests.sh && bash scripts/check-release-environment-governance-tests.sh",
     "ops:test": "bash server/sync/ops-script-tests.sh && bash server/sync/frontend-recovery-tests.sh && bash server/sync/credential-rotation-tests.sh && bash server/sync/systemd-contract-tests.sh",
@@ -55,7 +60,7 @@
   "dependencies": {
     "@simplewebauthn/browser": "13.3.0",
     "@simplewebauthn/server": "13.3.2",
-    "next": "16.2.10",
+    "next": "16.3.3",
     "pg": "8.22.0",
     "react": "19.2.7",
     "react-dom": "19.2.7",
@@ -72,7 +77,7 @@
     "vitest": "4.1.10"
   },
   "overrides": {
-    "postcss": "8.5.13",
+    "postcss": "8.5.23",
     "vite": "8.1.4"
   }
 }

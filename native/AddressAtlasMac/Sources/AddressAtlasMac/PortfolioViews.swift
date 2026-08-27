@@ -45,7 +45,7 @@ struct PortfolioView: View {
   }
 
   private var latestSnapshotLabel: String {
-    state.latestScan?.generatedAt.formatted(date: .abbreviated, time: .shortened) ?? "None"
+    state.latestScan.map { AtlasFormatting.dateTime($0.generatedAt) } ?? "None"
   }
 
   private var portfolioSummary: some View {
@@ -198,7 +198,7 @@ struct WalletRow: View {
 
       Spacer()
 
-      Badge(wallet.chainKind.rawValue.capitalized)
+      Badge(wallet.chainKind == .evm ? "EVM" : wallet.chainKind.rawValue.capitalized)
 
       Button(role: .destructive) {
         confirmingRemoval = true
@@ -666,7 +666,7 @@ struct SnapshotList: View {
                   .background(AtlasTheme.accent.opacity(0.09))
                   .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                 VStack(alignment: .leading, spacing: 3) {
-                  Text(run.generatedAt.formatted(date: .abbreviated, time: .shortened))
+                  Text(AtlasFormatting.dateTime(run.generatedAt))
                     .font(.body.weight(.semibold))
                   Text("\(run.holdings.count) assets")
                     .foregroundStyle(AtlasTheme.ink3)
@@ -750,7 +750,9 @@ struct ManualHoldingList: View {
                 VStack(alignment: .leading, spacing: 3) {
                   Text("\(holding.symbol) · \(holding.label)")
                     .font(.body.weight(.semibold))
-                  Text("\(holding.amount.formatted()) · \(money(holding.valueUsd))")
+                  Text(
+                    "\(holding.amount.formatted(.number.locale(AtlasFormatting.locale))) · \(money(holding.valueUsd))"
+                  )
                     .foregroundStyle(AtlasTheme.ink3)
                 }
                 Spacer()

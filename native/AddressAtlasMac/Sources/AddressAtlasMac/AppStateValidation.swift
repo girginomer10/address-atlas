@@ -60,7 +60,7 @@ extension AppState {
   }
 
   static func lastConfirmedSyncStatus(_ state: SyncState) -> String {
-    let confirmed = state.lastSyncedAt?.formatted(date: .abbreviated, time: .shortened) ?? "never"
+    let confirmed = state.lastSyncedAt.map(AtlasFormatting.dateTime) ?? "never"
     return state.remoteOutcomeUncertain ? "Unknown (last confirmed \(confirmed))" : confirmed
   }
 

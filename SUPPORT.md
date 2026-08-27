@@ -1,18 +1,13 @@
-# Support
+# Address Atlas Support
 
-Address Atlas is currently a source-first preview, not a supported public release. The project has no guaranteed response time or private end-user support channel.
+Address Atlas is a local-first, read-only macOS portfolio viewer. For product help, bug reports, or privacy questions:
 
-## Before opening an issue
+- Email [girginomer10@gmail.com](mailto:girginomer10@gmail.com).
+- Open a [public support issue](https://github.com/girginomer10/address-atlas/issues/new/choose) only when the report contains no sensitive information.
+- Report suspected security vulnerabilities through [GitHub private vulnerability reporting](https://github.com/girginomer10/address-atlas/security/advisories/new).
 
-1. Read the root [README](README.md) and the [native app guide](native/AddressAtlasMac/README.md).
-2. Check [existing issues](https://github.com/girginomer10/address-atlas/issues) for the same behavior.
-3. Confirm whether the app displayed a partial-scan or provider warning. Public RPC, exchange, and price providers can rate-limit or fail independently of the app.
-4. Reproduce with synthetic or redacted data whenever possible.
+Never include wallet inventories, exchange credentials, session tokens, recovery files or codes, private keys, seed phrases, or raw production logs in a public issue. Address Atlas cannot recover funds, reverse transactions, or provide investment advice.
 
-Use the repository's bug or feature template for non-sensitive requests. Include the Address Atlas commit or build, affected surface, relevant environment and tool versions, expected result, actual result, and minimal reproduction.
+When reporting a non-sensitive bug, include the Address Atlas version, macOS version, the affected screen, the expected result, and the privacy-safe diagnostic summary available in **Settings**. Response times are best-effort; there is no guaranteed service-level agreement.
 
-## Keep sensitive data private
-
-Do not post wallet inventories, exact balances, exchange API credentials, bearer tokens, passkeys, recovery files or codes, private keys, `.env` contents, production logs, or unredacted exports.
-
-For a suspected vulnerability, leaked credential, or user-data exposure, use [GitHub private vulnerability reporting](https://github.com/girginomer10/address-atlas/security/advisories/new). Do not open a public issue.
+Use of Address Atlas is governed by the [Terms of Use](TERMS.md); data handling is described in the [Privacy Model](PRIVACY.md).

@@ -46,7 +46,8 @@ final class AtlasDesignSystemTests: XCTestCase {
     let state = AppState(testStore: store, document: VaultDocument())
     let populatedState = AppState(
       testStore: store,
-      document: try populatedDocument(vaultKey: vaultKey)
+      document: try populatedDocument(vaultKey: vaultKey),
+      endpointConfigClient: FixedEndpointConfigClient(config: .bundled)
     )
     let screens: [(String, AnyView)] = [
       ("portfolio", AnyView(PortfolioView().environmentObject(state))),
@@ -159,6 +160,81 @@ final class AtlasDesignSystemTests: XCTestCase {
   }
 
   @MainActor
+  func testGenerateRequestedAppStoreScreenshot() throws {
+    guard
+      let screenshotPath = ProcessInfo.processInfo.environment[
+        "ADDRESS_ATLAS_APP_STORE_SCREENSHOT_DIR"
+      ], !screenshotPath.isEmpty,
+      let requestedFilename = ProcessInfo.processInfo.environment[
+        "ADDRESS_ATLAS_APP_STORE_SCREENSHOT_NAME"
+      ]
+    else { return }
+
+    XCTAssertEqual(AtlasFormatting.locale.identifier, "en_US")
+    XCTAssertEqual(money(8_000), "$8,000.00")
+
+    let screens: [(String, MainView.Section)] = [
+      ("01-portfolio.jpg", .portfolio),
+      ("02-wallets.jpg", .wallets),
+      ("03-assets.jpg", .assets),
+      ("04-snapshots.jpg", .snapshots),
+      ("05-sync.jpg", .sync),
+    ]
+    let requestedScreens = screens.filter { $0.0 == requestedFilename }
+    XCTAssertEqual(requestedScreens.count, 1)
+    let (filename, section) = try XCTUnwrap(requestedScreens.first)
+
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let vaultKey = try VaultCrypto().generateVaultKey()
+    let store = try EncryptedSQLiteVaultStore(
+      path: directory.appending(path: "vault.sqlite"),
+      vaultKey: vaultKey
+    )
+    _ = try store.load()
+    var screenshotDocument = try populatedDocument(vaultKey: vaultKey)
+    if section == .sync {
+      screenshotDocument.syncState = SyncState()
+    }
+    let state = AppState(
+      testStore: store,
+      document: screenshotDocument,
+      endpointConfigClient: FixedEndpointConfigClient(config: .bundled)
+    )
+
+    let screenshotDirectory = URL(fileURLWithPath: screenshotPath, isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: screenshotDirectory,
+      withIntermediateDirectories: true
+    )
+    let screenshotSize = NSSize(width: 1_440, height: 900)
+    let data = try XCTUnwrap(
+      renderedJPEG(
+        MainView(initialSection: section)
+          .environmentObject(state)
+          .environment(\.locale, Locale(identifier: "en_US"))
+          .preferredColorScheme(.dark)
+          .transaction {
+            $0.animation = nil
+            $0.disablesAnimations = true
+          },
+        size: screenshotSize,
+        appearanceName: .darkAqua
+      )
+    )
+    let bitmap = try XCTUnwrap(NSBitmapImageRep(data: data))
+    XCTAssertEqual(bitmap.pixelsWide, 1_440)
+    XCTAssertEqual(bitmap.pixelsHigh, 900)
+    XCTAssertFalse(bitmap.hasAlpha)
+    XCTAssertGreaterThan(data.count, 50_000)
+    try data.write(
+      to: screenshotDirectory.appending(path: filename),
+      options: .atomic
+    )
+  }
+
+  @MainActor
   func testAccessibilityAnnouncementsCoalesceDuplicateViewsButAllowFreshEvents() {
     var clock = 10.0
     var announcements: [(message: String, priority: Int)] = []
@@ -231,7 +307,7 @@ final class AtlasDesignSystemTests: XCTestCase {
       holdings: [ether, unpricedToken],
       warnings: ["A price source was temporarily unavailable for one token."]
     )
-    return VaultDocument(
+    var document = VaultDocument(
       wallets: [
         WalletRecord(
           label: "Main wallet",
@@ -271,8 +347,22 @@ final class AtlasDesignSystemTests: XCTestCase {
           lastSyncAt: Date(timeIntervalSince1970: 1_700_000_000)
         )
       ],
-      scanRuns: [scan]
+      scanRuns: [scan],
+      syncState: SyncState(
+        accountId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+        serverURL: "https://sync.addressatlas.example",
+        sessionToken: testSessionToken(
+          accountId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+        ),
+        latestRemoteVersion: 7,
+        lastSyncedAt: Date(timeIntervalSince1970: 1_700_000_000),
+        lastChecksum: String(repeating: "a", count: 64)
+      )
     )
+    document.syncState.lastSyncedContentChecksum = try VaultSyncCodec().contentChecksum(
+      for: document
+    )
+    return document
   }
 
   @MainActor
@@ -750,5 +840,29 @@ final class AtlasDesignSystemTests: XCTestCase {
     }
     hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
     return bitmap.representation(using: .png, properties: [:])
+  }
+
+  @MainActor
+  private func renderedJPEG<Content: View>(
+    _ content: Content,
+    size: NSSize,
+    appearanceName: NSAppearance.Name
+  ) -> Data? {
+    let hostingView = NSHostingView(
+      rootView: content.frame(
+        width: size.width,
+        height: size.height,
+        alignment: .topLeading
+      )
+    )
+    hostingView.sizingOptions = []
+    hostingView.appearance = NSAppearance(named: appearanceName)
+    hostingView.frame = NSRect(origin: .zero, size: size)
+    hostingView.layoutSubtreeIfNeeded()
+    guard let bitmap = hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds) else {
+      return nil
+    }
+    hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
+    return bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.92])
   }
 }

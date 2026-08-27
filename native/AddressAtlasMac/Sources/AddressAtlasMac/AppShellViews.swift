@@ -36,42 +36,54 @@ struct MainView: View {
 
   }
 
-  @State private var selected: Section = .portfolio
+  @State private var selected: Section
+
+  init(initialSection: Section = .portfolio) {
+    _selected = State(initialValue: initialSection)
+  }
 
   var body: some View {
-    HStack(spacing: 0) {
-      Sidebar(
-        selection: $selected,
-        onNavigate: {
-          state.clearTransientMessagesForNavigation()
-        })
-      Rectangle().fill(AtlasTheme.ruleSoft).frame(width: 1)
-      Group {
-        switch selected {
-        case .portfolio: PortfolioView()
-        case .wallets: WalletsView()
-        case .assets: AssetsView()
-        case .tokens: TokenAllowlistView()
-        case .snapshots: SnapshotsView()
-        case .exchanges: ExchangesView()
-        case .sync: SyncView()
-        case .export: ExportView()
-        case .settings: SettingsView()
+    GeometryReader { geometry in
+      HStack(spacing: 0) {
+        Sidebar(
+          selection: $selected,
+          onNavigate: {
+            state.clearTransientMessagesForNavigation()
+          })
+        Rectangle().fill(AtlasTheme.ruleSoft).frame(width: 1)
+        Group {
+          switch selected {
+          case .portfolio: PortfolioView()
+          case .wallets: WalletsView()
+          case .assets: AssetsView()
+          case .tokens: TokenAllowlistView()
+          case .snapshots: SnapshotsView()
+          case .exchanges: ExchangesView()
+          case .sync: SyncView(initialServerURL: state.document.syncState.serverURL)
+          case .export: ExportView()
+          case .settings: SettingsView()
+          }
         }
+        .id(selected)
+        .transition(
+          reduceMotion
+            ? .opacity
+            : .opacity.combined(with: .move(edge: .trailing))
+        )
+        .animation(
+          AtlasMotion.animation(AtlasMotion.standard, reduceMotion: reduceMotion),
+          value: selected
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
       }
-      .id(selected)
-      .transition(
-        reduceMotion
-          ? .opacity
-          : .opacity.combined(with: .move(edge: .trailing))
+      .frame(
+        width: geometry.size.width,
+        height: geometry.size.height,
+        alignment: .topLeading
       )
-      .animation(
-        AtlasMotion.animation(AtlasMotion.standard, reduceMotion: reduceMotion),
-        value: selected
-      )
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     .frame(minWidth: 900, minHeight: 600)
+    .clipped()
     .background(AtlasTheme.canvas)
   }
 }

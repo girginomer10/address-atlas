@@ -913,6 +913,7 @@ jobs:
         run: |
           bash Tests/build-mac-app-version-tests.sh
           bash Tests/notarize-mac-app-tests.sh
+          bash Tests/mas-release-contract-tests.sh
         working-directory: native/AddressAtlasMac
       - run: swift test
         working-directory: native/AddressAtlasMac
@@ -933,10 +934,32 @@ jobs:
           test "$(plutil -extract CFBundleDisplayName raw "dist/Address Atlas.app/Contents/Info.plist")" = "Address Atlas"
           test "$(plutil -extract CFBundleIconFile raw "dist/Address Atlas.app/Contents/Info.plist")" = "AppIcon.icns"
           test "$(plutil -extract LSApplicationCategoryType raw "dist/Address Atlas.app/Contents/Info.plist")" = "public.app-category.finance"
+          test "$(plutil -extract AddressAtlasSourceCommit raw "dist/Address Atlas.app/Contents/Info.plist")" = "$(git rev-parse HEAD)"
           test -s "dist/Address Atlas.app/Contents/Resources/AppIcon.icns"
           architectures="$(lipo -archs "dist/Address Atlas.app/Contents/MacOS/Address Atlas")"
           [[ " $architectures " == *" arm64 "* ]]
           [[ " $architectures " == *" x86_64 "* ]]
+        working-directory: native/AddressAtlasMac
+      - name: Build and validate an ad-hoc sandboxed App Store candidate
+        env:
+          ADDRESS_ATLAS_DISTRIBUTION_CHANNEL: app-store
+          ADDRESS_ATLAS_APP_STORE_ID: "1234567890"
+          ADDRESS_ATLAS_ALLOW_ADHOC_APP_STORE_BUILD: "1"
+        run: |
+          ./build-mac-app.sh
+          ADDRESS_ATLAS_EXPECTED_SOURCE_COMMIT="$(git rev-parse HEAD)" \
+            ./validate-mas-artifact.sh "dist/Address Atlas.app"
+          ditto "dist/Address Atlas.app" "dist/Address Atlas-tampered.app"
+          plutil -replace AddressAtlasSourceCommit -string 0000000000000000000000000000000000000000 \
+            "dist/Address Atlas-tampered.app/Contents/Info.plist"
+          codesign --force --options runtime --timestamp=none --sign - \
+            --entitlements Resources/AddressAtlasMac.entitlements \
+            "dist/Address Atlas-tampered.app"
+          if ADDRESS_ATLAS_EXPECTED_SOURCE_COMMIT="$(git rev-parse HEAD)" \
+            ./validate-mas-artifact.sh "dist/Address Atlas-tampered.app" >/dev/null 2>&1; then
+            echo "The validator accepted a signed bundle with a different source commit." >&2
+            exit 1
+          fi
         working-directory: native/AddressAtlasMac
 
   deployment-config:

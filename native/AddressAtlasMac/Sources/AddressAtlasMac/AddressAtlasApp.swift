@@ -63,6 +63,13 @@ struct AddressAtlasMacApp: App {
     .commands {
       CommandGroup(replacing: .newItem) {}
     }
+
+    Settings {
+      SettingsView()
+        .environmentObject(appDelegate.state)
+        .frame(minWidth: 900, minHeight: 650)
+        .background(AtlasTheme.canvas)
+    }
   }
 }
 
@@ -325,7 +332,13 @@ struct UnlockView: View {
     panel.allowsMultipleSelection = false
     panel.canChooseDirectories = false
     if panel.runModal() == .OK, let url = panel.url {
+      let isAccessing = url.startAccessingSecurityScopedResource()
       Task {
+        defer {
+          if isAccessing {
+            url.stopAccessingSecurityScopedResource()
+          }
+        }
         await state.restoreRecoveryKit(from: url, recoveryCode: restoreCode)
       }
     }

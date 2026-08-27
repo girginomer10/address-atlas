@@ -545,7 +545,11 @@ public struct TrackedAsset: Codable, Identifiable, Hashable, Sendable {
   }
 
   public var displayedAmount: String {
-    exactAmount ?? amount.formatted()
+    displayedAmount(locale: .autoupdatingCurrent)
+  }
+
+  public func displayedAmount(locale: Locale) -> String {
+    exactAmount ?? amount.formatted(.number.locale(locale))
   }
 
   private static func validatedExactAmount(

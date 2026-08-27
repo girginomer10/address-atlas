@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="background" x1="160" y1="120" x2="864" y2="904" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1d2c55"/>
+      <stop offset="0.54" stop-color="#101a36"/>
+      <stop offset="1" stop-color="#080d1c"/>
+    </linearGradient>
+    <linearGradient id="leftPanel" x1="248" y1="276" x2="430" y2="814" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#527fe8"/>
+      <stop offset="1" stop-color="#294d9f"/>
+    </linearGradient>
+    <linearGradient id="middlePanel" x1="430" y1="244" x2="604" y2="842" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8cb1ff"/>
+      <stop offset="1" stop-color="#557edc"/>
+    </linearGradient>
+    <linearGradient id="rightPanel" x1="604" y1="310" x2="790" y2="780" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#426dcc"/>
+      <stop offset="1" stop-color="#203f86"/>
+    </linearGradient>
+    <clipPath id="iconShape">
+      <rect x="52" y="52" width="920" height="920" rx="216"/>
+    </clipPath>
+    <filter id="mapShadow" x="160" y="160" width="704" height="744" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="28" stdDeviation="26" flood-color="#030611" flood-opacity="0.48"/>
+    </filter>
+  </defs>
+
+  <g clip-path="url(#iconShape)">
+    <rect x="52" y="52" width="920" height="920" rx="216" fill="url(#background)"/>
+    <circle cx="512" cy="512" r="356" fill="none" stroke="#8cb1ff" stroke-width="10" opacity="0.10"/>
+    <circle cx="512" cy="512" r="258" fill="none" stroke="#8cb1ff" stroke-width="8" opacity="0.08"/>
+    <path d="M52 340C242 286 391 300 512 340C666 391 808 385 972 316" fill="none" stroke="#a8c4ff" stroke-width="9" opacity="0.08"/>
+    <path d="M52 730C214 664 381 681 512 724C664 774 810 766 972 702" fill="none" stroke="#a8c4ff" stroke-width="9" opacity="0.07"/>
+
+    <g filter="url(#mapShadow)" stroke="#c8d8ff" stroke-width="18" stroke-linejoin="round">
+      <path d="M238 306L430 244V758L238 820Z" fill="url(#leftPanel)"/>
+      <path d="M430 244L604 316V842L430 758Z" fill="url(#middlePanel)"/>
+      <path d="M604 316L794 250V776L604 842Z" fill="url(#rightPanel)"/>
+    </g>
+
+    <path d="M300 682C350 622 401 646 450 592C505 532 514 449 579 422C624 403 673 424 730 370" fill="none" stroke="#081227" stroke-width="48" stroke-linecap="round" stroke-linejoin="round" opacity="0.34"/>
+    <path d="M300 670C350 610 401 634 450 580C505 520 514 437 579 410C624 391 673 412 730 358" fill="none" stroke="#f5f7ff" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <g stroke="#f5f7ff" stroke-width="16">
+      <circle cx="300" cy="670" r="30" fill="#6e9cff"/>
+      <circle cx="579" cy="410" r="30" fill="#6e9cff"/>
+      <circle cx="730" cy="358" r="30" fill="#6e9cff"/>
+    </g>
+    <path d="M251 308L430 251L603 322L786 258" fill="none" stroke="#ffffff" stroke-width="7" opacity="0.18"/>
+  </g>
+
+  <rect x="52" y="52" width="920" height="920" rx="216" fill="none" stroke="#a9c1f5" stroke-width="12" opacity="0.28"/>
+</svg>

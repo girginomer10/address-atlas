@@ -199,6 +199,26 @@ enum AtlasMotion {
   }
 }
 
+enum AtlasFormatting {
+  static var locale: Locale {
+    #if DEBUG
+      if let override = ProcessInfo.processInfo.environment["ADDRESS_ATLAS_UI_LOCALE"],
+        !override.isEmpty
+      {
+        return Locale(identifier: override)
+      }
+    #endif
+    return .autoupdatingCurrent
+  }
+
+  static func dateTime(_ date: Date) -> String {
+    date.formatted(
+      Date.FormatStyle(date: .abbreviated, time: .shortened)
+        .locale(locale)
+    )
+  }
+}
+
 struct Page<Content: View>: View {
   @ScaledMetric(relativeTo: .largeTitle) private var titleSize: CGFloat = 42
   var eyebrow: String
@@ -912,12 +932,11 @@ struct StatusLine: View {
           if !state.isAppVersionSupported {
             Link(destination: state.safeUpdateDownloadURL) {
               Label(
-                "Download the latest signed Address Atlas release",
+                state.updateActionTitle,
                 systemImage: "arrow.down.circle"
               )
             }
-            .accessibilityHint(
-              "Opens the hard-pinned Address Atlas releases page in your browser")
+            .accessibilityHint(state.updateActionHint)
           }
         }
         .font(.callout)
@@ -1269,7 +1288,7 @@ enum AtlasAccessibility {
   }
 
   static func snapshotIdentity(_ run: ScanRunRecord) -> String {
-    "\(run.generatedAt.formatted(date: .abbreviated, time: .shortened)), record ID \(run.id.uuidString.lowercased())"
+    "\(AtlasFormatting.dateTime(run.generatedAt)), record ID \(run.id.uuidString.lowercased())"
   }
 
   static func assetRowIdentity(_ asset: TrackedAsset) -> String {
@@ -1285,5 +1304,5 @@ enum AtlasAccessibility {
 }
 
 func money(_ value: Double) -> String {
-  value.formatted(.currency(code: "USD"))
+  value.formatted(.currency(code: "USD").locale(AtlasFormatting.locale))
 }

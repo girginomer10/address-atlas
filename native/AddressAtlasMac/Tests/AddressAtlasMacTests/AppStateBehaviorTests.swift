@@ -5,6 +5,50 @@ import XCTest
 
 @MainActor
 final class AppStateBehaviorTests: XCTestCase {
+  func testUpdateRouteNeverCrossesDistributionChannels() {
+    XCTAssertEqual(
+      AppState.resolvedUpdateDownloadURL(
+        distributionChannel: "direct",
+        rawURL: "https://apps.apple.com/app/id1234567890"
+      ),
+      AppState.directUpdateDownloadURL
+    )
+    XCTAssertEqual(
+      AppState.resolvedUpdateDownloadURL(
+        distributionChannel: "app-store",
+        rawURL: "https://example.com/untrusted"
+      ),
+      AppState.macAppStoreFallbackURL
+    )
+    XCTAssertEqual(
+      AppState.resolvedUpdateDownloadURL(
+        distributionChannel: "app-store",
+        rawURL: nil
+      ),
+      AppState.macAppStoreFallbackURL
+    )
+    XCTAssertEqual(
+      AppState.resolvedUpdateDownloadURL(
+        distributionChannel: "app-store",
+        rawURL: "https://apps.apple.com/app/id1234567890"
+      ).absoluteString,
+      "https://apps.apple.com/app/id1234567890"
+    )
+  }
+
+  func testPublicLegalSupportAndAttributionRoutesArePinnedToHTTPS() {
+    let routes = [
+      AppState.privacyPolicyURL,
+      AppState.supportURL,
+      AppState.termsOfUseURL,
+      AppState.coinGeckoAttributionURL,
+    ]
+
+    XCTAssertTrue(routes.allSatisfy { $0.scheme == "https" })
+    XCTAssertEqual(AppState.termsOfUseURL.host, "github.com")
+    XCTAssertEqual(AppState.coinGeckoAttributionURL.host, "www.coingecko.com")
+  }
+
   func testSyncActivityOwnerPreservesMutualExclusionAndCannotBeClearedByAnotherActivity() {
     let state = AppState()
 

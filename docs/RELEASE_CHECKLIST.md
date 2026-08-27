@@ -1,6 +1,6 @@
-# Address Atlas Public v1 Release Checklist
+# Address Atlas Public Release Checklist
 
-Public v1 must not ship unsigned or unnotarized. If no Developer ID Application certificate is available, stop at local beta builds.
+The direct-download and Mac App Store channels use different certificates, packages, update destinations, and publication state. Never treat a GitHub tag/DMG as a Mac App Store action. A direct public build must be Developer ID signed and notarized; a store build must be App Store distribution signed, sandboxed, validated, uploaded, processed, reviewed, and released through App Store Connect.
 
 ## Required Secrets And Accounts
 
@@ -95,6 +95,8 @@ Public v1 must not ship unsigned or unnotarized. If no Developer ID Application 
 
 ## Mac Release
 
+### Direct download (Developer ID + notarization)
+
 - Run `npm run release:doctor`; strict release environments should run `./scripts/release-doctor.sh --strict`.
 - Run `npm run native:test` from the repository root.
 - Run `cd native/AddressAtlasMac && swift test --sanitize=thread`.
@@ -114,6 +116,20 @@ Public v1 must not ship unsigned or unnotarized. If no Developer ID Application 
   the signed/notarized DMG, SHA-256 file, and JSON provenance manifest. Verify
   the app's hard-pinned “Get Latest Version” action opens that exact repository's
   latest-release page.
+
+### Mac App Store
+
+- Complete every code/test/data-safety gate in this checklist, then run `npm run native:mas:contracts` and `npm run native:mas:screenshots`.
+- Inspect all five exact `1440x900`, no-alpha, English (U.S.) screenshots under `app-store/screenshots/en-US/`; they must show fictional data, a full unclipped app shell, and no placeholder service represented as production.
+- Create the App Store Connect macOS record before the first build. Verify the explicit App ID, record, and signed bundle all use `com.addressatlas.mac`; record the numeric Apple ID rather than inventing one.
+- Install an Apple/Mac App Distribution identity and Mac Installer Distribution identity. Provide a Mac App Store Connect distribution provisioning profile for `com.addressatlas.mac`; the custom build path requires it to authorize the signed App ID used by Data Protection Keychain.
+- On a clean `main` checkout whose `HEAD` matches `origin/main`, set `ADDRESS_ATLAS_APP_STORE_ID`, `ADDRESS_ATLAS_MAS_CODESIGN_IDENTITY`, `ADDRESS_ATLAS_MAS_INSTALLER_IDENTITY`, and `ADDRESS_ATLAS_PROVISIONING_PROFILE`, then run `npm run native:mas:package`. Preserve the generated read-only provenance plist alongside the package; the source commit is embedded in the signed app and bound to the package SHA-256, version, bundle, signing team, and App Store record.
+- Verify the package contains the universal app at `/Applications`, the app and package authorities belong to the intended team, the signed App ID/team entitlements match the embedded profile, App Sandbox has only outgoing network plus user-selected read/write access, and no debug/temporary-exception entitlement is present.
+- Complete App Store Connect contracts, DSA status, age rating, category, price/tax, storefront availability, privacy answers, privacy/support URLs, review contact, review notes, screenshots, and data-source/brand authorization evidence. Confirm CoinGecko licensing covers a public-facing product; endpoint availability alone is not license evidence.
+- On a clean macOS account, prove sandbox network requests, file import/export, recovery, and account deletion. Separately prove legacy Application Support container migration and legacy-to-Data-Protection-Keychain migration without touching a real user's only vault.
+- Confirm `xcrun altool --help` works. Configure exactly one supported least-privilege authentication mode: a team API key with issuer UUID plus an explicit owner-private absolute `ADDRESS_ATLAS_ASC_P8_PATH`, or an individual Apple ID plus an app-specific password stored in Keychain and referenced by `ADDRESS_ATLAS_ASC_PASSWORD_KEYCHAIN_ITEM`. Never pass the password itself through an environment variable. Run `npm run native:mas:validate`, then `npm run native:mas:upload` only for the final reviewed commit/build number.
+- Re-read the build in App Store Connect. A successful upload is not a processed build; a processed build is not App Review approval; approval is not storefront availability. Submit the completed version for review and release it only after the configured manual-release gate.
+- Do **not** push a `v*` tag as part of this sequence; that invokes the separate Developer ID DMG workflow.
 
 ## Manual Smoke
 

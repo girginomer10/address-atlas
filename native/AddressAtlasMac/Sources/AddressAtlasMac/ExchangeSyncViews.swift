@@ -414,7 +414,7 @@ struct ExchangeRow: View {
           .lineLimit(2)
         } else if let lastSync = connection.lastSyncAt {
           Text(
-            "Last refreshed \(lastSync.formatted(date: .abbreviated, time: .shortened))"
+            "Last refreshed \(AtlasFormatting.dateTime(lastSync))"
           )
           .font(.caption)
           .foregroundStyle(AtlasTheme.ink3)
@@ -491,7 +491,7 @@ private struct SyncActionLabel: View {
 
 struct SyncView: View {
   @EnvironmentObject private var state: AppState
-  @State private var serverURL = ""
+  @State private var serverURL: String
   @State private var confirmingDiscardDownload = false
   @State private var confirmingSessionRevocation = false
   @State private var confirmingAccountDeletion = false
@@ -506,6 +506,10 @@ struct SyncView: View {
   @State private var pendingDisconnectServerURL: URL?
   @State private var pendingLocalDisconnectServerURL: URL?
   @State private var sessionEvaluationDate = Date()
+
+  init(initialServerURL: String = "") {
+    _serverURL = State(initialValue: initialServerURL)
+  }
 
   private var hasValidServerInput: Bool {
     AppState.validatedSyncURL(serverURL) != nil
@@ -561,7 +565,7 @@ struct SyncView: View {
           )
           VStack(alignment: .leading, spacing: 8) {
             FieldLabel("Sync server")
-            TextField("https://sync.example.com", text: $serverURL)
+            TextField("Enter your HTTPS sync server", text: $serverURL)
               .textFieldStyle(AtlasTextFieldStyle())
               .disabled(
                 state.syncing || state.scanning || state.syncPersistencePending
@@ -1150,7 +1154,7 @@ enum ExportPipeline {
       return String(decoding: data, as: UTF8.self)
     }
     return String(decoding: data.prefix(maximumByteCount), as: UTF8.self)
-      + "\n\n— Preview truncated to \(maximumByteCount.formatted()) bytes. The saved export includes all records."
+      + "\n\n— Preview truncated to \(maximumByteCount.formatted(.number.locale(AtlasFormatting.locale))) bytes. The saved export includes all records."
   }
 
   nonisolated static func renderPreview(for payload: ExportPayload) throws -> String {
@@ -1327,9 +1331,15 @@ struct ExportView: View {
     panel.canCreateDirectories = true
     if panel.runModal() == .OK, let url = panel.url {
       guard state.beginExportOperation() else { return }
+      let isAccessing = url.startAccessingSecurityScopedResource()
       state.error = ""
       Task { @MainActor in
-        defer { state.finishExportOperation() }
+        defer {
+          state.finishExportOperation()
+          if isAccessing {
+            url.stopAccessingSecurityScopedResource()
+          }
+        }
         do {
           exportedPreview = try await Task.detached(priority: .userInitiated) {
             try ExportPipeline.write(payload, to: url)
@@ -1584,6 +1594,40 @@ struct SettingsView: View {
       }
       .disabled(state.vaultEditsDisabled)
 
+      Surface {
+        VStack(alignment: .leading, spacing: 16) {
+          PanelHeader(
+            title: "Privacy and support",
+            subtitle: "Review data boundaries, get help, or inspect the price-data source",
+            systemImage: "hand.raised.fill"
+          )
+          AdaptiveStack {
+            Link(destination: AppState.privacyPolicyURL) {
+              Label("Privacy policy", systemImage: "lock.doc")
+            }
+            .buttonStyle(AtlasSecondaryButtonStyle())
+            Link(destination: AppState.supportURL) {
+              Label("Support", systemImage: "questionmark.circle")
+            }
+            .buttonStyle(AtlasSecondaryButtonStyle())
+            Link(destination: AppState.termsOfUseURL) {
+              Label("Terms of use", systemImage: "doc.text")
+            }
+            .buttonStyle(AtlasSecondaryButtonStyle())
+            Link(destination: AppState.coinGeckoAttributionURL) {
+              Label("Data provided by CoinGecko", systemImage: "chart.line.uptrend.xyaxis")
+            }
+            .buttonStyle(AtlasSecondaryButtonStyle())
+          }
+          Text(
+            "Address Atlas is read-only analytics software. It never creates wallets, stores private keys, signs transactions, executes trades, or provides personalized investment advice."
+          )
+          .font(.caption)
+          .foregroundStyle(AtlasTheme.ink2)
+          .lineSpacing(2)
+        }
+      }
+
       Surface(style: .warning) {
         VStack(alignment: .leading, spacing: 16) {
           PanelHeader(
@@ -1647,13 +1691,30 @@ struct SettingsView: View {
   }
 
   private func exportRecoveryKit() {
-    let panel = NSSavePanel()
-    panel.nameFieldStringValue = "address-atlas.atlas-recovery"
-    panel.allowedContentTypes = [UTType(filenameExtension: "atlas-recovery") ?? .data]
+    let panel = NSOpenPanel()
+    panel.title = "Export Recovery Kit"
+    panel.message = "Choose a folder for a uniquely named encrypted recovery file."
+    panel.prompt = "Export Here"
+    panel.canChooseFiles = false
+    panel.canChooseDirectories = true
+    panel.allowsMultipleSelection = false
     panel.canCreateDirectories = true
-    if panel.runModal() == .OK, let url = panel.url {
+    if panel.runModal() == .OK, let directory = panel.url {
+      let isAccessing = directory.startAccessingSecurityScopedResource()
+      defer {
+        if isAccessing {
+          directory.stopAccessingSecurityScopedResource()
+        }
+      }
       do {
-        recoveryCode = try state.exportRecoveryKit(to: url)
+        let filename = "address-atlas-\(Self.recoveryExportTimestamp()).atlas-recovery"
+        let destination = directory.appending(path: filename)
+        guard !FileManager.default.fileExists(atPath: destination.path) else {
+          state.error = "A recovery file with this timestamp already exists. Wait one second and retry."
+          return
+        }
+        recoveryCode = try state.exportRecoveryKit(to: destination)
+        state.notice = "Recovery kit saved as \(filename)."
       } catch {
         state.presentUserFacingError(error)
       }
@@ -1666,10 +1727,25 @@ struct SettingsView: View {
     panel.allowsMultipleSelection = false
     panel.canChooseDirectories = false
     if panel.runModal() == .OK, let url = panel.url {
+      let isAccessing = url.startAccessingSecurityScopedResource()
       Task {
+        defer {
+          if isAccessing {
+            url.stopAccessingSecurityScopedResource()
+          }
+        }
         await state.restoreRecoveryKit(from: url, recoveryCode: restoreCode)
       }
     }
+  }
+
+  private static func recoveryExportTimestamp(now: Date = Date()) -> String {
+    let formatter = DateFormatter()
+    formatter.calendar = Calendar(identifier: .gregorian)
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = .current
+    formatter.dateFormat = "yyyy-MM-dd-HHmmss"
+    return formatter.string(from: now)
   }
 }
 
