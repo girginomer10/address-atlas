@@ -27,7 +27,7 @@ Address Atlas is a local-first, read-only portfolio tracker for public wallet ad
 - **Read-only by design.** Add public addresses or balance-only exchange credentials. Address Atlas never asks for private keys or seed phrases.
 - **Private where it matters.** The portfolio vault is encrypted locally with a Keychain-backed key; only request data required by the providers you use leaves the app.
 - **Honest about partial data.** Provider, token, staking, reward, trustline, price, and pagination failures remain visible instead of silently producing a false all-clear.
-- **Optional encrypted sync.** A self-hostable sync service stores opaque ciphertext for cross-device continuity; it is not required for local use.
+- **Optional iCloud copies.** Save and restore an encrypted portfolio in your own iCloud account. No Address Atlas account or backup server is required. Transfers are user initiated, not automatic merging.
 
 ## Current coverage
 
@@ -53,7 +53,7 @@ Address Atlas does not pretend that querying a public blockchain is invisible. I
 | Chain RPC and REST providers | The public addresses and network requests needed to scan supported chains |
 | Supported exchanges | Signed, read-only balance requests made directly by the Mac app |
 | CoinGecko | Asset and fiat-rate lookup requests; no exchange credentials or vault snapshot |
-| Optional sync service | Passkey public credentials, operational metadata, and encrypted vault snapshots—not plaintext portfolio contents, plaintext exchange credentials, recovery material, or a decryptable vault key |
+| iCloud / CloudKit | Encrypted portfolio copies in your private database; a separate encryption key travels through iCloud Keychain |
 
 The recommended **share-safer** CSV and JSON summaries omit addresses, labels, exact balances, and history in favor of coarse groups and ranges. They reduce disclosure but are not anonymous. Full identifying reports remain available behind an explicit warning and are not vault backups.
 
@@ -67,13 +67,13 @@ flowchart LR
     M --> K["macOS Keychain"]
     M --> L["Encrypted local SQLite vault"]
     M --> P["Chain, price, and exchange providers"]
-    M -->|"Passkey auth and operational metadata"| S["Optional self-hosted sync"]
-    M -->|"AES-256-GCM vault snapshots"| S
-    S --> D["PostgreSQL"]
+    M -->|"Encrypted portfolio copies"| S["Private iCloud database"]
+    M -->|"Separate cloud key"| C["iCloud Keychain"]
 ```
 
 - [`native/AddressAtlasMac`](native/AddressAtlasMac) is the product: a native SwiftUI app with the portfolio model, scanners, encryption, recovery, export, and sync client.
-- The root Next.js service and [`server/sync`](server/sync) provide the narrow passkey-authenticated, client-encrypted sync surface.
+- The root Next.js service and [`server/sync`](server/sync) are retained as legacy migration/reference code. The current Mac app does not use or require them.
+- [`docs/ICLOUD.md`](docs/ICLOUD.md) describes provisioning, the private record schema, and the two-Mac release test. Real iCloud transfer requires an Apple-signed, iCloud-enabled build.
 - [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) records architectural invariants and the full verification gate.
 - [`docs/OPERATIONS.md`](docs/OPERATIONS.md) and [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) cover production operations and signed distribution.
 

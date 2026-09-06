@@ -291,6 +291,7 @@ if [[ -n "$PROVISIONING_PROFILE" ]]; then
   fi
   SIGNING_ENTITLEMENTS_FILE="$ICON_WORK_DIR/signed-entitlements.plist"
   cp "$BASE_ENTITLEMENTS_FILE" "$SIGNING_ENTITLEMENTS_FILE"
+  python3 "$ROOT/icloud-entitlements.py" prepare "$PROFILE_PLIST" "$SIGNING_ENTITLEMENTS_FILE"
   /usr/libexec/PlistBuddy \
     -c "Add :com.apple.application-identifier string $PROFILE_APP_IDENTIFIER" \
     "$SIGNING_ENTITLEMENTS_FILE"

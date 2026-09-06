@@ -12,6 +12,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
       .durable,
     ])
     let state = AppState(
+      legacyServerSyncEnabled: true,
       endpointConfigClient: FixedEndpointConfigClient(
         config: NativeEndpointConfig(configVersion: 31, refreshAfterSeconds: 300)
       ),
@@ -45,6 +46,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
     let serverURL = "https://sync.example"
 
     let firstProcess = AppState(
+      legacyServerSyncEnabled: true,
       endpointConfigClient: FixedEndpointConfigClient(
         config: NativeEndpointConfig(
           configVersion: 12, refreshAfterSeconds: 300, message: "accepted")
@@ -56,6 +58,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
     XCTAssertTrue(firstAccepted)
 
     let relaunchedRollback = AppState(
+      legacyServerSyncEnabled: true,
       endpointConfigClient: FixedEndpointConfigClient(
         config: NativeEndpointConfig(configVersion: 11, refreshAfterSeconds: 300)
       ),
@@ -67,6 +70,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
     XCTAssertEqual(relaunchedRollback.endpointConfig, .bundled)
 
     let relaunchedEquivocation = AppState(
+      legacyServerSyncEnabled: true,
       endpointConfigClient: FixedEndpointConfigClient(
         config: NativeEndpointConfig(
           configVersion: 12, refreshAfterSeconds: 300, message: "changed")
@@ -81,7 +85,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
 
   func testAcceptedConfigMessagePublishesOperatorMessageAndAbsenceClearsIt() async {
     let client = ControllableEndpointConfigClient()
-    let state = AppState(endpointConfigClient: client)
+    let state = AppState(legacyServerSyncEnabled: true, endpointConfigClient: client)
     state.document.syncState.serverURL = "https://sync.example"
     XCTAssertNil(state.operatorMessage)
 
@@ -124,7 +128,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
     let client = CountingEndpointConfigClient(
       config: NativeEndpointConfig(configVersion: 24, refreshAfterSeconds: 300)
     )
-    let state = AppState(endpointConfigClient: client)
+    let state = AppState(legacyServerSyncEnabled: true, endpointConfigClient: client)
     state.document.syncState.serverURL = "https://sync.example"
 
     async let first = state.refreshEndpointConfig(silent: true)
@@ -142,7 +146,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
     let client = SharedEndpointConfigClient(
       config: NativeEndpointConfig(configVersion: 25, refreshAfterSeconds: 300)
     )
-    let state = AppState(endpointConfigClient: client)
+    let state = AppState(legacyServerSyncEnabled: true, endpointConfigClient: client)
     state.document.syncState.serverURL = "https://sync.example"
 
     let first = Task { await state.refreshEndpointConfig(silent: true) }
@@ -169,7 +173,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
     let client = SharedEndpointConfigClient(
       config: NativeEndpointConfig(configVersion: 26, refreshAfterSeconds: 300)
     )
-    let state = AppState(endpointConfigClient: client)
+    let state = AppState(legacyServerSyncEnabled: true, endpointConfigClient: client)
     state.document.syncState.serverURL = "https://sync.example"
 
     let first = Task { await state.refreshEndpointConfig(silent: true) }
@@ -202,7 +206,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
     let client = SharedEndpointConfigClient(
       config: NativeEndpointConfig(configVersion: 27, refreshAfterSeconds: 300)
     )
-    let state = AppState(endpointConfigClient: client)
+    let state = AppState(legacyServerSyncEnabled: true, endpointConfigClient: client)
     state.document.syncState.serverURL = "https://sync.example"
 
     let first = Task { await state.refreshEndpointConfig(silent: true) }
@@ -231,7 +235,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
 
   func testCancellingRefreshCancelsUnderlyingFetchWithoutPublishingAnEndpointFailure() async {
     let client = CancellationObservingEndpointConfigClient()
-    let state = AppState(endpointConfigClient: client)
+    let state = AppState(legacyServerSyncEnabled: true, endpointConfigClient: client)
     state.document.syncState.serverURL = "https://sync.example"
 
     let refresh = Task { await state.refreshEndpointConfig(silent: true) }
@@ -251,7 +255,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
 
   func testCancellingScanDuringEndpointRefreshReportsScanCancellation() async {
     let client = CancellationObservingEndpointConfigClient()
-    let state = AppState(endpointConfigClient: client)
+    let state = AppState(legacyServerSyncEnabled: true, endpointConfigClient: client)
     state.vaultKey = Data(repeating: 0xA5, count: VaultCrypto.vaultKeyByteCount)
     state.document.syncState.serverURL = "https://sync.example"
 
@@ -271,7 +275,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
 
   func testRefreshLoopFetchesConfigProactivelyAfterUnlock() async {
     let client = ControllableEndpointConfigClient()
-    let state = AppState(endpointConfigClient: client)
+    let state = AppState(legacyServerSyncEnabled: true, endpointConfigClient: client)
     state.isUnlocked = true
     state.document.syncState.serverURL = "https://sync.example"
 
@@ -298,7 +302,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
 
   func testStaleResponseCannotReplaceConfigForNewServer() async {
     let client = ControllableEndpointConfigClient()
-    let state = AppState(endpointConfigClient: client)
+    let state = AppState(legacyServerSyncEnabled: true, endpointConfigClient: client)
     state.document.syncState.serverURL = "https://first.example"
 
     let firstRefresh = Task { await state.refreshEndpointConfig(silent: true) }
@@ -329,6 +333,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
     let secondOrigin = "https://second.example"
     let client = ControllableEndpointConfigClient()
     let state = AppState(
+      legacyServerSyncEnabled: true,
       endpointConfigClient: client,
       endpointConfigTrustStore: EndpointConfigTrustStore(fileURL: trustFile)
     )
@@ -370,6 +375,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
     // If the cancelled v40 request wrote a stale durable record, this valid v39
     // response would be rejected as a rollback after the simulated relaunch.
     let revisitedOrigin = AppState(
+      legacyServerSyncEnabled: true,
       endpointConfigClient: FixedEndpointConfigClient(
         config: NativeEndpointConfig(configVersion: 39, refreshAfterSeconds: 300)
       ),
@@ -385,6 +391,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
     let client = ControllableEndpointConfigClient()
     let trustStore = FirstRecordBlockingEndpointConfigTrustStore()
     let state = AppState(
+      legacyServerSyncEnabled: true,
       endpointConfigClient: client,
       endpointConfigTrustStore: trustStore
     )
@@ -418,7 +425,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
 
   func testSameServerRejectsRollbackAndPreservesAcceptedConfigOnFailure() async {
     let client = ControllableEndpointConfigClient()
-    let state = AppState(endpointConfigClient: client)
+    let state = AppState(legacyServerSyncEnabled: true, endpointConfigClient: client)
     state.document.syncState.serverURL = "https://sync.example"
 
     let first = Task { await state.refreshEndpointConfig(silent: true) }
@@ -455,7 +462,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
   func testUnsupportedAcceptedConfigKeepsUpdateRequiredAcrossRollbackEquivocationAndFailure() async
   {
     let client = ControllableEndpointConfigClient()
-    let state = AppState(endpointConfigClient: client)
+    let state = AppState(legacyServerSyncEnabled: true, endpointConfigClient: client)
     state.document.syncState.serverURL = "https://sync.example"
     let unsupported = NativeEndpointConfig(
       configVersion: 7,
@@ -513,7 +520,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
 
   func testServerSwitchResetsVersionMonotonicityButRejectsSameVersionEquivocation() async {
     let client = ControllableEndpointConfigClient()
-    let state = AppState(endpointConfigClient: client)
+    let state = AppState(legacyServerSyncEnabled: true, endpointConfigClient: client)
     state.document.syncState.serverURL = "https://first.example"
 
     let first = Task { await state.refreshEndpointConfig(silent: true) }

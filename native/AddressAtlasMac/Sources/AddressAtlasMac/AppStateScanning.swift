@@ -75,7 +75,8 @@ extension AppState {
     defer { scanning = false }
     do {
       var endpointPolicyWarning: String?
-      if let serverURL = AppState.validatedSyncURL(document.syncState.serverURL) {
+      if legacyServerSyncEnabled,
+        let serverURL = AppState.validatedSyncURL(document.syncState.serverURL) {
         let refreshed = await refreshEndpointConfig(silent: true)
         try Task.checkCancellation()
         if !refreshed {

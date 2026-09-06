@@ -25,13 +25,13 @@ The Homebrew Swift fallback can build the app, but it does not provide XCTest.
 open "dist/Address Atlas.app"
 ```
 
-The app bundle registers the `address-atlas://sync-auth` callback URL used by the encrypted sync passkey flow.
+The current product uses optional private iCloud copies. The former passkey/server UI and automatic server requests are retired. See [iCloud setup](../../docs/ICLOUD.md); unsigned local builds cannot access CloudKit.
 It is built as a universal `arm64` + `x86_64` binary with hardened runtime and ad-hoc signed for local testing by default. Set `ADDRESS_ATLAS_CODESIGN_IDENTITY` to a Developer ID Application identity when building a direct-download distribution candidate. Set `ADDRESS_ATLAS_ARCHS=arm64` only for an explicitly local single-architecture build; signed distribution flows reject artifacts unless their executable contains exactly both supported architectures.
 `CFBundleVersion` defaults to the full Git commit count. A shallow checkout must set a unique `ADDRESS_ATLAS_BUILD_NUMBER`; run `bash Tests/build-mac-app-version-tests.sh` before packaging.
 
 ## Build A Mac App Store Package
 
-The Mac App Store and direct-download channels are intentionally separate. A store package requires the App Store Connect numeric Apple ID, an Apple/Mac App Distribution certificate, a Mac Installer Distribution certificate, and a Mac App Store Connect distribution provisioning profile for `com.addressatlas.mac`:
+The Mac App Store and direct-download channels are intentionally separate. A store package requires the App Store Connect numeric Apple ID, an Apple/Mac App Distribution certificate, a Mac Installer Distribution certificate, and a Mac App Store Connect distribution provisioning profile for `com.addressatlas.mac` authorizing the Production CloudKit container `iCloud.com.addressatlas.mac`:
 
 ```bash
 ADDRESS_ATLAS_APP_STORE_ID="<numeric Apple ID>" \

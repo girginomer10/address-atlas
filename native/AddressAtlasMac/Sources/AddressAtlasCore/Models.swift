@@ -963,6 +963,18 @@ private struct VaultDocumentSchemaProbe: Decodable {
   let schemaVersion: Int?
 }
 
+public struct ICloudVaultState: Codable, Equatable, Sendable {
+  public var account: String
+  public var revision: String
+  public var savedAt: Date
+
+  public init(account: String, revision: String, savedAt: Date = Date()) {
+    self.account = account
+    self.revision = revision
+    self.savedAt = savedAt
+  }
+}
+
 public struct VaultDocument: Codable, Equatable, Sendable {
   public static let currentSchemaVersion = 2
 
@@ -974,6 +986,7 @@ public struct VaultDocument: Codable, Equatable, Sendable {
   public var exchangeConnections: [ExchangeConnectionRecord]
   public var scanRuns: [ScanRunRecord]
   public var syncState: SyncState
+  public var iCloudState: ICloudVaultState?
   public var updatedAt: Date
 
   public init(
@@ -995,6 +1008,7 @@ public struct VaultDocument: Codable, Equatable, Sendable {
     self.exchangeConnections = exchangeConnections
     self.scanRuns = scanRuns
     self.syncState = syncState
+    self.iCloudState = nil
     self.updatedAt = updatedAt
   }
 
@@ -1007,6 +1021,7 @@ public struct VaultDocument: Codable, Equatable, Sendable {
     case exchangeConnections
     case scanRuns
     case syncState
+    case iCloudState
     case updatedAt
   }
 
@@ -1055,6 +1070,7 @@ public struct VaultDocument: Codable, Equatable, Sendable {
     }
 
     schemaVersion = Self.currentSchemaVersion
+    iCloudState = try container.decodeIfPresent(ICloudVaultState.self, forKey: .iCloudState)
     if storedSchemaVersion == Self.currentSchemaVersion {
       preferences = try container.decode(Preferences.self, forKey: .preferences)
       wallets = try container.decode([WalletRecord].self, forKey: .wallets)

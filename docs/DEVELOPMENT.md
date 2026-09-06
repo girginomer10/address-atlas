@@ -7,7 +7,7 @@ Address Atlas is a local-first, read-only crypto portfolio tracker. It accepts p
 There are two runtime components:
 
 - `native/AddressAtlasMac`: the SwiftUI macOS product. It owns plaintext portfolio data, network scans, exchange credentials, local encryption, recovery, export, and sync encryption.
-- The repository-root Next.js service plus `server/sync`: a passkey-authenticated sync service. It stores passkey public keys and opaque encrypted vault snapshots in Postgres. It must not receive plaintext addresses, balances, token lists, exchange credentials, preferences, or recovery material.
+- The current Mac app uses private CloudKit copies and iCloud Keychain; see `docs/ICLOUD.md`. The repository-root Next.js service plus `server/sync` is retained legacy code, no longer a native product dependency. Server-specific invariants below apply to legacy regression testing and separately maintained deployments.
 
 The old Prisma/SQLite web portfolio and ccxt runtime no longer exist. Do not reintroduce them.
 

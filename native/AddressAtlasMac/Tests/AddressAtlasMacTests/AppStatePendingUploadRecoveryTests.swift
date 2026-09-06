@@ -66,6 +66,7 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertTrue(network.requests.isEmpty)
 
     let state = AppState(
+      legacyServerSyncEnabled: true,
       httpClient: network,
       keyStore: AppStateTestVaultKeyStore(key: fixture.vaultKey),
       appSupportDirectoryOverride: fixture.directory

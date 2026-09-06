@@ -23,7 +23,8 @@ PRIVATE BY DESIGN
 • Your vault is encrypted on the Mac.
 • The vault key is protected by macOS Keychain.
 • Seed phrases, wallet private keys, and signing material never enter the app.
-• Optional sync uploads only an encrypted snapshot; the server does not receive a decryptable vault key.
+• Optionally save an encrypted copy to your own iCloud account and restore on another Mac with iCloud Keychain enabled.
+• No separate Address Atlas account or backup server is required. iCloud transfers are manual.
 
 READ-ONLY PORTFOLIO TOOLS
 
@@ -56,4 +57,4 @@ crypto,portfolio,wallet,bitcoin,ethereum,balances,privacy,tracker,read-only,macO
 
 ## Release notes
 
-Initial Mac App Store release with encrypted local portfolio storage, public-wallet and supported read-only exchange scanning, snapshots, privacy-aware exports, recovery tools, accessibility support, and optional encrypted sync.
+Initial Mac App Store release with encrypted local portfolio storage, public-wallet and supported read-only exchange scanning, snapshots, privacy-aware exports, recovery tools, accessibility support, and optional encrypted iCloud copies.

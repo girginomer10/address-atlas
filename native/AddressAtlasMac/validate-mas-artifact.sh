@@ -281,6 +281,8 @@ if grep -Eq '^Authority=(Apple Distribution|Mac App Distribution|3rd Party Mac D
   PROFILE_PLIST="$VALIDATION_WORK_DIR/provisioning-profile.plist"
   security cms -D -i "$PROFILE" -o "$PROFILE_PLIST" >/dev/null
   plutil -lint "$PROFILE_PLIST" >/dev/null
+  python3 "$ROOT/icloud-entitlements.py" validate "$PROFILE_PLIST" "$ENTITLEMENTS_READBACK"
+  expected_entitlement_keys+=$'\ncom.apple.developer.icloud-container-identifiers\ncom.apple.developer.icloud-services\ncom.apple.developer.icloud-container-environment'
   profile_app_identifier="$(
     /usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.application-identifier' \
       "$PROFILE_PLIST" 2>/dev/null || true

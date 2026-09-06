@@ -119,6 +119,8 @@ The direct-download and Mac App Store channels use different certificates, packa
 
 ### Mac App Store
 
+- The current product uses private CloudKit copies, not the legacy hosted sync service. Complete `docs/ICLOUD.md`, including the production schema, iCloud-enabled profile, and real two-Mac transfer/conflict/delete tests. Historical server checks below apply only when releasing that legacy service separately.
+
 - Complete every code/test/data-safety gate in this checklist, then run `npm run native:mas:contracts` and `npm run native:mas:screenshots`.
 - Inspect all five exact `1440x900`, no-alpha, English (U.S.) screenshots under `app-store/screenshots/en-US/`; they must show fictional data, a full unclipped app shell, and no placeholder service represented as production.
 - Create the App Store Connect macOS record before the first build. Verify the explicit App ID, record, and signed bundle all use `com.addressatlas.mac`; record the numeric Apple ID rather than inventing one.

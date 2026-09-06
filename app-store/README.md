@@ -41,5 +41,5 @@ Xcode's upload command supports two authentication modes. For a team API key, se
 - EU DSA trader/non-trader status, storefront availability, tax category, and age-rating questionnaire are complete.
 - CoinGecko usage is covered by a plan/license suitable for a public-facing product, with the in-app attribution retained. Public endpoint accessibility alone is not license evidence.
 - Every other price, RPC, REST, exchange, explorer, and brand integration remains within its current terms; any requested authorization evidence is available.
-- The production sync service is either independently healthy and reviewable or the optional self-hosted scope is explained accurately in Review Notes. No unavailable service may be represented as working.
-- A clean macOS account proves first launch, sandbox network access, recovery export/restore, container migration from a legacy install, Data Protection Keychain migration, and account deletion if sync is exercised.
+- Enable the CloudKit container and deploy its Production schema as described in `docs/ICLOUD.md`. Verify manual encrypted transfers and iCloud Keychain delivery between two signed Macs. The app no longer uses the legacy hosted sync service.
+- A clean macOS account proves first launch, sandbox network access, recovery export/restore, container migration, Data Protection Keychain migration, and confirmed deletion of the private iCloud copy. Verify account switching and stale-save conflict handling.

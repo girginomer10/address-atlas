@@ -114,9 +114,6 @@ struct RootView: View {
         state.startScan()
       }
     }
-    .task(id: endpointConfigRefreshTaskID) {
-      await state.runEndpointConfigRefreshLoop()
-    }
   }
 }
 

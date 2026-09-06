@@ -1,6 +1,6 @@
 # Address Atlas Privacy Model
 
-**Effective date:** August 27, 2026
+**Effective date:** September 7, 2026
 **Operator:** Ömer Girgin, the maintainer of Address Atlas
 
 Address Atlas is built to reduce custody and data exposure, not to promise anonymity. It is a local-first, read-only portfolio viewer for public wallet addresses and supported exchange accounts.
@@ -11,7 +11,7 @@ While the app is unlocked, the native process handles wallet addresses, labels, 
 
 The vault uses AES-256-GCM with purpose-separated keys derived from a random vault key. macOS Keychain stores that vault key with this-device-only accessibility. Address Atlas does not ask for or store seed phrases, wallet private keys, or signing material.
 
-Exchange credentials are encrypted before persistence and decrypted only inside the native process when validation or local credential and balance operations require them. Plaintext credentials are never sent to the sync service. They must be balance/read-only credentials with no trading, transfer, margin, futures, or withdrawal capability.
+Exchange credentials are encrypted before persistence and decrypted only inside the native process when validation or local credential and balance operations require them. Plaintext credentials are never sent to iCloud. They must be balance/read-only credentials with no trading, transfer, margin, futures, or withdrawal capability.
 
 ## What network providers can observe
 
@@ -21,34 +21,28 @@ Local-first does not mean offline or anonymous. To retrieve balances and prices,
 - Supported exchanges receive authenticated read-only balance requests and the network metadata inherent in a direct connection.
 - CoinGecko receives asset identifiers and fiat-rate lookup requests.
 
-Those providers can observe normal connection metadata such as the source IP address, timing, and user agent. Their own terms and privacy practices apply. Address Atlas does not proxy these requests through the optional sync service.
+Those providers can observe normal connection metadata such as the source IP address, timing, and user agent. Their own terms and privacy practices apply. Address Atlas does not proxy these requests through a backup server.
 
 Address Atlas does not use advertising SDKs, cross-app tracking, data brokers, or analytics SDKs. It does not sell personal data.
 
-## Optional encrypted sync
+## Optional encrypted iCloud copies
 
-Sync is optional and self-hostable. The Mac app encrypts vault snapshots before upload. The sync service stores passkey public credentials, account and snapshot metadata, and opaque encrypted snapshots in PostgreSQL.
+The app uses Apple's CloudKit private database for user-initiated encrypted portfolio transfers. No Address Atlas account, passkey sign-in, developer-operated sync service, PostgreSQL database, or hosted backup is required. Save, restore, and delete happen only when selected in the iCloud screen; this is not automatic merging or versioned backup history.
 
-The sync service does not receive plaintext portfolio contents, plaintext exchange credentials, recovery material, or a decryptable vault key. It can still observe operational metadata such as account identifiers, snapshot versions and sizes, request timing, source IP addresses at the network edge, and service health data. This is server-blind encrypted sync, not a claim that the service stores no metadata.
+The Mac encrypts the whole portfolio before uploading, including already-encrypted exchange credentials. Credentials are rewrapped with a separate random cloud key; the original local vault key is never uploaded. The cloud key is synchronized through iCloud Keychain, scoped to the CloudKit user and a random key identifier. A different Mac decrypts the copy and re-encrypts credentials with its own local key. Kraken's installation binding remains intact.
 
-To enforce service limits, the hosted sync implementation retains per-account daily write counts and byte counts. Its bounded access logs retain request status and duration together with a masked network prefix for availability, security, and incident diagnosis; headers, request URI, exact IP addresses, and authentication material are removed before the record reaches the log stream. These records are disclosed conservatively as linked Other Usage Data, Other Diagnostic Data, and Other Data Types for app functionality, and are not used for tracking.
-
-The app opens a system web authentication session for passkey registration and sign-in. The callback carries a one-time authorization code, request state, and canonical server origin; the app exchanges that code with a PKCE verifier for a short-lived sync session.
-
-For App Store privacy disclosure, optional sync is treated conservatively as collection for app functionality: an opaque account identifier, passkey public credential material, operational/security/usage/diagnostic metadata, and encrypted portfolio content are transmitted off the Mac and retained by the chosen sync operator. The Address Atlas service cannot decrypt the portfolio snapshot, but the encrypted blob is still stored on a server and is therefore disclosed rather than treated as purely on-device processing.
+Apple receives the encrypted asset and normal CloudKit metadata (record identifiers, sizes, versions, timestamps, account and network information needed to operate iCloud). The data uses the user's iCloud storage quota and is subject to Apple's iCloud terms and privacy practices. The Address Atlas operator does not run a copy of this backup database or receive the plaintext portfolio or cloud key. CloudKit storage and iCloud Keychain key delivery are distinct; the key may arrive later than the record.
 
 ## Retention and deletion
 
-- Local vault data remains on the Mac until the user removes it or removes the app's container. User-created CSV, JSON, and recovery exports remain wherever the user saved them.
-- A sync server retains the current encrypted snapshot, account record, and passkey public credentials until the user deletes the sync account in the app. Account deletion cascades the account, passkeys, sessions, quota records, and encrypted snapshot.
-- Session grants stop working at expiration and are removed by bounded cleanup. Operational backups may retain encrypted records for up to 30 days before scheduled expiry.
-- To make deletion retries safe for an offline Mac, the service retains a one-way digest of the deletion operation identifier and its timestamp. That receipt contains no account identifier or portfolio content and is not used for tracking.
-
-The **Sync** screen includes **Delete sync account**. A recent passkey-authenticated session is required so a stolen unlocked session cannot silently delete the account. Users of a self-hosted server should contact that server's operator for backup or infrastructure-specific retention questions.
+- Local vaults, exports, recovery kits, and local rollback copies remain on the Mac or where the user saved them until removed by the user.
+- **iCloud → Delete iCloud copy** removes this app's private cloud snapshot, after confirmation. It does not delete portfolios on other Macs, exports, the Apple Account, or other iCloud data. Small Keychain encryption-key items remain available for in-flight restores.
+- A stale Mac does not automatically recreate a deleted cloud copy. An explicit reset of the local iCloud connection is required before saving a fresh copy.
+- Data left on a server by an older version is not deleted by this app update. Contact the previous server operator about retained snapshots, account records, or infrastructure backups. The current Mac app no longer contacts that service.
 
 ## Recovery
 
-A recovery kit contains a `.atlas-recovery` file and a high-entropy recovery code shown once. Both are required to unwrap the Mac vault key. Neither is uploaded to the sync service. Anyone who obtains both may be able to unlock the protected vault; store them separately and securely.
+A recovery kit contains a .atlas-recovery file and a high-entropy recovery code shown once. Both are required to unwrap the Mac's local vault key. They are not uploaded to iCloud. This kit does not recover the separate iCloud key. Protect iCloud Keychain access and keep a local vault/recovery kit; the operator cannot recover a missing cloud key. Anyone who obtains the recovery file and its code may be able to unlock the corresponding local vault, so keep them separately.
 
 ## Exports
 
@@ -61,7 +55,7 @@ Exports omit sync bearer sessions and encrypted exchange credentials. They are r
 
 ## User choices
 
-Network scanning begins only after the user adds a public address or read-only exchange connection and starts a scan (or enables automatic refresh). Sync is optional. A user can keep the app local-only, remove saved sources, revoke exchange credentials at the exchange, delete a sync account in the app, and delete any exported files they control.
+Network scanning begins only after the user adds a public address or read-only exchange connection and starts a scan (or enables automatic refresh). iCloud transfers are optional. A user can keep the app local-only, remove saved sources, revoke exchange credentials at the exchange, delete the iCloud copy in the app, and delete exported files they control.
 
 ## Security
 

@@ -211,4 +211,5 @@ expect_auth_failure "ADDRESS_ATLAS_ASC_USERNAME=line"$'\n'"break" \
 expect_auth_failure ADDRESS_ATLAS_ASC_USERNAME=reviewer@addressatlas.invalid \
   ADDRESS_ATLAS_ASC_PASSWORD_KEYCHAIN_ITEM=invalid:item
 
+python3 "$ROOT/Tests/icloud-entitlements-tests.py"
 echo "Mac App Store release contract checks passed."

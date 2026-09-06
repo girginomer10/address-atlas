@@ -135,6 +135,9 @@ extension AppState {
     notice = candidate.syncState.pendingExchangeCredentialCleanup
       ? "Exchange credentials were removed from this Mac and any local rollback point. The last remote snapshot may still contain them; upload the replacement vault to complete remote cleanup."
       : "Exchange credentials were removed from this Mac and any local rollback point."
+    if candidate.iCloudState != nil {
+      notice += " Save the updated portfolio to iCloud or delete its iCloud copy to remove the old encrypted credentials there too."
+    }
   }
 
 }

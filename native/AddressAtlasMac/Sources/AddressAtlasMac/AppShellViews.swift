@@ -14,7 +14,7 @@ struct MainView: View {
     case tokens = "Tokens"
     case snapshots = "Snapshots"
     case exchanges = "Exchanges"
-    case sync = "Sync"
+    case sync = "iCloud"
     case export = "Export"
     case settings = "Settings"
 
@@ -59,7 +59,7 @@ struct MainView: View {
           case .tokens: TokenAllowlistView()
           case .snapshots: SnapshotsView()
           case .exchanges: ExchangesView()
-          case .sync: SyncView(initialServerURL: state.document.syncState.serverURL)
+          case .sync: SyncView()
           case .export: ExportView()
           case .settings: SettingsView()
           }

@@ -1,6 +1,6 @@
 # Address Atlas Terms of Use
 
-**Effective date:** August 27, 2026
+**Effective date:** September 7, 2026
 
 **Operator:** Ömer Girgin, the maintainer of Address Atlas
 
@@ -22,13 +22,13 @@ You may not use Address Atlas to break applicable law; interfere with the app or
 
 ## 4. Third-party services and CoinGecko
 
-Address Atlas connects directly to third-party blockchain, exchange, price, and optional sync services. Their availability, data, security, terms, and privacy practices are outside the operator's control and may change or end at any time. Your use of those services remains subject to their terms.
+Address Atlas connects directly to third-party blockchain, exchange, price, and optional Apple iCloud services. Their availability, data, security, terms, and privacy practices are outside the operator's control and may change or end at any time. Your use of those services remains subject to their terms.
 
 The CoinGecko API and CoinGecko data are the property of Gecko Labs Pte. Ltd. **Data provided by [CoinGecko](https://www.coingecko.com/en/api).** You must use CoinGecko functionality consistently with the [CoinGecko API Terms](https://www.coingecko.com/en/api_terms), including its attribution, rate-limit, data-use, and non-redistribution requirements. CoinGecko does not sponsor or endorse Address Atlas and is not responsible or liable for the app, its operation, or decisions made from displayed data. The Address Atlas operator—not CoinGecko—assumes responsibility for offering the CoinGecko integration and for the disclosures and warnings in this app.
 
 ## 5. Your data and credentials
 
-You control the public addresses, read-only credentials, labels, exports, and optional sync server you provide. Protect your Mac login, recovery material, exports, and exchange credentials. Revoke an exchange credential at the exchange if you suspect exposure. The [Privacy Model](PRIVACY.md) explains local storage, provider requests, optional encrypted sync, retention, deletion, and data disclosures.
+You control the public addresses, read-only credentials, labels, exports, and optional iCloud copies you create. Protect your Mac login, Apple Account, recovery material, exports, and exchange credentials. Revoke an exchange credential at the exchange if you suspect exposure. iCloud transfers use your storage quota and require iCloud Keychain to decrypt on another Mac. The [Privacy Model](PRIVACY.md) explains local storage, provider requests, optional encrypted iCloud transfers, retention, deletion, and data disclosures.
 
 ## 6. Open-source code and provider rights
 
@@ -44,7 +44,7 @@ To the maximum extent permitted by applicable law, the operator is not liable fo
 
 ## 9. Suspension and termination
 
-You may stop using and remove the app at any time. The operator may suspend a hosted optional service or end access when necessary for security, legal compliance, provider compliance, maintenance, or abuse prevention. Ending app or service use does not automatically delete exports or self-hosted data you control; follow the deletion guidance in the Privacy Model.
+You may stop using and remove the app at any time. The current app does not offer an Address Atlas hosted backup service. Ending app use does not automatically delete exports, iCloud copies, or data left on a server used by an older version; follow the deletion guidance in the Privacy Model.
 
 ## 10. Changes and contact
 

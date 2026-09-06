@@ -50,6 +50,10 @@ enum DamagedVaultRecoveryAvailability: Equatable, Sendable {
 
 @MainActor
 final class AppState: ObservableObject {
+  // The retired server adapter remains solely for migration regression tests.
+  var legacyServerSyncEnabled = false
+  @Published var iCloudStatus = "Not connected"
+  var iCloudService: (any ICloudVaultSyncing)?
   @Published var document = VaultDocument() {
     didSet {
       documentRevision &+= 1
@@ -226,6 +230,7 @@ final class AppState: ObservableObject {
   )!
 
   init(
+    legacyServerSyncEnabled: Bool = false,
     endpointConfigClient: any EndpointConfigFetching = NativeEndpointConfigClient(),
     endpointConfigTrustStore: any EndpointConfigTrustPersisting =
       EphemeralEndpointConfigTrustStore(),
@@ -238,6 +243,7 @@ final class AppState: ObservableObject {
     keyStore: any VaultKeyStore = KeychainVaultKeyStore(),
     appSupportDirectoryOverride: URL? = nil
   ) {
+    self.legacyServerSyncEnabled = legacyServerSyncEnabled
     self.endpointConfigClient = endpointConfigClient
     self.endpointConfigTrustStore = endpointConfigTrustStore
     self.httpClient = httpClient
@@ -267,6 +273,7 @@ final class AppState: ObservableObject {
     sessionDateProvider: @escaping @Sendable () -> Date = { Date() }
   ) {
     precondition((1...VaultSyncCodec.maximumSnapshotByteCount).contains(syncSnapshotByteLimit))
+    legacyServerSyncEnabled = true
     self.endpointConfigClient = endpointConfigClient
     self.endpointConfigTrustStore = endpointConfigTrustStore
     self.httpClient = httpClient
@@ -613,8 +620,14 @@ final class AppState: ObservableObject {
         notice = pendingUpload == nil ? "" : "Recovering an interrupted encrypted vault upload."
         error = ""
       }
-      if pendingUpload != nil {
+      if pendingUpload != nil, legacyServerSyncEnabled {
         await recoverPendingVaultUpload()
+      }
+      if !legacyServerSyncEnabled, pendingUpload == nil, quarantinedUpload == nil,
+        document.syncState != SyncState() {
+        var local = document
+        local.syncState = SyncState()
+        _ = await save(local, projectedSyncVersion: nil)
       }
     } catch {
       recordDiagnosticFailure(.storageUnlockFailed)

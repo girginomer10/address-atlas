@@ -18,7 +18,9 @@ are separate states and require different evidence.
 - Keep `direct` and `app-store` as explicit distribution channels. App Store
   builds use bundle ID `com.addressatlas.mac`, the App Store product URL, App
   Sandbox, Data Protection Keychain, a container-migration manifest, and only
-  outgoing-network plus user-selected read/write file entitlements.
+  outgoing-network plus user-selected read/write file entitlements. Since
+  September 7, signed store builds also require the specifically provisioned
+  Production CloudKit container; ad-hoc builds keep CloudKit disabled.
 - Require a Mac App Store distribution profile whose App ID, Team ID, expiry,
   device scope, and sole authorized certificate match the final app signature.
   Require a same-team Mac Installer Distribution signature for the package.
@@ -46,7 +48,7 @@ are separate states and require different evidence.
   creating persistent account credentials. Before upload, the Account Holder
   must explicitly approve those actions; the App ID, record, certificates,
   profile, numeric Apple ID, and supported upload credential must exist.
-- Before submission, resolve the public-data licensing evidence, legally review
-  the custom EULA, choose and prove a reviewable hosted-sync path or remove that
-  marketed scope from the App Store build, and complete a clean-account sandbox
-  and migration smoke test.
+- Before submission, resolve public-data licensing evidence, review the custom
+  EULA, and complete clean-account sandbox/migration tests. The September 7
+  decision replaces the hosted-sync requirement with Production CloudKit setup
+  and a real two-Mac encrypted transfer test; see `docs/ICLOUD.md`.

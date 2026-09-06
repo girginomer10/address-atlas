@@ -1,20 +1,35 @@
 # App Review Notes — Address Atlas 0.2.0
 
-Address Atlas is read-only analytics software. It does not create or custody wallets, request seed phrases or private keys, sign or execute transactions, route orders, operate an exchange, enable mining, issue crypto rewards, or provide personalized investment advice.
+Address Atlas is read-only portfolio software. It does not create or custody
+wallets, request seed phrases or private keys, sign transactions, trade, mine,
+issue crypto rewards, or provide personalized investment advice.
 
-No account or demo credential is required for the core local experience. On first launch, select **Unlock vault**; the app creates an encrypted local vault. The reviewer can add a public address, scan supported providers, inspect assets and snapshots, create exports, and open Settings without supplying sensitive information. Please use only fictional or reviewer-controlled public addresses and read-only exchange credentials.
+No account or demo credential is required for the local experience. Unlock the
+vault, add a reviewer-controlled public address, scan, inspect assets and
+snapshots, and export. Do not use production exchange credentials in review.
 
-The **Sync** screen is an optional, self-hostable encrypted-vault transfer feature. It uses passkeys for account authentication and uploads an opaque encrypted snapshot; the server never receives the vault key. If App Review needs the hosted path rather than the fully functional local path, the production review endpoint and exact test procedure must be added in App Store Connect before submission. Do not submit with a placeholder or unavailable endpoint.
+The **iCloud** screen provides optional, manual Save to iCloud, Restore from
+iCloud, and Delete iCloud copy actions. It uses the reviewer's system Apple
+Account, CloudKit private database, and iCloud Passwords & Keychain. No separate
+Address Atlas registration or hosted server endpoint exists. Restore requires
+confirmation and keeps a local rollback copy. Concurrent remote changes cause a
+conflict message instead of silent overwrite. Review on an iCloud-enabled signed
+build; local/ad-hoc builds cannot demonstrate live CloudKit transfers.
 
-Account deletion is available inside **Sync** and requires a recent passkey-authenticated session. It cascades the account, passkeys, sessions, quota rows, and encrypted snapshot. A one-way, account-unlinked deletion-operation digest remains to make offline retry idempotent.
+Before submission, complete the Production schema and two-Mac checks in
+[docs/ICLOUD.md](../docs/ICLOUD.md). Never claim these checks passed based only on
+local unit tests. The screen does not promise automatic background merging.
 
 Network behavior:
 
-- Public wallet addresses and balance requests go directly to configured chain RPC/REST providers.
+- Public wallet addresses and requests go directly to chain RPC/REST providers.
 - Read-only exchange credentials go directly to the selected exchange.
-- CoinGecko receives asset identifiers for reference prices; Settings includes the required attribution.
-- Optional sync receives account/security metadata and an encrypted snapshot as described in the privacy policy.
+- CoinGecko receives asset identifiers and fiat-rate requests; Settings retains attribution.
+- Apple stores an encrypted portfolio asset in the user's private iCloud database.
+  The local vault key is not uploaded; a separate cloud key uses iCloud Keychain.
+- The retired Address Atlas sync server is not contacted by this build.
 
-The app uses only Apple platform cryptography and HTTPS (`CryptoKit`, Keychain, and `URLSession`). `ITSAppUsesNonExemptEncryption` is set to `NO`. The Mac App Store build uses App Sandbox with outgoing-network and user-selected read/write file access only.
-
-Update handling is distribution-specific: this App Store build opens its immutable `apps.apple.com` product page. It never directs App Store users to the separately signed GitHub DMG channel.
+The app uses Apple cryptography, HTTPS, App Sandbox, Data Protection Keychain,
+user-selected file access, and the specifically provisioned CloudKit container.
+Store builds open their App Store product page for updates. Provider usage
+permissions remain a separate release check; no paid subscription was added.

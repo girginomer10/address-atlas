@@ -865,6 +865,7 @@ public final class EncryptedSQLiteVaultStore: @unchecked Sendable {
       crypto: crypto
     )
     checkpoint.syncState = current.syncState
+    checkpoint.iCloudState = current.iCloudState
     let prepared = try prepareDocument(checkpoint)
     let storedRevision = try persistPreparedDocument(prepared, db: db)
     try deleteRollbackCheckpoint(db: db)

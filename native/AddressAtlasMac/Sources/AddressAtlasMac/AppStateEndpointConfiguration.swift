@@ -97,6 +97,7 @@ extension AppState {
 
   @discardableResult
   func refreshEndpointConfig(silent: Bool = false) async -> Bool {
+    guard legacyServerSyncEnabled else { return false }
     guard acceptsNewOperations else { return false }
     guard let serverURL = AppState.validatedSyncURL(document.syncState.serverURL) else {
       endpointConfigRefreshGeneration &+= 1
