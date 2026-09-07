@@ -6,7 +6,7 @@ This directory is the source-controlled submission packet for Address Atlas 0.2.
 
 - Platform: macOS
 - Bundle ID: `com.addressatlas.mac`
-- App Store Connect Apple ID: `6809515105` (created September 7, 2026; draft, no build uploaded)
+- App Store Connect Apple ID: `6809515105` (0.2.0 build 82 uploaded September 7, 2026; UI processing, not submitted for review)
 - SKU: `address-atlas-macos-001`
 - Version: `0.2.0`
 - Primary language: English (U.S.)
