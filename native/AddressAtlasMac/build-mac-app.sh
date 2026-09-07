@@ -439,7 +439,7 @@ if [[ "$DISTRIBUTION_CHANNEL" == "app-store" ]]; then
       exit 65
     }
     SIGNED_CERTIFICATE_PREFIX="$ICON_WORK_DIR/signed-certificate"
-    codesign --display --extract-certificates "$SIGNED_CERTIFICATE_PREFIX" \
+    codesign --display --extract-certificates="$SIGNED_CERTIFICATE_PREFIX" \
       "$APP_DIR" 2>/dev/null
     SIGNED_CERTIFICATE="$SIGNED_CERTIFICATE_PREFIX"0
     [[ -s "$SIGNED_CERTIFICATE" ]] || {

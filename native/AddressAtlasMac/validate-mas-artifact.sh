@@ -331,7 +331,7 @@ if grep -Eq '^Authority=(Apple Distribution|Mac App Distribution|3rd Party Mac D
     exit 65
   }
   signed_certificate_prefix="$VALIDATION_WORK_DIR/signed-certificate"
-  codesign --display --extract-certificates "$signed_certificate_prefix" \
+  codesign --display --extract-certificates="$signed_certificate_prefix" \
     "$APP_PATH" 2>/dev/null
   signed_certificate="$signed_certificate_prefix"0
   [[ -s "$signed_certificate" ]] || {

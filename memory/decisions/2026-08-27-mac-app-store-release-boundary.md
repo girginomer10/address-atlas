@@ -8,6 +8,10 @@ related_files: [native/AddressAtlasMac/build-mac-app.sh, native/AddressAtlasMac/
 
 ## Context
 
+Real-signing gotcha (2026-09-07): use `--extract-certificates=PREFIX` in codesign.
+A separate prefix argument is interpreted as an extra code target. Keep builder
+and artifact validator aligned; ad-hoc tests do not exercise this path.
+
 Address Atlas needs a Mac App Store channel without weakening or conflating the
 existing Developer ID/GitHub channel. A successful local build, upload command,
 processed App Store Connect build, App Review approval, and storefront release
