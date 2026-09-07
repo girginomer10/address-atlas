@@ -7,6 +7,15 @@ record merging or a versioned backup history. Local scanning does not need iClou
 
 ## Apple setup and release evidence
 
+Apple portal checkpoint (September 7, 2026): team `VWW3GZL279` now has the
+explicit `com.addressatlas.mac` App ID with CloudKit enabled and one assigned
+container, `iCloud.com.addressatlas.mac`. `EncryptedVault` with the three fields
+below was created and the console confirmed **Changes Deployed** to Production.
+For this type, `_world` has no access, `_icloud` has create only, and `_creator`
+has read/write. The app still uses the private database; these schema role
+settings do not replace private-database isolation. Distribution signing,
+matching provisioning, and signed two-Mac transfer remain unverified.
+
 1. Enable CloudKit for App ID `com.addressatlas.mac` in the existing developer team.
 2. Register and associate `iCloud.com.addressatlas.mac` with that App ID.
 3. In CloudKit Console, create `EncryptedVault` in the development schema, with
