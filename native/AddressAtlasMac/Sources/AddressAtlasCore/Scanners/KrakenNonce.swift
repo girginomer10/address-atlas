@@ -17,7 +17,7 @@ public enum KrakenNonceError: Error, Equatable, LocalizedError, Sendable {
     switch self {
     case .invalidClock:
       return
-        "The system clock cannot produce a safe Kraken nonce. Correct the Mac's date and time before retrying."
+        "The system clock cannot produce a safe Kraken nonce. Correct the \(PlatformCopy.deviceNounPossessive) date and time before retrying."
     case .exhausted:
       return
         "The Kraken nonce range is exhausted for this API key. Create a new read-only Kraken API key."
@@ -25,7 +25,7 @@ public enum KrakenNonceError: Error, Equatable, LocalizedError, Sendable {
       return "Kraken's protected local nonce state is unavailable. No Kraken request was sent."
     case .localStateChanged:
       return
-        "Kraken's local device state changed. Remove this connection and add a new read-only Kraken API key created only for this Mac."
+        "Kraken's local device state changed. Remove this connection and add a new read-only Kraken API key created only for this \(PlatformCopy.deviceNoun)."
     }
   }
 }

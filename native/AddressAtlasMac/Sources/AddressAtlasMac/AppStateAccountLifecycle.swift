@@ -50,7 +50,7 @@ extension AppState {
           "The server session was revoked, but removing its local token is pending persistence. Use Retry local save after fixing storage: \(persistenceError)"
         return
       }
-      notice = "This Mac's sync session was revoked."
+      notice = "This \(PlatformCopy.deviceNounPossessive) sync session was revoked."
       error = ""
     } catch {
       recordDiagnosticFailure(.syncAccountLifecycleFailed)
@@ -415,11 +415,11 @@ extension AppState {
       guard await saveAndDiscardRollbackCheckpoint(disconnected) else {
         let persistenceError = error
         error =
-          "This Mac's server session was revoked, but its local account binding and rollback point could not be cleared atomically. Fix local storage, then use Disconnect locally without contacting server: \(persistenceError)"
+          "This \(PlatformCopy.deviceNounPossessive) server session was revoked, but its local account binding and rollback point could not be cleared atomically. Fix local storage, then use Disconnect locally without contacting server: \(persistenceError)"
         return
       }
       notice =
-        "This Mac disconnected from the sync account. The remote account and encrypted remote vault were kept; the previous account's automatic rollback point was removed."
+        "This \(PlatformCopy.deviceNoun) disconnected from the sync account. The remote account and encrypted remote vault were kept; the previous account's automatic rollback point was removed."
       error = ""
     } catch {
       recordDiagnosticFailure(.syncAccountLifecycleFailed)
@@ -469,7 +469,7 @@ extension AppState {
       return
     }
     notice =
-      "This Mac disconnected locally from the sync account. No server request was made; the remote account and vault were kept, and the old server session may remain valid until it expires."
+      "This \(PlatformCopy.deviceNoun) disconnected locally from the sync account. No server request was made; the remote account and vault were kept, and the old server session may remain valid until it expires."
     error = ""
   }
 

@@ -50,3 +50,13 @@ __pycache__/
 /repo-memory.sqlite3*
 
 /src/generated/prisma
+
+# iOS (xcodegen) project: generated version metadata and Xcode local state
+native/AddressAtlasiOS/Version.xcconfig
+xcuserdata/
+*.xcuserstate
+DerivedData/
+*.xcresult
+*.ipa
+*.xcarchive
+*.provisionprofile

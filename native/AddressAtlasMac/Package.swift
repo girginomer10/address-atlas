@@ -5,7 +5,8 @@ import PackageDescription
 let package = Package(
   name: "AddressAtlasMac",
   platforms: [
-    .macOS(.v14)
+    .macOS(.v14),
+    .iOS(.v17),
   ],
   products: [
     .library(name: "AddressAtlasCore", targets: ["AddressAtlasCore"]),

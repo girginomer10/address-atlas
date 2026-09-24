@@ -19,7 +19,7 @@ enum UserFacingErrorMapper {
       switch keychain {
       case .unexpectedStatus:
         return
-          "Address Atlas could not access the vault key in Keychain. Unlock this Mac, then try again."
+          "Address Atlas could not access the vault key in Keychain. Unlock this \(PlatformCopy.deviceNoun), then try again."
       case .invalidItem:
         return "The saved vault key is invalid. Restore your recovery kit before making changes."
       }

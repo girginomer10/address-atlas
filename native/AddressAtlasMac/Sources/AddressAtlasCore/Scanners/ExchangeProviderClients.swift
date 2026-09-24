@@ -170,7 +170,7 @@ public struct NativeExchangeBalanceClient: Sendable {
       return .manualVerificationRequired(
         provider: .kraken,
         guidance:
-          "Kraken key scope could not be verified automatically. Confirm only Query Funds permission is enabled and use this key on one Mac only."
+          "Kraken key scope could not be verified automatically. Confirm only Query Funds permission is enabled and use this key on one \(PlatformCopy.deviceNoun) only."
       )
     }
   }

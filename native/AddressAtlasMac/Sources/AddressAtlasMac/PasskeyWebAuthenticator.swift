@@ -1,5 +1,9 @@
 import AddressAtlasCore
-import AppKit
+#if canImport(AppKit)
+  import AppKit
+#elseif canImport(UIKit)
+  import UIKit
+#endif
 import AuthenticationServices
 import CryptoKit
 import Foundation
@@ -28,10 +32,10 @@ enum PasskeyAuthenticationError: Error, Equatable, LocalizedError, Sendable {
       return nil
     case .invalidCallback:
       return
-        "This Mac was not connected because the passkey callback was invalid. The server may still have created or refreshed a sign-in grant; start sign-in again to obtain a fresh, safely bound session."
+        "This \(PlatformCopy.deviceNoun) was not connected because the passkey callback was invalid. The server may still have created or refreshed a sign-in grant; start sign-in again to obtain a fresh, safely bound session."
     case .invalidExchange:
       return
-        "This Mac was not connected because the one-time passkey exchange could not be confirmed. The server outcome is unknown; start sign-in again to obtain a fresh, safely bound session."
+        "This \(PlatformCopy.deviceNoun) was not connected because the one-time passkey exchange could not be confirmed. The server outcome is unknown; start sign-in again to obtain a fresh, safely bound session."
     case .unavailable:
       return "Passkey sign-in could not be started. Check the sync server and try again."
     }
@@ -241,7 +245,14 @@ final class PasskeyWebAuthenticator: NSObject, PasskeyAuthenticating,
   }
 
   func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-    NSApplication.shared.keyWindow ?? NSApplication.shared.windows.first ?? NSWindow()
+    #if canImport(AppKit)
+      return NSApplication.shared.keyWindow ?? NSApplication.shared.windows.first ?? NSWindow()
+    #else
+      let windows = UIApplication.shared.connectedScenes
+        .compactMap { $0 as? UIWindowScene }
+        .flatMap(\.windows)
+      return windows.first(where: \.isKeyWindow) ?? windows.first ?? UIWindow()
+    #endif
   }
 
   static func makePKCEMaterial(randomBytes: Data? = nil) throws -> PasskeyPKCEMaterial {

@@ -27,8 +27,18 @@ public struct KeychainVaultKeyStore: VaultKeyStore {
   ) {
     self.service = service
     self.account = account
-    self.usesDataProtectionKeychain = usesDataProtectionKeychain
-      ?? (Bundle.main.infoDictionary?["AddressAtlasUseDataProtectionKeychain"] as? Bool == true)
+    #if os(macOS)
+      self.usesDataProtectionKeychain = usesDataProtectionKeychain
+        ?? (Bundle.main.infoDictionary?["AddressAtlasUseDataProtectionKeychain"] as? Bool == true)
+    #else
+      // iOS has exactly one keychain and it is always the Data Protection
+      // Keychain, so the macOS legacy-file-keychain migration is meaningless
+      // there. Worse, its delete query omits kSecUseDataProtectionKeychain and
+      // would match the active item itself, deleting the vault key right after
+      // it was saved. The flag is therefore forced off on iOS.
+      _ = usesDataProtectionKeychain
+      self.usesDataProtectionKeychain = false
+    #endif
   }
 
   public func loadVaultKey() throws -> Data? {

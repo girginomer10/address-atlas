@@ -1,5 +1,9 @@
 import AddressAtlasCore
-import AppKit
+#if canImport(AppKit)
+  import AppKit
+#elseif canImport(UIKit)
+  import UIKit
+#endif
 import Combine
 import SwiftUI
 import UniformTypeIdentifiers
@@ -13,9 +17,15 @@ struct AtlasRGB: Equatable, Sendable {
     Color(red: red, green: green, blue: blue)
   }
 
-  var nsColor: NSColor {
-    NSColor(srgbRed: red, green: green, blue: blue, alpha: 1)
-  }
+  #if canImport(AppKit)
+    var nsColor: NSColor {
+      NSColor(srgbRed: red, green: green, blue: blue, alpha: 1)
+    }
+  #else
+    var uiColor: UIColor {
+      UIColor(red: red, green: green, blue: blue, alpha: 1)
+    }
+  #endif
 }
 
 enum AtlasAppearanceVariant: CaseIterable, Equatable, Sendable {
@@ -34,8 +44,21 @@ enum AtlasAppearanceVariant: CaseIterable, Equatable, Sendable {
     }
   }
 
-  init(appearance: NSAppearance, increaseContrast: Bool) {
-    let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+  #if canImport(AppKit)
+    init(appearance: NSAppearance, increaseContrast: Bool) {
+      let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+      self.init(isDark: isDark, increaseContrast: increaseContrast)
+    }
+  #else
+    init(traitCollection: UITraitCollection) {
+      self.init(
+        isDark: traitCollection.userInterfaceStyle == .dark,
+        increaseContrast: traitCollection.accessibilityContrast == .high
+      )
+    }
+  #endif
+
+  init(isDark: Bool, increaseContrast: Bool) {
     switch (isDark, increaseContrast) {
     case (false, false): self = .light
     case (true, false): self = .dark
@@ -172,14 +195,22 @@ enum AtlasTheme {
     _ name: String,
     _ keyPath: KeyPath<AtlasPalette, AtlasRGB>
   ) -> Color {
-    Color(
-      nsColor: NSColor(name: NSColor.Name("AddressAtlas.\(name)")) { appearance in
-        palette(
-          for: AtlasAppearanceVariant(
-            appearance: appearance,
-            increaseContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
-          ))[keyPath: keyPath].nsColor
-      })
+    #if canImport(AppKit)
+      return Color(
+        nsColor: NSColor(name: NSColor.Name("AddressAtlas.\(name)")) { appearance in
+          palette(
+            for: AtlasAppearanceVariant(
+              appearance: appearance,
+              increaseContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+            ))[keyPath: keyPath].nsColor
+        })
+    #else
+      return Color(
+        uiColor: UIColor { traitCollection in
+          palette(for: AtlasAppearanceVariant(traitCollection: traitCollection))[keyPath: keyPath]
+            .uiColor
+        })
+    #endif
   }
 }
 
@@ -199,27 +230,17 @@ enum AtlasMotion {
   }
 }
 
-enum AtlasFormatting {
-  static var locale: Locale {
-    #if DEBUG
-      if let override = ProcessInfo.processInfo.environment["ADDRESS_ATLAS_UI_LOCALE"],
-        !override.isEmpty
-      {
-        return Locale(identifier: override)
-      }
-    #endif
-    return .autoupdatingCurrent
-  }
-
-  static func dateTime(_ date: Date) -> String {
-    date.formatted(
-      Date.FormatStyle(date: .abbreviated, time: .shortened)
-        .locale(locale)
-    )
-  }
-}
-
 struct Page<Content: View>: View {
+  /// Desktop pages reserve a readable minimum width; compact iOS layouts must
+  /// never force horizontal scrolling.
+  static var minimumContentWidth: CGFloat {
+    #if os(macOS)
+      return 720
+    #else
+      return 0
+    #endif
+  }
+
   @ScaledMetric(relativeTo: .largeTitle) private var titleSize: CGFloat = 42
   var eyebrow: String
   var title: String
@@ -257,7 +278,7 @@ struct Page<Content: View>: View {
               headerStat
                 .frame(minWidth: 180, alignment: .trailing)
             }
-            .frame(minWidth: 720)
+            .frame(minWidth: Self.minimumContentWidth)
 
             VStack(alignment: .leading, spacing: 16) {
               heading(lineLimit: 2)
@@ -736,7 +757,7 @@ struct PrivacyCard: View {
         VStack(alignment: .leading, spacing: 1) {
           Text("Private by design")
             .font(.callout.weight(.semibold))
-          Text("Encrypted on this Mac")
+          Text("Encrypted on this \(PlatformCopy.deviceNoun)")
             .font(.caption)
             .foregroundStyle(AtlasTheme.ink3)
         }
@@ -778,7 +799,7 @@ final class AtlasAccessibilityAnnouncer {
       }
     }
 
-    var priority: NSAccessibilityPriorityLevel {
+    var priority: AtlasAnnouncementPriority {
       switch self {
       case .operatorMessage, .notice: .medium
       case .guidance, .error: .high
@@ -787,7 +808,7 @@ final class AtlasAccessibilityAnnouncer {
   }
 
   typealias Clock = @MainActor () -> TimeInterval
-  typealias Poster = @MainActor (String, NSAccessibilityPriorityLevel) -> Void
+  typealias Poster = @MainActor (String, AtlasAnnouncementPriority) -> Void
 
   static let shared = AtlasAccessibilityAnnouncer()
 
@@ -858,20 +879,41 @@ final class AtlasAccessibilityAnnouncer {
     poster(message, kind.priority)
   }
 
-  private static func postToAppKit(
-    _ message: String,
-    priority: NSAccessibilityPriorityLevel
-  ) {
-    NSAccessibility.post(
-      element: NSApplication.shared,
-      notification: .announcementRequested,
-      userInfo: [
-        .announcement: message,
-        .priority: priority.rawValue,
-      ]
-    )
-  }
+  #if canImport(AppKit)
+    private static func postToAppKit(
+      _ message: String,
+      priority: AtlasAnnouncementPriority
+    ) {
+      NSAccessibility.post(
+        element: NSApplication.shared,
+        notification: .announcementRequested,
+        userInfo: [
+          .announcement: message,
+          .priority: priority.rawValue,
+        ]
+      )
+    }
+  #else
+    /// UIKit has no announcement priority; the message itself is posted.
+    private static func postToAppKit(
+      _ message: String,
+      priority: AtlasAnnouncementPriority
+    ) {
+      UIAccessibility.post(notification: .announcement, argument: message)
+    }
+  #endif
 }
+
+/// Announcement urgency, mapped onto AppKit's priority levels on macOS so the
+/// existing macOS behavior and tests are unchanged.
+#if canImport(AppKit)
+  typealias AtlasAnnouncementPriority = NSAccessibilityPriorityLevel
+#else
+  enum AtlasAnnouncementPriority: Int, Sendable {
+    case medium = 50
+    case high = 90
+  }
+#endif
 
 struct StatusLine: View {
   enum Presentation {

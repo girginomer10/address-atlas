@@ -133,8 +133,8 @@ extension AppState {
     // Restore can never resurrect a credential the UI said was removed.
     guard await saveAndDiscardRollbackCheckpoint(candidate) else { return }
     notice = candidate.syncState.pendingExchangeCredentialCleanup
-      ? "Exchange credentials were removed from this Mac and any local rollback point. The last remote snapshot may still contain them; upload the replacement vault to complete remote cleanup."
-      : "Exchange credentials were removed from this Mac and any local rollback point."
+      ? "Exchange credentials were removed from this \(PlatformCopy.deviceNoun) and any local rollback point. The last remote snapshot may still contain them; upload the replacement vault to complete remote cleanup."
+      : "Exchange credentials were removed from this \(PlatformCopy.deviceNoun) and any local rollback point."
     if candidate.iCloudState != nil {
       notice += " Save the updated portfolio to iCloud or delete its iCloud copy to remove the old encrypted credentials there too."
     }

@@ -1,0 +1,578 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		001D86EF3E9452AD1BF9C46D /* ICloudScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = E776BCC56C7A58C6ADC73F23 /* ICloudScreen.swift */; };
+		0CCA57D11E44DF0096B308FA /* AddressAtlasCore in Frameworks */ = {isa = PBXBuildFile; productRef = 801905FA6FA9C4F51B290652 /* AddressAtlasCore */; };
+		185D080067EB67F924B283B5 /* SnapshotsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA18A3E4D8663AF413B9BECB /* SnapshotsScreen.swift */; };
+		1CA89A8DD856DAA8A22B3159 /* ExchangesScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35DD59B780459F2D86827A3F /* ExchangesScreen.swift */; };
+		21057DE447CC3FA791F3ABB3 /* WalletsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02D92FF63369E31CF04D24D0 /* WalletsScreen.swift */; };
+		2A94988F6444A42C36C5A438 /* ExportScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D52FBF704ADD4D782C73EF6 /* ExportScreen.swift */; };
+		2CA0D0C8D880A88CE0A06062 /* PortfolioScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 084E3DF7E79C8C8A2BC7C779 /* PortfolioScreen.swift */; };
+		2E98CDB2ED71CDDF3C581679 /* AppStateDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 533EC174E4E518D135EF3EFD /* AppStateDiagnostics.swift */; };
+		3A4DE02A5C1046DE6B93E213 /* PasskeyWebAuthenticator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 696B657AF51571D531104B22 /* PasskeyWebAuthenticator.swift */; };
+		3CF2DDA060EAA7232F5304E0 /* AppStateExchangeConnections.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B7C9BE5A425C44D1BBF6F3B /* AppStateExchangeConnections.swift */; };
+		4E8478200BDB3861FFBEEDBC /* AssetsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 478987FC2E1C1206E20F758E /* AssetsScreen.swift */; };
+		4FE120655C1216E70423F619 /* AtlasSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 374D5366490E6CB10977C60D /* AtlasSection.swift */; };
+		5320277B5CFC780C186CCAB8 /* SettingsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB6599F39A81C8F170E79B74 /* SettingsScreen.swift */; };
+		5362D54DF67A225118265A96 /* IOSSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 794806A4DD437BC916CAD7A7 /* IOSSupport.swift */; };
+		5B79D516A4A1DDBB22F3D0DD /* TokensScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 606FA4F090348CF9EC1664FC /* TokensScreen.swift */; };
+		690317403BDDC5EDE5257CA6 /* AppStateScanning.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04E59E2E786153253189CD5F /* AppStateScanning.swift */; };
+		6C98C84D5ED74C0F80410E5C /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5301917867ACFE8CBB9F33FA /* RootView.swift */; };
+		6E9D1606CAA6C4CE538E5EB8 /* UnlockScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67ADF2440084A336EC7A193E /* UnlockScreen.swift */; };
+		74F5AFCA1B2D58B553B863A7 /* ICloudVaultService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A42E9764A079F1DE8C8F572 /* ICloudVaultService.swift */; };
+		7B2E7B739410FAE02E90A1F9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0DA31591CD25C1D10EA3119E /* Assets.xcassets */; };
+		80AFD4B2F3823A2D681F67FF /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC93E4A10CF81A60F0D50C66 /* AppState.swift */; };
+		85D37CE8976363FADB9B4D4B /* AppStateICloud.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4C43B692B10AD943CC995C2 /* AppStateICloud.swift */; };
+		86729B4037637FAFAE252D93 /* ExportPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EF4CAB228D89D371EE0BB39 /* ExportPipeline.swift */; };
+		887E5A7B0C419A0C206C23D3 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 4F04D2CEE0AC93D87843CC0A /* PrivacyInfo.xcprivacy */; };
+		98DE6CC7C48241240405BF94 /* AtlasFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA68BBA92A4983A0704EA966 /* AtlasFormatting.swift */; };
+		9B7E5EC08CB8A1BF722781C6 /* AtlasDesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 933502CCA3204D600DEC264D /* AtlasDesignSystem.swift */; };
+		9FA8EB661F0A60FA57768699 /* MainShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3FE2888AB7E4FA0A1465760 /* MainShell.swift */; };
+		B026FF23FEDC3C3010BBCCA0 /* UserFacingErrors.swift in Sources */ = {isa = PBXBuildFile; fileRef = 494600BE507D8CD4AE731861 /* UserFacingErrors.swift */; };
+		B5106DC7C5F6D58B8F63FD0A /* AppStateVaultSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F46649DE17C5B4463770E88 /* AppStateVaultSync.swift */; };
+		BA61E8F000D5B50FF1AC7139 /* AppStateAccountLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = C04752AA39E3937CDF9A758E /* AppStateAccountLifecycle.swift */; };
+		BD9CB67CB93CA33374A57804 /* AppStateTermination.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99E3451BFA9F65AFC461CE22 /* AppStateTermination.swift */; };
+		C033BF470FB1F25697EAB870 /* AddressAtlasiOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E36EA502005E2033B62F7B9 /* AddressAtlasiOSApp.swift */; };
+		CB9032B3EFEC7F5B9F786A1F /* AppStateVaultMutations.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11D1EE5B95AC1FE1A52CC6D9 /* AppStateVaultMutations.swift */; };
+		F2315D8BFCDBA09AD747B969 /* AppStateValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 181AA1E44268FF2873AFFCB4 /* AppStateValidation.swift */; };
+		F5F6156AFEB2709FB304F4F4 /* AppStateEndpointConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A4CE78ED4D7AF0170ED4CFD /* AppStateEndpointConfiguration.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		02D92FF63369E31CF04D24D0 /* WalletsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletsScreen.swift; sourceTree = "<group>"; };
+		04E59E2E786153253189CD5F /* AppStateScanning.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateScanning.swift; sourceTree = "<group>"; };
+		084E3DF7E79C8C8A2BC7C779 /* PortfolioScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortfolioScreen.swift; sourceTree = "<group>"; };
+		0D52FBF704ADD4D782C73EF6 /* ExportScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportScreen.swift; sourceTree = "<group>"; };
+		0DA31591CD25C1D10EA3119E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		11D1EE5B95AC1FE1A52CC6D9 /* AppStateVaultMutations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateVaultMutations.swift; sourceTree = "<group>"; };
+		181AA1E44268FF2873AFFCB4 /* AppStateValidation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateValidation.swift; sourceTree = "<group>"; };
+		1A42E9764A079F1DE8C8F572 /* ICloudVaultService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ICloudVaultService.swift; sourceTree = "<group>"; };
+		1F46649DE17C5B4463770E88 /* AppStateVaultSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateVaultSync.swift; sourceTree = "<group>"; };
+		20FB7043B3920081808DDCD4 /* AddressAtlasMac */ = {isa = PBXFileReference; lastKnownFileType = folder; name = AddressAtlasMac; path = ../AddressAtlasMac; sourceTree = SOURCE_ROOT; };
+		35DD59B780459F2D86827A3F /* ExchangesScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExchangesScreen.swift; sourceTree = "<group>"; };
+		374D5366490E6CB10977C60D /* AtlasSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasSection.swift; sourceTree = "<group>"; };
+		478987FC2E1C1206E20F758E /* AssetsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssetsScreen.swift; sourceTree = "<group>"; };
+		494600BE507D8CD4AE731861 /* UserFacingErrors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserFacingErrors.swift; sourceTree = "<group>"; };
+		4F04D2CEE0AC93D87843CC0A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		5301917867ACFE8CBB9F33FA /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		533EC174E4E518D135EF3EFD /* AppStateDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateDiagnostics.swift; sourceTree = "<group>"; };
+		606FA4F090348CF9EC1664FC /* TokensScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TokensScreen.swift; sourceTree = "<group>"; };
+		67ADF2440084A336EC7A193E /* UnlockScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnlockScreen.swift; sourceTree = "<group>"; };
+		696B657AF51571D531104B22 /* PasskeyWebAuthenticator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasskeyWebAuthenticator.swift; sourceTree = "<group>"; };
+		794806A4DD437BC916CAD7A7 /* IOSSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSSupport.swift; sourceTree = "<group>"; };
+		7A4CE78ED4D7AF0170ED4CFD /* AppStateEndpointConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateEndpointConfiguration.swift; sourceTree = "<group>"; };
+		7E36EA502005E2033B62F7B9 /* AddressAtlasiOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddressAtlasiOSApp.swift; sourceTree = "<group>"; };
+		8B7C9BE5A425C44D1BBF6F3B /* AppStateExchangeConnections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateExchangeConnections.swift; sourceTree = "<group>"; };
+		933502CCA3204D600DEC264D /* AtlasDesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasDesignSystem.swift; sourceTree = "<group>"; };
+		99E3451BFA9F65AFC461CE22 /* AppStateTermination.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateTermination.swift; sourceTree = "<group>"; };
+		9EF4CAB228D89D371EE0BB39 /* ExportPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportPipeline.swift; sourceTree = "<group>"; };
+		AC93E4A10CF81A60F0D50C66 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		BA18A3E4D8663AF413B9BECB /* SnapshotsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotsScreen.swift; sourceTree = "<group>"; };
+		C04752AA39E3937CDF9A758E /* AppStateAccountLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateAccountLifecycle.swift; sourceTree = "<group>"; };
+		C637B52D89C7E95B55870379 /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Version.xcconfig; sourceTree = "<group>"; };
+		D3FE2888AB7E4FA0A1465760 /* MainShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainShell.swift; sourceTree = "<group>"; };
+		DE56FC9A41FAD9556228BD4B /* AddressAtlasiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AddressAtlasiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E4C43B692B10AD943CC995C2 /* AppStateICloud.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateICloud.swift; sourceTree = "<group>"; };
+		E776BCC56C7A58C6ADC73F23 /* ICloudScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ICloudScreen.swift; sourceTree = "<group>"; };
+		EB6599F39A81C8F170E79B74 /* SettingsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsScreen.swift; sourceTree = "<group>"; };
+		FA68BBA92A4983A0704EA966 /* AtlasFormatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasFormatting.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		D73593F50C339E7B81409BBE /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0CCA57D11E44DF0096B308FA /* AddressAtlasCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		1C25A0534277008D0AA30215 = {
+			isa = PBXGroup;
+			children = (
+				4EEA3E7648AF62EA8152B491 /* native */,
+				4A378A85EB37214942F15360 /* Packages */,
+				72E069974130496B25427213 /* Resources */,
+				C5D9934E33AAA22D3A164FF1 /* Sources */,
+				6A175CBB00709EBB96464F25 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		3E4EC073E60565D88D173CE1 /* AddressAtlasMac */ = {
+			isa = PBXGroup;
+			children = (
+				B87D4DC372ED4EF544830C71 /* Resources */,
+				D43234349A8B88D3B7D527C8 /* Sources */,
+			);
+			path = AddressAtlasMac;
+			sourceTree = "<group>";
+		};
+		4A378A85EB37214942F15360 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				20FB7043B3920081808DDCD4 /* AddressAtlasMac */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		4EEA3E7648AF62EA8152B491 /* native */ = {
+			isa = PBXGroup;
+			children = (
+				E3749A001DDB8CF36475DD6A /* AddressAtlasiOS */,
+				3E4EC073E60565D88D173CE1 /* AddressAtlasMac */,
+			);
+			name = native;
+			path = ..;
+			sourceTree = "<group>";
+		};
+		6A175CBB00709EBB96464F25 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				DE56FC9A41FAD9556228BD4B /* AddressAtlasiOS.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		72E069974130496B25427213 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				0DA31591CD25C1D10EA3119E /* Assets.xcassets */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		792EF02BB4AF741C09B16BC5 /* AddressAtlasiOS */ = {
+			isa = PBXGroup;
+			children = (
+				7E36EA502005E2033B62F7B9 /* AddressAtlasiOSApp.swift */,
+				478987FC2E1C1206E20F758E /* AssetsScreen.swift */,
+				374D5366490E6CB10977C60D /* AtlasSection.swift */,
+				35DD59B780459F2D86827A3F /* ExchangesScreen.swift */,
+				0D52FBF704ADD4D782C73EF6 /* ExportScreen.swift */,
+				E776BCC56C7A58C6ADC73F23 /* ICloudScreen.swift */,
+				794806A4DD437BC916CAD7A7 /* IOSSupport.swift */,
+				D3FE2888AB7E4FA0A1465760 /* MainShell.swift */,
+				084E3DF7E79C8C8A2BC7C779 /* PortfolioScreen.swift */,
+				5301917867ACFE8CBB9F33FA /* RootView.swift */,
+				EB6599F39A81C8F170E79B74 /* SettingsScreen.swift */,
+				BA18A3E4D8663AF413B9BECB /* SnapshotsScreen.swift */,
+				606FA4F090348CF9EC1664FC /* TokensScreen.swift */,
+				67ADF2440084A336EC7A193E /* UnlockScreen.swift */,
+				02D92FF63369E31CF04D24D0 /* WalletsScreen.swift */,
+			);
+			path = AddressAtlasiOS;
+			sourceTree = "<group>";
+		};
+		B87D4DC372ED4EF544830C71 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				4F04D2CEE0AC93D87843CC0A /* PrivacyInfo.xcprivacy */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		C5D9934E33AAA22D3A164FF1 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				792EF02BB4AF741C09B16BC5 /* AddressAtlasiOS */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		D43234349A8B88D3B7D527C8 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				E060A0274E2E808C040581F7 /* SharedMacSources */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		E060A0274E2E808C040581F7 /* SharedMacSources */ = {
+			isa = PBXGroup;
+			children = (
+				AC93E4A10CF81A60F0D50C66 /* AppState.swift */,
+				C04752AA39E3937CDF9A758E /* AppStateAccountLifecycle.swift */,
+				533EC174E4E518D135EF3EFD /* AppStateDiagnostics.swift */,
+				7A4CE78ED4D7AF0170ED4CFD /* AppStateEndpointConfiguration.swift */,
+				8B7C9BE5A425C44D1BBF6F3B /* AppStateExchangeConnections.swift */,
+				E4C43B692B10AD943CC995C2 /* AppStateICloud.swift */,
+				04E59E2E786153253189CD5F /* AppStateScanning.swift */,
+				99E3451BFA9F65AFC461CE22 /* AppStateTermination.swift */,
+				181AA1E44268FF2873AFFCB4 /* AppStateValidation.swift */,
+				11D1EE5B95AC1FE1A52CC6D9 /* AppStateVaultMutations.swift */,
+				1F46649DE17C5B4463770E88 /* AppStateVaultSync.swift */,
+				933502CCA3204D600DEC264D /* AtlasDesignSystem.swift */,
+				FA68BBA92A4983A0704EA966 /* AtlasFormatting.swift */,
+				9EF4CAB228D89D371EE0BB39 /* ExportPipeline.swift */,
+				1A42E9764A079F1DE8C8F572 /* ICloudVaultService.swift */,
+				696B657AF51571D531104B22 /* PasskeyWebAuthenticator.swift */,
+				494600BE507D8CD4AE731861 /* UserFacingErrors.swift */,
+			);
+			name = SharedMacSources;
+			path = AddressAtlasMac;
+			sourceTree = "<group>";
+		};
+		E3749A001DDB8CF36475DD6A /* AddressAtlasiOS */ = {
+			isa = PBXGroup;
+			children = (
+				C637B52D89C7E95B55870379 /* Version.xcconfig */,
+			);
+			path = AddressAtlasiOS;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		E0488D9AEB29828FE810526D /* AddressAtlasiOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D3D83B96F459112D088B9AE9 /* Build configuration list for PBXNativeTarget "AddressAtlasiOS" */;
+			buildPhases = (
+				A14BBD429E4109603E06EA56 /* Sources */,
+				8A737DB5E9284980DA0BCE09 /* Resources */,
+				D73593F50C339E7B81409BBE /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = AddressAtlasiOS;
+			packageProductDependencies = (
+				801905FA6FA9C4F51B290652 /* AddressAtlasCore */,
+			);
+			productName = AddressAtlasiOS;
+			productReference = DE56FC9A41FAD9556228BD4B /* AddressAtlasiOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		C8579629606951B55EF228E7 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 2650;
+				TargetAttributes = {
+					E0488D9AEB29828FE810526D = {
+						DevelopmentTeam = VWW3GZL279;
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 918AC4C475FE736895DBC29E /* Build configuration list for PBXProject "AddressAtlasiOS" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 1C25A0534277008D0AA30215;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				3E4B5BDE516422FDF1275F59 /* XCLocalSwiftPackageReference "../AddressAtlasMac" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 6A175CBB00709EBB96464F25 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				E0488D9AEB29828FE810526D /* AddressAtlasiOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		8A737DB5E9284980DA0BCE09 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7B2E7B739410FAE02E90A1F9 /* Assets.xcassets in Resources */,
+				887E5A7B0C419A0C206C23D3 /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A14BBD429E4109603E06EA56 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C033BF470FB1F25697EAB870 /* AddressAtlasiOSApp.swift in Sources */,
+				80AFD4B2F3823A2D681F67FF /* AppState.swift in Sources */,
+				BA61E8F000D5B50FF1AC7139 /* AppStateAccountLifecycle.swift in Sources */,
+				2E98CDB2ED71CDDF3C581679 /* AppStateDiagnostics.swift in Sources */,
+				F5F6156AFEB2709FB304F4F4 /* AppStateEndpointConfiguration.swift in Sources */,
+				3CF2DDA060EAA7232F5304E0 /* AppStateExchangeConnections.swift in Sources */,
+				85D37CE8976363FADB9B4D4B /* AppStateICloud.swift in Sources */,
+				690317403BDDC5EDE5257CA6 /* AppStateScanning.swift in Sources */,
+				BD9CB67CB93CA33374A57804 /* AppStateTermination.swift in Sources */,
+				F2315D8BFCDBA09AD747B969 /* AppStateValidation.swift in Sources */,
+				CB9032B3EFEC7F5B9F786A1F /* AppStateVaultMutations.swift in Sources */,
+				B5106DC7C5F6D58B8F63FD0A /* AppStateVaultSync.swift in Sources */,
+				4E8478200BDB3861FFBEEDBC /* AssetsScreen.swift in Sources */,
+				9B7E5EC08CB8A1BF722781C6 /* AtlasDesignSystem.swift in Sources */,
+				98DE6CC7C48241240405BF94 /* AtlasFormatting.swift in Sources */,
+				4FE120655C1216E70423F619 /* AtlasSection.swift in Sources */,
+				1CA89A8DD856DAA8A22B3159 /* ExchangesScreen.swift in Sources */,
+				86729B4037637FAFAE252D93 /* ExportPipeline.swift in Sources */,
+				2A94988F6444A42C36C5A438 /* ExportScreen.swift in Sources */,
+				001D86EF3E9452AD1BF9C46D /* ICloudScreen.swift in Sources */,
+				74F5AFCA1B2D58B553B863A7 /* ICloudVaultService.swift in Sources */,
+				5362D54DF67A225118265A96 /* IOSSupport.swift in Sources */,
+				9FA8EB661F0A60FA57768699 /* MainShell.swift in Sources */,
+				3A4DE02A5C1046DE6B93E213 /* PasskeyWebAuthenticator.swift in Sources */,
+				2CA0D0C8D880A88CE0A06062 /* PortfolioScreen.swift in Sources */,
+				6C98C84D5ED74C0F80410E5C /* RootView.swift in Sources */,
+				5320277B5CFC780C186CCAB8 /* SettingsScreen.swift in Sources */,
+				185D080067EB67F924B283B5 /* SnapshotsScreen.swift in Sources */,
+				5B79D516A4A1DDBB22F3D0DD /* TokensScreen.swift in Sources */,
+				6E9D1606CAA6C4CE538E5EB8 /* UnlockScreen.swift in Sources */,
+				B026FF23FEDC3C3010BBCCA0 /* UserFacingErrors.swift in Sources */,
+				21057DE447CC3FA791F3ABB3 /* WalletsScreen.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		8A169837723C8DC4EFAA13AB /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = C637B52D89C7E95B55870379 /* Version.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Resources/AddressAtlasiOS.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.addressatlas.ios;
+				PRODUCT_MODULE_NAME = AddressAtlasiOS;
+				PRODUCT_NAME = "Address Atlas";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		917BF00419DBE0CFE897B780 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = VWW3GZL279;
+				ENABLE_MODULE_VERIFIER = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_TREAT_WARNINGS_AS_ERRORS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		B5ACE1DA3D4D885F44B075B3 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = C637B52D89C7E95B55870379 /* Version.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Resources/AddressAtlasiOS.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.addressatlas.ios;
+				PRODUCT_MODULE_NAME = AddressAtlasiOS;
+				PRODUCT_NAME = "Address Atlas";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		BC992A2A0D0FBC4B6831DEC0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = VWW3GZL279;
+				ENABLE_MODULE_VERIFIER = NO;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_TREAT_WARNINGS_AS_ERRORS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		918AC4C475FE736895DBC29E /* Build configuration list for PBXProject "AddressAtlasiOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				917BF00419DBE0CFE897B780 /* Debug */,
+				BC992A2A0D0FBC4B6831DEC0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		D3D83B96F459112D088B9AE9 /* Build configuration list for PBXNativeTarget "AddressAtlasiOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B5ACE1DA3D4D885F44B075B3 /* Debug */,
+				8A169837723C8DC4EFAA13AB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		3E4B5BDE516422FDF1275F59 /* XCLocalSwiftPackageReference "../AddressAtlasMac" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../AddressAtlasMac;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		801905FA6FA9C4F51B290652 /* AddressAtlasCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AddressAtlasCore;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = C8579629606951B55EF228E7 /* Project object */;
+}

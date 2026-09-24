@@ -33,7 +33,7 @@ enum SyncActivity: String, CaseIterable, Equatable, Sendable {
     case .recoveringUpload: "Recovering interrupted upload"
     case .retryingLocalSave: "Retrying local save"
     case .stoppingUploadRecovery: "Stopping upload recovery"
-    case .revokingSession: "Revoking this Mac's session"
+    case .revokingSession: "Revoking this \(PlatformCopy.deviceNounPossessive) session"
     case .deletingAccount: "Deleting sync account"
     case .disconnectingAccount: "Disconnecting sync account"
     case .restoringRollbackCheckpoint: "Restoring encrypted rollback point"
@@ -535,13 +535,13 @@ final class AppState: ObservableObject {
 
   var updateActionTitle: String {
     usesMacAppStoreUpdates
-      ? "Open Address Atlas in the Mac App Store"
+      ? "Open Address Atlas in the \(PlatformCopy.appStoreName)"
       : "Download the latest signed Address Atlas release"
   }
 
   var updateActionHint: String {
     usesMacAppStoreUpdates
-      ? "Opens the hard-pinned Address Atlas product page in the Mac App Store"
+      ? "Opens the hard-pinned Address Atlas product page in the \(PlatformCopy.appStoreName)"
       : "Opens the hard-pinned Address Atlas releases page in your browser"
   }
 

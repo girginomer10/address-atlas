@@ -8,13 +8,13 @@ enum ICloudVaultError: LocalizedError {
   case unavailable, accountChanged, conflict, missing, missingKey, malformed, keychain
   var errorDescription: String? {
     switch self {
-    case .unavailable: "iCloud is unavailable. Use a signed iCloud-enabled build and sign in to iCloud in System Settings."
+    case .unavailable: "iCloud is unavailable. Use a signed iCloud-enabled build and sign in to iCloud in \(PlatformCopy.iCloudSettingsLocation)."
     case .accountChanged: "The iCloud account changed. No local data was replaced. Use the original Apple Account or explicitly start a new iCloud copy."
-    case .conflict: "The iCloud copy changed on another Mac. Restore it before saving again. Export local changes first if you need to keep both versions."
+    case .conflict: "The iCloud copy changed on another \(PlatformCopy.deviceNoun). Restore it before saving again. Export local changes first if you need to keep both versions."
     case .missing: "No Address Atlas copy was found in this iCloud account."
-    case .missingKey: "The encryption key has not arrived through iCloud Keychain. Enable Passwords & Keychain on both Macs and try again. The existing iCloud copy will not be overwritten."
+    case .missingKey: "The encryption key has not arrived through iCloud Keychain. Enable Passwords & Keychain on both \(PlatformCopy.deviceNounPlural) and try again. The existing iCloud copy will not be overwritten."
     case .malformed: "The iCloud copy could not be verified. Your local vault has not been replaced."
-    case .keychain: "iCloud Keychain could not safely save or read the encryption key. Try again after unlocking this Mac."
+    case .keychain: "iCloud Keychain could not safely save or read the encryption key. Try again after unlocking this \(PlatformCopy.deviceNoun)."
     }
   }
 }
@@ -34,13 +34,24 @@ actor ICloudVaultService: ICloudVaultSyncing {
 
   init() { container = CKContainer(identifier: Self.containerIdentifier) }
 
-  static var isConfigured: Bool {
-    guard let task = SecTaskCreateFromSelf(nil),
-      let containers = SecTaskCopyValueForEntitlement(task,
-        "com.apple.developer.icloud-container-identifiers" as CFString, nil) as? [String]
-    else { return false }
-    return containers.contains(containerIdentifier)
-  }
+  #if os(macOS)
+    static var isConfigured: Bool {
+      guard let task = SecTaskCreateFromSelf(nil),
+        let containers = SecTaskCopyValueForEntitlement(task,
+          "com.apple.developer.icloud-container-identifiers" as CFString, nil) as? [String]
+      else { return false }
+      return containers.contains(containerIdentifier)
+    }
+  #else
+    /// The iOS SDK has no SecTask API, so the running build's entitlements are
+    /// read from the executable itself (simulator builds embed them in a
+    /// `__TEXT,__entitlements` section) or from the embedded provisioning
+    /// profile (device, TestFlight, and App Store builds). Anything else fails
+    /// closed so CloudKit is never initialized without the container grant.
+    static var isConfigured: Bool {
+      EmbeddedEntitlements.iCloudContainerIdentifiers().contains(containerIdentifier)
+    }
+  #endif
 
   func save(_ document: VaultDocument, localKey: Data) async throws -> ICloudVaultState {
     let account = try await accountIdentifier()
@@ -162,3 +173,81 @@ actor ICloudVaultService: ICloudVaultSyncing {
     return try cloudKey(account: account, keyID: keyID, create: false)
   }
 }
+
+#if !os(macOS)
+  import MachO
+
+  /// Reads the running iOS build's code-signing entitlements without SecTask.
+  /// Only the two sources Xcode actually produces are consulted; a missing or
+  /// unparseable source yields an empty result so callers fail closed.
+  enum EmbeddedEntitlements {
+    static let iCloudContainersKey = "com.apple.developer.icloud-container-identifiers"
+
+    static func iCloudContainerIdentifiers() -> [String] {
+      if let entitlements = executableEntitlements() {
+        return entitlements[iCloudContainersKey] as? [String] ?? []
+      }
+      if let entitlements = provisioningProfileEntitlements() {
+        return entitlements[iCloudContainersKey] as? [String] ?? []
+      }
+      return []
+    }
+
+    /// Simulator builds carry the signed entitlements plist in a
+    /// `__TEXT,__entitlements` section of the main executable.
+    static func executableEntitlements() -> [String: Any]? {
+      guard let executablePath = Bundle.main.executableURL?.standardizedFileURL.path else {
+        return nil
+      }
+      let imageCount = _dyld_image_count()
+      for index in 0..<imageCount {
+        guard let namePointer = _dyld_get_image_name(index),
+          String(cString: namePointer) == executablePath,
+          let header = _dyld_get_image_header(index)
+        else { continue }
+        var size: UInt = 0
+        let plist = header.withMemoryRebound(to: mach_header_64.self, capacity: 1) {
+          header64 -> Data? in
+          guard
+            let pointer = getsectiondata(
+              header64, "__TEXT", "__entitlements", &size),
+            size > 0
+          else { return nil }
+          return Data(bytes: pointer, count: Int(size))
+        }
+        guard let plist else { return nil }
+        return parsePlist(plist)
+      }
+      return nil
+    }
+
+    /// Device, TestFlight, and App Store builds embed the provisioning profile
+    /// (a CMS envelope around an XML plist) whose `Entitlements` dictionary
+    /// mirrors the signed entitlements.
+    static func provisioningProfileEntitlements() -> [String: Any]? {
+      guard
+        let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
+        let raw = try? Data(contentsOf: url),
+        let plist = extractPlist(from: raw)
+      else { return nil }
+      return plist["Entitlements"] as? [String: Any]
+    }
+
+    static func extractPlist(from raw: Data) -> [String: Any]? {
+      let opening = Data("<?xml".utf8)
+      let closing = Data("</plist>".utf8)
+      guard let start = raw.range(of: opening),
+        let end = raw.range(of: closing, in: start.lowerBound..<raw.endIndex)
+      else { return nil }
+      return parsePlist(raw[start.lowerBound..<end.upperBound])
+    }
+
+    private static func parsePlist(_ data: Data) -> [String: Any]? {
+      guard
+        let object = try? PropertyListSerialization.propertyList(
+          from: data, options: [], format: nil)
+      else { return nil }
+      return object as? [String: Any]
+    }
+  }
+#endif

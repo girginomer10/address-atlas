@@ -105,13 +105,13 @@ public enum ExchangeClientError: Error, Equatable, LocalizedError, Sendable {
       return "\(provider) pagination exceeded the \(pages)-page safety limit."
     case .legacyKrakenCredentialRequiresMigration:
       return
-        "This Kraken connection predates device-safe nonces. Remove it, then add a new read-only Kraken API key created only for this Mac. Use a different Kraken API key on every device."
+        "This Kraken connection predates device-safe nonces. Remove it, then add a new read-only Kraken API key created only for this \(PlatformCopy.deviceNoun). Use a different Kraken API key on every device."
     case .krakenCredentialBelongsToAnotherDevice:
       return
-        "This Kraken connection belongs to another Mac. Add a separate read-only Kraken API key for this Mac; never reuse one Kraken API key across devices."
+        "This Kraken connection belongs to another \(PlatformCopy.deviceNoun). Add a separate read-only Kraken API key for this \(PlatformCopy.deviceNoun); never reuse one Kraken API key across devices."
     case .duplicateKrakenCredential:
       return
-        "The same Kraken API key appears in more than one saved connection. Remove every duplicate, then add exactly one read-only Kraken API key created only for this Mac. Use a different Kraken API key on every device."
+        "The same Kraken API key appears in more than one saved connection. Remove every duplicate, then add exactly one read-only Kraken API key created only for this \(PlatformCopy.deviceNoun). Use a different Kraken API key on every device."
     case .duplicateCredential(let provider):
       return
         "The same \(provider.label) API key appears in more than one saved connection. Remove every duplicate so this exchange account is scanned exactly once."
@@ -196,7 +196,7 @@ public struct NativeExchangeScanner: Sendable {
               connection: job.connection,
               warnings: [
                 ProviderErrorSanitizer.sanitize(
-                  "\(job.connection.label): skipped on this Mac because this Kraken connection is bound to another Mac."
+                  "\(job.connection.label): skipped on this \(PlatformCopy.deviceNoun) because this Kraken connection is bound to another \(PlatformCopy.deviceNoun)."
                 )
               ]
             )
