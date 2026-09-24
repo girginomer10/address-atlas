@@ -1,6 +1,6 @@
 # Address Atlas Terms of Use
 
-**Effective date:** September 7, 2026
+**Effective date:** September 25, 2026
 
 **Operator:** Ömer Girgin, the maintainer of Address Atlas
 
@@ -28,7 +28,7 @@ The CoinGecko API and CoinGecko data are the property of Gecko Labs Pte. Ltd. **
 
 ## 5. Your data and credentials
 
-You control the public addresses, read-only credentials, labels, exports, and optional iCloud copies you create. Protect your Mac login, Apple Account, recovery material, exports, and exchange credentials. Revoke an exchange credential at the exchange if you suspect exposure. iCloud transfers use your storage quota and require iCloud Keychain to decrypt on another Mac. The [Privacy Model](PRIVACY.md) explains local storage, provider requests, optional encrypted iCloud transfers, retention, deletion, and data disclosures.
+You control the public addresses, read-only credentials, labels, exports, and optional iCloud copies you create. Protect your device login (Mac login or iPhone/iPad passcode), Apple Account, recovery material, exports, and exchange credentials. Revoke an exchange credential at the exchange if you suspect exposure. iCloud transfers use your storage quota and require iCloud Keychain to decrypt on another device (Mac, iPhone, or iPad). The [Privacy Model](PRIVACY.md) explains local storage, provider requests, optional encrypted iCloud transfers, retention, deletion, and data disclosures.
 
 ## 6. Open-source code and provider rights
 

@@ -1,6 +1,6 @@
 # Address Atlas Support
 
-Address Atlas is a local-first, read-only macOS portfolio viewer. For product help, bug reports, or privacy questions:
+Address Atlas is a local-first, read-only portfolio viewer for macOS and iOS. For product help, bug reports, or privacy questions:
 
 - Email [girginomer10@gmail.com](mailto:girginomer10@gmail.com).
 - Open a [public support issue](https://github.com/girginomer10/address-atlas/issues/new/choose) only when the report contains no sensitive information.
@@ -8,12 +8,12 @@ Address Atlas is a local-first, read-only macOS portfolio viewer. For product he
 
 Never include wallet inventories, exchange credentials, session tokens, recovery files or codes, private keys, seed phrases, or raw production logs in a public issue. Address Atlas cannot recover funds, reverse transactions, or provide investment advice.
 
-When reporting a non-sensitive bug, include the Address Atlas version, macOS version, the affected screen, the expected result, and the privacy-safe diagnostic summary available in **Settings**. Response times are best-effort; there is no guaranteed service-level agreement.
+When reporting a non-sensitive bug, include the Address Atlas version, the macOS or iOS version and device, the affected screen, the expected result, and the privacy-safe diagnostic summary available in **Settings**. Response times are best-effort; there is no guaranteed service-level agreement.
 
 Use of Address Atlas is governed by the [Terms of Use](TERMS.md); data handling is described in the [Privacy Model](PRIVACY.md).
 
 For iCloud transfers, use the same Apple Account and enable Passwords & Keychain
-on both Macs. Transfers are manual from **iCloud**. A missing encryption key may
+on both devices (Mac, iPhone, or iPad). Transfers are manual from **iCloud**. A missing encryption key may
 arrive after the portfolio copy; wait and try again rather than deleting anything.
 The maintainer cannot recover an iCloud encryption key. A local recovery kit
 protects the local vault key, not the separate iCloud key. See [iCloud setup and

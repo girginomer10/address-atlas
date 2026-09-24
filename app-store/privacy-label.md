@@ -4,7 +4,7 @@ These answers replace the retired hosted-sync packet. Verify them against the
 exact signed build and current Apple questionnaire before submission.
 
 - Tracking: No. Advertising and analytics SDKs: none.
-- Local vault contents remain encrypted on the Mac.
+- Local vault contents remain encrypted on the device (Mac, iPhone, or iPad).
 - Optional portfolio copies go to the user's CloudKit private database, encrypted
   before upload. A separate key travels through iCloud Keychain. Address Atlas
   operates no backup database, passkey accounts, session service, usage quota
@@ -18,6 +18,12 @@ exact signed build and current Apple questionnaire before submission.
 - Confirm Apple's treatment of the private CloudKit storage path in the final
   questionnaire. Do not infer “no data collected” for the entire app from using
   private iCloud: provider requests remain a separate boundary.
+
+The iOS record (`com.addressatlas.ios`, not yet created) must answer this
+questionnaire identically: the iOS app compiles the same state layer, contacts
+the same providers, and uses the same private CloudKit container. Do not answer
+"no data collected" on one platform while disclosing provider requests on the
+other.
 
 No app-created cloud account is required. **iCloud → Delete iCloud copy** removes
 this app's private snapshot and preserves local vaults; Apple controls underlying

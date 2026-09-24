@@ -1,6 +1,6 @@
 # Address Atlas Mac
 
-Native SwiftUI macOS app for Address Atlas.
+Native SwiftUI macOS app for Address Atlas. This package also hosts `AddressAtlasCore` and the shared state layer and design system that the iOS app in [`../AddressAtlasiOS`](../AddressAtlasiOS/README.md) compiles directly; see [iOS target](#ios-target) for the shared/Mac-only split.
 
 ## Run In Development
 
@@ -54,3 +54,16 @@ The sandboxed Mac App Store build stores the same relative path inside its app c
 The native app performs wallet RPC, price, token, and exchange balance requests directly from macOS. Wallet scans include native BTC/SOL/EVM/TRX/XRP/Cosmos balances, registered ERC-20/SPL/TRC20 tokens, XRP issued-currency trustlines, and Cosmos delegation/reward balances. If an optional token, price, staking, reward, trustline, or pagination subrequest fails, the scan keeps successful balances and presents a visible warning. Exchange credentials are sealed with a dedicated vault subkey before being saved, then decrypted only in memory when a local scan runs. Exchange origins and credential-bearing paths are pinned in the app and cannot be redirected by sync-server configuration.
 
 TLS certificate pinning is deliberately not used: the app talks only to third-party services (chain RPCs, price API, exchanges, sync server) that rotate certificates on their own schedule, so pins would turn routine rotations into outages. The transport boundary is instead the system trust store plus HTTPS-only host/scheme/port allowlisting, sessions that refuse to follow redirects, bounded response sizes, and request timeouts (see `Sources/AddressAtlasCore/Scanners/HTTPClient.swift`).
+
+## iOS target
+
+The iOS app lives in [`../AddressAtlasiOS`](../AddressAtlasiOS/README.md). It is an xcodegen-generated Xcode project, not a second SwiftPM package: it links the `AddressAtlasCore` library product from this package (which declares `.iOS(.v17)` alongside `.macOS(.v14)`) and compiles most of `Sources/AddressAtlasMac` as its own sources. It has no App Store record, TestFlight build, or physical-device verification yet.
+
+Shared with iOS (every file in `Sources/AddressAtlasMac` is shared unless it is listed in the exclusion list in `../AddressAtlasiOS/project.yml`):
+
+- every `AppState*.swift` file
+- `UserFacingErrors.swift`, `ICloudVaultService.swift`, `PasskeyWebAuthenticator.swift`, `AtlasDesignSystem.swift`, `AtlasFormatting.swift`, `ExportPipeline.swift`
+
+Mac-only (excluded from the iOS target): `AddressAtlasApp.swift`, `AppShellViews.swift`, `PortfolioViews.swift`, `PortfolioComponents.swift`, `ExchangeSyncViews.swift`, `ICloudSyncView.swift`, `PrivacySafeDiagnosticsView.swift`.
+
+Platform differences inside shared files sit behind `#if canImport(AppKit)` or `#if os(macOS)`, and user-facing device nouns come from `PlatformCopy` in `AddressAtlasCore` ("Mac" here, "device" on iOS). When you add a shared Swift file to this directory, run `npm run native:ios:generate` and commit the regenerated `AddressAtlasiOS.xcodeproj`; CI fails when a shared source is missing from it. The iOS build derives its version from `currentAppVersion` in `AppState.swift` and its build number from `./build-mac-app.sh --print-build-version`, so both apps always report one product version and one build number.

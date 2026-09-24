@@ -13,7 +13,8 @@ Address Atlas is deliberately read-only. Changes must not request or store seed 
 
 ## Repository layout
 
-- `native/AddressAtlasMac` — native SwiftUI product, core model, scanners, encryption, recovery, export, and sync client.
+- `native/AddressAtlasMac` — native SwiftUI macOS product plus the shared core model, scanners, encryption, recovery, export, iCloud client, and state layer.
+- `native/AddressAtlasiOS` — native SwiftUI iOS app (iPhone and iPad) that compiles the shared core and state layer from the Mac package; the generated Xcode project is committed.
 - `src` and `server/sync` — optional passkey-authenticated, client-encrypted sync service.
 - `docs/DEVELOPMENT.md` — architectural invariants, local setup, and the complete verification gate.
 - `docs/OPERATIONS.md` — production sync operations.
@@ -48,6 +49,15 @@ npm run sync:db:up
 npm run dev
 ```
 
+For the iOS app (full Xcode required; `xcodegen` only after editing
+`native/AddressAtlasiOS/project.yml`):
+
+```bash
+npm run native:ios:build      # simulator build
+npm run native:ios:run        # install and launch on the booted simulator
+npm run native:ios:generate   # after editing project.yml; commit the result
+```
+
 The setup creates `.env` with owner-only permissions and replaces the
 deliberately rejected session-secret placeholder. Use locally generated secrets
 in `.env` and never commit it. The repository rejects known secret and private-key
@@ -62,6 +72,7 @@ artifacts, but that guard is not a substitute for reviewing what you stage.
 - Treat unpriced assets as unpriced, not as successfully valued at zero.
 - Preserve migration compatibility for persisted vault documents.
 - Keep user-facing privacy and export claims consistent with actual code paths.
+- Keep shared `Sources/AddressAtlasMac` files compiling on both macOS and iOS: guard platform APIs with `#if canImport(AppKit)` or `#if os(macOS)`, and take device nouns from `PlatformCopy` instead of writing "Mac" into shared strings.
 
 New networks, tokens, or providers should include validation, stable identity rules, bounded requests, failure behavior, and representative tests. Do not add a provider based only on a happy-path response.
 
@@ -76,9 +87,12 @@ npm run build
 
 cd native/AddressAtlasMac
 swift test
+
+cd "$(git rev-parse --show-toplevel)"
+npm run native:ios:build:unsigned
 ```
 
-Full native tests require Xcode rather than Command Line Tools alone. Operations, release tooling, database changes, and concurrency-sensitive code have additional gates listed in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+Full native tests and the iOS build require Xcode rather than Command Line Tools alone. The iOS build uses strict concurrency and warnings as errors, and CI fails when a shared Swift file is missing from the committed Xcode project. Operations, release tooling, database changes, and concurrency-sensitive code have additional gates listed in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 Before opening a pull request:
 

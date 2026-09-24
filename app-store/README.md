@@ -19,6 +19,32 @@ This directory is the source-controlled submission packet for Address Atlas 0.2.
 
 The App Store Connect record's numeric Apple ID must be supplied as `ADDRESS_ATLAS_APP_STORE_ID`. Do not invent or reuse an ID from another product.
 
+## iOS product record (not created)
+
+No App Store Connect iOS record, iOS distribution provisioning profile, TestFlight build, or upload exists. The values below are the intended record, written down so nobody invents them later; the iOS app has been exercised only on the simulator.
+
+- Platform: iOS (iPhone and iPad)
+- Bundle ID: `com.addressatlas.ios`
+- App Store Connect Apple ID: to be recorded from App Store Connect once the record exists; never invent one, and never reuse the Mac record's `6809515105`
+- SKU (suggested): `address-atlas-ios-001`
+- Version: `0.2.0`, derived from the same `currentAppVersion` and build number as the Mac app
+- Primary language: English (U.S.)
+- Primary category: Finance
+- Price: Free
+- Release method: Manual release after approval
+- Privacy policy, Terms of Use, and Support URLs: the same three links as the macOS record
+- Privacy answers: identical to the macOS record; see `privacy-label.md`
+
+External gates before an iOS build can be signed for a device or uploaded:
+
+- Register the explicit App ID `com.addressatlas.ios` under team `VWW3GZL279` with iCloud (CloudKit) and Keychain Sharing enabled and the existing `iCloud.com.addressatlas.mac` container assigned.
+- Create an iOS App Store distribution provisioning profile for that App ID. The Mac App Store profile, `ADDRESS_ATLAS_PROVISIONING_PROFILE`, `ADDRESS_ATLAS_APP_STORE_ID`, and the Mac numeric Apple ID must not be reused.
+- Prove a Mac→iPhone encrypted restore on a physical device with iCloud Passwords & Keychain enabled; the simulator cannot sync iCloud Keychain. Kraken connections need a separate read-only key per device.
+- Produce iPhone and iPad screenshots with fictional data; none exist yet.
+- Until the record exists, the iOS `Info.plist` keeps `AddressAtlasUpdateURL` at the generic `https://apps.apple.com` storefront on purpose.
+
+The `native:mas:*` scripts are Mac-only. There is no iOS packaging, validation, or upload script yet; see `docs/RELEASE_CHECKLIST.md` and `docs/ICLOUD.md` for the iOS gates.
+
 ## Local release sequence
 
 1. Run `npm run native:mas:screenshots` and inspect all five fictional-data JPEGs.

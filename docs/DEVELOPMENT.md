@@ -4,9 +4,10 @@
 
 Address Atlas is a local-first, read-only crypto portfolio tracker. It accepts public wallet addresses and balance/read-only exchange credentials. It must never request seed phrases, wallet private keys, signing permission, trading permission, or withdrawal permission.
 
-There are two runtime components:
+There are three runtime components:
 
-- `native/AddressAtlasMac`: the SwiftUI macOS product. It owns plaintext portfolio data, network scans, exchange credentials, local encryption, recovery, export, and sync encryption.
+- `native/AddressAtlasMac`: the SwiftUI macOS product. It owns plaintext portfolio data, network scans, exchange credentials, local encryption, recovery, export, and sync encryption. Its package also hosts `AddressAtlasCore` and the shared state layer that the iOS app compiles.
+- `native/AddressAtlasiOS`: the SwiftUI iOS product for iPhone and iPad. It is an xcodegen-generated Xcode project that links `AddressAtlasCore` and compiles the shared state layer and design system directly from the Mac package sources, adding only its own screens. It is source-only today: verified on the iPhone 17 Pro simulator, with no physical-device, TestFlight, or App Store Connect evidence.
 - The current Mac app uses private CloudKit copies and iCloud Keychain; see `docs/ICLOUD.md`. The repository-root Next.js service plus `server/sync` is retained legacy code, no longer a native product dependency. Server-specific invariants below apply to legacy regression testing and separately maintained deployments.
 
 The old Prisma/SQLite web portfolio and ccxt runtime no longer exist. Do not reintroduce them.
@@ -24,7 +25,35 @@ The old Prisma/SQLite web portfolio and ccxt runtime no longer exist. Do not rei
   version, and schema metadata are cryptographically bound to the ciphertext.
 - `Scanners/`: public-chain scanners, CoinGecko pricing, and native Binance, Coinbase Advanced Trade, and Kraken read-only clients.
 - `Sources/AddressAtlasMac/AppState.swift`: UI state transitions, validation, scan orchestration, conflict-safe sync, and bounded snapshot retention.
-- `Sources/AddressAtlasMac/AddressAtlasApp.swift`: SwiftUI presentation and recovery/unlock flows.
+- `Sources/AddressAtlasMac/AddressAtlasApp.swift`: SwiftUI presentation and recovery/unlock flows (macOS only).
+- `Sources/AddressAtlasCore/PlatformCopy.swift`: device nouns for shared
+  user-facing copy ("Mac" on macOS, "device" on iOS). Shared strings must
+  use it instead of hard-coding a platform noun.
+- `native/AddressAtlasiOS/Sources/AddressAtlasiOS`: the iOS entry point
+  (`AddressAtlasiOSApp.swift`, `RootView.swift`, `MainShell.swift` with a tab
+  shell on iPhone and `NavigationSplitView` on iPad), the Unlock/recovery
+  screen, one screen per section (Portfolio, Wallets, Assets, Tokens,
+  Snapshots, Exchanges, iCloud, Export, Settings), and `IOSSupport.swift`.
+  The target compiles `AddressAtlasCore` and, straight from
+  `native/AddressAtlasMac/Sources/AddressAtlasMac`, every `AppState*.swift`
+  file plus `UserFacingErrors.swift`, `ICloudVaultService.swift`,
+  `PasskeyWebAuthenticator.swift`, `AtlasDesignSystem.swift`,
+  `AtlasFormatting.swift`, and `ExportPipeline.swift`. The macOS-only files
+  `AddressAtlasApp.swift`, `AppShellViews.swift`, `PortfolioViews.swift`,
+  `PortfolioComponents.swift`, `ExchangeSyncViews.swift`,
+  `ICloudSyncView.swift`, and `PrivacySafeDiagnosticsView.swift` are
+  excluded in `native/AddressAtlasiOS/project.yml`. Any other file added to
+  that directory is shared by default: guard platform code with
+  `#if canImport(AppKit)` or `#if os(macOS)` rather than adding a new
+  exclusion, then run `npm run native:ios:generate` and commit the
+  regenerated project (CI fails when a shared source is missing from it).
+- Existing platform splits: the theme uses `UIColor` dynamic providers on
+  iOS; accessibility announcements use `UIAccessibility`; the iCloud
+  entitlement probe in `ICloudVaultService.swift` reads the executable's
+  `__TEXT,__entitlements` section or the embedded `embedded.mobileprovision`
+  instead of `SecTask` and fails closed when neither grants the container;
+  `KeychainVaultKeyStore` forces the macOS legacy-keychain migration off on
+  iOS because its delete query would match the freshly saved item.
 
 Exchange origins and sensitive request paths are pinned in the native app. Remote `/config/native` data may change only paths on each chain's bundled HTTPS origin; it cannot change RPC origins. The CoinGecko price origin and path are both fixed. Remote config must never redirect signed exchange requests or credential-bearing headers.
 
@@ -45,6 +74,15 @@ Native app:
 cd native/AddressAtlasMac
 ./check-toolchain.sh
 swift run AddressAtlasMac
+```
+
+Native iOS app (full Xcode selected with `xcode-select`; the committed project
+needs `xcodegen` only after editing `native/AddressAtlasiOS/project.yml`):
+
+```bash
+npm run native:ios:build      # simulator build, Xcode ad-hoc signed
+npm run native:ios:run        # build, install, and launch on the booted simulator
+npm run native:ios:generate   # after editing project.yml; commit the result
 ```
 
 The local Postgres port is bound to loopback only. `SYNC_SESSION_SECRET` must be at least 32 random bytes; published example/placeholder values are rejected.
@@ -75,6 +113,7 @@ npm run native:test
 bash native/AddressAtlasMac/Tests/build-mac-app-version-tests.sh
 bash native/AddressAtlasMac/Tests/notarize-mac-app-tests.sh
 ./native/AddressAtlasMac/build-mac-app.sh
+npm run native:ios:build:unsigned
 ./scripts/release-doctor.sh --strict
 ```
 
@@ -127,6 +166,25 @@ The Postgres integration suite additionally requires `TEST_SYNC_DATABASE_URL`. L
 - XRPL raw 160-bit currency code plus issuer is the durable asset identity.
   Decoded printable text is presentation only and may never collapse distinct
   issued currencies into the same row ID.
+
+## iOS Lifecycle
+
+- Scans and iCloud transfers are foreground-only. The iOS target declares no
+  `UIBackgroundModes`.
+- When the scene moves to the background, `RootView` takes a UIKit
+  background-time assertion and `AppState.flushBeforeSuspension()` writes
+  wallet-label drafts and pending persistence through the shared termination
+  lane. If iOS expires that time while a scan is still running, the scan is
+  cancelled. A scan is also cancelled when the device locks, because the vault
+  key and the Kraken installation secret are readable only while the device is
+  unlocked. Returning to the foreground clears the shared termination flag so
+  the UI is re-enabled. The local store directory is excluded from device
+  backups (the key never restores, so a restored database could only block
+  first launch); the iCloud copy and the recovery kit are the cross-device
+  paths.
+- There is no termination hook. iOS may suspend and later kill the process
+  without notice, so nothing may depend on the macOS quit path running on
+  iOS; durable state must already be flushed when the app is backgrounded.
 
 ## Distribution
 

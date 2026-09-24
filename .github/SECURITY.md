@@ -3,10 +3,10 @@
 ## Supported versions
 
 Address Atlas is currently a source-first preview with no signed and notarized
-public release. Security fixes land on `main`. Once public releases begin, only
-the latest signed and notarized release and the currently deployed sync service
-will receive fixes; older builds will not be supported after a replacement is
-published.
+public macOS release and no iOS TestFlight or App Store release. Security fixes
+land on `main`. Once public releases begin, only the latest signed release on
+each platform and the currently deployed sync service will receive fixes; older
+builds will not be supported after a replacement is published.
 
 ## Reporting a vulnerability
 

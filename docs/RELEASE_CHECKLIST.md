@@ -133,6 +133,49 @@ The direct-download and Mac App Store channels use different certificates, packa
 - Re-read the build in App Store Connect. A successful upload is not a processed build; a processed build is not App Review approval; approval is not storefront availability. Submit the completed version for review and release it only after the configured manual-release gate.
 - Do **not** push a `v*` tag as part of this sequence; that invokes the separate Developer ID DMG workflow.
 
+### iOS App Store
+
+- No iOS App Store Connect record, iOS distribution provisioning profile,
+  TestFlight build, or upload exists. None of the steps below has been
+  performed; the iOS app has been exercised only on the iPhone 17 Pro
+  simulator. Do not record any of them as done without App Store Connect
+  evidence.
+- External gates, in order: register the explicit App ID `com.addressatlas.ios`
+  under team `VWW3GZL279` with iCloud (CloudKit) and Keychain Sharing enabled
+  and the existing `iCloud.com.addressatlas.mac` container assigned; create an
+  iOS App Store distribution provisioning profile for that App ID; create the
+  App Store Connect iOS record and record its numeric Apple ID rather than
+  inventing one; prove a Mac→iPhone encrypted restore on a physical device with
+  iCloud Passwords & Keychain enabled (the simulator cannot sync iCloud
+  Keychain). See `docs/ICLOUD.md`.
+- Until the record exists, `AddressAtlasUpdateURL` in the iOS `Info.plist`
+  stays the generic `https://apps.apple.com` storefront on purpose (fail
+  closed). Point it at the real product page only after the record exists.
+- Run `npm run native:ios:build:unsigned` and `npm run native:ios:build` from a
+  clean `main` checkout; the `native-ios` CI job must be green for the exact
+  commit. It checks that the committed project references every shared
+  source, builds with strict concurrency and warnings as errors, and validates
+  the bundle (`com.addressatlas.ios`, version parity with the Mac app, source
+  commit, privacy manifest, opaque icon, no
+  `AddressAtlasUseDataProtectionKeychain` key).
+- Only once the App ID and profile exist, build for a device with
+  `native/AddressAtlasiOS/build-ios-app.sh --device --configuration Release`
+  (automatic signing, team `VWW3GZL279`) and verify the signed bundle carries
+  the iCloud container, CloudKit, and both keychain-access-groups
+  entitlements.
+- Complete the same App Store Connect contracts, DSA status, age rating,
+  category, price/tax, availability, privacy answers (identical to the Mac
+  record), privacy/support/terms URLs, review contact, review notes, and
+  CoinGecko licensing evidence as the Mac record. iPhone and iPad screenshots
+  with fictional data do not exist yet.
+- Kraken connections stay bound to the device that created them; a restored
+  copy needs a separate read-only Kraken key per device. Keep that in the
+  review notes.
+- Do **not** reuse the Mac record's numeric Apple ID,
+  `ADDRESS_ATLAS_APP_STORE_ID`, Mac App Store provisioning profile, or the
+  `native:mas:*` scripts; there is no iOS packaging, validation, or upload
+  script yet. Do **not** push a `v*` tag as part of this sequence.
+
 ## Manual Smoke
 
 - Install the notarized DMG on a clean Mac profile.
@@ -152,6 +195,20 @@ The direct-download and Mac App Store channels use different certificates, packa
 - Create passkey account on the VPS domain, upload encrypted vault, restart, sign in, download, and confirm decrypt.
 - Export CSV and JSON from the latest local snapshot.
 - Inspect JSON export and confirm no session token, checksum, account ID, or other sync authentication state is present.
+- iPhone and iPad (simulator today; repeat on a physical device once a signed
+  device build exists):
+  - First launch creates the Keychain-backed local vault; unlock, lock, and
+    unlock again on both the iPhone tab shell and the iPad split view.
+  - Add a wallet, scan, and confirm optional RPC warnings stay visible. Send
+    the app to the background during a scan and confirm it either finishes or
+    is cancelled cleanly, with no crash and no lost wallet-label draft.
+  - Export share-safer CSV and JSON through the share sheet and confirm the
+    full identifying reports stay behind the explicit warning.
+  - Export a recovery kit to Files, verify the displayed code is stored
+    separately, then restore it from the Unlock screen through Files and
+    confirm the vault unlocks.
+  - On an unsigned or simulator build, open **iCloud** and confirm the clear
+    unavailable message; no CloudKit request may be attempted.
 
 ## Data-Safety Checks
 

@@ -6,12 +6,13 @@
 
 <p align="center">
   <strong>The private crypto portfolio tracker that sees what others miss.</strong><br>
-  Wallets, exchanges, tokens, staking, and rewards in one encrypted macOS app.
+  Wallets, exchanges, tokens, staking, and rewards in one encrypted native app for Mac, iPhone, and iPad.
 </p>
 
 <p align="center">
   <a href="https://github.com/girginomer10/address-atlas/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/girginomer10/address-atlas/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="macOS 14 or newer" src="https://img.shields.io/badge/macOS-14%2B-11120f?logo=apple">
+  <img alt="iOS 17 or newer" src="https://img.shields.io/badge/iOS-17%2B-11120f?logo=apple">
   <img alt="Swift 5.10" src="https://img.shields.io/badge/Swift-5.10-F05138?logo=swift&logoColor=white">
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-668fb5"></a>
 </p>
@@ -19,7 +20,7 @@
 Address Atlas is a local-first, read-only portfolio tracker for public wallet addresses and supported exchanges. It maps assets across **20 active networks** without taking custody, asking for a seed phrase, or requesting signing, trading, or withdrawal permission.
 
 > [!IMPORTANT]
-> Address Atlas is currently a **source-first preview**. There is no signed and notarized public download yet. Build it from source, and treat every result as portfolio visibility—not accounting-grade proof or financial advice.
+> Address Atlas is currently a **source-first preview**. There is no signed and notarized public download yet. Build it from source, and treat every result as portfolio visibility—not accounting-grade proof or financial advice. The iOS app is source-only as well: it has no TestFlight build, App Store record, or public download, and it has been exercised only on the simulator.
 
 ## Why Address Atlas
 
@@ -48,10 +49,10 @@ Address Atlas does not pretend that querying a public blockchain is invisible. I
 
 | Boundary | What it receives |
 | --- | --- |
-| Your Mac | Plaintext portfolio data while the app is unlocked; the local SQLite vault stores one AES-256-GCM encrypted document |
-| macOS Keychain | A random, this-device-only vault key |
+| Your device (Mac, iPhone, or iPad) | Plaintext portfolio data while the app is unlocked; the local SQLite vault stores one AES-256-GCM encrypted document |
+| Device Keychain (macOS or iOS) | A random, this-device-only vault key |
 | Chain RPC and REST providers | The public addresses and network requests needed to scan supported chains |
-| Supported exchanges | Signed, read-only balance requests made directly by the Mac app |
+| Supported exchanges | Signed, read-only balance requests made directly by the native app |
 | CoinGecko | Asset and fiat-rate lookup requests; no exchange credentials or vault snapshot |
 | iCloud / CloudKit | Encrypted portfolio copies in your private database; a separate encryption key travels through iCloud Keychain |
 
@@ -63,17 +64,18 @@ See [PRIVACY.md](PRIVACY.md) for the complete user-facing boundary and [.github/
 
 ```mermaid
 flowchart LR
-    U["User"] --> M["Native SwiftUI app"]
-    M --> K["macOS Keychain"]
+    U["User"] --> M["Native SwiftUI apps (macOS, iOS)"]
+    M --> K["Device Keychain"]
     M --> L["Encrypted local SQLite vault"]
     M --> P["Chain, price, and exchange providers"]
     M -->|"Encrypted portfolio copies"| S["Private iCloud database"]
     M -->|"Separate cloud key"| C["iCloud Keychain"]
 ```
 
-- [`native/AddressAtlasMac`](native/AddressAtlasMac) is the product: a native SwiftUI app with the portfolio model, scanners, encryption, recovery, export, and sync client.
+- [`native/AddressAtlasMac`](native/AddressAtlasMac) is the macOS product and the home of the shared code: the `AddressAtlasCore` library (portfolio model, scanners, encryption, recovery, export, and iCloud client) plus the shared state layer and design system.
+- [`native/AddressAtlasiOS`](native/AddressAtlasiOS) is the iOS app for iPhone and iPad. It compiles `AddressAtlasCore` and the shared state layer straight from the Mac package sources and adds only its own SwiftUI screens; see the [iOS app guide](native/AddressAtlasiOS/README.md).
 - The root Next.js service and [`server/sync`](server/sync) are retained as legacy migration/reference code. The current Mac app does not use or require them.
-- [`docs/ICLOUD.md`](docs/ICLOUD.md) describes provisioning, the private record schema, and the two-Mac release test. Real iCloud transfer requires an Apple-signed, iCloud-enabled build.
+- [`docs/ICLOUD.md`](docs/ICLOUD.md) describes provisioning, the private record schema, the two-device release test, and the iOS gates. Real iCloud transfer requires an Apple-signed, iCloud-enabled build.
 - [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) records architectural invariants and the full verification gate.
 - [`docs/OPERATIONS.md`](docs/OPERATIONS.md) and [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) cover production operations and signed distribution.
 
@@ -96,6 +98,19 @@ open "dist/Address Atlas.app"
 ```
 
 Local builds use hardened runtime and ad-hoc signing by default. They are not public distribution artifacts. See the [native app guide](native/AddressAtlasMac/README.md) for signing, toolchain, storage, and packaging details.
+
+## Run the iOS app
+
+Requirements: full Xcode selected with `xcode-select` (Command Line Tools alone cannot build iOS apps; CI uses Xcode 26.5) and an iOS 17 or newer simulator. The generated Xcode project is committed, so `xcodegen` is only needed after editing `native/AddressAtlasiOS/project.yml`.
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+npm run native:ios:build      # simulator build, Xcode ad-hoc signed so the Keychain works
+npm run native:ios:run        # build, then install and launch on the booted simulator
+npm run native:ios:generate   # only after editing project.yml; commit the regenerated project
+```
+
+Alternatively, open `native/AddressAtlasiOS/AddressAtlasiOS.xcodeproj` in Xcode and run the `AddressAtlasiOS` scheme on a simulator. The iOS app has no TestFlight build, App Store record, or public download, and no physical-device or signed build has been verified. See the [iOS app guide](native/AddressAtlasiOS/README.md) for versioning, signing, entitlements, and the shared-source layout.
 
 ## Run optional encrypted sync
 
@@ -132,9 +147,13 @@ npm run build
 # Native app (requires full Xcode)
 cd native/AddressAtlasMac
 swift test
+
+# Native iOS app (requires full Xcode; compile-only, no signing identity needed)
+cd "$(git rev-parse --show-toplevel)"
+npm run native:ios:build:unsigned
 ```
 
-GitHub Actions also verifies repository hygiene, dependency security, server behavior, native tests, production operations, and release governance.
+GitHub Actions also verifies repository hygiene, dependency security, server behavior, native tests, the iOS simulator build and bundle checks, production operations, and release governance.
 
 ## Built with OpenAI Codex and GPT-5.6
 
