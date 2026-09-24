@@ -104,6 +104,10 @@ targets:
           - iCloud.com.addressatlas.mac
         com.apple.developer.icloud-services:
           - CloudKit
+        # The Mac App Store build pins the Production CloudKit environment; a
+        # Debug device build left at Xcode's Development default would read a
+        # different database and never see a copy saved from a Mac.
+        com.apple.developer.icloud-container-environment: Production
         # The Mac app stores the synchronizable iCloud copy key in its default
         # keychain group (<team>.com.addressatlas.mac). Listing that group
         # first makes it this app's default group too, so the key written on a

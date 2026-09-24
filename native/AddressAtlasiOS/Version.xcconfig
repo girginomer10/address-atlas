@@ -1,0 +1,10 @@
+// Committed defaults so AddressAtlasiOS.xcodeproj opens and builds in Xcode
+// without any prerequisite. They are deliberately invalid for release: the
+// generated file below (written by scripts/write-version-xcconfig.sh, which
+// build-ios-app.sh and generate-project.sh run first) overrides every value
+// with the product version from AppState.swift, the git commit count, and the
+// source commit. CI asserts the built bundle carries the real values.
+MARKETING_VERSION = 0.0.0
+CURRENT_PROJECT_VERSION = 1
+ADDRESS_ATLAS_SOURCE_COMMIT = unversioned-local-build
+#include? "Version.generated.xcconfig"

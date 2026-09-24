@@ -194,31 +194,38 @@ actor ICloudVaultService: ICloudVaultSyncing {
     }
 
     /// Simulator builds carry the signed entitlements plist in a
-    /// `__TEXT,__entitlements` section of the main executable.
+    /// `__TEXT,__entitlements` section of the main executable. The executable's
+    /// Mach-O header is located through `dladdr` on a symbol that lives in this
+    /// binary, which avoids comparing dyld image paths against Foundation paths
+    /// (they differ by a `/private` prefix on devices).
     static func executableEntitlements() -> [String: Any]? {
-      guard let executablePath = Bundle.main.executableURL?.standardizedFileURL.path else {
-        return nil
+      guard let header = mainExecutableHeader() else { return nil }
+      var size: UInt = 0
+      let plist = header.withMemoryRebound(to: mach_header_64.self, capacity: 1) {
+        header64 -> Data? in
+        guard
+          let pointer = getsectiondata(header64, "__TEXT", "__entitlements", &size),
+          size > 0
+        else { return nil }
+        return Data(bytes: pointer, count: Int(size))
       }
-      let imageCount = _dyld_image_count()
-      for index in 0..<imageCount {
-        guard let namePointer = _dyld_get_image_name(index),
-          String(cString: namePointer) == executablePath,
-          let header = _dyld_get_image_header(index)
-        else { continue }
-        var size: UInt = 0
-        let plist = header.withMemoryRebound(to: mach_header_64.self, capacity: 1) {
-          header64 -> Data? in
-          guard
-            let pointer = getsectiondata(
-              header64, "__TEXT", "__entitlements", &size),
-            size > 0
-          else { return nil }
-          return Data(bytes: pointer, count: Int(size))
-        }
-        guard let plist else { return nil }
-        return parsePlist(plist)
+      guard let plist else { return nil }
+      return parsePlist(plist)
+    }
+
+    /// Never read or written; only its address matters.
+    nonisolated(unsafe) private static var imageAnchor: UInt8 = 0
+
+    private static func mainExecutableHeader() -> UnsafePointer<mach_header>? {
+      var info = Dl_info()
+      let found = withUnsafePointer(to: &imageAnchor) { anchor in
+        dladdr(UnsafeRawPointer(anchor), &info) != 0
       }
-      return nil
+      guard found, let base = info.dli_fbase else {
+        // Fall back to dyld's image list, where the main executable is image 0.
+        return _dyld_get_image_header(0)
+      }
+      return UnsafeRawPointer(base).assumingMemoryBound(to: mach_header.self)
     }
 
     /// Device, TestFlight, and App Store builds embed the provisioning profile

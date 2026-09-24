@@ -7,13 +7,21 @@ import UIKit
 /// termination/durability lane (the macOS app does this from
 /// `applicationShouldTerminate`; iOS suspends instead of quitting).
 struct RootView: View {
+  /// Matches the macOS auto-refresh cadence.
+  static let autoRefreshInterval: TimeInterval = 15 * 60
+  /// The loop wakes once a minute so a foreground transition never restarts
+  /// the whole interval and a sleep that expired while suspended does not
+  /// scan before the scene has settled.
+  static let autoRefreshTick: Duration = .seconds(60)
+
   @EnvironmentObject private var state: AppState
   @Environment(\.scenePhase) private var scenePhase
   @StateObject private var reachability = NetworkReachability()
   @StateObject private var suspension = SuspensionCoordinator()
+  @State private var lastAutoRefresh = Date()
 
   private var autoRefreshTaskID: String {
-    "\(state.isUnlocked)-\(state.document.preferences.autoRefresh)-\(scenePhase == .active)"
+    "\(state.isUnlocked)-\(state.document.preferences.autoRefresh)"
   }
 
   var body: some View {
@@ -30,18 +38,22 @@ struct RootView: View {
     .disabled(state.isTerminationInProgress)
     .environmentObject(reachability)
     .task {
+      TemporaryExportFiles.purgeStale()
       await state.unlock()
+      state.excludeLocalStoreFromDeviceBackups()
     }
     .task(id: autoRefreshTaskID) {
-      guard state.isUnlocked, state.document.preferences.autoRefresh, scenePhase == .active
-      else { return }
+      guard state.isUnlocked, state.document.preferences.autoRefresh else { return }
+      lastAutoRefresh = Date()
       while !Task.isCancelled {
         do {
-          try await Task.sleep(for: .seconds(15 * 60))
+          try await Task.sleep(for: Self.autoRefreshTick)
         } catch {
           return
         }
-        guard state.isUnlocked,
+        guard Date().timeIntervalSince(lastAutoRefresh) >= Self.autoRefreshInterval,
+          scenePhase == .active,
+          state.isUnlocked,
           state.document.preferences.autoRefresh,
           state.hasScanSources,
           reachability.isReachable,
@@ -49,11 +61,23 @@ struct RootView: View {
           !state.syncing,
           !state.syncPersistencePending
         else { continue }
+        lastAutoRefresh = Date()
         state.startScan()
       }
     }
+    .onChange(of: state.scanning) { _, isScanning in
+      // A manual scan also resets the cadence, as on macOS where every scan
+      // restarts the 15-minute wait.
+      if isScanning { lastAutoRefresh = Date() }
+    }
     .onChange(of: scenePhase) { _, phase in
       suspension.handle(phase, state: state)
+    }
+    .onReceive(
+      NotificationCenter.default.publisher(
+        for: UIApplication.protectedDataWillBecomeUnavailableNotification)
+    ) { _ in
+      suspension.deviceWillLock(state: state)
     }
   }
 }
@@ -85,6 +109,15 @@ final class SuspensionCoordinator: ObservableObject {
       break
     @unknown default:
       break
+    }
+  }
+
+  /// The vault key and the Kraken installation secret are
+  /// WhenUnlockedThisDeviceOnly, so a scan that outlives the lock screen can
+  /// only fail; it is cancelled with the normal cancellation notice instead.
+  func deviceWillLock(state: AppState) {
+    if state.scanning {
+      state.cancelScan()
     }
   }
 

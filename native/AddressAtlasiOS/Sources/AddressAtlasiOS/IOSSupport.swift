@@ -121,6 +121,28 @@ enum TemporaryExportFiles {
     let directory = url.hasDirectoryPath ? url : url.deletingLastPathComponent()
     try? FileManager.default.removeItem(at: directory)
   }
+
+  /// Share sheets have no completion callback that is safe to delete on, so
+  /// directories older than one hour are removed at launch instead.
+  static func purgeStale(olderThan age: TimeInterval = 60 * 60, now: Date = Date()) {
+    let fileManager = FileManager.default
+    for folder in ["exports", "recovery-kit"] {
+      let root = fileManager.temporaryDirectory.appending(path: folder, directoryHint: .isDirectory)
+      guard
+        let entries = try? fileManager.contentsOfDirectory(
+          at: root, includingPropertiesForKeys: [.contentModificationDateKey],
+          options: [.skipsHiddenFiles])
+      else { continue }
+      for entry in entries {
+        let modified =
+          (try? entry.resourceValues(forKeys: [.contentModificationDateKey]))?
+          .contentModificationDate ?? .distantPast
+        if now.timeIntervalSince(modified) > age {
+          try? fileManager.removeItem(at: entry)
+        }
+      }
+    }
+  }
 }
 
 /// UIKit share sheet for a file URL, used where `ShareLink` cannot observe the
@@ -194,6 +216,22 @@ extension AppState {
     if isTerminationInProgress {
       setTerminationInProgress(false)
     }
+  }
+
+  /// The vault key is WhenUnlockedThisDeviceOnly and never restores to another
+  /// device, so a vault file restored from an iCloud or computer backup would
+  /// only be an unreadable database that blocks first launch. The whole local
+  /// store (vault, Kraken installation state, endpoint trust record) is
+  /// therefore kept out of device backups; the encrypted iCloud copy and the
+  /// recovery kit are the supported cross-device paths.
+  func excludeLocalStoreFromDeviceBackups() {
+    var directory = appSupportDirectory
+    guard FileManager.default.fileExists(atPath: directory.path) else { return }
+    var values = URLResourceValues()
+    values.isExcludedFromBackup = true
+    // A failure here only means the directory may enter a backup; the vault
+    // stays encrypted and unreadable without this device's key either way.
+    try? directory.setResourceValues(values)
   }
 
   /// Starts a scan only with connectivity; mirrors `startScan()` otherwise.

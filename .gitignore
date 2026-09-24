@@ -52,7 +52,8 @@ __pycache__/
 /src/generated/prisma
 
 # iOS (xcodegen) project: generated version metadata and Xcode local state
-native/AddressAtlasiOS/Version.xcconfig
+native/AddressAtlasiOS/Version.generated.xcconfig
+.swiftpm/
 xcuserdata/
 *.xcuserstate
 DerivedData/
@@ -60,3 +61,6 @@ DerivedData/
 *.ipa
 *.xcarchive
 *.provisionprofile
+
+# Workflow worktrees created by coding agents
+.claude/worktrees/

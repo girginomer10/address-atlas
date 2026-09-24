@@ -962,6 +962,68 @@ jobs:
           fi
         working-directory: native/AddressAtlasMac
 
+  native-ios:
+    name: Native iOS app
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # The iOS build number comes from the same full-history commit count
+          # as the Mac app; a shallow checkout must fail closed.
+          fetch-depth: 0
+      - name: Verify the committed Xcode project matches the shared sources
+        run: |
+          # Every Swift file the iOS target shares with the Mac package must be
+          # referenced by the committed project; a new shared file that was
+          # not regenerated into the project would silently be left out.
+          for file in ../AddressAtlasMac/Sources/AddressAtlasMac/*.swift; do
+            name="$(basename "$file")"
+            case "$name" in
+              AddressAtlasApp.swift|AppShellViews.swift|PortfolioViews.swift|PortfolioComponents.swift|ExchangeSyncViews.swift|ICloudSyncView.swift|PrivacySafeDiagnosticsView.swift) continue ;;
+            esac
+            grep -q "path = $name;" AddressAtlasiOS.xcodeproj/project.pbxproj \
+              || { echo "Shared source $name is missing from AddressAtlasiOS.xcodeproj; run ./generate-project.sh and commit." >&2; exit 1; }
+          done
+          for file in Sources/AddressAtlasiOS/*.swift; do
+            name="$(basename "$file")"
+            grep -q "path = $name;" AddressAtlasiOS.xcodeproj/project.pbxproj \
+              || { echo "iOS source $name is missing from AddressAtlasiOS.xcodeproj; run ./generate-project.sh and commit." >&2; exit 1; }
+          done
+        working-directory: native/AddressAtlasiOS
+      - name: Enforce complete Swift concurrency checking for the core library on iOS
+        # Xcode compiles the package target with the package's own settings, so
+        # the app target's strictness does not reach AddressAtlasCore.
+        run: |
+          swift build --target AddressAtlasCore \
+            --triple arm64-apple-ios17.0-simulator \
+            --sdk "$(xcrun --sdk iphonesimulator --show-sdk-path)" \
+            -Xswiftc -strict-concurrency=complete -Xswiftc -warnings-as-errors
+        working-directory: native/AddressAtlasMac
+      - name: Build the iOS app for the simulator with strict concurrency and warnings as errors
+        run: ./build-ios-app.sh --simulator --unsigned
+        working-directory: native/AddressAtlasiOS
+      - name: Validate the built bundle
+        run: |
+          app="build/DerivedData/Build/Products/Debug-iphonesimulator/Address Atlas.app"
+          plutil -lint "$app/Info.plist"
+          test "$(plutil -extract CFBundleIdentifier raw "$app/Info.plist")" = "com.addressatlas.ios"
+          test "$(plutil -extract CFBundleDisplayName raw "$app/Info.plist")" = "Address Atlas"
+          test "$(plutil -extract CFBundleShortVersionString raw "$app/Info.plist")" = "$(sed -nE 's/^[[:space:]]*static let currentAppVersion = "([0-9]+\.[0-9]+\.[0-9]+)"$/\1/p' ../AddressAtlasMac/Sources/AddressAtlasMac/AppState.swift)"
+          test "$(plutil -extract AddressAtlasSourceCommit raw "$app/Info.plist")" = "$(git rev-parse HEAD)"
+          test "$(plutil -extract LSApplicationCategoryType raw "$app/Info.plist")" = "public.app-category.finance"
+          test "$(plutil -extract ITSAppUsesNonExemptEncryption raw "$app/Info.plist")" = "false"
+          test -s "$app/PrivacyInfo.xcprivacy"
+          # The Mac-only Data Protection Keychain switch must never reach iOS.
+          if plutil -extract AddressAtlasUseDataProtectionKeychain raw "$app/Info.plist" >/dev/null 2>&1; then
+            echo "AddressAtlasUseDataProtectionKeychain must not be set in the iOS Info.plist." >&2
+            exit 1
+          fi
+          test "$(sips -g hasAlpha Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png | awk '/hasAlpha/ {print $2}')" = "no"
+        working-directory: native/AddressAtlasiOS
+
   deployment-config:
     name: Deployment configuration
     runs-on: ubuntu-latest
