@@ -125,8 +125,12 @@ private struct SnapshotsRunRow: View {
           }
           Spacer(minLength: 8)
           VStack(alignment: .trailing, spacing: 6) {
+            // The amount must never wrap mid-number; the date column yields.
             Text(money(run.totalUsd))
-              .font(.body.monospaced())
+              .font(.body.weight(.semibold).monospacedDigit())
+              .lineLimit(1)
+              .fixedSize(horizontal: true, vertical: false)
+              .layoutPriority(1)
             if !run.warnings.isEmpty {
               Badge(warningsSummary, color: AtlasTheme.warning)
             }

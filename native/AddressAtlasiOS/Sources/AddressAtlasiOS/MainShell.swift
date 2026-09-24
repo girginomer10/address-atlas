@@ -52,7 +52,7 @@ struct TabShell: View {
       }
 
       NavigationStack(path: $morePath) {
-        MoreList()
+        MoreList(path: $morePath)
           .navigationDestination(for: AtlasSection.self) { section in
             section.screen
           }
@@ -68,29 +68,47 @@ struct TabShell: View {
 /// The iPhone "More" tab: the remaining sections plus the privacy card.
 struct MoreList: View {
   @EnvironmentObject private var state: AppState
+  @Binding var path: NavigationPath
 
   var body: some View {
     List {
       Section {
         ForEach(AtlasSection.moreSections) { section in
-          NavigationLink(value: section) {
-            Label {
+          // A Button (not NavigationLink) so the transient status is cleared
+          // before the destination is pushed; a gesture attached to a link
+          // would compete with the row's own tap handling.
+          Button {
+            state.clearTransientMessagesForNavigation()
+            path.append(section)
+          } label: {
+            HStack(spacing: 12) {
+              Image(systemName: section.systemImage)
+                .font(.title3)
+                .foregroundStyle(AtlasTheme.accent)
+                .frame(width: 28)
+                .accessibilityHidden(true)
               VStack(alignment: .leading, spacing: 2) {
                 Text(section.title)
                   .font(.body.weight(.medium))
+                  .foregroundStyle(AtlasTheme.ink)
                 Text(section.summary)
                   .font(.caption)
                   .foregroundStyle(AtlasTheme.ink3)
               }
-            } icon: {
-              Image(systemName: section.systemImage)
-                .foregroundStyle(AtlasTheme.accent)
+              Spacer(minLength: 8)
+              Image(systemName: "chevron.right")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(AtlasTheme.ink3)
+                .accessibilityHidden(true)
             }
-            .padding(.vertical, 2)
+            .padding(.vertical, 6)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
           }
-          .simultaneousGesture(
-            TapGesture().onEnded { state.clearTransientMessagesForNavigation() }
-          )
+          .buttonStyle(.plain)
+          .accessibilityLabel(section.title)
+          .accessibilityHint(section.summary)
+          .accessibilityAddTraits(.isLink)
         }
       }
       .listRowBackground(AtlasTheme.surface)
