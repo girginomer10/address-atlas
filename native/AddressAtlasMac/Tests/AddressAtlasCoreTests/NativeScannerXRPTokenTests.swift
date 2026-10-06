@@ -391,7 +391,7 @@ extension NativeScannerTokenTests {
       result.warnings,
       [
         "XRP skipped one trust line with an invalid issuer or currency code.",
-        "XRP discarded one issued asset because its trust-line data included an invalid or non-positive balance.",
+        "XRP discarded one issued asset because its trust-line data included an invalid or negative balance.",
         "XRP repeated one identical trust line; the duplicate was skipped to avoid double-counting.",
         "XRP returned conflicting balances for one issued asset; every version was skipped.",
       ]
@@ -400,11 +400,11 @@ extension NativeScannerTokenTests {
     XCTAssertEqual(NativeScanner.canonicalXrplCurrencyIdentity("XRP"), "")
   }
 
-  func testXrpMalformedZeroAndNegativeDuplicatesTaintIdentityInEitherOrder() {
+  func testXrpMalformedAndNegativeDuplicatesTaintIdentityInEitherOrder() {
     let issuer = "rDsbeomae4FXwgQTJp9Rs64Qg9vDiTCdBv"
     let valid = XrpTrustLine(account: issuer, balance: "2", currency: "USD")
 
-    for rejectedBalance in ["not-a-number", "0", "-1"] {
+    for rejectedBalance in ["not-a-number", "-1", "inf", "nan", ""] {
       let rejected = XrpTrustLine(
         account: issuer,
         balance: rejectedBalance,
@@ -421,11 +421,53 @@ extension NativeScannerTokenTests {
         XCTAssertEqual(
           result.warnings,
           [
-            "XRP discarded one issued asset because its trust-line data included an invalid or non-positive balance."
+            "XRP discarded one issued asset because its trust-line data included an invalid or negative balance."
           ]
         )
       }
     }
+  }
+
+  func testXrpZeroDuplicateNextToPositiveRowIsAConflictInEitherOrder() {
+    let issuer = "rDsbeomae4FXwgQTJp9Rs64Qg9vDiTCdBv"
+    let positive = XrpTrustLine(account: issuer, balance: "2", currency: "USD")
+    let zero = XrpTrustLine(account: issuer, balance: "0", currency: "USD")
+
+    for lines in [[positive, zero], [zero, positive]] {
+      let result = NativeScanner.parseXrpTrustLineResult(
+        lines,
+        address: "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+        chain: ChainRegistry.xrp
+      )
+
+      XCTAssertTrue(result.assets.isEmpty)
+      XCTAssertEqual(
+        result.warnings,
+        ["XRP returned conflicting balances for one issued asset; every version was skipped."]
+      )
+    }
+  }
+
+  func testXrpValidZeroTrustLinesAreSkippedWithoutWarning() {
+    let issuer = "rDsbeomae4FXwgQTJp9Rs64Qg9vDiTCdBv"
+    let otherIssuer = "rhub8VRN55s94qWKDv6jmDy1pUykJzF3wq"
+    let result = NativeScanner.parseXrpTrustLineResult(
+      [
+        // A newly opened trust line starts at zero; repeated or signed-zero
+        // forms of the same empty line are equally harmless.
+        XrpTrustLine(account: issuer, balance: "0", currency: "USD"),
+        XrpTrustLine(account: otherIssuer, balance: "0.0", currency: "EUR"),
+        XrpTrustLine(account: otherIssuer, balance: "0", currency: "EUR"),
+        XrpTrustLine(account: otherIssuer, balance: "-0", currency: "GBP"),
+        XrpTrustLine(account: issuer, balance: "5", currency: "CAD"),
+      ],
+      address: "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+      chain: ChainRegistry.xrp
+    )
+
+    XCTAssertEqual(result.assets.map(\.symbol), ["CAD"])
+    XCTAssertEqual(result.assets.first?.amount, 5)
+    XCTAssertEqual(result.warnings, [])
   }
 
   func testXrpConflictingDuplicateTaintsIdentityInEitherOrder() {
@@ -456,7 +498,8 @@ extension NativeScannerTokenTests {
         XrpTrustLine(account: "not-an-xrp-address", balance: "1", currency: "AUD"),
         XrpTrustLine(account: issuer, balance: "1", currency: "XRP"),
         XrpTrustLine(account: issuer, balance: "invalid", currency: "GBP"),
-        XrpTrustLine(account: issuer, balance: "0", currency: "JPY"),
+        XrpTrustLine(account: issuer, balance: "-1", currency: "JPY"),
+        XrpTrustLine(account: issuer, balance: "0", currency: "CHF"),
         XrpTrustLine(account: issuer, balance: "2", currency: "USD"),
         XrpTrustLine(account: issuer, balance: "2.0", currency: "USD"),
         XrpTrustLine(account: issuer, balance: "2.00", currency: "USD"),
@@ -474,7 +517,7 @@ extension NativeScannerTokenTests {
       result.warnings,
       [
         "XRP skipped 2 trust lines with invalid issuers or currency codes.",
-        "XRP discarded 2 issued assets because their trust-line data included invalid or non-positive balances.",
+        "XRP discarded 2 issued assets because their trust-line data included invalid or negative balances.",
         "XRP repeated 2 identical trust lines; the duplicates were skipped to avoid double-counting.",
         "XRP returned conflicting balances for 2 issued assets; every version was skipped.",
       ]

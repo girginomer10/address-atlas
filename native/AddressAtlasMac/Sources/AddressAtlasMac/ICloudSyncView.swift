@@ -20,7 +20,7 @@ struct SyncView: View {
           PanelHeader(title: "Your vault in iCloud",
             subtitle: "No separate account or Address Atlas backup server",
             systemImage: "icloud.fill")
-          Text("Save from this Mac, then restore on another Mac using the same Apple Account. Enable iCloud Passwords & Keychain on both Macs so the encryption key can arrive.")
+          Text("Save from this Mac, then restore on another Mac, iPhone, or iPad signed in to the same Apple Account. Turn on iCloud Passwords & Keychain on both devices so the encryption key can arrive.")
           if let cloud = state.document.iCloudState {
             Text("Last completed transfer: \(cloud.savedAt.formatted(date: .abbreviated, time: .shortened))")
               .foregroundStyle(.secondary)
@@ -35,7 +35,7 @@ struct SyncView: View {
             ProgressView("Transferring encrypted data…")
               .accessibilityLabel("iCloud transfer in progress")
           }
-          Text("Transfers happen only when you choose. Restoring replaces this Mac’s portfolio after keeping a local rollback copy. Newer changes from another Mac are never overwritten silently.")
+          Text("Transfers happen only when you choose. Restoring replaces this Mac’s portfolio after keeping a local rollback copy. Newer changes from another device are never overwritten silently.")
             .font(.callout).foregroundStyle(.secondary)
           Text("Exchange credentials travel encrypted. Kraken connections still require a separate API key on each Mac. iCloud storage counts toward your Apple Account quota.")
             .font(.callout).foregroundStyle(.secondary)
@@ -67,7 +67,7 @@ struct SyncView: View {
     .confirmationDialog("Delete the Address Atlas copy in your current iCloud account?",
       isPresented: $deleteConfirmation) {
       Button("Delete iCloud copy", role: .destructive) { Task { await state.deleteICloudCopy() } }
-    } message: { Text("Your local portfolio stays on this Mac. Other Macs keep their local copies too.") }
+    } message: { Text("Your local portfolio stays on this Mac. Other devices keep their local copies too.") }
     .confirmationDialog("Stop the old server transfer and keep the local vault?",
       isPresented: $migrationConfirmation) {
       Button("Keep local vault and migrate") { Task { await state.finishLegacySyncMigration() } }

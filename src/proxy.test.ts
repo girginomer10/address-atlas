@@ -2,8 +2,8 @@ import { NextRequest } from "next/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { config, proxy } from "./proxy";
 
-function request(pathname: string) {
-  return new NextRequest(`https://sync.addressatlas.test${pathname}`);
+function request(pathname: string, init?: ConstructorParameters<typeof NextRequest>[1]) {
+  return new NextRequest(`https://sync.addressatlas.test${pathname}`, init);
 }
 
 describe("sync-only proxy gate", () => {
@@ -31,6 +31,22 @@ describe("sync-only proxy gate", () => {
     const lifecycleResponse = proxy(request("/account/session"));
     expect(lifecycleResponse.status).toBe(200);
     expect(lifecycleResponse.headers.get("x-middleware-next")).toBe("1");
+  });
+
+  it("passes the native authorization code exchange POST through to Next", () => {
+    vi.stubEnv("ADDRESS_ATLAS_SYNC_ONLY", "true");
+
+    // Mirrors PasskeyWebAuthenticator.exchangeAuthorizationCode in the native app.
+    const response = proxy(
+      request("/auth/native/exchange", {
+        method: "POST",
+        headers: { accept: "application/json", "content-type": "application/json" },
+        body: JSON.stringify({ authorizationCode: "code", codeVerifier: "verifier" })
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-middleware-next")).toBe("1");
   });
 
   it("passes all routes through only when sync-only mode is explicitly disabled", () => {

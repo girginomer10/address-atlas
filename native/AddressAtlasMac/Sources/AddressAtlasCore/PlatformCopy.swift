@@ -17,14 +17,9 @@ public enum PlatformCopy {
   /// Possessive form for phrases such as "Correct the Mac's date and time".
   public static var deviceNounPossessive: String { "\(deviceNoun)'s" }
 
-  /// Plural form for phrases such as "Enable Passwords & Keychain on both Macs".
-  public static let deviceNounPlural: String = {
-    #if os(macOS)
-      return "Macs"
-    #else
-      return "devices"
-    #endif
-  }()
+  // iCloud copy can move between a Mac, iPhone, and iPad, so copy about the
+  // other end of a transfer says "device" on every platform instead of using
+  // this noun.
 
   /// Where the user signs in to iCloud on this platform.
   public static let iCloudSettingsLocation: String = {

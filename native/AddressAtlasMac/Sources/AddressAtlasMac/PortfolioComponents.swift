@@ -236,7 +236,7 @@ struct QuickActionsPanel: View {
         VStack(alignment: .leading, spacing: 12) {
           SidebarTrustLine(title: "Encrypted storage", copy: "Protected on this device")
           SidebarTrustLine(
-            title: "Private sync", copy: "Only encrypted snapshots go to your sync server")
+            title: "Optional iCloud copy", copy: "Encrypted before it leaves this Mac")
           SidebarTrustLine(
             title: "Direct connections", copy: "Addresses and balance requests go to providers")
         }
