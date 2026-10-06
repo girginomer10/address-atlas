@@ -47,25 +47,12 @@ extension AppState {
   /// "Bitcoin wallet 2") instead of a truncated address; the address itself is
   /// always shown next to the label.
   static func suggestedWalletLabel(chain: ChainConfig, existing: [WalletRecord]) -> String {
-    let network: String
-    switch chain.family {
-    case .evm: network = "Ethereum"
-    case .bitcoin: network = "Bitcoin"
-    case .solana: network = "Solana"
-    case .tron: network = "TRON"
-    case .xrp: network = "XRP"
-    case .cosmos: network = chain.name
-    case .exchange: network = "Exchange"
-    }
+    let network =
+      chain.family == .cosmos
+      ? chain.name : walletNetworkName(family: chain.family, address: "")
     let base = "\(network) wallet"
-    // Wallets saved before readable defaults still carry the truncated
-    // address; the apps present those by network name, so they occupy it.
-    let taken = Set(
-      existing.map { wallet in
-        wallet.chainKind == chain.family
-          && wallet.label == AddressDetection.defaultWalletLabel(wallet.address)
-          ? base.lowercased() : wallet.label.lowercased()
-      })
+    // Includes the names legacy truncated-address labels are presented as.
+    let taken = Set(walletDisplayNames(existing).values.map { $0.lowercased() })
     guard taken.contains(base.lowercased()) else { return base }
     var number = 2
     while taken.contains("\(base) \(number)".lowercased()) { number += 1 }

@@ -102,16 +102,73 @@ extension AppState {
     return String(String.UnicodeScalarView(scalars.prefix(maximumOperatorMessageScalarCount))) + "…"
   }
 
+  /// The network a wallet is presented under ("Ethereum", "Osmosis").
+  nonisolated static func walletNetworkName(family: ChainFamily, address: String) -> String {
+    switch family {
+    case .evm: "Ethereum"
+    case .bitcoin: "Bitcoin"
+    case .solana: "Solana"
+    case .tron: "TRON"
+    case .xrp: "XRP"
+    case .cosmos:
+      AddressDetection.detectChains(for: address).first(where: { $0.family == .cosmos })?.name
+        ?? "Cosmos"
+    case .exchange: "Exchange"
+    }
+  }
+
+  /// One readable name per wallet for every screen, search, and export.
+  /// Wallets saved before readable defaults still carry their truncated
+  /// address as the label; those are presented as "<Network> wallet",
+  /// numbered in saved order so two of them never share a name.
+  nonisolated static func walletDisplayNames(_ wallets: [WalletRecord]) -> [UUID: String] {
+    var names: [UUID: String] = [:]
+    var taken = Set<String>()
+    var legacy: [WalletRecord] = []
+    for wallet in wallets {
+      if wallet.label == AddressDetection.defaultWalletLabel(wallet.address) {
+        legacy.append(wallet)
+      } else {
+        names[wallet.id] = wallet.label
+        taken.insert(wallet.label.lowercased())
+      }
+    }
+    for wallet in legacy {
+      let base = "\(walletNetworkName(family: wallet.chainKind, address: wallet.address)) wallet"
+      var candidate = base
+      var number = 2
+      while taken.contains(candidate.lowercased()) {
+        candidate = "\(base) \(number)"
+        number += 1
+      }
+      taken.insert(candidate.lowercased())
+      names[wallet.id] = candidate
+    }
+    return names
+  }
+
+  /// The presented name of a saved wallet, including an unsaved rename.
+  func walletDisplayName(for wallet: WalletRecord) -> String {
+    let draft = walletLabelDraft(for: wallet).trimmingCharacters(in: .whitespacesAndNewlines)
+    if !draft.isEmpty, draft != AddressDetection.defaultWalletLabel(wallet.address) {
+      return draft
+    }
+    return Self.walletDisplayNames(document.wallets)[wallet.id]
+      ?? "\(Self.walletNetworkName(family: wallet.chainKind, address: wallet.address)) wallet"
+  }
+
   static func applyingWalletLabels(
     to holdings: [TrackedAsset],
     wallets: [WalletRecord]
   ) -> [TrackedAsset] {
     var labelsByAddress: [String: String] = [:]
+    let displayNames = walletDisplayNames(wallets)
     for wallet in wallets {
       guard
         let canonical = AddressDetection.canonicalAddress(wallet.address, family: wallet.chainKind)
       else { continue }
-      labelsByAddress["\(wallet.chainKind.rawValue):\(canonical)"] = wallet.label
+      labelsByAddress["\(wallet.chainKind.rawValue):\(canonical)"] =
+        displayNames[wallet.id] ?? wallet.label
     }
 
     var attributed = holdings
