@@ -10,6 +10,7 @@ struct AssetsScreen: View {
   @EnvironmentObject private var state: AppState
   @EnvironmentObject private var navigation: IOSNavigationModel
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   @State private var query = ""
   @State private var hideUnpriced = false
   @AppStorage("assets.groupByAsset.v1") private var groupByAsset = false
@@ -18,6 +19,10 @@ struct AssetsScreen: View {
   @State private var expandedGroups: Set<String> = []
   @State private var editingThreshold = false
   @State private var thresholdDraft = ""
+  /// Set when Portfolio opened Assets for one symbol: while the search text
+  /// still equals it, only holdings with exactly that symbol match (so "ETH"
+  /// does not also list WETH or every Ethereum token).
+  @State private var exactSymbol: String?
 
   private static let thresholdFormat = FloatingPointFormatStyle<Double>.number
     .locale(AtlasFormatting.locale)
@@ -25,11 +30,19 @@ struct AssetsScreen: View {
 
   // MARK: Data
 
+  /// Latest-snapshot holdings whose wallet, exchange, or manual holding is
+  /// still saved; a removed source stops counting before the next scan.
+  private var savedSourceKeys: Set<String> { state.savedScanSourceKeys }
+
   /// Wallet labels edited after the scan are applied for display; the stored
   /// snapshot is never rewritten.
   private var labeledHoldings: [TrackedAsset] {
-    AppState.applyingWalletLabels(
-      to: state.visibleLatestHoldings, wallets: state.document.wallets)
+    let keys = savedSourceKeys
+    return AppState.applyingWalletLabels(
+      to: state.visibleLatestHoldings.filter {
+        AppState.holdingSourceIsSaved($0, savedKeys: keys)
+      },
+      wallets: state.document.wallets)
   }
 
   /// Holdings left after the dust preference and the price filter, before
@@ -48,10 +61,21 @@ struct AssetsScreen: View {
     let holdings = filteredHoldings
     let query = trimmedQuery
     guard !query.isEmpty else { return holdings }
+    if let exactSymbol, exactSymbol.caseInsensitiveCompare(query) == .orderedSame {
+      return holdings.filter { $0.symbol.caseInsensitiveCompare(exactSymbol) == .orderedSame }
+    }
     return holdings.filter { Self.matches($0, query: query) }
   }
 
-  private var snapshotHoldingCount: Int { state.latestScan?.holdings.count ?? 0 }
+  private var snapshotHoldingCount: Int {
+    let keys = savedSourceKeys
+    return (state.latestScan?.holdings ?? []).filter {
+      AppState.holdingSourceIsSaved($0, savedKeys: keys)
+    }.count
+  }
+
+  /// The header total no longer equals the portfolio total.
+  private var isFiltered: Bool { hiddenByFilters > 0 || !trimmedQuery.isEmpty }
 
   private var hasSnapshotHoldings: Bool { snapshotHoldingCount > 0 }
 
@@ -100,6 +124,17 @@ struct AssetsScreen: View {
     }
     .sheet(item: $selectedAsset) { asset in
       AssetDetailSheet(asset: asset)
+    }
+    .onAppear { applyPendingQuery() }
+    .onChange(of: navigation.assetsQuery) { _, _ in applyPendingQuery() }
+    .onChange(of: query) { _, newValue in
+      // Typing replaces the symbol filter with a normal search.
+      if let exactSymbol,
+        exactSymbol.caseInsensitiveCompare(
+          newValue.trimmingCharacters(in: .whitespacesAndNewlines)) != .orderedSame
+      {
+        self.exactSymbol = nil
+      }
     }
     .alert("Small-balance threshold", isPresented: $editingThreshold) {
       TextField("USD", text: $thresholdDraft)
@@ -173,17 +208,54 @@ struct AssetsScreen: View {
       ? "\(assets.count) asset\(assets.count == 1 ? "" : "s")"
       : "\(assets.count) result\(assets.count == 1 ? "" : "s")"
     let detail = unpriced > 0 ? "\(countText) · \(unpriced) unpriced" : countText
+    let filtered = isFiltered
     return VStack(alignment: .leading, spacing: 4) {
       if !assets.isEmpty {
-        Text(money(total))
-          .font(.title2.weight(.semibold).monospacedDigit())
-          .foregroundStyle(AtlasTheme.ink)
-          .lineLimit(1)
-          .minimumScaleFactor(0.5)
+        let totalLayout =
+          dynamicTypeSize.isAccessibilitySize
+          ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
+          : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 8))
+        totalLayout {
+          Text(money(total))
+            .font(.title2.weight(.semibold).monospacedDigit())
+            .foregroundStyle(AtlasTheme.ink)
+            .lineLimit(1)
+            .minimumScaleFactor(0.5)
+          // The total follows search and filters, so it is labeled whenever
+          // it is not the whole portfolio.
+          if filtered {
+            Badge("Filtered", color: AtlasTheme.accent)
+              .fixedSize()
+          }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(filtered ? "Filtered total \(money(total))" : "Total \(money(total))")
         Text(detail)
           .font(.subheadline)
           .foregroundStyle(AtlasTheme.ink3)
           .fixedSize(horizontal: false, vertical: true)
+      }
+      if state.latestScanSourceDrift.hasChanges {
+        Button {
+          state.clearTransientMessagesForNavigation()
+          navigation.open(.portfolio)
+        } label: {
+          HStack(spacing: 4) {
+            Text("Sources changed since the last scan ·")
+              .foregroundStyle(AtlasTheme.ink3)
+            Text("Scan")
+              .fontWeight(.semibold)
+              .foregroundStyle(AtlasTheme.accent)
+          }
+          .font(.subheadline)
+          .frame(minHeight: 32, alignment: .leading)
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Sources changed since the last scan")
+        .accessibilityHint("Opens Portfolio to scan again.")
+        .accessibilityAddTraits(.isButton)
       }
       if hiddenByFilters > 0 {
         Button(action: showAll) {
@@ -243,7 +315,7 @@ struct AssetsScreen: View {
     } label: {
       AssetRowView(asset: asset)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(AtlasAccessibility.assetRowIdentity(asset))
+        .accessibilityLabel(AtlasIOSAccessibility.holding(asset))
     }
     .buttonStyle(.plain)
     .accessibilityHint("Shows the full holding.")
@@ -400,6 +472,20 @@ struct AssetsScreen: View {
     }
   }
 
+  /// Portfolio's allocation rows open Assets for one symbol ("Other" and
+  /// "All assets" open it unfiltered).
+  private func applyPendingQuery() {
+    guard let request = navigation.consumeAssetsQuery() else { return }
+    selectedAsset = nil
+    if let symbol = request.symbol {
+      exactSymbol = symbol
+      query = symbol
+    } else {
+      exactSymbol = nil
+      query = ""
+    }
+  }
+
   private static func matches(_ asset: TrackedAsset, query: String) -> Bool {
     asset.symbol.localizedCaseInsensitiveContains(query)
       || asset.name.localizedCaseInsensitiveContains(query)
@@ -466,35 +552,12 @@ extension TrackedAsset {
     }
   }
 
-  fileprivate var atlasKindLabel: String {
-    switch source {
-    case .native: "Native coin"
-    case .erc20: "ERC-20 token"
-    case .spl: "SPL token"
-    case .trc20: "TRC-20 token"
-    case .issued: "Issued asset"
-    case .exchange: atlasIsManual ? "Manual holding" : "Exchange balance"
-    case .staked: "Staked"
-    case .rewards: "Staking rewards"
-    }
-  }
 }
 
 private enum AssetsFormatting {
   static func shortAddress(_ address: String) -> String {
     guard address.count > 14 else { return address }
     return "\(address.prefix(6))…\(address.suffix(4))"
-  }
-
-  /// The complete amount: the exact exchange decimal, or the shortest
-  /// round-trip form of the stored number, localized without rounding.
-  static func fullAmount(_ asset: TrackedAsset) -> String {
-    let raw = asset.canonicalAmount
-    guard let decimal = Decimal(string: raw, locale: Locale(identifier: "en_US_POSIX")) else {
-      return asset.displayedAmount(locale: AtlasFormatting.locale)
-    }
-    return decimal.formatted(
-      .number.precision(.fractionLength(0...30)).locale(AtlasFormatting.locale))
   }
 
   /// Unit prices below a dollar keep their significant digits.
@@ -508,11 +571,9 @@ private enum AssetsFormatting {
     return money(value)
   }
 
+  /// `percent` is in percentage points (2.5 = 2.5%).
   static func change24h(_ percent: Double) -> String {
-    let text = AtlasPercent.text(abs(percent) / 100)
-    if percent > 0 { return "+" + text }
-    if percent < 0 { return "−" + text }
-    return text
+    AtlasPercent.signedChange(percent / 100)
   }
 }
 
@@ -555,12 +616,15 @@ private struct AssetRowView: View {
               .lineLimit(1)
           }
         }
-        // Network and source when both fit; otherwise the network alone
-        // (the detail sheet always shows the full source).
-        ViewThatFits(in: .horizontal) {
-          Text(asset.atlasSecondaryLine)
+        // Every row has the same shape: network, then the source, which
+        // truncates first (the detail sheet shows it in full).
+        HStack(spacing: 0) {
           Text(asset.atlasNetworkLabel)
-            .truncationMode(.tail)
+            .layoutPriority(1)
+          if let source = asset.atlasSourceLabel {
+            Text(" · \(source)")
+              .truncationMode(.tail)
+          }
         }
         .font(.subheadline)
         .foregroundStyle(AtlasTheme.ink3)
@@ -570,7 +634,7 @@ private struct AssetRowView: View {
       VStack(alignment: .trailing, spacing: 3) {
         AssetValueText(asset: asset)
           .fixedSize()
-        Text(asset.displayedAmount(locale: AtlasFormatting.locale))
+        Text(AtlasAmount.compact(asset))
           .font(.subheadline.monospacedDigit())
           .foregroundStyle(AtlasTheme.ink2)
           .lineLimit(1)
@@ -599,7 +663,7 @@ private struct AssetRowView: View {
       AssetValueText(asset: asset)
         .lineLimit(1)
         .minimumScaleFactor(0.5)
-      Text(asset.displayedAmount(locale: AtlasFormatting.locale))
+      Text(AtlasAmount.compact(asset))
         .font(.subheadline.monospacedDigit())
         .foregroundStyle(AtlasTheme.ink2)
         .lineLimit(1)
@@ -688,14 +752,16 @@ private struct AssetGroupRowView: View {
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   var group: AssetGroup
 
+  /// One rule for every group: the network (or network count), then the
+  /// holding count only when it differs from the network count.
   private var subtitle: String {
-    "\(networkSummary) · \(group.members.count) holdings"
-  }
-
-  private var networkSummary: String {
     let networks = group.networks
-    if networks.count == 1, let network = networks.first { return network }
-    return "\(networks.count) networks"
+    let count = group.members.count
+    if networks.count == 1, let network = networks.first {
+      return "\(network) · \(count) holdings"
+    }
+    if networks.count == count { return "\(count) networks" }
+    return "\(networks.count) networks · \(count) holdings"
   }
 
   private var valueText: some View {
@@ -744,13 +810,11 @@ private struct AssetGroupRowView: View {
               .font(.body.weight(.semibold))
               .foregroundStyle(AtlasTheme.ink)
               .lineLimit(1)
-            ViewThatFits(in: .horizontal) {
-              Text(subtitle)
-              Text(networkSummary)
-            }
-            .font(.subheadline)
-            .foregroundStyle(AtlasTheme.ink3)
-            .lineLimit(1)
+            Text(subtitle)
+              .font(.subheadline)
+              .foregroundStyle(AtlasTheme.ink3)
+              .lineLimit(1)
+              .truncationMode(.middle)
           }
           .frame(maxWidth: .infinity, alignment: .leading)
           valueText
@@ -768,7 +832,7 @@ private struct AssetGroupRowView: View {
   private var accessibilityText: String {
     var parts = ["\(group.symbol), \(subtitle)"]
     if group.unpricedCount < group.members.count {
-      parts.append("known value \(money(group.pricedTotal))")
+      parts.append("value \(money(group.pricedTotal))")
     }
     if group.unpricedCount > 0 { parts.append("\(group.unpricedCount) unpriced") }
     return parts.joined(separator: ", ")
@@ -841,12 +905,14 @@ private struct AssetDetailSheet: View {
         }
 
         Section("Holding") {
-          AssetDetailRow(title: "Amount", value: AssetsFormatting.fullAmount(asset), monospacedDigits: true)
+          AssetDetailRow(title: "Amount", value: AtlasAmount.full(asset), monospacedDigits: true)
           AssetDetailRow(title: "Price", value: priceText)
-          if let change = asset.change24h, asset.pricingStatus != .unpriced {
+          if let change = asset.change24h, change.isFinite, asset.pricingStatus != .unpriced {
+            // Below 0.005 points the value reads "0%" and stays neutral.
             AssetDetailRow(
               title: "24h change", value: AssetsFormatting.change24h(change),
-              valueColor: change > 0 ? AtlasTheme.gain : (change < 0 ? AtlasTheme.loss : AtlasTheme.ink))
+              valueColor: change >= 0.005
+                ? AtlasTheme.gain : (change <= -0.005 ? AtlasTheme.loss : AtlasTheme.ink))
           }
           AssetDetailRow(title: "Valuation", value: valuationText, valueColor: valuationColor)
         }
@@ -854,7 +920,7 @@ private struct AssetDetailSheet: View {
 
         Section("Source") {
           AssetDetailRow(title: asset.family == .exchange ? "Venue" : "Network", value: asset.atlasNetworkLabel)
-          AssetDetailRow(title: "Type", value: asset.atlasKindLabel)
+          AssetDetailRow(title: "Type", value: asset.atlasIOSKindLabel)
           sourceRows
           if let contract = asset.atlasContract {
             AssetDetailRow(title: contract.title, value: contract.value, copyable: true, stacked: true)
@@ -875,8 +941,7 @@ private struct AssetDetailSheet: View {
         }
       }
     }
-    .presentationDetents([.medium, .large])
-    .presentationDragIndicator(.visible)
+    .atlasDetailSheetPresentation()
   }
 
   private var header: some View {
@@ -920,7 +985,11 @@ private struct AssetDetailSheet: View {
         AssetDetailRow(title: "Connection", value: connection)
       }
     } else if asset.atlasIsManual {
-      AssetDetailRow(title: "Label", value: asset.address)
+      if !asset.address.isEmpty,
+        asset.address.caseInsensitiveCompare(asset.atlasNetworkLabel) != .orderedSame
+      {
+        AssetDetailRow(title: "Label", value: asset.address)
+      }
     } else {
       if let label = asset.walletLabel, !label.isEmpty {
         AssetDetailRow(title: "Wallet", value: label)

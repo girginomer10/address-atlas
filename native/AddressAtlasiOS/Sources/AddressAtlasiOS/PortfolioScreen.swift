@@ -14,6 +14,7 @@ struct PortfolioScreen: View {
   @EnvironmentObject private var navigation: IOSNavigationModel
 
   var body: some View {
+    let current = PortfolioCurrentHoldings(state: state)
     IOSPage(title: "Portfolio") {
       if !state.hasScanSources {
         PortfolioStartCard()
@@ -21,15 +22,20 @@ struct PortfolioScreen: View {
         PortfolioOfflineBanner()
       }
 
-      if let latest = state.latestScan {
+      if let latest = state.latestScan, state.hasScanSources {
+        if current.drift.hasChanges {
+          PortfolioSourcesChangedBanner(drift: current.drift)
+        }
+
         PortfolioHero(
-          total: state.latestKnownValueUsd,
+          total: current.total,
           generatedAt: latest.generatedAt,
-          change: change,
-          unpricedCount: state.unpricedHoldingCount,
-          hiddenDustCount: state.hiddenDustHoldingCount,
-          hiddenDustValueUsd: state.hiddenDustValueUsd,
-          stats: stats
+          // The banner already says the sources changed since this scan.
+          change: current.drift.hasChanges ? nil : change(latest: latest),
+          unpricedCount: current.unpricedCount,
+          hiddenDustCount: current.hiddenDustCount,
+          hiddenDustValueUsd: current.hiddenDustValueUsd,
+          stats: stats(visibleCount: current.visible.count)
         )
 
         if !latest.warnings.isEmpty {
@@ -37,9 +43,13 @@ struct PortfolioScreen: View {
         }
 
         PortfolioAllocationSection(
-          allocation: allocation,
-          unpricedCount: state.unpricedHoldingCount,
-          openAssets: { openAssets() }
+          allocation: PortfolioAllocation.make(
+            visibleHoldings: current.visible,
+            hiddenDustCount: current.hiddenDustCount,
+            total: current.total
+          ),
+          unpricedCount: current.unpricedCount,
+          openAssets: { symbol in openAssets(symbol: symbol) }
         )
 
         Link(destination: AppState.coinGeckoAttributionURL) {
@@ -66,6 +76,8 @@ struct PortfolioScreen: View {
     .refreshable {
       await refresh()
     }
+    .onAppear { runPendingFirstScan() }
+    .onChange(of: navigation.pendingAction) { _, _ in runPendingFirstScan() }
   }
 
   private var sourceCount: Int {
@@ -73,7 +85,7 @@ struct PortfolioScreen: View {
       + state.document.manualHoldings.filter(\.enabled).count
   }
 
-  private var stats: [PortfolioStat] {
+  private func stats(visibleCount: Int) -> [PortfolioStat] {
     var stats = [
       PortfolioStat(
         id: "wallets", systemImage: "wallet.pass",
@@ -84,7 +96,7 @@ struct PortfolioScreen: View {
         plural: "exchanges"),
       PortfolioStat(
         id: "assets", systemImage: "circle.grid.2x2",
-        count: state.visibleLatestHoldings.count, singular: "asset", plural: "assets"),
+        count: visibleCount, singular: "asset", plural: "assets"),
     ]
     // Zero-count sources are noise on the hero; assets always show.
     stats.removeAll { $0.count == 0 && $0.id != "assets" }
@@ -92,36 +104,34 @@ struct PortfolioScreen: View {
   }
 
   /// Change against the snapshot before the latest one, using the same
-  /// validated-total derivation for both sides so the comparison matches the
-  /// hero value.
-  private var change: PortfolioChange? {
+  /// validated-total derivation for both sides. When the two scans read
+  /// different wallets, exchanges, or manual holdings the difference is not
+  /// a market move, so the hero says the sources changed instead.
+  private func change(latest: ScanRunRecord) -> PortfolioChange? {
     let runs = state.document.scanRuns.sorted { $0.generatedAt > $1.generatedAt }
-    guard runs.count > 1 else { return nil }
+    guard runs.count > 1, runs[0].id == latest.id else { return nil }
     let previous = runs[1]
-    guard let previousTotal = AppState.validatedPortfolioTotal(previous.holdings) else {
-      return nil
-    }
-    let current = state.latestKnownValueUsd
-    let delta = current - previousTotal
+    guard state.scanRunsShareSources(previous, latest) else { return .sourcesChanged }
+    guard let previousTotal = AppState.validatedPortfolioTotal(previous.holdings),
+      let latestTotal = AppState.validatedPortfolioTotal(latest.holdings)
+    else { return nil }
+    let delta = latestTotal - previousTotal
     guard delta.isFinite else { return nil }
-    return PortfolioChange(
-      delta: delta,
-      fraction: previousTotal > 0 ? delta / previousTotal : nil,
-      since: previous.generatedAt
-    )
+    return .moved(delta: delta, fraction: previousTotal > 0 ? delta / previousTotal : nil)
   }
 
-  private var allocation: PortfolioAllocation {
-    PortfolioAllocation.make(
-      visibleHoldings: state.visibleLatestHoldings,
-      hiddenDustCount: state.hiddenDustHoldingCount,
-      total: state.latestKnownValueUsd
-    )
-  }
-
-  private func openAssets() {
+  /// Nil opens every asset; a symbol opens Assets filtered to it.
+  private func openAssets(symbol: String?) {
     state.clearTransientMessagesForNavigation()
-    navigation.open(.assets)
+    navigation.openAssets(symbol: symbol)
+  }
+
+  /// `IOSPendingAction.runFirstScan`: another screen (the toast after the
+  /// first source is saved, or Wallets) asked Portfolio to start a scan.
+  private func runPendingFirstScan() {
+    guard navigation.consume(.runFirstScan) else { return }
+    guard !state.scanning, PortfolioScanAdmission.canStart(state) else { return }
+    state.startScanIfReachable(reachability)
   }
 
   /// Pull-to-refresh follows the toolbar button's admission rules but never
@@ -140,6 +150,147 @@ struct PortfolioScreen: View {
     while state.scanning, !Task.isCancelled {
       try? await Task.sleep(for: .milliseconds(250))
     }
+  }
+}
+
+// MARK: - Current holdings
+
+/// The latest snapshot as the person's saved sources see it now: holdings
+/// from a wallet, exchange, or manual holding that was removed (or paused)
+/// since the scan are left out until the next scan, so a deleted wallet
+/// never keeps counting. The stored snapshot itself is unchanged (Snapshots
+/// still shows it in full). Dust and pricing rules match `AppState`.
+@MainActor
+struct PortfolioCurrentHoldings {
+  var all: [TrackedAsset]
+  var visible: [TrackedAsset]
+  var total: Double
+  var unpricedCount: Int
+  var hiddenDustCount: Int
+  var hiddenDustValueUsd: Double
+  var drift: ScanSourceDrift
+
+  init(state: AppState) {
+    let savedKeys = state.savedScanSourceKeys
+    let keep = { (asset: TrackedAsset) in AppState.holdingSourceIsSaved(asset, savedKeys: savedKeys) }
+    all = (state.latestScan?.holdings ?? []).filter(keep)
+    visible = state.visibleLatestHoldings.filter(keep)
+    total = AppState.validatedPortfolioTotal(all) ?? 0
+    unpricedCount = all.filter { $0.pricingStatus != .priced }.count
+    let preferences = state.document.preferences
+    if preferences.hideDust {
+      let threshold = preferences.dustThreshold.isFinite ? max(0, preferences.dustThreshold) : 0
+      let dust = all.filter {
+        $0.pricingStatus == .priced && (!$0.valueUsd.isFinite || $0.valueUsd < threshold)
+      }
+      hiddenDustCount = dust.count
+      hiddenDustValueUsd =
+        AppState.validatedPortfolioTotal(dust.filter { $0.valueUsd.isFinite && $0.valueUsd >= 0 })
+        ?? 0
+    } else {
+      hiddenDustCount = 0
+      hiddenDustValueUsd = 0
+    }
+    drift = state.latestScanSourceDrift
+  }
+}
+
+/// Sources were added, removed, or edited after the latest scan.
+private struct PortfolioSourcesChangedBanner: View {
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+  var drift: ScanSourceDrift
+
+  private var detail: String {
+    var parts: [String] = []
+    if drift.added > 0 { parts.append("\(drift.added) new") }
+    if drift.removed > 0 { parts.append("\(drift.removed) removed") }
+    if drift.edited > 0 { parts.append("\(drift.edited) edited") }
+    return parts.joined(separator: ", ")
+  }
+
+  private var copy: some View {
+    VStack(alignment: .leading, spacing: 2) {
+      Text("Sources changed")
+        .font(.callout.weight(.semibold))
+        .foregroundStyle(AtlasTheme.ink)
+      Text("\(detail) since the last scan")
+        .font(.footnote)
+        .foregroundStyle(AtlasTheme.ink3)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+    .accessibilityElement(children: .combine)
+  }
+
+  var body: some View {
+    let layout =
+      dynamicTypeSize.isAccessibilitySize
+      ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
+      : AnyLayout(HStackLayout(alignment: .center, spacing: 12))
+    layout {
+      if !dynamicTypeSize.isAccessibilitySize {
+        Image(systemName: "arrow.triangle.2.circlepath")
+          .font(.body.weight(.semibold))
+          .foregroundStyle(AtlasTheme.accent)
+          .frame(width: 32, height: 32)
+          .background(AtlasTheme.accent.opacity(0.12))
+          .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+          .accessibilityHidden(true)
+      }
+      copy
+      if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 4) }
+      PortfolioCompactScanButton()
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 12)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(
+      RoundedRectangle(cornerRadius: AtlasRadius.card, style: .continuous)
+        .fill(AtlasTheme.accent.opacity(0.07))
+    )
+    .overlay {
+      RoundedRectangle(cornerRadius: AtlasRadius.card, style: .continuous)
+        .stroke(AtlasTheme.accent.opacity(0.2), lineWidth: 1)
+    }
+    .accessibilityElement(children: .contain)
+    .accessibilityIdentifier("portfolio-sources-changed")
+  }
+}
+
+/// A small capsule scan button for inline banners.
+private struct PortfolioCompactScanButton: View {
+  @EnvironmentObject private var state: AppState
+  @EnvironmentObject private var reachability: NetworkReachability
+
+  var body: some View {
+    Button {
+      if state.scanning {
+        state.cancelScan()
+      } else {
+        state.startScanIfReachable(reachability)
+      }
+    } label: {
+      HStack(spacing: 6) {
+        if state.scanning {
+          ProgressView()
+            .controlSize(.mini)
+            .tint(AtlasTheme.paper)
+        }
+        Text(state.scanning ? "Scanning" : "Scan")
+      }
+      .font(.callout.weight(.semibold))
+      .foregroundStyle(AtlasTheme.paper)
+      .padding(.horizontal, 16)
+      .frame(minHeight: 34)
+      .background(Capsule().fill(AtlasTheme.accent))
+      .frame(minHeight: 44)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .fixedSize()
+    .disabled(PortfolioScanAdmission.controlDisabled(state))
+    .opacity(PortfolioScanAdmission.controlDisabled(state) ? 0.5 : 1)
+    .accessibilityLabel(state.scanning ? "Cancel scan" : "Scan now")
+    .accessibilityIdentifier("portfolio-sources-changed-scan")
   }
 }
 
@@ -252,19 +403,29 @@ private struct PortfolioStartCard: View {
         Button {
           open(.wallets, then: .addWallet)
         } label: {
-          Label("Add a wallet", systemImage: "wallet.pass.fill")
-            .frame(maxWidth: .infinity, minHeight: 48)
+          Label {
+            Text("Add a wallet")
+          } icon: {
+            Image(systemName: "wallet.pass.fill").accessibilityHidden(true)
+          }
+          .frame(maxWidth: .infinity, minHeight: 48)
         }
         .buttonStyle(AtlasPrimaryButtonStyle())
+        .accessibilityLabel("Add a wallet")
         .accessibilityIdentifier("portfolio-empty-add-wallet")
 
         Button {
           open(.exchanges, then: .connectExchange)
         } label: {
-          Label("Connect an exchange", systemImage: "building.columns.fill")
-            .frame(maxWidth: .infinity, minHeight: 48)
+          Label {
+            Text("Connect an exchange")
+          } icon: {
+            Image(systemName: "building.columns.fill").accessibilityHidden(true)
+          }
+          .frame(maxWidth: .infinity, minHeight: 48)
         }
         .buttonStyle(AtlasSecondaryButtonStyle())
+        .accessibilityLabel("Connect an exchange")
         .accessibilityIdentifier("portfolio-empty-connect-exchange")
       }
     }
@@ -374,10 +535,11 @@ private struct PortfolioOfflineBanner: View {
 
 // MARK: - Hero
 
-private struct PortfolioChange {
-  var delta: Double
-  var fraction: Double?
-  var since: Date
+private enum PortfolioChange {
+  /// Same sources as the previous scan: a market move.
+  case moved(delta: Double, fraction: Double?)
+  /// The previous scan read different wallets, exchanges, or holdings.
+  case sourcesChanged
 }
 
 private struct PortfolioStat: Identifiable {
@@ -478,9 +640,15 @@ private struct PortfolioHero: View {
 private struct PortfolioChangeLine: View {
   var change: PortfolioChange
 
+  private var delta: Double {
+    if case .moved(let delta, _) = change { return delta }
+    return 0
+  }
+
   private var direction: Int {
-    if change.delta > 0.005 { return 1 }
-    if change.delta < -0.005 { return -1 }
+    guard case .moved = change else { return 0 }
+    if delta > 0.005 { return 1 }
+    if delta < -0.005 { return -1 }
     return 0
   }
 
@@ -493,46 +661,68 @@ private struct PortfolioChangeLine: View {
   }
 
   private var symbol: String {
+    if case .sourcesChanged = change { return "arrow.triangle.branch" }
     switch direction {
-    case 1: "arrow.up.right"
-    case -1: "arrow.down.right"
-    default: "equal"
+    case 1: return "arrow.up.right"
+    case -1: return "arrow.down.right"
+    default: return "equal"
     }
   }
 
   private var amountText: String {
     let sign = direction > 0 ? "+" : (direction < 0 ? "−" : "")
-    return sign + money(abs(change.delta))
+    return sign + money(abs(delta))
   }
 
+  /// Shown only from 0.1% up, where it says more than the amount.
   private var percentText: String? {
-    guard let fraction = change.fraction, fraction.isFinite, abs(fraction) >= 0.001 else { return nil }
-    let sign = direction > 0 ? "+" : (direction < 0 ? "−" : "")
-    return sign + AtlasPercent.text(abs(fraction))
+    guard case .moved(_, let fraction?) = change, fraction.isFinite, abs(fraction) >= 0.001,
+      direction != 0
+    else { return nil }
+    return AtlasPercent.signedChange(fraction)
   }
 
   var body: some View {
+    HStack(alignment: .firstTextBaseline, spacing: 6) {
+      Image(systemName: symbol)
+        .font(.footnote.weight(.bold))
+        .foregroundStyle(color)
+        .accessibilityHidden(true)
+      text
+        .fixedSize(horizontal: false, vertical: true)
+    }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(accessibilityText)
+    .accessibilityIdentifier("portfolio-change")
+  }
+
+  private var text: Text {
+    if case .sourcesChanged = change {
+      return Text("Sources changed since the previous scan")
+        .font(.subheadline)
+        .foregroundStyle(AtlasTheme.ink3)
+    }
+    if direction == 0 {
+      return Text("No change since last scan")
+        .font(.subheadline)
+        .foregroundStyle(AtlasTheme.ink3)
+    }
     let amount = Text(percentText.map { "\(amountText) (\($0))" } ?? amountText)
       .font(.subheadline.weight(.semibold).monospacedDigit())
       .foregroundStyle(color)
     let caption = Text("since last scan")
       .font(.subheadline)
       .foregroundStyle(AtlasTheme.ink3)
-    HStack(alignment: .firstTextBaseline, spacing: 6) {
-      Image(systemName: symbol)
-        .font(.footnote.weight(.bold))
-        .foregroundStyle(color)
-        .accessibilityHidden(true)
-      Text("\(amount) \(caption)")
-        .fixedSize(horizontal: false, vertical: true)
+    return Text("\(amount) \(caption)")
+  }
+
+  private var accessibilityText: String {
+    if case .sourcesChanged = change {
+      return "Sources changed since the previous scan, so no change is shown"
     }
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel(
-      direction == 0
-        ? "No change since the previous scan"
-        : "\(direction > 0 ? "Up" : "Down") \(money(abs(change.delta)))\(percentText.map { ", \($0.dropFirst())" } ?? "") since the previous scan"
-    )
-    .accessibilityIdentifier("portfolio-change")
+    guard direction != 0 else { return "No change since the previous scan" }
+    let percent = percentText.map { ", \($0.dropFirst())" } ?? ""
+    return "\(direction > 0 ? "Up" : "Down") \(money(abs(delta)))\(percent) since the previous scan"
   }
 }
 
@@ -552,27 +742,20 @@ private struct PortfolioStatsRow: View {
   }
 
   private func item(_ stat: PortfolioStat) -> some View {
-    Label {
+    HStack(spacing: 6) {
+      Image(systemName: stat.systemImage)
+        .font(.footnote.weight(.semibold))
+        .foregroundStyle(AtlasTheme.ink3)
+        .accessibilityHidden(true)
       Text(stat.text)
         .font(.subheadline.weight(.medium))
         .foregroundStyle(AtlasTheme.ink2)
         .fixedSize()
-    } icon: {
-      Image(systemName: stat.systemImage)
-        .font(.footnote.weight(.semibold))
-        .foregroundStyle(AtlasTheme.ink3)
     }
-    .labelStyle(PortfolioCompactLabelStyle())
+    // The text alone is the element, so the symbol's name never surfaces.
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(stat.text)
     .accessibilityIdentifier("portfolio-metric-\(stat.id)")
-  }
-}
-
-private struct PortfolioCompactLabelStyle: LabelStyle {
-  func makeBody(configuration: Configuration) -> some View {
-    HStack(spacing: 6) {
-      configuration.icon
-      configuration.title
-    }
   }
 }
 
@@ -741,7 +924,8 @@ private struct PortfolioAllocation {
 private struct PortfolioAllocationSection: View {
   var allocation: PortfolioAllocation
   var unpricedCount: Int
-  var openAssets: () -> Void
+  /// Nil opens every asset; a symbol opens Assets filtered to it.
+  var openAssets: (String?) -> Void
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
   private var headerTitle: some View {
@@ -762,7 +946,9 @@ private struct PortfolioAllocationSection: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
-      Button(action: openAssets) {
+      Button {
+        openAssets(nil)
+      } label: {
         ViewThatFits(in: .horizontal) {
           HStack(alignment: .firstTextBaseline) {
             headerTitle
@@ -828,7 +1014,7 @@ private struct PortfolioAllocationRow: View {
   @Environment(\.colorScheme) private var colorScheme
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   var entry: PortfolioAllocationEntry
-  var openAssets: () -> Void
+  var openAssets: (String?) -> Void
 
   private var isOther: Bool {
     if case .other = entry.subject { return true }
@@ -845,11 +1031,13 @@ private struct PortfolioAllocationRow: View {
   private var subtitle: String {
     switch entry.subject {
     case .group(_, let holdings):
-      let networks = Set(holdings.map(\.chainId))
+      let networks = Set(holdings.map(\.atlasIOSVenue))
       if networks.count > 1 { return "On \(networks.count) networks" }
-      let chain = holdings[0].chainName
+      let chain = holdings[0].atlasIOSVenue
       if holdings.count > 1 { return "\(chain) · \(holdings.count) sources" }
-      return "\(chain) · \(holdings[0].walletLabel ?? holdings[0].address)"
+      let source = holdings[0].walletLabel.flatMap { $0.isEmpty ? nil : $0 }
+      guard let source, source != chain else { return chain }
+      return "\(chain) · \(source)"
     case .other(let count, let hiddenDustCount):
       return hiddenDustCount > 0
         ? "\(count) more, \(hiddenDustCount) small"
@@ -873,28 +1061,31 @@ private struct PortfolioAllocationRow: View {
   private var accessibilityLabel: String {
     switch entry.subject {
     case .group(_, let holdings) where holdings.count == 1:
-      "\(AtlasAccessibility.assetRowIdentity(holdings[0])), \(percentText) of portfolio value"
+      "\(AtlasIOSAccessibility.holding(holdings[0])), \(percentText) of portfolio value"
     case .group(let symbol, _):
-      "\(symbol), \(subtitle), known value \(money(entry.valueUsd)), \(percentText) of portfolio value"
+      "\(symbol), \(subtitle), value \(money(entry.valueUsd)), \(percentText) of portfolio value"
     case .other:
-      "Other, \(subtitle), known value \(money(entry.valueUsd)), \(percentText) of portfolio value"
+      "Other, \(subtitle), value \(money(entry.valueUsd)), \(percentText) of portfolio value"
     }
   }
 
+  private var symbolFilter: String? {
+    if case .group(let symbol, _) = entry.subject { return symbol }
+    return nil
+  }
+
   var body: some View {
-    if isOther {
-      Button(action: openAssets) { content(showsChevron: true) }
-        .buttonStyle(PortfolioRowButtonStyle())
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilityLabel)
-        .accessibilityHint("Opens Assets.")
-        .accessibilityIdentifier("portfolio-allocation-row-\(entry.id)")
-    } else {
-      content(showsChevron: false)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilityLabel)
-        .accessibilityIdentifier("portfolio-allocation-row-\(entry.id)")
+    Button {
+      openAssets(symbolFilter)
+    } label: {
+      content(showsChevron: true)
     }
+    .buttonStyle(PortfolioRowButtonStyle())
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(accessibilityLabel)
+    .accessibilityHint(symbolFilter.map { "Shows every \($0) holding in Assets." } ?? "Opens Assets.")
+    .accessibilityAddTraits(.isButton)
+    .accessibilityIdentifier("portfolio-allocation-row-\(entry.id)")
   }
 
   @ViewBuilder

@@ -72,7 +72,7 @@ struct SnapshotsScreen: View {
     return Button {
       selectedRunID = run.id
     } label: {
-      SnapshotRowView(run: run, change: SnapshotChange(run: run, previous: previous))
+      SnapshotRowView(run: run, change: SnapshotChange(run: run, previous: previous, state: state))
         .opacity(isRemoving ? 0.4 : 1)
     }
     .buttonStyle(.plain)
@@ -116,7 +116,7 @@ struct SnapshotsScreen: View {
     }
     .accessibilityLabel(
       SnapshotRowView.accessibilityText(
-        run: run, change: SnapshotChange(run: run, previous: previous)))
+        run: run, change: SnapshotChange(run: run, previous: previous, state: state)))
   }
 
   private func isLatest(_ run: ScanRunRecord) -> Bool {
@@ -205,35 +205,58 @@ struct SnapshotsScreen: View {
 
 // MARK: - Change
 
-/// Difference against the previous (older) snapshot's stored total.
+/// Difference against the previous (older) snapshot's stored total. When the
+/// two scans read different wallets, exchanges, or manual holdings, the
+/// difference is not a market move and is not shown as one.
 private struct SnapshotChange {
   var delta: Double
   var fraction: Double?
+  var sourcesChanged: Bool
 
-  init?(run: ScanRunRecord, previous: ScanRunRecord?) {
+  @MainActor
+  init?(run: ScanRunRecord, previous: ScanRunRecord?, state: AppState) {
     guard let previous, run.totalUsd.isFinite, previous.totalUsd.isFinite else { return nil }
+    sourcesChanged = !state.scanRunsShareSources(previous, run)
     delta = run.totalUsd - previous.totalUsd
     fraction = previous.totalUsd > 0 ? delta / previous.totalUsd : nil
   }
 
+  /// Cent-level differences read as no change.
+  private var direction: Int {
+    if delta >= 0.005 { return 1 }
+    if delta <= -0.005 { return -1 }
+    return 0
+  }
+
   var color: Color {
-    delta > 0 ? AtlasTheme.gain : (delta < 0 ? AtlasTheme.loss : AtlasTheme.ink3)
+    guard !sourcesChanged else { return AtlasTheme.ink3 }
+    switch direction {
+    case 1: return AtlasTheme.gain
+    case -1: return AtlasTheme.loss
+    default: return AtlasTheme.ink3
+    }
   }
 
   var text: String {
-    guard delta != 0 else { return "No change" }
-    let sign = delta > 0 ? "+" : "−"
-    let amount = sign + money(abs(delta))
+    if sourcesChanged { return "Sources changed" }
+    guard direction != 0 else { return "No change" }
+    let amount = (direction > 0 ? "+" : "−") + money(abs(delta))
     // Below 0.1% the percentage adds nothing the amount does not already
     // say, matching the Portfolio hero.
     guard let fraction, abs(fraction) >= 0.001 else { return amount }
-    return "\(amount) (\(sign)\(AtlasPercent.text(abs(fraction))))"
+    return "\(amount) (\(AtlasPercent.signedChange(fraction)))"
+  }
+
+  /// The header line in the detail sheet.
+  var detailText: String {
+    if sourcesChanged { return "Sources changed since the previous snapshot" }
+    return "\(text) since previous"
   }
 
   var accessibilityText: String {
-    guard delta != 0 else { return "no change since the previous snapshot" }
-    let direction = delta > 0 ? "up" : "down"
-    var text = "\(direction) \(money(abs(delta)))"
+    if sourcesChanged { return "sources changed since the previous snapshot" }
+    guard direction != 0 else { return "no change since the previous snapshot" }
+    var text = "\(direction > 0 ? "up" : "down") \(money(abs(delta)))"
     if let fraction, abs(fraction) >= 0.001 { text += ", \(AtlasPercent.text(abs(fraction)))" }
     return text + " since the previous snapshot"
   }
@@ -251,13 +274,13 @@ private struct SnapshotRowView: View {
 
   var body: some View {
     Group {
+      // Every row uses the same layout; the date side wraps before the
+      // total moves, so rows never switch shape with "Just now" vs
+      // "2 minutes ago".
       if dynamicTypeSize.isAccessibilitySize {
         stacked
       } else {
-        ViewThatFits(in: .horizontal) {
-          inline
-          stacked
-        }
+        inline
       }
     }
     .padding(.vertical, 6)
@@ -271,8 +294,8 @@ private struct SnapshotRowView: View {
         dateText
         metaLine
       }
-      .fixedSize()
-      Spacer(minLength: 12)
+      .fixedSize(horizontal: false, vertical: true)
+      .frame(maxWidth: .infinity, alignment: .leading)
       VStack(alignment: .trailing, spacing: 3) {
         totalText
         changeText
@@ -321,10 +344,16 @@ private struct SnapshotRowView: View {
           SnapshotWarningBadge(count: run.warnings.count)
         }
       }
+    } else if run.warnings.isEmpty {
+      metaText
     } else {
-      HStack(spacing: 8) {
-        metaText
-        if !run.warnings.isEmpty {
+      ViewThatFits(in: .horizontal) {
+        HStack(spacing: 8) {
+          metaText.fixedSize()
+          SnapshotWarningBadge(count: run.warnings.count)
+        }
+        VStack(alignment: .leading, spacing: 4) {
+          metaText
           SnapshotWarningBadge(count: run.warnings.count)
         }
       }
@@ -548,12 +577,11 @@ private struct SnapshotDetailSheet: View {
         }
       }
     }
-    .presentationDetents([.medium, .large])
-    .presentationDragIndicator(.visible)
+    .atlasDetailSheetPresentation()
   }
 
   private var header: some View {
-    let change = SnapshotChange(run: run, previous: previous)
+    let change = SnapshotChange(run: run, previous: previous, state: state)
     return VStack(alignment: .leading, spacing: 6) {
       Text(AtlasFormatting.dateTime(run.generatedAt))
         .font(.subheadline.weight(.medium))
@@ -564,7 +592,7 @@ private struct SnapshotDetailSheet: View {
         .lineLimit(2)
         .minimumScaleFactor(0.5)
       if let change {
-        Text("\(change.text) since previous")
+        Text(change.detailText)
           .font(.subheadline.monospacedDigit())
           .foregroundStyle(change.color)
       }
@@ -582,7 +610,8 @@ private struct SnapshotDetailSheet: View {
       SnapshotFormatting.relative(run.generatedAt), SnapshotFormatting.assetCount(run),
     ]
     if run.inputCount > 0 {
-      parts.append("\(run.inputCount) source\(run.inputCount == 1 ? "" : "s") scanned")
+      // `inputCount` is the number of wallet addresses the scan read.
+      parts.append("\(run.inputCount) wallet\(run.inputCount == 1 ? "" : "s") scanned")
     }
     return parts.joined(separator: " · ")
   }
@@ -603,8 +632,12 @@ private struct SnapshotHoldingRow: View {
     }
   }
 
+  /// Holdings worth less than a cent (shown as $0.00) get no share, so a
+  /// zero balance never reads "<0.1%".
   private var shareText: String? {
-    guard asset.pricingStatus == .priced, total > 0, asset.valueUsd.isFinite else { return nil }
+    guard asset.pricingStatus == .priced, total > 0, asset.valueUsd.isFinite,
+      asset.valueUsd >= 0.005
+    else { return nil }
     return AtlasPercent.text(asset.valueUsd / total)
   }
 
@@ -646,8 +679,11 @@ private struct SnapshotHoldingRow: View {
     .padding(.vertical, 2)
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(
-      [asset.symbol, network, valueText, shareText.map { "\($0) of total" }]
-        .compactMap { $0 }.joined(separator: ", "))
+      [
+        AtlasIOSAccessibility.holding(asset),
+        shareText.map { "\($0) of total" },
+      ]
+      .compactMap { $0 }.joined(separator: ", "))
   }
 
   private var value: some View {

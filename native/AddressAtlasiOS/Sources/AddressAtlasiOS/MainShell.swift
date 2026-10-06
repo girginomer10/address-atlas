@@ -90,6 +90,7 @@ struct TabShell: View {
 /// The iPhone "More" tab: the remaining sections plus a one-row privacy note.
 struct MoreList: View {
   @EnvironmentObject private var state: AppState
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   @Binding var path: NavigationPath
 
   var body: some View {
@@ -104,20 +105,29 @@ struct MoreList: View {
             path.append(section)
           } label: {
             HStack(spacing: 14) {
-              SectionIconTile(section: section)
+              // At accessibility sizes the words need the whole width; a
+              // single-word title never breaks mid-word.
+              if !dynamicTypeSize.isAccessibilitySize {
+                SectionIconTile(section: section)
+              }
               VStack(alignment: .leading, spacing: 1) {
                 Text(section.title)
                   .font(.body)
                   .foregroundStyle(AtlasTheme.ink)
+                  .lineLimit(1)
+                  .minimumScaleFactor(0.6)
                 Text(section.summary)
                   .font(.footnote)
                   .foregroundStyle(AtlasTheme.ink3)
+                  .fixedSize(horizontal: false, vertical: true)
               }
               Spacer(minLength: 8)
-              Image(systemName: "chevron.right")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(AtlasTheme.ink3.opacity(0.7))
-                .accessibilityHidden(true)
+              if !dynamicTypeSize.isAccessibilitySize {
+                Image(systemName: "chevron.right")
+                  .font(.footnote.weight(.semibold))
+                  .foregroundStyle(AtlasTheme.ink3.opacity(0.7))
+                  .accessibilityHidden(true)
+              }
             }
             .padding(.vertical, 4)
             .frame(minHeight: 44)
@@ -187,7 +197,8 @@ private struct CompactPrivacyRow: View {
     }
     .padding(.vertical, 4)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .accessibilityElement(children: .combine)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("Private by design. Read-only and encrypted on this \(PlatformCopy.deviceNoun).")
   }
 }
 
@@ -233,12 +244,21 @@ struct SplitShell: View {
       }
       .scrollContentBackground(.hidden)
       .background(AtlasTheme.surface)
-      .navigationTitle("Address Atlas")
+      // The brand lockup is the sidebar's title; a bar title would repeat
+      // it. The bar itself stays for the sidebar toggle.
+      .navigationTitle("")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbarBackground(AtlasTheme.surface, for: .navigationBar)
       .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 320)
     } detail: {
       NavigationStack {
         (selectedSection ?? .portfolio).screen
           .id(selectedSection ?? .portfolio)
+      }
+      // Inside the detail column so the toast centers on the content and
+      // never spans the sidebar.
+      .overlay {
+        IOSStatusToast(bottomPadding: 24)
       }
     }
     .navigationSplitViewStyle(.balanced)

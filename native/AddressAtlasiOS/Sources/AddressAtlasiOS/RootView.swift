@@ -16,6 +16,7 @@ struct RootView: View {
 
   @EnvironmentObject private var state: AppState
   @Environment(\.scenePhase) private var scenePhase
+  @Environment(\.horizontalSizeClass) private var horizontalSizeClass
   @StateObject private var reachability = NetworkReachability()
   @StateObject private var suspension = SuspensionCoordinator()
   @StateObject private var navigation = IOSNavigationModel()
@@ -27,6 +28,8 @@ struct RootView: View {
   private var showsOnboarding: Bool {
     !onboardingCompleted && !state.hasScanSources
   }
+
+  private var showsMainShell: Bool { state.isUnlocked && !showsOnboarding }
 
   private var autoRefreshTaskID: String {
     "\(state.isUnlocked)-\(state.document.preferences.autoRefresh)"
@@ -51,9 +54,17 @@ struct RootView: View {
       }
     }
     .overlay {
-      IOSStatusToast(bottomPadding: state.isUnlocked && !showsOnboarding ? 92 : nil)
+      // The iPad split view shows the toast inside its detail column so it
+      // never spans the sidebar.
+      if !showsMainShell {
+        IOSStatusToast(bottomPadding: nil, offersFirstScan: false)
+      } else if horizontalSizeClass != .regular {
+        IOSStatusToast(bottomPadding: 92)
+      }
     }
     .overlay {
+      // Fallback for the moment before the cover window exists; the window
+      // (`IOSPrivacyShield`) also covers presented sheets and dialogs.
       if scenePhase != .active {
         IOSPrivacyCover()
       }
@@ -65,6 +76,7 @@ struct RootView: View {
     .disabled(state.isTerminationInProgress)
     .environmentObject(reachability)
     .task {
+      IOSPrivacyShield.shared.install()
       TemporaryExportFiles.purgeStale()
       await state.unlock()
       state.excludeLocalStoreFromDeviceBackups()
@@ -98,6 +110,11 @@ struct RootView: View {
       if isScanning { lastAutoRefresh = Date() }
     }
     .onChange(of: scenePhase) { _, phase in
+      if phase == .active {
+        IOSPrivacyShield.shared.hide()
+      } else {
+        IOSPrivacyShield.shared.show()
+      }
       suspension.handle(phase, state: state)
     }
     .onReceive(

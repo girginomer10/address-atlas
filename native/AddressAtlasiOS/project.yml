@@ -71,6 +71,7 @@ targets:
         NSHumanReadableCopyright: "Copyright © 2026 Ömer Girgin. All rights reserved."
         UILaunchScreen:
           UIColorName: LaunchBackground
+          UIImageName: LaunchLogo
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         UISupportedInterfaceOrientations:
