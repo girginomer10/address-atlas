@@ -3,14 +3,20 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// iOS port of the macOS `ExportView` and `ExportPreview`: the share-safer
-/// summary first, the full identifying reports behind an explicit disclosure,
-/// and the read-only preview rendered as rows instead of a `Table`. Every
-/// export is generated locally by the shared `ExportPipeline` and leaves the
-/// device only through the Files picker or the share sheet.
+/// summary first as the one obvious choice, the full identifying reports
+/// behind an explicit danger disclosure, and the read-only preview in a sheet
+/// rendered as rows instead of a `Table`. Every export is generated locally by
+/// the shared `ExportPipeline` and leaves the device only through the Files
+/// picker or the share sheet.
 struct ExportScreen: View {
   @EnvironmentObject private var state: AppState
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   @State private var exportedPreview = ""
+  @State private var previewDisplayName = ""
+  @State private var isPreviewPresented = false
+  @State private var shareSaferFormat: ExportScreenFormat = .csv
+  @State private var fullFormat: ExportScreenFormat = .csv
   @State private var showFullIdentifyingExports = false
   @State private var activeAction: ExportScreenAction?
   @State private var lastExportDisplayName = ""
@@ -18,26 +24,24 @@ struct ExportScreen: View {
   @State private var isFileExporterPresented = false
   @State private var shareItem: ExportScreenShareItem?
   @State private var activeShare: ExportScreenShareItem?
+  @State private var preparationTask: Task<Void, Never>?
 
   private var latestAssetCount: Int {
     state.latestScan?.holdings.count ?? 0
   }
 
-  private var latestAssetsBadge: String {
-    latestAssetCount == 1
-      ? "1 asset in the latest scan"
-      : "\(latestAssetCount) assets in the latest scan"
+  private var latestScanLine: String {
+    switch latestAssetCount {
+    case 0: "No assets in the latest scan yet."
+    case 1: "Covers 1 asset from the latest scan."
+    default: "Covers \(latestAssetCount) assets from the latest scan."
+    }
   }
 
   var body: some View {
-    IOSPage(
-      title: "Export",
-      subtitle:
-        "Choose the minimum detail your recipient needs. Every export is generated locally on this device."
-    ) {
+    IOSPage(title: "Export", subtitle: "Files are generated on this device.") {
       shareSaferSurface
       fullIdentifyingSurface
-      ExportScreenPreview(exportedPreview: exportedPreview)
     }
     .fileExporter(
       isPresented: $isFileExporterPresented,
@@ -65,51 +69,81 @@ struct ExportScreen: View {
       .presentationDetents([.medium, .large])
       .ignoresSafeArea()
     }
+    .sheet(isPresented: $isPreviewPresented) {
+      ExportScreenPreviewSheet(
+        displayName: previewDisplayName,
+        exportedPreview: exportedPreview
+      )
+    }
+    .onDisappear {
+      // Leaving the page while a file is still being rendered would
+      // otherwise present the picker or share sheet from a page that no
+      // longer exists, leaving the shared export lock claimed.
+      cancelPreparation()
+    }
   }
 
   // MARK: - Sections
 
   private var shareSaferSurface: some View {
-    Surface(style: .accent) {
+    let key = shareSaferFormat.shareSaferKey
+    let displayName = payloadDisplayName(for: key)
+    return Surface(style: .accent) {
       VStack(alignment: .leading, spacing: 16) {
-        PanelHeader(
-          title: "Share-safer summary",
-          subtitle: "Recommended for intentional sharing · not anonymous",
-          systemImage: "person.crop.circle.badge.checkmark"
-        )
-        Badge(latestAssetsBadge, color: AtlasTheme.accent)
-        InfoCallout(
-          title: "Reduced exposure—not anonymous",
-          copy: "\(ShareSafePortfolioReport.privacyNotice) \(ExportCopy.shareSaferExplanation)",
-          tone: .info
-        )
-        VStack(alignment: .leading, spacing: 14) {
-          ExportScreenFormatRow(
-            key: .shareSafeCSV,
-            displayName: ExportPayload.shareSafeCSV(state.document).displayName,
-            isPrimary: true,
-            activeAction: activeAction,
-            onSave: { perform(.saveToFiles, for: .shareSafeCSV) },
-            onShare: { perform(.share, for: .shareSafeCSV) },
-            onPreview: { perform(.preview, for: .shareSafeCSV) }
-          )
-          ExportScreenFormatRow(
-            key: .shareSafeJSON,
-            displayName: ExportPayload.shareSafeJSON(state.document).displayName,
-            isPrimary: false,
-            activeAction: activeAction,
-            onSave: { perform(.saveToFiles, for: .shareSafeJSON) },
-            onShare: { perform(.share, for: .shareSafeJSON) },
-            onPreview: { perform(.preview, for: .shareSafeJSON) }
-          )
+        HStack(alignment: .top, spacing: 12) {
+          if !dynamicTypeSize.isAccessibilitySize {
+            Image(systemName: "person.crop.circle.badge.checkmark")
+              .font(.title3.weight(.semibold))
+              .foregroundStyle(AtlasTheme.accent)
+              .frame(width: 44, height: 44)
+              .background(AtlasTheme.accent.opacity(0.12))
+              .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+              .accessibilityHidden(true)
+          }
+          VStack(alignment: .leading, spacing: 3) {
+            Text("Share-safer summary")
+              .font(.headline.weight(.semibold))
+              .foregroundStyle(AtlasTheme.ink)
+              .accessibilityAddTraits(.isHeader)
+            Text("Grouped ranges, no addresses or exact amounts.")
+              .font(.callout)
+              .foregroundStyle(AtlasTheme.ink2)
+              .fixedSize(horizontal: false, vertical: true)
+            Text(latestScanLine)
+              .font(.caption)
+              .foregroundStyle(AtlasTheme.ink3)
+              .padding(.top, 2)
+          }
         }
-        .disabled(state.isExportOperationInProgress)
+
+        ExportScreenFormatPicker(selection: $shareSaferFormat, detail: key.detail)
+
+        exportActions(for: key, displayName: displayName, savesAsPrimary: true)
+
+        VStack(alignment: .leading, spacing: 10) {
+          Label {
+            Text("Reduced exposure, not anonymous: your mix of assets can still identify you.")
+              .fixedSize(horizontal: false, vertical: true)
+          } icon: {
+            Image(systemName: "eye.trianglebadge.exclamationmark")
+              .foregroundStyle(AtlasTheme.warning)
+          }
+          .font(.footnote)
+          .foregroundStyle(AtlasTheme.ink2)
+
+          LearnMoreDisclosure("What's left out", systemImage: "list.bullet.rectangle") {
+            Text(ShareSafePortfolioReport.privacyNotice)
+            Text(ExportCopy.shareSaferExplanation)
+          }
+        }
       }
     }
   }
 
   private var fullIdentifyingSurface: some View {
-    Surface(style: .danger) {
+    let key = fullFormat.fullKey
+    let displayName = payloadDisplayName(for: key)
+    return Surface(style: .danger) {
       VStack(alignment: .leading, spacing: 14) {
         Button {
           withAnimation(AtlasMotion.animation(AtlasMotion.standard, reduceMotion: reduceMotion)) {
@@ -117,56 +151,107 @@ struct ExportScreen: View {
           }
         } label: {
           HStack(alignment: .center, spacing: 12) {
-            PanelHeader(
-              title: "Full identifying reports",
-              subtitle: "Addresses, balances, and portfolio details are disclosed",
-              systemImage: "exclamationmark.triangle.fill",
-              tint: AtlasTheme.loss
-            )
-            Image(systemName: showFullIdentifyingExports ? "chevron.up" : "chevron.down")
+            if !dynamicTypeSize.isAccessibilitySize {
+              Image(systemName: "exclamationmark.triangle.fill")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(AtlasTheme.loss)
+                .frame(width: 36, height: 36)
+                .background(AtlasTheme.loss.opacity(0.10))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            VStack(alignment: .leading, spacing: 2) {
+              Text("Full identifying reports")
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(AtlasTheme.ink)
+              Text("Addresses and exact balances")
+                .font(.callout)
+                .foregroundStyle(AtlasTheme.ink3)
+            }
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.down")
               .font(.callout.weight(.semibold))
               .foregroundStyle(AtlasTheme.ink3)
-              .frame(width: 24, height: 24)
-              .accessibilityHidden(true)
+              .rotationEffect(.degrees(showFullIdentifyingExports ? 180 : 0))
           }
           .frame(minHeight: 44)
           .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel("Full identifying reports")
         .accessibilityValue(showFullIdentifyingExports ? "Expanded" : "Collapsed")
         .accessibilityHint("Shows or hides the exports that disclose addresses and balances.")
+        .accessibilityAddTraits(.isButton)
         .accessibilityIdentifier("full-identifying-export-disclosure")
 
         if showFullIdentifyingExports {
-          InfoCallout(
-            title: "This report can identify your portfolio",
-            copy: ExportCopy.fullIdentifyingExplanation,
-            tone: .danger
+          Text(
+            "Anyone with these files can see your addresses, labels, and exact balances. They contain no exchange credentials and are not backups."
           )
-          VStack(alignment: .leading, spacing: 14) {
-            ExportScreenFormatRow(
-              key: .fullCSV,
-              displayName: ExportPayload.csv([]).displayName,
-              isPrimary: false,
-              activeAction: activeAction,
-              onSave: { perform(.saveToFiles, for: .fullCSV) },
-              onShare: { perform(.share, for: .fullCSV) },
-              onPreview: { perform(.preview, for: .fullCSV) }
-            )
-            ExportScreenFormatRow(
-              key: .fullJSON,
-              displayName: ExportPayload.json(state.document).displayName,
-              isPrimary: false,
-              activeAction: activeAction,
-              onSave: { perform(.saveToFiles, for: .fullJSON) },
-              onShare: { perform(.share, for: .fullJSON) },
-              onPreview: { perform(.preview, for: .fullJSON) }
-            )
-          }
-          .disabled(state.isExportOperationInProgress)
+          .font(.callout)
+          .foregroundStyle(AtlasTheme.ink)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityLabel(
+            "Warning: anyone with these files can see your addresses, labels, and exact balances. They contain no exchange credentials and are not backups."
+          )
+
+          ExportScreenFormatPicker(selection: $fullFormat, detail: key.detail)
+
+          exportActions(for: key, displayName: displayName, savesAsPrimary: false)
+            .transition(.opacity)
         }
       }
+    }
+  }
+
+  /// Save to Files on its own row, Share and Preview below it. The full
+  /// identifying reports use the same layout with a secondary Save so the
+  /// share-safer summary stays the one obvious choice.
+  private func exportActions(
+    for key: ExportScreenExportKey, displayName: String, savesAsPrimary: Bool
+  ) -> some View {
+    VStack(spacing: 10) {
+      ExportScreenActionButton(
+        title: "Save to Files",
+        systemImage: "arrow.down.doc",
+        isPrimary: savesAsPrimary,
+        isActive: isActive(.saveToFiles, key),
+        accessibilityLabel: "Save \(displayName) to Files",
+        accessibilityHint: "Generates the file on this device and opens the Files picker.",
+        action: { perform(.saveToFiles, for: key) }
+      )
+      AdaptiveStack(horizontalSpacing: 10, verticalSpacing: 10) {
+        ExportScreenActionButton(
+          title: "Share",
+          systemImage: "square.and.arrow.up",
+          isActive: isActive(.share, key),
+          accessibilityLabel: "Share \(displayName)",
+          accessibilityHint: "Generates the file on this device and opens the share sheet.",
+          action: { perform(.share, for: key) }
+        )
+        ExportScreenActionButton(
+          title: "Preview",
+          systemImage: "eye",
+          isActive: isActive(.preview, key),
+          accessibilityLabel: "Preview \(displayName)",
+          accessibilityHint: "Shows the exact report without saving it.",
+          action: { perform(.preview, for: key) }
+        )
+      }
+    }
+    .disabled(state.isExportOperationInProgress)
+  }
+
+  private func isActive(_ kind: ExportScreenAction.Kind, _ key: ExportScreenExportKey) -> Bool {
+    activeAction == ExportScreenAction(kind: kind, key: key)
+  }
+
+  private func payloadDisplayName(for key: ExportScreenExportKey) -> String {
+    switch key {
+    case .shareSafeCSV: ExportPayload.shareSafeCSV(state.document).displayName
+    case .shareSafeJSON: ExportPayload.shareSafeJSON(state.document).displayName
+    case .fullCSV: ExportPayload.csv([]).displayName
+    case .fullJSON: ExportPayload.json(state.document).displayName
     }
   }
 
@@ -211,7 +296,8 @@ struct ExportScreen: View {
   // MARK: - Export lane
 
   /// One shared lane for preview, Files, and share: the export flag is claimed
-  /// before any rendering starts and released on every completion path.
+  /// before any rendering starts and released on every completion path,
+  /// including the page disappearing while the file is still being rendered.
   private func perform(_ kind: ExportScreenAction.Kind, for key: ExportScreenExportKey) {
     guard let payload = payload(for: key) else { return }
     guard state.beginExportOperation() else { return }
@@ -219,16 +305,30 @@ struct ExportScreen: View {
     activeAction = ExportScreenAction(kind: kind, key: key)
     lastExportDisplayName = payload.displayName
     let writesTemporaryFile = kind == .share
-    Task { @MainActor in
-      defer { activeAction = nil }
+    preparationTask = Task { @MainActor in
+      defer {
+        activeAction = nil
+        if !Task.isCancelled { preparationTask = nil }
+      }
       do {
         let prepared = try await Task.detached(priority: .userInitiated) {
           try ExportScreenPreparedExport(payload: payload, writesTemporaryFile: writesTemporaryFile)
         }.value
+        guard !Task.isCancelled else {
+          // The page went away while rendering: nothing is presented, the
+          // temporary share file is deleted, and the lock is released.
+          if let url = prepared.temporaryURL {
+            TemporaryExportFiles.remove(url)
+          }
+          state.finishExportOperation()
+          return
+        }
         exportedPreview = prepared.preview
         switch kind {
         case .preview:
+          previewDisplayName = payload.displayName
           state.finishExportOperation()
+          isPreviewPresented = true
         case .saveToFiles:
           pendingFileExport = ExportScreenFileExport(
             payload: payload,
@@ -249,6 +349,14 @@ struct ExportScreen: View {
         state.finishExportOperation()
       }
     }
+  }
+
+  /// Only a render that has not presented anything yet is cancelled; the
+  /// Files picker and share sheet keep their own completion paths.
+  private func cancelPreparation() {
+    guard let task = preparationTask else { return }
+    preparationTask = nil
+    task.cancel()
   }
 
   private func finishFileExport(_ result: Result<URL, any Error>) {
@@ -283,32 +391,31 @@ struct ExportScreen: View {
 
 // MARK: - Models
 
+private enum ExportScreenFormat: Hashable {
+  case csv
+  case json
+
+  var shareSaferKey: ExportScreenExportKey {
+    self == .csv ? .shareSafeCSV : .shareSafeJSON
+  }
+
+  var fullKey: ExportScreenExportKey {
+    self == .csv ? .fullCSV : .fullJSON
+  }
+}
+
 private enum ExportScreenExportKey: Equatable {
   case shareSafeCSV
   case shareSafeJSON
   case fullCSV
   case fullJSON
 
-  var title: String {
-    switch self {
-    case .shareSafeCSV, .fullCSV: "CSV"
-    case .shareSafeJSON, .fullJSON: "JSON"
-    }
-  }
-
   var detail: String {
     switch self {
-    case .shareSafeCSV: "Grouped ranges only. Opens in any spreadsheet app."
-    case .shareSafeJSON: "The same grouped summary as structured data."
+    case .shareSafeCSV: "Opens in any spreadsheet app."
+    case .shareSafeJSON: "The same summary as structured data."
     case .fullCSV: "Latest addresses, labels, asset names, and exact balances."
     case .fullJSON: "Adds portfolio records, settings, timestamps, and scan history."
-    }
-  }
-
-  var saveTitle: String {
-    switch self {
-    case .shareSafeCSV, .fullCSV: "Save CSV"
-    case .shareSafeJSON, .fullJSON: "Save JSON"
     }
   }
 }
@@ -355,61 +462,59 @@ private struct ExportScreenShareItem: Identifiable {
 
 // MARK: - Components
 
-/// One format: a text button for the Files picker plus icon buttons for the
-/// share sheet and the read-only preview. Every control is at least 44pt tall
-/// and carries a full accessibility label.
-private struct ExportScreenFormatRow: View {
-  var key: ExportScreenExportKey
-  var displayName: String
-  var isPrimary: Bool
-  var activeAction: ExportScreenAction?
-  var onSave: () -> Void
-  var onShare: () -> Void
-  var onPreview: () -> Void
-
-  private func isActive(_ kind: ExportScreenAction.Kind) -> Bool {
-    activeAction == ExportScreenAction(kind: kind, key: key)
-  }
+private struct ExportScreenFormatPicker: View {
+  @Binding var selection: ExportScreenFormat
+  var detail: String
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      VStack(alignment: .leading, spacing: 2) {
-        Text(key.title)
-          .font(.callout.weight(.semibold))
-        Text(key.detail)
-          .font(.caption)
-          .foregroundStyle(AtlasTheme.ink3)
-          .fixedSize(horizontal: false, vertical: true)
+    VStack(alignment: .leading, spacing: 6) {
+      Picker("Format", selection: $selection) {
+        Text("CSV").tag(ExportScreenFormat.csv)
+        Text("JSON").tag(ExportScreenFormat.json)
       }
-      .accessibilityElement(children: .combine)
-
-      AdaptiveStack(horizontalSpacing: 8, verticalSpacing: 8) {
-        saveButton
-        Button(action: onShare) {
-          ExportScreenActionLabel(
-            isActive: isActive(.share), systemImage: "square.and.arrow.up", title: nil)
-        }
-        .buttonStyle(AtlasSecondaryButtonStyle())
-        .accessibilityLabel("Share \(displayName)")
-        .accessibilityHint("Generates the file on this device and opens the share sheet.")
-        Button(action: onPreview) {
-          ExportScreenActionLabel(isActive: isActive(.preview), systemImage: "eye", title: nil)
-        }
-        .buttonStyle(AtlasSecondaryButtonStyle())
-        .accessibilityLabel("Preview \(displayName)")
-        .accessibilityHint("Shows the exact report in the read-only preview below without saving it.")
-      }
+      .pickerStyle(.segmented)
+      .labelsHidden()
+      .frame(minHeight: 36)
+      .accessibilityLabel("Format")
+      Text(detail)
+        .font(.caption)
+        .foregroundStyle(AtlasTheme.ink3)
+        .fixedSize(horizontal: false, vertical: true)
     }
   }
+}
 
-  @ViewBuilder
-  private var saveButton: some View {
-    let button = Button(action: onSave) {
-      ExportScreenActionLabel(
-        isActive: isActive(.saveToFiles), systemImage: "arrow.down.doc", title: key.saveTitle)
+/// A full-width action with a progress state. Every control is at least
+/// 44pt tall and carries a full accessibility label naming the report.
+private struct ExportScreenActionButton: View {
+  var title: String
+  var systemImage: String
+  var isPrimary = false
+  var isActive: Bool
+  var accessibilityLabel: String
+  var accessibilityHint: String
+  var action: () -> Void
+
+  var body: some View {
+    let button = Button(action: action) {
+      Group {
+        if isActive {
+          HStack(spacing: 8) {
+            ProgressView()
+              .controlSize(.small)
+              .tint(isPrimary ? AtlasTheme.paper : AtlasTheme.accent)
+            Text("Preparing…")
+          }
+        } else {
+          Label(title, systemImage: systemImage)
+        }
+      }
+      .multilineTextAlignment(.center)
+      .padding(.vertical, 4)
+      .frame(maxWidth: .infinity, minHeight: 44)
     }
-    .accessibilityLabel("Save \(displayName) to Files")
-    .accessibilityHint("Generates the file on this device and opens the Files picker.")
+    .accessibilityLabel(isActive ? "Preparing export, in progress" : accessibilityLabel)
+    .accessibilityHint(isActive ? "" : accessibilityHint)
 
     if isPrimary {
       button.buttonStyle(AtlasPrimaryButtonStyle())
@@ -419,93 +524,83 @@ private struct ExportScreenFormatRow: View {
   }
 }
 
-private struct ExportScreenActionLabel: View {
-  var isActive: Bool
-  var systemImage: String
-  var title: String?
-
-  var body: some View {
-    Group {
-      if isActive {
-        HStack(spacing: 8) {
-          ProgressView()
-            .controlSize(.small)
-          if title != nil {
-            Text("Preparing…")
-          }
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Preparing export, in progress")
-      } else if let title {
-        Label(title, systemImage: systemImage)
-      } else {
-        Image(systemName: systemImage)
-      }
-    }
-    .frame(minHeight: 44)
-  }
-}
-
-/// Read-only preview as navigable rows. Keeps the macOS accessibility
+/// Read-only preview in its own sheet. Readable intro text on top; only the
+/// actual CSV/JSON content is monospaced. Keeps the macOS accessibility
 /// contract: one element per `ExportPreviewRow`, labelled by location and
 /// valued by content, inside a container with the shared identifier.
-private struct ExportScreenPreview: View {
+private struct ExportScreenPreviewSheet: View {
   static let contentAccessibilityIdentifier = "export-preview-content"
 
+  @Environment(\.dismiss) private var dismiss
+  var displayName: String
   var exportedPreview: String
 
-  private var displayedText: String {
-    exportedPreview.isEmpty
-      ? "Preview the recommended share-safer summary here. It reduces direct exposure, but portfolio composition can still identify you; it is not anonymous."
-      : exportedPreview
-  }
-
   var body: some View {
-    let model = ExportPreviewAccessibilityModel(text: displayedText)
+    let model = ExportPreviewAccessibilityModel(text: exportedPreview)
 
-    Surface {
-      VStack(alignment: .leading, spacing: 10) {
-        PanelHeader(
-          title: "Read-only preview",
-          subtitle: "Inspect the exact report before saving or sharing",
-          systemImage: "doc.text.magnifyingglass"
-        )
-        Text(model.spokenSummary)
-          .font(.caption)
-          .foregroundStyle(AtlasTheme.ink2)
-          .fixedSize(horizontal: false, vertical: true)
-          .accessibilityLabel(model.accessibilitySummaryLabel)
-        LazyVStack(alignment: .leading, spacing: 0) {
-          ForEach(model.rows) { row in
-            VStack(alignment: .leading, spacing: 2) {
-              Text(row.locationLabel)
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(AtlasTheme.ink3)
-                .accessibilityHidden(true)
-              Text(row.visibleContent)
-                .font(.caption.monospaced())
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityLabel(row.locationLabel)
-                .accessibilityValue(row.accessibilityValue)
-                .accessibilityIdentifier(row.accessibilityIdentifier)
-            }
-            .padding(.vertical, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            if row.id != model.rows.last?.id {
-              Divider().overlay(AtlasTheme.ruleSoft)
+    NavigationStack {
+      ScrollView {
+        VStack(alignment: .leading, spacing: 14) {
+          VStack(alignment: .leading, spacing: 4) {
+            Text(displayName)
+              .font(.headline)
+              .foregroundStyle(AtlasTheme.ink)
+            Text("The exact file contents. Nothing is saved or shared from here.")
+              .font(.callout)
+              .foregroundStyle(AtlasTheme.ink2)
+              .fixedSize(horizontal: false, vertical: true)
+            Text(model.sourceLineCount == 1 ? "1 line" : "\(model.sourceLineCount) lines")
+              .font(.caption)
+              .foregroundStyle(AtlasTheme.ink3)
+              .accessibilityLabel(model.accessibilitySummaryLabel)
+          }
+
+          LazyVStack(alignment: .leading, spacing: 0) {
+            ForEach(model.rows) { row in
+              HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(row.part == 1 ? "\(row.sourceLine)" : "")
+                  .font(.caption2.monospacedDigit())
+                  .foregroundStyle(AtlasTheme.ink3)
+                  .frame(minWidth: 24, alignment: .trailing)
+                  .accessibilityHidden(true)
+                Text(row.visibleContent)
+                  .font(.caption.monospaced())
+                  .foregroundStyle(AtlasTheme.ink)
+                  .textSelection(.enabled)
+                  .fixedSize(horizontal: false, vertical: true)
+                  .frame(maxWidth: .infinity, alignment: .leading)
+                  .accessibilityLabel(row.locationLabel)
+                  .accessibilityValue(row.accessibilityValue)
+                  .accessibilityIdentifier(row.accessibilityIdentifier)
+              }
+              .padding(.vertical, 5)
             }
           }
+          .padding(12)
+          .background(AtlasTheme.surfaceMuted.opacity(0.5))
+          .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
+          .accessibilityElement(children: .contain)
+          .accessibilityLabel("Read-only export preview list")
+          .accessibilityHint(ExportPreviewAccessibilityModel.navigationHint)
+          .accessibilityIdentifier(Self.contentAccessibilityIdentifier)
         }
-        .padding(10)
-        .background(AtlasTheme.surfaceMuted.opacity(0.5))
-        .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Read-only export preview list")
-        .accessibilityHint(ExportPreviewAccessibilityModel.navigationHint)
-        .accessibilityIdentifier(Self.contentAccessibilityIdentifier)
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 32)
+        .frame(maxWidth: 760, alignment: .leading)
+        .frame(maxWidth: .infinity)
       }
-      .accessibilityElement(children: .contain)
+      .background(AtlasTheme.canvas)
+      .navigationTitle("Preview")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbarBackground(AtlasTheme.canvas, for: .navigationBar)
+      .toolbar {
+        ToolbarItem(placement: .confirmationAction) {
+          Button("Done") { dismiss() }
+        }
+      }
     }
+    .presentationDetents([.medium, .large])
+    .presentationDragIndicator(.visible)
   }
 }
