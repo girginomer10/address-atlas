@@ -464,7 +464,7 @@ private struct AddWalletSheet: View {
         .accessibilityHint(
           isAdding
             ? "Saving the detected addresses."
-            : "Saves the detected public addresses to this vault.")
+            : "Saves the detected public addresses on this device.")
 
         if isBusyElsewhere {
           Text("Available when the current scan or sync finishes.")

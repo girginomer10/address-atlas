@@ -458,7 +458,7 @@ struct ExchangeRow: View {
       Button("Cancel", role: .cancel) {}
     } message: {
       Text(
-        "The encrypted API credentials will be removed from this Mac and from its automatic rollback point. A previously uploaded encrypted snapshot may still contain them until you upload the replacement vault."
+        "The encrypted API credentials will be removed from this Mac, including its earlier local copy. An older encrypted copy you uploaded may still contain them until you save a new one."
       )
     }
     .disabled(state.vaultEditsDisabled)
@@ -854,7 +854,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 16) {
           PanelHeader(
             title: "Recovery kit",
-            subtitle: "A recovery file and separately stored code restore this Mac's vault key",
+            subtitle: "A recovery file and separately stored code restore this Mac's encryption key",
             systemImage: "key.fill",
             tint: AtlasTheme.warning
           )

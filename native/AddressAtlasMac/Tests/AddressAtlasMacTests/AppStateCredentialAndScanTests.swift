@@ -155,7 +155,7 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertTrue(state.document.syncState.pendingExchangeCredentialCleanup)
     XCTAssertTrue(state.hasUnsyncedLocalChanges)
     XCTAssertFalse(state.hasVaultRollbackCheckpoint)
-    XCTAssertTrue(state.notice.contains("last remote snapshot may still contain"))
+    XCTAssertTrue(state.notice.contains("last uploaded encrypted copy may still contain"))
     XCTAssertFalse(try fixture.store.containsRollbackCheckpoint())
     let reloaded = try fixture.store.load()
     XCTAssertTrue(reloaded.exchangeConnections.isEmpty)

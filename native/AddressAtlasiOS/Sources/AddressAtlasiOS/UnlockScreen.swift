@@ -184,7 +184,7 @@ struct UnlockScreen: View {
         Button {
           Task { await state.recoverDamagedVaultFromRollbackCheckpoint() }
         } label: {
-          Text("Restore verified rollback point")
+          Text("Restore the earlier copy")
             .modifier(UnlockScreenFullWidthLabel())
         }
         .buttonStyle(AtlasPrimaryButtonStyle())

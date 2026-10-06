@@ -145,7 +145,7 @@ struct UnlockView: View {
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
               Text(
-                "Your vault key stays in macOS Keychain. Portfolio data, exchange credentials, and scan history are encrypted before storage, including the optional iCloud copy."
+                "Your encryption key stays in macOS Keychain. Portfolio data, exchange credentials, and scan history are encrypted before storage, including the optional iCloud copy."
               )
               .font(.body)
               .foregroundStyle(AtlasTheme.ink2)
@@ -232,7 +232,7 @@ struct UnlockView: View {
           tint: AtlasTheme.warning
         )
         if recovery == .validatedRollbackCheckpoint {
-          Button("Restore verified rollback point") {
+          Button("Restore the earlier copy") {
             Task { await state.recoverDamagedVaultFromRollbackCheckpoint() }
           }
           .buttonStyle(AtlasPrimaryButtonStyle())

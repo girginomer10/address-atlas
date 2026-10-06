@@ -20,7 +20,7 @@ public enum RecoveryKitError: Error, Equatable, LocalizedError {
     case .checksumMismatch:
       "Recovery file checksum does not match."
     case .invalidVaultKey:
-      "Recovery file did not contain a valid vault key."
+      "This recovery file doesn't contain a valid encryption key."
     }
   }
 }

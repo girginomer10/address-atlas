@@ -297,7 +297,7 @@ extension AppState {
       return nil
     }
     guard priceInput.isEmpty || parsedPrice != nil else {
-      error = "USD price must be a finite, non-negative number."
+      error = "Enter the USD price as a number of 0 or more, or leave it empty."
       return nil
     }
     if let builtIn = Self.builtInToken(
@@ -431,11 +431,16 @@ extension AppState {
   func validatedManualHolding(symbol: String, amount: String, valueUsd: String)
     -> (symbol: String, amount: Double, priceUsd: Double, valueUsd: Double)?
   {
-    guard let parsedAmount = UserInputValidation.nonnegativeFiniteNumber(amount),
-      let parsedValue = UserInputValidation.nonnegativeFiniteNumber(valueUsd),
-      !symbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    else {
-      error = "Manual holding needs a symbol plus finite, non-negative amount and value."
+    guard !symbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      error = "Enter a symbol, such as BTC."
+      return nil
+    }
+    guard let parsedAmount = UserInputValidation.nonnegativeFiniteNumber(amount) else {
+      error = "Enter the amount as a number of 0 or more."
+      return nil
+    }
+    guard let parsedValue = UserInputValidation.nonnegativeFiniteNumber(valueUsd) else {
+      error = "Enter the total value in dollars as a number of 0 or more."
       return nil
     }
     guard
@@ -548,7 +553,7 @@ extension AppState {
   func setDustThreshold(_ value: Double) async {
     guard canMutateVault() else { return }
     guard value.isFinite, value >= 0 else {
-      error = "Dust threshold must be a finite, non-negative USD value."
+      error = "Enter a dollar amount of 0 or more."
       return
     }
     _ = await mutateDocument { $0.preferences.dustThreshold = value }

@@ -209,7 +209,7 @@ public enum VaultKeyManagerError: Error, Equatable, LocalizedError {
   public var errorDescription: String? {
     switch self {
     case .recoveryRequired:
-      "The existing vault key is missing. Restore a recovery kit to unlock this vault."
+      "This device's encryption key is missing. Restore your recovery kit to open your portfolio."
     }
   }
 }

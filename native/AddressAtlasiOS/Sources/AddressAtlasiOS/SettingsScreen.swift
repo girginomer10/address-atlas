@@ -213,7 +213,7 @@ struct SettingsScreen: View {
   private var recoverySection: some View {
     SettingsGroup(
       title: "Recovery kit",
-      footer: "Keep the file and its code in different places. Anyone with both can recover your vault key."
+      footer: "Keep the file and its code in different places. Anyone with both can recover your encryption key."
     ) {
       Button {
         exportRecoveryKit()

@@ -221,7 +221,7 @@ struct WalletRow: View {
       }
       Button("Cancel", role: .cancel) {}
     } message: {
-      Text("The public address will be removed from this vault. Existing snapshots are unchanged.")
+      Text("The public address will be removed from this Mac. Existing snapshots are unchanged.")
     }
     .onDisappear(perform: commitLabel)
     .disabled(state.vaultEditsDisabled)
