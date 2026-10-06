@@ -1,6 +1,7 @@
 import AddressAtlasCore
 import CloudKit
 import SwiftUI
+import UIKit
 
 /// iOS port of the macOS `SyncView`: the same iCloud actions, confirmations,
 /// and safety rules, laid out as a status card, two actions, a collapsed
@@ -76,32 +77,6 @@ struct ICloudScreen: View {
       }
     }
     .confirmationDialog(
-      "Replace this device’s portfolio with the iCloud copy?",
-      isPresented: $restoreConfirmation,
-      titleVisibility: .visible
-    ) {
-      Button("Restore iCloud copy", role: .destructive) {
-        Task { await state.restoreFromICloud() }
-      }
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text(
-        "A local rollback copy is saved first. Export this portfolio first if you want to keep both."
-      )
-    }
-    .confirmationDialog(
-      "Delete the Address Atlas copy in your current iCloud account?",
-      isPresented: $deleteConfirmation,
-      titleVisibility: .visible
-    ) {
-      Button("Delete iCloud copy", role: .destructive) {
-        Task { await state.deleteICloudCopy() }
-      }
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text("Your local portfolio stays on this device. Other devices keep their local copies too.")
-    }
-    .confirmationDialog(
       "Stop the old server transfer and keep the local vault?",
       isPresented: $migrationConfirmation,
       titleVisibility: .visible
@@ -110,30 +85,6 @@ struct ICloudScreen: View {
       Button("Cancel", role: .cancel) {}
     } message: {
       Text("Existing server data is not deleted by this action.")
-    }
-    .confirmationDialog(
-      "Reset this device’s iCloud connection?",
-      isPresented: $resetConfirmation,
-      titleVisibility: .visible
-    ) {
-      Button("Reset connection") { resetConnection() }
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text(
-        "Local and cloud copies stay. The next transfer uses the Apple Account signed in on this device."
-      )
-    }
-    .confirmationDialog(
-      "Restore the previous local portfolio?",
-      isPresented: $rollbackConfirmation,
-      titleVisibility: .visible
-    ) {
-      Button("Restore previous local copy", role: .destructive) {
-        Task { await state.restoreVaultRollbackCheckpoint() }
-      }
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text("This replaces the current local portfolio. The iCloud copy is not changed.")
     }
   }
 
@@ -222,6 +173,20 @@ struct ICloudScreen: View {
         .accessibilityLabel("iCloud status: \(status.title). \(status.detail)")
         .accessibilityIdentifier("icloud.status")
 
+        if status.opensSettings {
+          Button {
+            if let url = URL(string: UIApplication.openSettingsURLString) {
+              UIApplication.shared.open(url)
+            }
+          } label: {
+            Label("Open Settings", systemImage: "gear")
+              .frame(maxWidth: .infinity, minHeight: 44)
+          }
+          .buttonStyle(AtlasSecondaryButtonStyle())
+          .accessibilityHint("Opens the Settings app.")
+          .accessibilityIdentifier("icloud.openSettings")
+        }
+
         if let cloud = state.document.iCloudState, !status.isWorking {
           Divider().overlay(AtlasTheme.ruleSoft)
           VStack(spacing: 6) {
@@ -270,6 +235,20 @@ struct ICloudScreen: View {
         "Asks for confirmation, then replaces this device’s portfolio with the iCloud copy after saving a local rollback copy."
       )
       .accessibilityIdentifier("icloud.restore")
+      .confirmationDialog(
+        "Replace this device’s portfolio with the iCloud copy?",
+        isPresented: $restoreConfirmation,
+        titleVisibility: .visible
+      ) {
+        Button("Restore iCloud copy", role: .destructive) {
+          Task { await state.restoreFromICloud() }
+        }
+        Button("Cancel", role: .cancel) {}
+      } message: {
+        Text(
+          "A local rollback copy is saved first. Export this portfolio first if you want to keep both."
+        )
+      }
     }
     .buttonStyle(ICloudRowButtonStyle())
     .disabled(transferControlsDisabled)
@@ -367,6 +346,18 @@ struct ICloudScreen: View {
           .accessibilityHint(
             "Asks for confirmation, then replaces the current local portfolio with the rollback copy saved before the last restore."
           )
+          .confirmationDialog(
+            "Restore the previous local portfolio?",
+            isPresented: $rollbackConfirmation,
+            titleVisibility: .visible
+          ) {
+            Button("Restore previous local copy", role: .destructive) {
+              Task { await state.restoreVaultRollbackCheckpoint() }
+            }
+            Button("Cancel", role: .cancel) {}
+          } message: {
+            Text("This replaces the current local portfolio. The iCloud copy is not changed.")
+          }
           Divider().overlay(AtlasTheme.ruleSoft)
             .padding(.leading, dynamicTypeSize.isAccessibilitySize ? 14 : 52)
         }
@@ -387,6 +378,18 @@ struct ICloudScreen: View {
           .accessibilityHint(
             "Asks for confirmation, then forgets this device’s link to the iCloud copy. Local and cloud copies stay."
           )
+          .confirmationDialog(
+            "Reset this device’s iCloud connection?",
+            isPresented: $resetConfirmation,
+            titleVisibility: .visible
+          ) {
+            Button("Reset connection") { resetConnection() }
+            Button("Cancel", role: .cancel) {}
+          } message: {
+            Text(
+              "Local and cloud copies stay. The next transfer uses the Apple Account signed in on this device."
+            )
+          }
           Divider().overlay(AtlasTheme.ruleSoft)
             .padding(.leading, dynamicTypeSize.isAccessibilitySize ? 14 : 52)
         }
@@ -407,6 +410,19 @@ struct ICloudScreen: View {
           "Asks for confirmation, then removes the copy from your current iCloud account. The local portfolio stays."
         )
         .accessibilityIdentifier("icloud.delete")
+        .confirmationDialog(
+          "Delete the Address Atlas copy in your current iCloud account?",
+          isPresented: $deleteConfirmation,
+          titleVisibility: .visible
+        ) {
+          Button("Delete iCloud copy", role: .destructive) {
+            Task { await state.deleteICloudCopy() }
+          }
+          Button("Cancel", role: .cancel) {}
+        } message: {
+          Text(
+            "Your local portfolio stays on this device. Other devices keep their local copies too.")
+        }
       }
       .buttonStyle(ICloudRowButtonStyle())
       .iCloudGroupedCard()
@@ -515,6 +531,8 @@ private struct ICloudStatusPresentation {
   var title: String
   var detail: String
   var isWorking = false
+  /// Shows an "Open Settings" button when the fix is in the Settings app.
+  var opensSettings = false
 
   static func progressTitle(for activity: SyncActivity) -> String {
     switch activity {
@@ -570,7 +588,8 @@ private enum ICloudAvailability: Equatable {
         systemImage: "person.crop.circle.badge.exclamationmark",
         tint: AtlasTheme.warning,
         title: "Sign in to iCloud",
-        detail: "Open Settings, sign in with your Apple Account, then come back."
+        detail: "Sign in with your Apple Account in Settings, then come back.",
+        opensSettings: true
       )
     case .restricted:
       ICloudStatusPresentation(
@@ -584,7 +603,8 @@ private enum ICloudAvailability: Equatable {
         systemImage: "exclamationmark.icloud",
         tint: AtlasTheme.warning,
         title: "iCloud is temporarily unavailable",
-        detail: "Check Settings › Apple Account › iCloud, then try again."
+        detail: "Check Apple Account › iCloud in Settings, then try again.",
+        opensSettings: true
       )
     case .checking, .available, .unknown:
       nil
@@ -615,7 +635,8 @@ private enum ICloudAttentionIssue: Equatable {
       ICloudStatusPresentation(
         systemImage: "person.crop.circle.badge.exclamationmark", tint: warning,
         title: "Sign in to iCloud",
-        detail: "Open Settings, sign in with your Apple Account, then try again.")
+        detail: "Sign in with your Apple Account in Settings, then try again.",
+        opensSettings: true)
     case .accountChanged:
       ICloudStatusPresentation(
         systemImage: icon, tint: warning, title: "Different Apple Account",
@@ -631,7 +652,8 @@ private enum ICloudAttentionIssue: Equatable {
     case .missingKey:
       ICloudStatusPresentation(
         systemImage: "key.icloud", tint: warning, title: "Waiting for the encryption key",
-        detail: "Turn on Passwords & Keychain on both devices, then try again.")
+        detail: "Turn on Passwords & Keychain on both devices, then try again.",
+        opensSettings: true)
     case .malformed:
       ICloudStatusPresentation(
         systemImage: icon, tint: warning, title: "iCloud copy couldn’t be verified",

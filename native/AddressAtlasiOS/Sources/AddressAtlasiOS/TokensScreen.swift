@@ -49,6 +49,7 @@ struct TokensScreen: View {
           openAddSheet(for: segment)
         } label: {
           Image(systemName: "plus")
+            .foregroundStyle(state.vaultEditsDisabled ? AtlasTheme.ink3.opacity(0.55) : AtlasTheme.ink)
         }
         .disabled(state.vaultEditsDisabled)
         .accessibilityLabel(segment == .holdings ? "Add manual holding" : "Add custom token")
@@ -272,7 +273,8 @@ private struct TokensManualHoldingRow: View {
   var holding: ManualHoldingRecord
   var onSelect: () -> Void
 
-  private var identity: String { AtlasAccessibility.manualHoldingIdentity(holding) }
+  /// Spoken name for this holding (never the record ID).
+  private var identity: String { "\(holding.symbol) holding" }
   /// Optimistic switch position while the vault write is in flight, so the
   /// control does not snap back for a frame before the document updates.
   private var isEnabled: Bool { pendingEnabled ?? holding.enabled }
@@ -287,7 +289,7 @@ private struct TokensManualHoldingRow: View {
 
   var body: some View {
     TokensSwipeRow(
-      removeAccessibilityLabel: "Remove manual holding \(identity)",
+      removeAccessibilityLabel: "Remove \(identity)",
       onOpen: onSelect,
       onRemove: { confirmingRemoval = true }
     ) {
@@ -338,9 +340,7 @@ private struct TokensManualHoldingRow: View {
       )
       .labelsHidden()
       .frame(minHeight: 44)
-      .accessibilityLabel(
-        "\(holding.enabled ? "Disable" : "Enable") manual holding \(identity)"
-      )
+      .accessibilityLabel("Include \(identity) in snapshots")
     }
     .contextMenu {
       Button {
@@ -418,15 +418,16 @@ private struct TokensCustomTokenRow: View {
   var token: CustomTokenRecord
   var onSelect: () -> Void
 
-  private var identity: String { AtlasAccessibility.tokenIdentity(token) }
   private var isEnabled: Bool { pendingEnabled ?? token.enabled }
   private var networkName: String {
     TokensCopy.networkName(chainKind: token.chainKind, chainId: token.chainId)
   }
+  /// Spoken name for this token (never the raw chain ID or record ID).
+  private var identity: String { "\(token.symbol) on \(networkName)" }
 
   var body: some View {
     TokensSwipeRow(
-      removeAccessibilityLabel: "Remove token \(identity)",
+      removeAccessibilityLabel: "Remove \(identity)",
       onOpen: onSelect,
       onRemove: { confirmingRemoval = true }
     ) {
@@ -472,7 +473,7 @@ private struct TokensCustomTokenRow: View {
       )
       .labelsHidden()
       .frame(minHeight: 44)
-      .accessibilityLabel("\(token.enabled ? "Disable" : "Enable") token \(identity)")
+      .accessibilityLabel("Include \(identity) in scans")
     }
     .contextMenu {
       Button {
@@ -546,6 +547,10 @@ private struct TokensAddHoldingSheet: View {
       && !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
+  private var canSubmit: Bool {
+    hasRequiredInput && !isAdding && !isAtLimit && !state.vaultEditsDisabled
+  }
+
   /// Same derivation the vault write uses, shown live so the unit price the
   /// snapshot will carry is visible before saving.
   private var impliedPrice: Double? {
@@ -565,6 +570,12 @@ private struct TokensAddHoldingSheet: View {
 
       TokensFormField(title: "Symbol", placeholder: "BTC", kind: .symbol, text: $symbol)
         .accessibilityIdentifier("manual-holding-symbol")
+        .toolbar {
+          ToolbarItem(placement: .confirmationAction) {
+            FormToolbarConfirmButton(
+              title: isEditing ? "Save" : "Add", isEnabled: canSubmit, action: add)
+          }
+        }
 
       AdaptiveStack(horizontalSpacing: 12, verticalSpacing: 14) {
         TokensFormField(
@@ -623,7 +634,7 @@ private struct TokensAddHoldingSheet: View {
         .frame(maxWidth: .infinity, minHeight: 44)
       }
       .buttonStyle(AtlasPrimaryButtonStyle())
-      .disabled(!hasRequiredInput || isAdding || isAtLimit || state.vaultEditsDisabled)
+      .disabled(!canSubmit)
       .accessibilityIdentifier(isEditing ? "manual-holding-save" : "manual-holding-add")
 
       if !isEditing {
@@ -646,7 +657,7 @@ private struct TokensAddHoldingSheet: View {
   }
 
   private func add() {
-    guard !isAdding else { return }
+    guard canSubmit else { return }
     // Lower the keyboard first so the inline error or the dismissal is
     // visible right next to the button that was pressed (F04).
     TokensCopy.dismissKeyboard()
@@ -677,6 +688,7 @@ private struct TokensAddHoldingSheet: View {
 private struct TokensAddCustomTokenSheet: View {
   @EnvironmentObject private var state: AppState
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   @State private var chainKind: ChainFamily
   @State private var chainId: String
   @State private var address: String
@@ -719,6 +731,61 @@ private struct TokensAddCustomTokenSheet: View {
 
   private var builtIn: TokenConfig? {
     TokensCopy.builtInToken(chainKind: chainKind, chainId: effectiveChainId, address: address)
+  }
+
+  private var canSubmit: Bool {
+    hasRequiredInput && !isAdding && !isAtLimit && builtIn == nil && addressProblem == nil
+      && !state.vaultEditsDisabled
+  }
+
+  /// Addresses that are certainly not a token, caught without a network
+  /// lookup: burn addresses, the Solana system program, and the person's own
+  /// saved wallets (a common mix-up when copying from a wallet app).
+  private var addressProblem: String? {
+    let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    switch chainKind {
+    case .evm:
+      let lower = trimmed.lowercased()
+      if lower == "0x0000000000000000000000000000000000000000"
+        || lower == "0x000000000000000000000000000000000000dead"
+      {
+        return "That's a burn address, not a token contract."
+      }
+    case .solana:
+      if trimmed == "11111111111111111111111111111111" {
+        return "That's the Solana system program, not a token mint."
+      }
+    default:
+      break
+    }
+    guard let identity = AddressDetection.canonicalAddress(trimmed, family: chainKind),
+      let wallet = state.document.wallets.first(where: {
+        $0.chainKind == chainKind
+          && AddressDetection.canonicalAddress($0.address, family: $0.chainKind) == identity
+      })
+    else { return nil }
+    return
+      "That's your saved wallet “\(state.walletDisplayName(for: wallet))”, not a token. Paste the token's \(chainKind == .evm ? "contract" : "mint") address."
+  }
+
+  /// Required fields (other than the name) that are still empty, named once
+  /// something was entered.
+  private var missingFields: [String] {
+    var missing: [String] = []
+    if address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      missing.append(chainKind == .evm ? "contract address" : "mint address")
+    }
+    if symbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { missing.append("symbol") }
+    // A missing name is explained under its own field.
+    if decimals.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      missing.append("decimals")
+    }
+    return missing
+  }
+
+  private var hasStartedInput: Bool {
+    [address, symbol, name].contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
   }
 
   private var selectedNetworkName: String {
@@ -768,37 +835,61 @@ private struct TokensAddCustomTokenSheet: View {
         networkPicker
       }
     }
+    .toolbar {
+      ToolbarItem(placement: .confirmationAction) {
+        FormToolbarConfirmButton(
+          title: isEditing ? "Save" : "Add", isEnabled: canSubmit, action: add)
+      }
+    }
   }
 
   private var addressSection: some View {
     VStack(alignment: .leading, spacing: 8) {
-      FieldLabel(chainKind == .evm ? "Contract address" : "Mint address")
-      HStack(spacing: 8) {
-        TextField(
-          chainKind == .evm ? "0x…" : "Mint address",
-          text: $address
-        )
-        .textFieldStyle(AtlasTextFieldStyle())
-        .atlasIdentifierInput()
-        .accessibilityLabel(chainKind == .evm ? "Contract address" : "Mint address")
-        .accessibilityIdentifier("custom-token-address")
+      // Same label row and capsule Paste button as the Add wallet sheet.
+      let headerLayout =
+        dynamicTypeSize.isAccessibilitySize
+        ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+        : AnyLayout(HStackLayout(alignment: .center, spacing: 8))
+      headerLayout {
+        FieldLabel(chainKind == .evm ? "Contract address" : "Mint address")
+          .accessibilityHidden(true)
+        if !dynamicTypeSize.isAccessibilitySize {
+          Spacer(minLength: 8)
+        }
         PasteButton(payloadType: String.self) { strings in
           guard let pasted = strings.first else { return }
           Task { @MainActor in
             address = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
           }
         }
-        .labelStyle(.iconOnly)
-        .buttonBorderShape(.roundedRectangle(radius: AtlasRadius.control))
-        .frame(minHeight: 44)
+        .labelStyle(.titleAndIcon)
+        .buttonBorderShape(.capsule)
+        .controlSize(.small)
+        .tint(AtlasTheme.accent)
       }
-      Label(
-        "The address decides what is scanned. Copy it from a trusted source.",
-        systemImage: "checkmark.shield"
+      TextField(
+        chainKind == .evm ? "0x…" : "Mint address",
+        text: $address
       )
-      .font(.caption)
-      .foregroundStyle(AtlasTheme.ink3)
-      .fixedSize(horizontal: false, vertical: true)
+      .textFieldStyle(AtlasTextFieldStyle())
+      .atlasIdentifierInput()
+      .accessibilityLabel(chainKind == .evm ? "Contract address" : "Mint address")
+      .accessibilityIdentifier("custom-token-address")
+      if let addressProblem {
+        Label(addressProblem, systemImage: "exclamationmark.triangle.fill")
+          .font(.footnote)
+          .foregroundStyle(AtlasTheme.warning)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityIdentifier("custom-token-address-problem")
+      } else {
+        Label(
+          "The address decides what is scanned. Copy it from a trusted source.",
+          systemImage: "checkmark.shield"
+        )
+        .font(.caption)
+        .foregroundStyle(AtlasTheme.ink3)
+        .fixedSize(horizontal: false, vertical: true)
+      }
     }
   }
 
@@ -814,7 +905,15 @@ private struct TokensAddCustomTokenSheet: View {
       )
     }
 
-    TokensFormField(title: "Name", placeholder: "USD Coin", kind: .name, text: $name)
+    VStack(alignment: .leading, spacing: 6) {
+      TokensFormField(title: "Name", placeholder: "USD Coin", kind: .name, text: $name)
+      if hasStartedInput, name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        Text("Required. Use the token's full name, like USD Coin.")
+          .font(.caption)
+          .foregroundStyle(AtlasTheme.ink3)
+          .accessibilityIdentifier("custom-token-name-hint")
+      }
+    }
 
     AdaptiveStack(horizontalSpacing: 12, verticalSpacing: 14) {
       TokensFormField(
@@ -861,6 +960,15 @@ private struct TokensAddCustomTokenSheet: View {
 
     IOSInlineError()
 
+    if hasStartedInput, !missingFields.isEmpty {
+      Text("Still needed: \(missingFields.joined(separator: ", ")).")
+        .font(.footnote)
+        .foregroundStyle(AtlasTheme.ink3)
+        .frame(maxWidth: .infinity)
+        .multilineTextAlignment(.center)
+        .accessibilityIdentifier("custom-token-missing-fields")
+    }
+
     Button(action: add) {
       HStack(spacing: 8) {
         if isAdding {
@@ -873,9 +981,7 @@ private struct TokensAddCustomTokenSheet: View {
       .frame(maxWidth: .infinity, minHeight: 44)
     }
     .buttonStyle(AtlasPrimaryButtonStyle())
-    .disabled(
-      !hasRequiredInput || isAdding || isAtLimit || builtIn != nil || state.vaultEditsDisabled
-    )
+    .disabled(!canSubmit)
     .accessibilityIdentifier(isEditing ? "custom-token-save" : "custom-token-add")
 
     if !isEditing {
@@ -949,7 +1055,7 @@ private struct TokensAddCustomTokenSheet: View {
   }
 
   private func add() {
-    guard !isAdding, builtIn == nil else { return }
+    guard canSubmit else { return }
     TokensCopy.dismissKeyboard()
     isAdding = true
     let addedSymbol = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
@@ -1099,9 +1205,7 @@ private struct TokensHoldingDetailSheet: View {
     }
     .buttonStyle(TokensDestructiveButtonStyle())
     .disabled(isRemoving || state.vaultEditsDisabled)
-    .accessibilityLabel(
-      "Remove manual holding \(AtlasAccessibility.manualHoldingIdentity(holding))"
-    )
+    .accessibilityLabel("Remove \(holding.symbol) holding")
     .confirmationDialog(
       "Remove \(holding.symbol) holding?",
       isPresented: $confirmingRemoval,
@@ -1255,7 +1359,7 @@ private struct TokensCustomTokenDetailSheet: View {
     }
     .buttonStyle(TokensDestructiveButtonStyle())
     .disabled(isRemoving || state.vaultEditsDisabled)
-    .accessibilityLabel("Remove token \(AtlasAccessibility.tokenIdentity(token))")
+    .accessibilityLabel("Remove \(token.symbol) on \(network)")
     .confirmationDialog(
       "Remove \(token.symbol) on \(network)?",
       isPresented: $confirmingRemoval,

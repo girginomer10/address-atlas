@@ -11,6 +11,7 @@ import UniformTypeIdentifiers
 /// app's scratch space.
 struct SettingsScreen: View {
   @EnvironmentObject private var state: AppState
+  @EnvironmentObject private var navigation: IOSNavigationModel
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.scenePhase) private var scenePhase
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -27,6 +28,12 @@ struct SettingsScreen: View {
   @State private var isRestoreConfirmationPresented = false
   @State private var isRecoveryImporterPresented = false
   @State private var isRecoveryRestoreRunning = false
+  /// File name of the kit just saved, shown with the code instead of a toast
+  /// that would cover the code's buttons.
+  @State private var savedRecoveryFileName = ""
+  @State private var recoveryCodeCopied = false
+  @State private var revealsRestoreCode = false
+  @State private var restoreSucceeded = false
 
   private enum SettingsField: Hashable {
     case dustThreshold
@@ -60,11 +67,13 @@ struct SettingsScreen: View {
     .onDisappear {
       // The code is shown once; leaving the screen must not leave it behind.
       revealedRecoveryCode = ""
+      revealsRestoreCode = false
     }
     .onChange(of: scenePhase) { _, phase in
       // Backgrounding or the app switcher hides the code for good.
       if phase != .active {
         revealedRecoveryCode = ""
+        revealsRestoreCode = false
       }
     }
     .onChange(of: state.document.preferences.dustThreshold) { _, _ in
@@ -88,25 +97,11 @@ struct SettingsScreen: View {
     } onCancellation: {
       finishRecoveryExport(nil)
     }
-    .confirmationDialog(
-      "Replace the vault key in this device's Keychain?",
-      isPresented: $isRestoreConfirmationPresented,
-      titleVisibility: .visible
-    ) {
-      Button("Choose recovery file", role: .destructive) {
-        // Presented on the next main-actor turn so the dialog has finished
-        // dismissing before the document picker is asked to appear.
-        Task { isRecoveryImporterPresented = true }
-      }
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text(
-        "The file is opened with your code and checked against this device's vault first. If the key doesn't open this vault, nothing changes."
-      )
-    }
     .fileImporter(
       isPresented: $isRecoveryImporterPresented,
-      allowedContentTypes: [AppState.recoveryKitContentType, .json, .data]
+      // Only recovery kits (.atlas-recovery), as on macOS; JSON exports and
+      // other files can't be picked by mistake.
+      allowedContentTypes: [AppState.recoveryKitContentType]
     ) { result in
       switch result {
       case .success(let url):
@@ -122,7 +117,7 @@ struct SettingsScreen: View {
   private var portfolioSection: some View {
     SettingsGroup(
       title: "Portfolio",
-      footer: "Automatic refresh runs every 15 minutes while the app is open and unlocked."
+      footer: "Values are in US dollars. Automatic refresh runs every 15 minutes while the app is open."
     ) {
       SettingsToggleRow(
         title: "Automatic refresh",
@@ -152,13 +147,6 @@ struct SettingsScreen: View {
         dustThresholdRow
           .transition(.opacity)
       }
-      SettingsDivider()
-      SettingsRowLabel(title: "Display currency", systemImage: "dollarsign", tint: AtlasTheme.gain) {
-        Text("USD")
-          .foregroundStyle(AtlasTheme.ink3)
-      }
-      .accessibilityElement(children: .ignore)
-      .accessibilityLabel("Display currency, USD")
     }
     .disabled(state.vaultEditsDisabled)
     .animation(animation, value: state.document.preferences.hideDust)
@@ -293,12 +281,38 @@ struct SettingsScreen: View {
 
   private var restoreForm: some View {
     VStack(alignment: .leading, spacing: 10) {
-      SecureField("Recovery code", text: $restoreCode)
+      if restoreSucceeded {
+        restoreSuccessPanel
+      }
+      HStack(spacing: 8) {
+        Group {
+          if revealsRestoreCode {
+            TextField("Recovery code", text: $restoreCode)
+          } else {
+            SecureField("Recovery code", text: $restoreCode)
+          }
+        }
         .textFieldStyle(AtlasTextFieldStyle())
         .atlasIdentifierInput()
         .focused($focusedField, equals: .restoreCode)
         .submitLabel(.done)
         .accessibilityLabel("Recovery code for restore")
+        Button {
+          revealsRestoreCode.toggle()
+        } label: {
+          Image(systemName: revealsRestoreCode ? "eye.slash" : "eye")
+            .font(.callout)
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+            .foregroundStyle(AtlasTheme.ink3)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(revealsRestoreCode ? "Hide recovery code" : "Show recovery code")
+      }
+      .onChange(of: restoreCode) { _, code in
+        if !code.isEmpty { restoreSucceeded = false }
+      }
       Button {
         focusedField = nil
         isRestoreConfirmationPresented = true
@@ -319,17 +333,79 @@ struct SettingsScreen: View {
       .accessibilityHint(
         "Asks for confirmation, then opens the Files picker to choose the recovery file."
       )
-      Text("Checked against this device's vault before Keychain changes.")
-        .font(.footnote)
-        .foregroundStyle(AtlasTheme.ink3)
-        .fixedSize(horizontal: false, vertical: true)
+      // Anchored to the button that asked for it.
+      .confirmationDialog(
+        "Use this recovery kit on this device?",
+        isPresented: $isRestoreConfirmationPresented,
+        titleVisibility: .visible
+      ) {
+        Button("Choose recovery file", role: .destructive) {
+          // Presented on the next main-actor turn so the dialog has finished
+          // dismissing before the document picker is asked to appear.
+          Task { isRecoveryImporterPresented = true }
+        }
+        Button("Cancel", role: .cancel) {}
+      } message: {
+        Text(
+          "The kit's key replaces the one saved on this device, but only if it opens the portfolio stored here. Otherwise nothing changes."
+        )
+      }
     }
+  }
+
+  /// What a successful restore did, in place of a generic toast: the kit
+  /// holds the encryption key, not the portfolio itself.
+  private var restoreSuccessPanel: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Label {
+        VStack(alignment: .leading, spacing: 4) {
+          Text("Encryption key restored")
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(AtlasTheme.ink)
+          Text(
+            "This device can open its saved portfolio with the kit's key. To bring in a portfolio saved from another device, restore its iCloud copy."
+          )
+          .font(.footnote)
+          .foregroundStyle(AtlasTheme.ink2)
+          .fixedSize(horizontal: false, vertical: true)
+        }
+      } icon: {
+        Image(systemName: "checkmark.circle.fill")
+          .foregroundStyle(AtlasTheme.gain)
+      }
+      .accessibilityElement(children: .combine)
+      Button {
+        restoreSucceeded = false
+        navigation.open(.iCloud)
+      } label: {
+        Label("Open iCloud", systemImage: "icloud")
+          .settingsControlLabel()
+      }
+      .buttonStyle(AtlasSecondaryButtonStyle())
+      .accessibilityHint("Opens the iCloud page, where you can restore a saved copy.")
+    }
+    .padding(12)
+    .background(AtlasTheme.gain.opacity(0.08))
+    .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
+    .accessibilityIdentifier("settings.restoreSucceeded")
   }
 
   /// The code has no system text selection: the only copy path is the Copy
   /// button, which keeps the clipboard entry local and expiring (F08).
   private var revealedCodePanel: some View {
     VStack(alignment: .leading, spacing: 10) {
+      if !savedRecoveryFileName.isEmpty {
+        Label {
+          Text("Saved \(savedRecoveryFileName)")
+            .lineLimit(2)
+            .truncationMode(.middle)
+        } icon: {
+          Image(systemName: "checkmark.circle.fill")
+            .foregroundStyle(AtlasTheme.gain)
+        }
+        .font(.footnote.weight(.medium))
+        .foregroundStyle(AtlasTheme.ink2)
+      }
       Label {
         Text("Store this code apart from the file. It won't be shown again.")
       } icon: {
@@ -360,13 +436,21 @@ struct SettingsScreen: View {
         Button {
           copyRecoveryCode()
         } label: {
-          Label("Copy code", systemImage: "doc.on.doc")
-            .settingsControlLabel()
+          Label(
+            recoveryCodeCopied ? "Copied" : "Copy code",
+            systemImage: recoveryCodeCopied ? "checkmark" : "doc.on.doc"
+          )
+          .settingsControlLabel()
         }
         .buttonStyle(AtlasSecondaryButtonStyle())
         .accessibilityHint(
           "Copies the code to this device's clipboard for one minute without sharing it with other devices."
         )
+        .task(id: recoveryCodeCopied) {
+          guard recoveryCodeCopied else { return }
+          try? await Task.sleep(for: .seconds(3))
+          recoveryCodeCopied = false
+        }
         Button {
           revealedRecoveryCode = ""
         } label: {
@@ -481,29 +565,43 @@ struct SettingsScreen: View {
         label: "Source commit",
         value: SettingsBuildInfo.shortSourceCommit ?? "Unavailable"
       )
-      SettingsDivider(inset: 14)
-      Link(destination: state.safeUpdateDownloadURL) {
-        HStack(spacing: 12) {
-          Text(
-            state.usesMacAppStoreUpdates
-              ? "View in \(PlatformCopy.appStoreName)" : "Download latest release"
-          )
-          .foregroundStyle(AtlasTheme.accent)
-          Spacer(minLength: 8)
-          Image(systemName: "arrow.up.right")
-            .font(.footnote.weight(.semibold))
-            .foregroundStyle(AtlasTheme.ink3)
-            .accessibilityHidden(true)
-        }
-        .font(.body)
-        .padding(.horizontal, 14)
-        .frame(minHeight: 48)
-        .contentShape(Rectangle())
+      if showsUpdateLink {
+        SettingsDivider(inset: 14)
+        updateLink
       }
-      .buttonStyle(SettingsRowButtonStyle())
-      .accessibilityLabel(state.updateActionTitle)
-      .accessibilityHint(state.updateActionHint)
     }
+  }
+
+  /// The store link only appears once the build carries a real product page;
+  /// the generic apps.apple.com fallback opens a blank page.
+  private var showsUpdateLink: Bool {
+    let url = state.safeUpdateDownloadURL
+    guard state.usesMacAppStoreUpdates else { return true }
+    return url != AppState.macAppStoreFallbackURL && url.path.contains("/app/")
+  }
+
+  private var updateLink: some View {
+    Link(destination: state.safeUpdateDownloadURL) {
+      HStack(spacing: 12) {
+        Text(
+          state.usesMacAppStoreUpdates
+            ? "View in \(PlatformCopy.appStoreName)" : "Download latest release"
+        )
+        .foregroundStyle(AtlasTheme.accent)
+        Spacer(minLength: 8)
+        Image(systemName: "arrow.up.right")
+          .font(.footnote.weight(.semibold))
+          .foregroundStyle(AtlasTheme.ink3)
+          .accessibilityHidden(true)
+      }
+      .font(.body)
+      .padding(.horizontal, 14)
+      .frame(minHeight: 48)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(SettingsRowButtonStyle())
+    .accessibilityLabel(state.updateActionTitle)
+    .accessibilityHint(state.updateActionHint)
   }
 
   private var disclaimer: some View {
@@ -566,6 +664,8 @@ struct SettingsScreen: View {
     guard state.beginExportOperation() else { return }
     isRecoveryExportRunning = true
     revealedRecoveryCode = ""
+    savedRecoveryFileName = ""
+    recoveryCodeCopied = false
     Task {
       var directory: URL?
       do {
@@ -581,8 +681,9 @@ struct SettingsScreen: View {
           code: code
         )
         // The shared helper reports the write as saved; on iOS the file only
-        // exists in scratch space until the picker moves it somewhere durable.
-        state.notice = "Choose where to save the recovery file."
+        // exists in scratch space until the picker moves it somewhere durable,
+        // and the picker itself asks where to save it.
+        state.notice = ""
         state.error = ""
         isRecoveryMoverPresented = true
       } catch {
@@ -608,9 +709,13 @@ struct SettingsScreen: View {
     TemporaryExportFiles.remove(export.directory)
     switch result {
     case .success(let url):
+      // Confirmed inside the code panel; a toast would cover its buttons.
       revealedRecoveryCode = export.code
-      state.notice = "Recovery kit saved as \(url.lastPathComponent). Store the code separately."
+      savedRecoveryFileName = url.lastPathComponent
+      state.notice = ""
       state.error = ""
+      AtlasAccessibilityAnnouncer.shared.announceEvent(
+        "Recovery kit saved. Store the code separately.", kind: .notice)
     case .failure(let error):
       revealedRecoveryCode = ""
       state.presentUserFacingError(error)
@@ -630,8 +735,11 @@ struct SettingsScreen: View {
         .expirationDate: Date().addingTimeInterval(60),
       ]
     )
-    state.notice = "Code copied to this device only. It expires in one minute."
+    // Confirmed on the button itself; a toast would cover the code panel.
+    recoveryCodeCopied = true
     state.error = ""
+    AtlasAccessibilityAnnouncer.shared.announceEvent(
+      "Code copied to this device only. It expires in one minute.", kind: .notice)
   }
 
   private func restoreRecoveryKit(from url: URL) {
@@ -639,6 +747,7 @@ struct SettingsScreen: View {
     let code = restoreCode
     let isAccessing = url.startAccessingSecurityScopedResource()
     isRecoveryRestoreRunning = true
+    restoreSucceeded = false
     Task {
       defer {
         if isAccessing {
@@ -647,6 +756,16 @@ struct SettingsScreen: View {
         isRecoveryRestoreRunning = false
       }
       await state.restoreRecoveryKit(from: url, recoveryCode: code)
+      guard state.error.isEmpty, state.notice.hasPrefix("Recovery kit restored") else { return }
+      // The code has done its job; it doesn't stay on screen.
+      restoreCode = ""
+      revealsRestoreCode = false
+      restoreSucceeded = true
+      // The plain success is explained inline; any follow-up (an
+      // interrupted upload being recovered) stays in the toast.
+      if state.notice == "Recovery kit restored." { state.notice = "" }
+      AtlasAccessibilityAnnouncer.shared.announceEvent(
+        "Encryption key restored on this device.", kind: .notice)
     }
   }
 
