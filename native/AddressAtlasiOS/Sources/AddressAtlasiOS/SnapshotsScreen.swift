@@ -224,18 +224,17 @@ private struct SnapshotChange {
     guard delta != 0 else { return "No change" }
     let sign = delta > 0 ? "+" : "−"
     let amount = sign + money(abs(delta))
-    guard let fraction else { return amount }
-    // Below the 0.1% floor the sign would read as "−<0.1%"; the amount and
-    // color already carry the direction.
-    let percentSign = abs(fraction) < 0.001 ? "" : sign
-    return "\(amount) (\(percentSign)\(AtlasPercent.text(abs(fraction))))"
+    // Below 0.1% the percentage adds nothing the amount does not already
+    // say, matching the Portfolio hero.
+    guard let fraction, abs(fraction) >= 0.001 else { return amount }
+    return "\(amount) (\(sign)\(AtlasPercent.text(abs(fraction))))"
   }
 
   var accessibilityText: String {
     guard delta != 0 else { return "no change since the previous snapshot" }
     let direction = delta > 0 ? "up" : "down"
     var text = "\(direction) \(money(abs(delta)))"
-    if let fraction { text += ", \(AtlasPercent.text(abs(fraction)))" }
+    if let fraction, abs(fraction) >= 0.001 { text += ", \(AtlasPercent.text(abs(fraction)))" }
     return text + " since the previous snapshot"
   }
 }

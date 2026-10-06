@@ -203,6 +203,7 @@ struct IOSInlineError: View {
 /// callouts.
 struct LearnMoreDisclosure<Content: View>: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   @State private var isExpanded = false
   var title: String
   var systemImage: String
@@ -226,9 +227,11 @@ struct LearnMoreDisclosure<Content: View>: View {
         }
       } label: {
         HStack(spacing: 10) {
-          Image(systemName: systemImage)
-            .foregroundStyle(AtlasTheme.accent)
-            .accessibilityHidden(true)
+          if !dynamicTypeSize.isAccessibilitySize {
+            Image(systemName: systemImage)
+              .foregroundStyle(AtlasTheme.accent)
+              .accessibilityHidden(true)
+          }
           Text(title)
             .font(.callout.weight(.medium))
             .foregroundStyle(AtlasTheme.ink)

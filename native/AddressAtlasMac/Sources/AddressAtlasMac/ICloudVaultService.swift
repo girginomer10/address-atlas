@@ -331,7 +331,23 @@ actor ICloudVaultService: ICloudVaultSyncing {
     /// binary, which avoids comparing dyld image paths against Foundation paths
     /// (they differ by a `/private` prefix on devices).
     static func executableEntitlements() -> [String: Any]? {
-      guard let header = mainExecutableHeader() else { return nil }
+      // Debug builds run the app's code from `<App>.debug.dylib`, so the
+      // image that contains this symbol may not carry the section; dyld's
+      // image 0 is always the main executable.
+      var headers: [UnsafePointer<mach_header>] = []
+      if let header = mainExecutableHeader() { headers.append(header) }
+      if let header = _dyld_get_image_header(0), !headers.contains(header) {
+        headers.append(header)
+      }
+      for header in headers {
+        if let entitlements = entitlementsSection(in: header) { return entitlements }
+      }
+      return nil
+    }
+
+    private static func entitlementsSection(in header: UnsafePointer<mach_header>)
+      -> [String: Any]?
+    {
       var size: UInt = 0
       let plist = header.withMemoryRebound(to: mach_header_64.self, capacity: 1) {
         header64 -> Data? in
