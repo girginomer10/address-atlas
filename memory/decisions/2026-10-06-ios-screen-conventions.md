@@ -38,8 +38,8 @@ items, no first run, status lines at the top of pages far from the action.
 
 - New iOS screens follow these patterns; adding a shared iOS file still
   requires `./generate-project.sh` and committing the project.
-- Manual holdings and custom tokens have no update API in `AppState`; detail
-  sheets offer include/pause and remove only.
+- Manual holdings and custom tokens are edited in place (see the update
+  below); detail sheets offer edit, include/pause, and remove.
 
 ## Update 2026-10-07 (second QA pass)
 
