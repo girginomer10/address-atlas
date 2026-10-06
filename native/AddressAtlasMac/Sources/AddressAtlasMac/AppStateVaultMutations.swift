@@ -36,10 +36,40 @@ extension AppState {
     return await mutateDocument { document in
       document.wallets.append(
         WalletRecord(
-          label: AddressDetection.defaultWalletLabel(trimmed), address: trimmed,
+          label: Self.suggestedWalletLabel(chain: chain, existing: document.wallets),
+          address: trimmed,
           chainKind: chain.family)
       )
     }
+  }
+
+  /// A readable default name for a new wallet ("Ethereum wallet",
+  /// "Bitcoin wallet 2") instead of a truncated address; the address itself is
+  /// always shown next to the label.
+  static func suggestedWalletLabel(chain: ChainConfig, existing: [WalletRecord]) -> String {
+    let network: String
+    switch chain.family {
+    case .evm: network = "Ethereum"
+    case .bitcoin: network = "Bitcoin"
+    case .solana: network = "Solana"
+    case .tron: network = "TRON"
+    case .xrp: network = "XRP"
+    case .cosmos: network = chain.name
+    case .exchange: network = "Exchange"
+    }
+    let base = "\(network) wallet"
+    // Wallets saved before readable defaults still carry the truncated
+    // address; the apps present those by network name, so they occupy it.
+    let taken = Set(
+      existing.map { wallet in
+        wallet.chainKind == chain.family
+          && wallet.label == AddressDetection.defaultWalletLabel(wallet.address)
+          ? base.lowercased() : wallet.label.lowercased()
+      })
+    guard taken.contains(base.lowercased()) else { return base }
+    var number = 2
+    while taken.contains("\(base) \(number)".lowercased()) { number += 1 }
+    return "\(base) \(number)"
   }
 
   static func normalizedWalletLabel(_ label: String) -> String? {
@@ -185,8 +215,41 @@ extension AppState {
     }
   }
 
-  @discardableResult
-  func addCustomToken(
+  /// The validated, normalized fields of a custom-token editor submission.
+  struct CustomTokenInput: Equatable {
+    var chainKind: ChainFamily
+    var chainId: String
+    var address: String
+    var symbol: String
+    var name: String
+    var decimals: Int
+    var coinGeckoId: String?
+    var priceUsd: Double?
+  }
+
+  /// The built-in registry entry that already covers a contract or mint. The
+  /// scanner keeps the built-in entry and drops a custom copy
+  /// (`NativeScanner.appendUnique`), so such a copy would have no effect.
+  nonisolated static func builtInToken(
+    chainKind: ChainFamily, chainId: String, address: String
+  ) -> TokenConfig? {
+    let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    switch chainKind {
+    case .evm:
+      return ChainRegistry.commonErc20Tokens[chainId]?.first {
+        $0.address.lowercased() == trimmed.lowercased()
+      }
+    case .solana:
+      return ChainRegistry.commonSplTokens["solana"]?.first { $0.address == trimmed }
+    default:
+      return nil
+    }
+  }
+
+  /// Shared add/edit validation. Sets `error` and returns nil on failure.
+  /// `replacing` excludes that record from the duplicate check.
+  func validatedCustomToken(
     chainKind: ChainFamily,
     chainId: String,
     address: String,
@@ -194,13 +257,9 @@ extension AppState {
     name: String,
     decimals: String,
     coinGeckoId: String,
-    priceUsd: String
-  ) async -> Bool {
-    guard canMutateVault() else { return false }
-    guard document.customTokens.count < Self.maximumCustomTokens else {
-      error = "A vault can contain at most \(Self.maximumCustomTokens) custom tokens."
-      return false
-    }
+    priceUsd: String,
+    replacing id: UUID? = nil
+  ) -> CustomTokenInput? {
     let trimmedAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
     let normalizedAddress = chainKind == .evm ? trimmedAddress.lowercased() : trimmedAddress
     let normalizedSymbol = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
@@ -232,11 +291,11 @@ extension AppState {
       parsedDecimals <= 36
     else {
       error = "Token needs address, symbol, name, and decimals between 0 and 36."
-      return false
+      return nil
     }
     guard trimmedCoinGeckoId.isEmpty || normalizedCoinGeckoId != nil else {
       error = "CoinGecko ID may contain lowercase letters, numbers, and hyphens only."
-      return false
+      return nil
     }
     // Preserve mixed-case EVM input until after EIP-55 validation; lowercasing
     // first would erase an invalid checksum and turn it into an accepted address.
@@ -244,39 +303,125 @@ extension AppState {
       error =
         chainKind == .evm
         ? "Enter a valid 0x token contract address." : "Enter a valid Solana mint address."
-      return false
+      return nil
     }
     guard chainKind != .evm || ChainRegistry.evmChains.contains(where: { $0.id == chainId }) else {
       error = "Choose a supported EVM chain."
-      return false
+      return nil
     }
     guard priceInput.isEmpty || parsedPrice != nil else {
       error = "USD price must be a finite, non-negative number."
-      return false
+      return nil
+    }
+    if let builtIn = Self.builtInToken(
+      chainKind: chainKind, chainId: chainId, address: normalizedAddress)
+    {
+      error =
+        "\(builtIn.symbol) is already built in and scanned automatically; a custom copy would be ignored."
+      return nil
     }
     if document.customTokens.contains(where: {
-      $0.chainKind == chainKind
+      $0.id != id
+        && $0.chainKind == chainKind
         && $0.chainId == chainId
         && (chainKind == .evm
           ? $0.address.lowercased() == normalizedAddress.lowercased()
           : $0.address == normalizedAddress)
     }) {
       error = "That token is already in the allowlist."
+      return nil
+    }
+    return CustomTokenInput(
+      chainKind: chainKind,
+      chainId: chainId,
+      address: normalizedAddress,
+      symbol: normalizedSymbol,
+      name: normalizedName,
+      decimals: parsedDecimals,
+      coinGeckoId: normalizedCoinGeckoId,
+      priceUsd: parsedPrice
+    )
+  }
+
+  @discardableResult
+  func addCustomToken(
+    chainKind: ChainFamily,
+    chainId: String,
+    address: String,
+    symbol: String,
+    name: String,
+    decimals: String,
+    coinGeckoId: String,
+    priceUsd: String
+  ) async -> Bool {
+    guard canMutateVault() else { return false }
+    guard document.customTokens.count < Self.maximumCustomTokens else {
+      error = "A vault can contain at most \(Self.maximumCustomTokens) custom tokens."
       return false
     }
+    guard
+      let input = validatedCustomToken(
+        chainKind: chainKind, chainId: chainId, address: address, symbol: symbol,
+        name: name, decimals: decimals, coinGeckoId: coinGeckoId, priceUsd: priceUsd)
+    else { return false }
     return await mutateDocument { document in
       document.customTokens.append(
         CustomTokenRecord(
-          chainKind: chainKind,
-          chainId: chainId,
-          address: normalizedAddress,
-          symbol: normalizedSymbol,
-          name: normalizedName,
-          decimals: parsedDecimals,
-          coinGeckoId: normalizedCoinGeckoId,
-          priceUsd: parsedPrice
+          chainKind: input.chainKind,
+          chainId: input.chainId,
+          address: input.address,
+          symbol: input.symbol,
+          name: input.name,
+          decimals: input.decimals,
+          coinGeckoId: input.coinGeckoId,
+          priceUsd: input.priceUsd
         )
       )
+    }
+  }
+
+  /// Edits a saved custom token in place, keeping its identity, enabled
+  /// state, and creation date. Same validation as `addCustomToken`.
+  @discardableResult
+  func updateCustomToken(
+    id: UUID,
+    chainKind: ChainFamily,
+    chainId: String,
+    address: String,
+    symbol: String,
+    name: String,
+    decimals: String,
+    coinGeckoId: String,
+    priceUsd: String
+  ) async -> Bool {
+    guard canMutateVault() else { return false }
+    guard let index = document.customTokens.firstIndex(where: { $0.id == id }) else {
+      error = "That token is no longer in the allowlist."
+      return false
+    }
+    guard
+      let input = validatedCustomToken(
+        chainKind: chainKind, chainId: chainId, address: address, symbol: symbol,
+        name: name, decimals: decimals, coinGeckoId: coinGeckoId, priceUsd: priceUsd,
+        replacing: id)
+    else { return false }
+    let current = document.customTokens[index]
+    guard
+      current.chainKind != input.chainKind || current.chainId != input.chainId
+        || current.address != input.address || current.symbol != input.symbol
+        || current.name != input.name || current.decimals != input.decimals
+        || current.coinGeckoId != input.coinGeckoId || current.priceUsd != input.priceUsd
+    else { return true }
+    return await mutateDocument { document in
+      document.customTokens[index].chainKind = input.chainKind
+      document.customTokens[index].chainId = input.chainId
+      document.customTokens[index].address = input.address
+      document.customTokens[index].symbol = input.symbol
+      document.customTokens[index].name = input.name
+      document.customTokens[index].decimals = input.decimals
+      document.customTokens[index].coinGeckoId = input.coinGeckoId
+      document.customTokens[index].priceUsd = input.priceUsd
+      document.customTokens[index].updatedAt = Date()
     }
   }
 
@@ -294,19 +439,17 @@ extension AppState {
     _ = await mutateDocument { $0.customTokens.removeAll { $0.id == id } }
   }
 
-  @discardableResult
-  func addManualHolding(symbol: String, amount: String, valueUsd: String) async -> Bool {
-    guard canMutateVault() else { return false }
-    guard document.manualHoldings.count < Self.maximumManualHoldings else {
-      error = "A vault can contain at most \(Self.maximumManualHoldings) manual holdings."
-      return false
-    }
+  /// Shared add/edit validation for a manual holding. Sets `error` and
+  /// returns nil on failure.
+  func validatedManualHolding(symbol: String, amount: String, valueUsd: String)
+    -> (symbol: String, amount: Double, priceUsd: Double, valueUsd: Double)?
+  {
     guard let parsedAmount = UserInputValidation.nonnegativeFiniteNumber(amount),
       let parsedValue = UserInputValidation.nonnegativeFiniteNumber(valueUsd),
       !symbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     else {
       error = "Manual holding needs a symbol plus finite, non-negative amount and value."
-      return false
+      return nil
     }
     guard
       let derivedPrice = AppState.derivedManualPrice(amount: parsedAmount, valueUsd: parsedValue)
@@ -315,7 +458,7 @@ extension AppState {
         parsedAmount > 0
         ? "Manual holding amount and value produce an unsupported price."
         : "Manual holding amount must be greater than zero."
-      return false
+      return nil
     }
     let normalized = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
     guard normalized.count <= 32,
@@ -323,21 +466,66 @@ extension AppState {
     else {
       error =
         "Manual holding symbols may use up to 32 letters, numbers, dots, dashes, or underscores."
+      return nil
+    }
+    return (normalized, parsedAmount, derivedPrice, parsedValue)
+  }
+
+  @discardableResult
+  func addManualHolding(symbol: String, amount: String, valueUsd: String) async -> Bool {
+    guard canMutateVault() else { return false }
+    guard document.manualHoldings.count < Self.maximumManualHoldings else {
+      error = "A vault can contain at most \(Self.maximumManualHoldings) manual holdings."
       return false
     }
+    guard let input = validatedManualHolding(symbol: symbol, amount: amount, valueUsd: valueUsd)
+    else { return false }
     return await mutateDocument { document in
       document.manualHoldings.append(
         ManualHoldingRecord(
           label: "Manual",
           provider: "custom",
           customVenue: "Manual",
-          symbol: normalized,
-          name: normalized,
-          amount: parsedAmount,
-          priceUsd: derivedPrice,
-          valueUsd: parsedValue
+          symbol: input.symbol,
+          name: input.symbol,
+          amount: input.amount,
+          priceUsd: input.priceUsd,
+          valueUsd: input.valueUsd
         )
       )
+    }
+  }
+
+  /// Edits a saved manual holding in place, keeping its identity, enabled
+  /// state, venue, and creation date. Same validation as `addManualHolding`.
+  @discardableResult
+  func updateManualHolding(id: UUID, symbol: String, amount: String, valueUsd: String) async
+    -> Bool
+  {
+    guard canMutateVault() else { return false }
+    guard let index = document.manualHoldings.firstIndex(where: { $0.id == id }) else {
+      error = "That holding is no longer saved."
+      return false
+    }
+    guard let input = validatedManualHolding(symbol: symbol, amount: amount, valueUsd: valueUsd)
+    else { return false }
+    let current = document.manualHoldings[index]
+    let renamed = current.symbol != input.symbol
+    guard
+      renamed || current.amount != input.amount || current.valueUsd != input.valueUsd
+        || current.priceUsd != input.priceUsd
+    else { return true }
+    return await mutateDocument { document in
+      document.manualHoldings[index].symbol = input.symbol
+      if renamed || document.manualHoldings[index].name == current.symbol {
+        document.manualHoldings[index].name = input.symbol
+      }
+      document.manualHoldings[index].amount = input.amount
+      document.manualHoldings[index].priceUsd = input.priceUsd
+      document.manualHoldings[index].valueUsd = input.valueUsd
+      // The amount and value describe a new observation.
+      document.manualHoldings[index].generatedAt = Date()
+      document.manualHoldings[index].updatedAt = Date()
     }
   }
 

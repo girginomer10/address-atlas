@@ -1130,6 +1130,11 @@ struct AtlasTextFieldStyle: TextFieldStyle {
   @Environment(\.isFocused) private var isFocused
   @Environment(\.colorScheme) private var colorScheme
   @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+  #if os(iOS)
+    /// The field's padding is outside the UIKit text view, so a touch on it
+    /// would otherwise do nothing; the whole rounded control focuses the field.
+    @FocusState private var tapFocused: Bool
+  #endif
 
   func _body(configuration: TextField<Self._Label>) -> some View {
     let tokens = AtlasControlStyleResolver.tokens(
@@ -1145,15 +1150,32 @@ struct AtlasTextFieldStyle: TextFieldStyle {
       )
     )
 
-    configuration
-      .textFieldStyle(.plain)
-      .foregroundStyle(tokens.foreground.color)
-      .padding(.horizontal, 13)
-      .padding(.vertical, 10)
-      .frame(minHeight: 42)
-      .background(tokens.background.color)
-      .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
-      .overlay(AtlasControlOutline(tokens: tokens))
+    #if os(iOS)
+      configuration
+        .textFieldStyle(.plain)
+        .focused($tapFocused)
+        .foregroundStyle(tokens.foreground.color)
+        .padding(.horizontal, 13)
+        .padding(.vertical, 10)
+        .frame(minHeight: 42)
+        .background(tokens.background.color)
+        .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
+        .overlay(AtlasControlOutline(tokens: tokens))
+        .contentShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
+        .onTapGesture {
+          if isEnabled { tapFocused = true }
+        }
+    #else
+      configuration
+        .textFieldStyle(.plain)
+        .foregroundStyle(tokens.foreground.color)
+        .padding(.horizontal, 13)
+        .padding(.vertical, 10)
+        .frame(minHeight: 42)
+        .background(tokens.background.color)
+        .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
+        .overlay(AtlasControlOutline(tokens: tokens))
+    #endif
   }
 }
 

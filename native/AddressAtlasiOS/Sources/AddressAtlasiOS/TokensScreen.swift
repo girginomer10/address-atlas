@@ -119,28 +119,21 @@ private enum TokensCopy {
     value.formatted(.number.precision(.fractionLength(0...8)).locale(AtlasFormatting.locale))
   }
 
-  /// The built-in registry entry that already covers this contract or mint.
-  /// The scanner keeps the built-in entry and silently drops a custom copy
-  /// (`NativeScanner.appendUnique`), so such a copy would have no effect.
+  /// The built-in registry entry that already covers this contract or mint;
+  /// the shared state refuses such a copy because the scanner would ignore it.
   static func builtInToken(
     chainKind: ChainFamily, chainId: String, address: String
   ) -> TokenConfig? {
-    let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return nil }
-    switch chainKind {
-    case .evm:
-      return ChainRegistry.commonErc20Tokens[chainId]?.first {
-        $0.address.lowercased() == trimmed.lowercased()
-      }
-    case .solana:
-      return ChainRegistry.commonSplTokens["solana"]?.first { $0.address == trimmed }
-    default:
-      return nil
-    }
+    AppState.builtInToken(chainKind: chainKind, chainId: chainId, address: address)
   }
 
-  /// Decimal separator the shared validator accepts (it parses with the
-  /// current locale), shown so "1.5" vs "1,5" is never a guess.
+  /// A stored number in the current locale without grouping, so it parses
+  /// back through `UserInputValidation` unchanged when an edit is saved.
+  static func editableNumber(_ value: Double) -> String {
+    value.formatted(
+      .number.grouping(.never).precision(.fractionLength(0...12)).locale(.current))
+  }
+
   static var decimalHint: String {
     let separator = Locale.current.decimalSeparator ?? "."
     let example = 1.5.formatted(.number.locale(.current))
@@ -519,13 +512,30 @@ private struct TokensCustomTokenRow: View {
 private struct TokensAddHoldingSheet: View {
   @EnvironmentObject private var state: AppState
   @Environment(\.dismiss) private var dismiss
-  @State private var symbol = ""
-  @State private var amount = ""
-  @State private var value = ""
+  @State private var symbol: String
+  @State private var amount: String
+  @State private var value: String
   @State private var isAdding = false
+  /// The saved holding being edited; nil adds a new one.
+  private let editingID: UUID?
+
+  /// Pushed inside the detail sheet's navigation stack instead of presented.
+  private let embedded: Bool
+
+  init(editing holding: ManualHoldingRecord? = nil, embedded: Bool = false) {
+    editingID = holding?.id
+    self.embedded = embedded
+    _symbol = State(initialValue: holding?.symbol ?? "")
+    _amount = State(initialValue: holding.map { TokensCopy.editableNumber($0.amount) } ?? "")
+    _value = State(initialValue: holding.map { TokensCopy.editableNumber($0.valueUsd) } ?? "")
+  }
+
+  private var isEditing: Bool { editingID != nil }
 
   private var holdings: [ManualHoldingRecord] { state.document.manualHoldings }
-  private var isAtLimit: Bool { holdings.count >= AppState.maximumManualHoldings }
+  private var isAtLimit: Bool {
+    !isEditing && holdings.count >= AppState.maximumManualHoldings
+  }
   private var trimmedSymbol: String {
     symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
   }
@@ -546,8 +556,10 @@ private struct TokensAddHoldingSheet: View {
   }
 
   var body: some View {
-    IOSFormSheet(title: "Add holding") {
-      Text("Included in your next snapshot.")
+    TokensFormContainer(title: isEditing ? "Edit holding" : "Add holding", embedded: embedded) {
+      Text(
+        isEditing
+          ? "Changes apply from your next snapshot." : "Included in your next snapshot.")
         .font(.callout)
         .foregroundStyle(AtlasTheme.ink2)
 
@@ -606,18 +618,20 @@ private struct TokensAddHoldingSheet: View {
               .controlSize(.small)
               .tint(AtlasTheme.paper)
           }
-          Text("Add holding")
+          Text(isEditing ? "Save changes" : "Add holding")
         }
         .frame(maxWidth: .infinity, minHeight: 44)
       }
       .buttonStyle(AtlasPrimaryButtonStyle())
       .disabled(!hasRequiredInput || isAdding || isAtLimit || state.vaultEditsDisabled)
-      .accessibilityIdentifier("manual-holding-add")
+      .accessibilityIdentifier(isEditing ? "manual-holding-save" : "manual-holding-add")
 
-      Text("\(holdings.count) of \(AppState.maximumManualHoldings) holdings used")
-        .font(.caption)
-        .foregroundStyle(AtlasTheme.ink3)
-        .frame(maxWidth: .infinity)
+      if !isEditing {
+        Text("\(holdings.count) of \(AppState.maximumManualHoldings) holdings used")
+          .font(.caption)
+          .foregroundStyle(AtlasTheme.ink3)
+          .frame(maxWidth: .infinity)
+      }
     }
     .presentationDetents([.large])
     .onAppear { state.error = "" }
@@ -639,11 +653,18 @@ private struct TokensAddHoldingSheet: View {
     isAdding = true
     let addedSymbol = trimmedSymbol
     Task {
-      let added = await state.addManualHolding(symbol: symbol, amount: amount, valueUsd: value)
+      let saved: Bool
+      if let editingID {
+        saved = await state.updateManualHolding(
+          id: editingID, symbol: symbol, amount: amount, valueUsd: value)
+      } else {
+        saved = await state.addManualHolding(symbol: symbol, amount: amount, valueUsd: value)
+      }
       isAdding = false
-      if added {
-        if state.notice.isEmpty, state.error.isEmpty {
-          state.notice = "\(addedSymbol) holding added."
+      if saved {
+        if state.error.isEmpty {
+          state.notice =
+            isEditing ? "\(addedSymbol) holding updated." : "\(addedSymbol) holding added."
         }
         dismiss()
       }
@@ -656,18 +677,37 @@ private struct TokensAddHoldingSheet: View {
 private struct TokensAddCustomTokenSheet: View {
   @EnvironmentObject private var state: AppState
   @Environment(\.dismiss) private var dismiss
-  @State private var chainKind: ChainFamily = .evm
-  @State private var chainId = "ethereum"
-  @State private var address = ""
-  @State private var symbol = ""
-  @State private var name = ""
-  @State private var decimals = "18"
-  @State private var coinGeckoId = ""
-  @State private var priceUsd = ""
+  @State private var chainKind: ChainFamily
+  @State private var chainId: String
+  @State private var address: String
+  @State private var symbol: String
+  @State private var name: String
+  @State private var decimals: String
+  @State private var coinGeckoId: String
+  @State private var priceUsd: String
   @State private var isAdding = false
+  /// The saved token being edited; nil adds a new one.
+  private let editingID: UUID?
 
+  /// Pushed inside the detail sheet's navigation stack instead of presented.
+  private let embedded: Bool
+
+  init(editing token: CustomTokenRecord? = nil, embedded: Bool = false) {
+    editingID = token?.id
+    self.embedded = embedded
+    _chainKind = State(initialValue: token?.chainKind ?? .evm)
+    _chainId = State(initialValue: token?.chainId ?? "ethereum")
+    _address = State(initialValue: token?.address ?? "")
+    _symbol = State(initialValue: token?.symbol ?? "")
+    _name = State(initialValue: token?.name ?? "")
+    _decimals = State(initialValue: token.map { "\($0.decimals)" } ?? "18")
+    _coinGeckoId = State(initialValue: token?.coinGeckoId ?? "")
+    _priceUsd = State(initialValue: token?.priceUsd.map(TokensCopy.editableNumber) ?? "")
+  }
+
+  private var isEditing: Bool { editingID != nil }
   private var tokens: [CustomTokenRecord] { state.document.customTokens }
-  private var isAtLimit: Bool { tokens.count >= AppState.maximumCustomTokens }
+  private var isAtLimit: Bool { !isEditing && tokens.count >= AppState.maximumCustomTokens }
   private var effectiveChainId: String { chainKind == .solana ? "solana" : chainId }
 
   private var hasRequiredInput: Bool {
@@ -686,7 +726,7 @@ private struct TokensAddCustomTokenSheet: View {
   }
 
   var body: some View {
-    IOSFormSheet(title: "Add custom token") {
+    TokensFormContainer(title: isEditing ? "Edit token" : "Add custom token", embedded: embedded) {
       networkSection
       addressSection
       if let builtIn {
@@ -828,7 +868,7 @@ private struct TokensAddCustomTokenSheet: View {
             .controlSize(.small)
             .tint(AtlasTheme.paper)
         }
-        Text("Add token")
+        Text(isEditing ? "Save changes" : "Add token")
       }
       .frame(maxWidth: .infinity, minHeight: 44)
     }
@@ -836,12 +876,14 @@ private struct TokensAddCustomTokenSheet: View {
     .disabled(
       !hasRequiredInput || isAdding || isAtLimit || builtIn != nil || state.vaultEditsDisabled
     )
-    .accessibilityIdentifier("custom-token-add")
+    .accessibilityIdentifier(isEditing ? "custom-token-save" : "custom-token-add")
 
-    Text("\(tokens.count) of \(AppState.maximumCustomTokens) custom tokens used")
-      .font(.caption)
-      .foregroundStyle(AtlasTheme.ink3)
-      .frame(maxWidth: .infinity)
+    if !isEditing {
+      Text("\(tokens.count) of \(AppState.maximumCustomTokens) custom tokens used")
+        .font(.caption)
+        .foregroundStyle(AtlasTheme.ink3)
+        .frame(maxWidth: .infinity)
+    }
   }
 
   private func builtInNotice(_ token: TokenConfig) -> some View {
@@ -912,20 +954,38 @@ private struct TokensAddCustomTokenSheet: View {
     isAdding = true
     let addedSymbol = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
     Task {
-      let added = await state.addCustomToken(
-        chainKind: chainKind,
-        chainId: effectiveChainId,
-        address: address,
-        symbol: symbol,
-        name: name,
-        decimals: decimals,
-        coinGeckoId: coinGeckoId,
-        priceUsd: priceUsd
-      )
+      let saved: Bool
+      if let editingID {
+        saved = await state.updateCustomToken(
+          id: editingID,
+          chainKind: chainKind,
+          chainId: effectiveChainId,
+          address: address,
+          symbol: symbol,
+          name: name,
+          decimals: decimals,
+          coinGeckoId: coinGeckoId,
+          priceUsd: priceUsd
+        )
+      } else {
+        saved = await state.addCustomToken(
+          chainKind: chainKind,
+          chainId: effectiveChainId,
+          address: address,
+          symbol: symbol,
+          name: name,
+          decimals: decimals,
+          coinGeckoId: coinGeckoId,
+          priceUsd: priceUsd
+        )
+      }
       isAdding = false
-      if added {
-        if state.notice.isEmpty, state.error.isEmpty {
-          state.notice = "\(addedSymbol) added. It's included in the next scan."
+      if saved {
+        if state.error.isEmpty {
+          state.notice =
+            isEditing
+            ? "\(addedSymbol) updated. Changes apply from the next scan."
+            : "\(addedSymbol) added. It's included in the next scan."
         }
         dismiss()
       }
@@ -935,12 +995,11 @@ private struct TokensAddCustomTokenSheet: View {
 
 // MARK: - Detail sheets
 
-/// Read-only facts plus the controls the vault supports for a saved holding:
-/// include/pause and remove. The shared state has no in-place edit, so a
-/// changed balance is recorded by removing and re-adding the holding.
+/// Facts plus the controls for a saved holding: edit, include/pause, remove.
 private struct TokensHoldingDetailSheet: View {
   @EnvironmentObject private var state: AppState
   @Environment(\.dismiss) private var dismiss
+  @State private var isEditing = false
   @State private var confirmingRemoval = false
   @State private var isRemoving = false
   @State private var pendingEnabled: Bool?
@@ -951,7 +1010,10 @@ private struct TokensHoldingDetailSheet: View {
   }
 
   var body: some View {
-    TokensDetailScaffold(title: holding?.symbol ?? "Holding") {
+    TokensDetailScaffold(
+      title: holding?.symbol ?? "Holding",
+      onEdit: holding == nil || state.vaultEditsDisabled ? nil : { isEditing = true }
+    ) {
       if let holding {
         content(holding)
       } else {
@@ -983,6 +1045,10 @@ private struct TokensHoldingDetailSheet: View {
         }
         TokensDetailDivider()
         TokensDetailRow(title: "Added", value: AtlasFormatting.dateTime(holding.createdAt))
+        if holding.updatedAt.timeIntervalSince(holding.createdAt) > 1 {
+          TokensDetailDivider()
+          TokensDetailRow(title: "Updated", value: AtlasFormatting.dateTime(holding.updatedAt))
+        }
       }
     }
 
@@ -1007,10 +1073,18 @@ private struct TokensHoldingDetailSheet: View {
       .disabled(state.vaultEditsDisabled)
     }
 
-    Text("To change the amount or value, remove this holding and add it again.")
-      .font(.caption)
-      .foregroundStyle(AtlasTheme.ink3)
-      .fixedSize(horizontal: false, vertical: true)
+    Button {
+      isEditing = true
+    } label: {
+      Label("Edit amount or value", systemImage: "pencil")
+        .frame(maxWidth: .infinity, minHeight: 44)
+    }
+    .buttonStyle(AtlasSecondaryButtonStyle())
+    .disabled(state.vaultEditsDisabled)
+    .accessibilityIdentifier("manual-holding-edit")
+    .navigationDestination(isPresented: $isEditing) {
+      TokensAddHoldingSheet(editing: holding, embedded: true)
+    }
 
     Button(role: .destructive) {
       confirmingRemoval = true
@@ -1051,6 +1125,7 @@ private struct TokensHoldingDetailSheet: View {
 private struct TokensCustomTokenDetailSheet: View {
   @EnvironmentObject private var state: AppState
   @Environment(\.dismiss) private var dismiss
+  @State private var isEditing = false
   @State private var confirmingRemoval = false
   @State private var isRemoving = false
   @State private var pendingEnabled: Bool?
@@ -1061,7 +1136,10 @@ private struct TokensCustomTokenDetailSheet: View {
   }
 
   var body: some View {
-    TokensDetailScaffold(title: token?.symbol ?? "Token") {
+    TokensDetailScaffold(
+      title: token?.symbol ?? "Token",
+      onEdit: token == nil || state.vaultEditsDisabled ? nil : { isEditing = true }
+    ) {
       if let token {
         content(token)
       } else {
@@ -1140,6 +1218,19 @@ private struct TokensCustomTokenDetailSheet: View {
     }
 
     Button {
+      isEditing = true
+    } label: {
+      Label("Edit token", systemImage: "pencil")
+        .frame(maxWidth: .infinity, minHeight: 44)
+    }
+    .buttonStyle(AtlasSecondaryButtonStyle())
+    .disabled(state.vaultEditsDisabled)
+    .accessibilityIdentifier("custom-token-edit")
+    .navigationDestination(isPresented: $isEditing) {
+      TokensAddCustomTokenSheet(editing: token, embedded: true)
+    }
+
+    Button {
       UIPasteboard.general.string = token.address
       state.notice = token.chainKind == .evm ? "Contract address copied." : "Mint address copied."
     } label: {
@@ -1185,15 +1276,57 @@ private struct TokensCustomTokenDetailSheet: View {
   }
 }
 
+/// Add forms are their own sheet; edit forms are pushed inside the detail
+/// sheet, so a second sheet never stacks on the first.
+private struct TokensFormContainer<Content: View>: View {
+  var title: String
+  var embedded: Bool
+  var content: Content
+
+  init(title: String, embedded: Bool, @ViewBuilder content: () -> Content) {
+    self.title = title
+    self.embedded = embedded
+    self.content = content()
+  }
+
+  var body: some View {
+    if embedded {
+      ScrollView {
+        VStack(alignment: .leading, spacing: 18) {
+          content
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 32)
+        .frame(maxWidth: 640, alignment: .leading)
+        .frame(maxWidth: .infinity)
+      }
+      .scrollDismissesKeyboard(.interactively)
+      .background(AtlasTheme.canvas)
+      .navigationTitle(title)
+      .navigationBarTitleDisplayMode(.inline)
+      .atlasKeyboardDoneButton()
+    } else {
+      IOSFormSheet(title: title) {
+        content
+      }
+    }
+  }
+}
+
 /// Detail sheets show saved records, so they close with "Done" rather than
 /// the add sheets' "Cancel"; otherwise the same chrome as `IOSFormSheet`.
 private struct TokensDetailScaffold<Content: View>: View {
   @Environment(\.dismiss) private var dismiss
   var title: String
+  /// Leading "Edit" action, visible at the medium detent where the body's
+  /// own buttons may be below the fold.
+  var onEdit: (() -> Void)?
   var content: Content
 
-  init(title: String, @ViewBuilder content: () -> Content) {
+  init(title: String, onEdit: (() -> Void)? = nil, @ViewBuilder content: () -> Content) {
     self.title = title
+    self.onEdit = onEdit
     self.content = content()
   }
 
@@ -1216,6 +1349,11 @@ private struct TokensDetailScaffold<Content: View>: View {
       .toolbar {
         ToolbarItem(placement: .confirmationAction) {
           Button("Done") { dismiss() }
+        }
+        if let onEdit {
+          ToolbarItem(placement: .cancellationAction) {
+            Button("Edit", action: onEdit)
+          }
         }
       }
     }
