@@ -443,6 +443,18 @@ final class AtlasDesignSystemTests: XCTestCase {
     )
   }
 
+  func testExportPreviewSplitsLongLinesBetweenWordsRatherThanMidWord() {
+    let words = (0..<200).map { "word\($0)" }
+    let text = words.joined(separator: " ")
+    let model = ExportPreviewAccessibilityModel(text: text)
+
+    XCTAssertGreaterThan(model.rows.count, 1)
+    for row in model.rows.dropLast() {
+      XCTAssertTrue(row.content.hasSuffix(" "), "Part ended mid-word: \(row.content.suffix(12))")
+    }
+    XCTAssertEqual(model.rows.map(\.content).joined(), text)
+  }
+
   func testExportPreviewCapsPathologicalAXNodeCountsAndDisclosesOmission() {
     let text = String(repeating: "\n", count: 10_000)
     let model = ExportPreviewAccessibilityModel(text: text)

@@ -24,7 +24,7 @@ extension AppState {
       candidate.iCloudState = receipt
       candidate.syncState = SyncState()
       guard await save(candidate, projectedSyncVersion: nil) else {
-        iCloudStatus = "Saved remotely; local receipt failed"
+        iCloudStatus = "Saved to iCloud; not recorded on this \(PlatformCopy.deviceNoun)"
         // A retry is conflict-protected even after a crash before saving this receipt.
         return
       }
@@ -92,6 +92,6 @@ extension AppState {
     notice = ""
     // CloudKit diagnostics can contain record/account details; do not echo them.
     error = (failure as? ICloudVaultError)?.errorDescription
-      ?? "iCloud could not complete the transfer. Check your connection and iCloud storage, then try again. Your local vault is still available."
+      ?? "iCloud couldn't finish. Check your connection and iCloud storage, then try again. Your portfolio on this \(PlatformCopy.deviceNoun) is unchanged."
   }
 }

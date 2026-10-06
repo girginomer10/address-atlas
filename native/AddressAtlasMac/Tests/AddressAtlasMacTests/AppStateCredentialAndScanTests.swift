@@ -255,7 +255,7 @@ extension AppStateNetworkBoundaryTests {
 
     await state.scanSavedWallets()
 
-    XCTAssertTrue(state.error.contains("Scanning stayed offline"))
+    XCTAssertTrue(state.error.contains("so the scan didn't run"))
     XCTAssertTrue(state.document.scanRuns.isEmpty)
     XCTAssertEqual(state.endpointConfigStatus, "Bundled endpoints (remote unavailable)")
     XCTAssertTrue(http.requests.isEmpty)
@@ -309,7 +309,7 @@ extension AppStateNetworkBoundaryTests {
 
     XCTAssertEqual(state.error, "")
     let run = try XCTUnwrap(state.document.scanRuns.first)
-    XCTAssertTrue(run.warnings.contains { $0.contains("current app session") })
+    XCTAssertTrue(run.warnings.contains { $0.contains("confirmed earlier in this session") })
     XCTAssertTrue(state.endpointConfigStatus.contains("refresh unavailable"))
     XCTAssertTrue(http.requests.contains { $0.url?.host == "blockstream.info" })
   }

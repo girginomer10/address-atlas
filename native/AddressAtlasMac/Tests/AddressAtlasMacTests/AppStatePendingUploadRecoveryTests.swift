@@ -293,10 +293,11 @@ extension AppStateNetworkBoundaryTests {
     )
     XCTAssertTrue(relaunched.document.syncState.remoteOutcomeUncertain)
     XCTAssertTrue(relaunched.hasUnsyncedLocalChanges)
-    XCTAssertTrue(relaunched.persistentOperationGuidance?.contains("may or may not") == true)
+    XCTAssertTrue(
+      relaunched.persistentOperationGuidance?.contains("unclear whether the last upload") == true)
     relaunched.notice = "Transient"
     relaunched.clearTransientMessagesForNavigation()
-    XCTAssertTrue(relaunched.persistentOperationGuidance?.contains("reconcile") == true)
+    XCTAssertTrue(relaunched.persistentOperationGuidance?.contains("Open Sync to check") == true)
     let requestCountBeforeBlockedDownload = http.requests.count
 
     await relaunched.downloadEncryptedVault(expectedServerURL: expectedServerURL)
@@ -455,7 +456,7 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertTrue(state.document.preferences.hideDust)
     XCTAssertTrue(state.hasUnsyncedLocalChanges)
     XCTAssertEqual(state.document.syncState.latestRemoteVersion, 1)
-    XCTAssertTrue(state.notice.contains("Newer local changes were preserved"))
+    XCTAssertTrue(state.notice.contains("still need to be uploaded"))
     XCTAssertFalse(state.notice.contains("Removed"))
     let currentRemote = await server.currentRemote()
     let remote = try XCTUnwrap(currentRemote)

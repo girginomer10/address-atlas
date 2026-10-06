@@ -220,7 +220,6 @@ public enum AddressAtlasExporter {
     ].joined(separator: ",")
     let rows = report.groups.map { group in
       [
-        csvEscape(report.privacyNotice),
         group.family.rawValue,
         group.source.rawValue,
         group.pricingStatus.rawValue,
@@ -228,16 +227,26 @@ public enum AddressAtlasExporter {
         group.estimatedValueUsdRange.rawValue,
       ].joined(separator: ",")
     }
-    // Keep the output rectangular even when no scan exists. The first column
-    // repeats the non-anonymity notice so it survives row-only imports.
-    let outputRows = rows.isEmpty
-      ? [[csvEscape(report.privacyNotice), "", "", "", "", ""].joined(separator: ",")]
-      : rows
+    // The output stays rectangular even when no scan exists. The
+    // non-anonymity notice is stated once, in the first data row, so it
+    // survives header-less imports without repeating on every row.
+    let outputRows = (rows.isEmpty ? [",,,,"] : rows).enumerated().map { index, row in
+      (index == 0 ? csvEscape(report.privacyNotice) : "") + "," + row
+    }
     return ([header] + outputRows).joined(separator: "\n")
   }
 
   public static func shareSafeJSON(for document: VaultDocument) throws -> Data {
-    try JSONEncoder.addressAtlas.encode(shareSafeReport(for: document))
+    try exportJSONEncoder.encode(shareSafeReport(for: document))
+  }
+
+  /// Exports are read by people as well as programs, so JSON is
+  /// pretty-printed with a stable key order. The content is identical to the
+  /// compact form; only whitespace differs.
+  static var exportJSONEncoder: JSONEncoder {
+    let encoder = JSONEncoder.addressAtlas
+    encoder.outputFormatting = [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes]
+    return encoder
   }
 
   private static func cappedDeterministicValue(_ values: [Double]) -> Double {
@@ -254,10 +263,15 @@ public enum AddressAtlasExporter {
     return total
   }
 
+  /// Full identifying holdings report. `address` (the public wallet address;
+  /// blank for exchange and manual holdings) follows the readable wallet or
+  /// exchange name. Numbers use plain, locale-independent decimal notation
+  /// without exponents or binary floating-point tails.
   public static func csv(for assets: [TrackedAsset]) throws -> String {
     try VaultDocumentSemanticValidator.validateAssets(assets)
     let header = [
       "wallet_or_exchange",
+      "address",
       "chain",
       "symbol",
       "name",
@@ -268,16 +282,18 @@ public enum AddressAtlasExporter {
       "source",
     ].joined(separator: ",")
     let rows = assets.map { asset in
-      [
+      let source = exportSource(for: asset)
+      return [
         csvEscape(asset.walletLabel ?? asset.address),
+        source.isWallet ? csvEscape(asset.address) : "",
         csvEscape(asset.chainName),
         csvEscape(asset.symbol),
         csvEscape(asset.name),
-        asset.canonicalAmount,
-        asset.pricingStatus == .unpriced ? "" : String(asset.priceUsd),
-        asset.pricingStatus == .priced ? String(asset.valueUsd) : "",
+        asset.exactAmount ?? ExportDecimal.amount(asset.amount),
+        asset.pricingStatus == .unpriced ? "" : ExportDecimal.price(asset.priceUsd),
+        asset.pricingStatus == .priced ? ExportDecimal.value(asset.valueUsd) : "",
         asset.pricingStatus.rawValue,
-        csvEscape(asset.source.rawValue),
+        csvEscape(source.label),
       ].joined(separator: ",")
     }
     return ([header] + rows).joined(separator: "\n")
@@ -285,7 +301,39 @@ public enum AddressAtlasExporter {
 
   public static func json(for document: VaultDocument) throws -> Data {
     try VaultDocumentSemanticValidator.validate(document)
-    return try JSONEncoder.addressAtlas.encode(ExportedVaultDocument(document))
+    return try exportJSONEncoder.encode(ExportedVaultDocument(document))
+  }
+
+  private enum ExportSource: Equatable {
+    case wallet(AssetSource)
+    case exchange
+    case manual
+
+    var isWallet: Bool {
+      if case .wallet = self { return true }
+      return false
+    }
+
+    var label: String {
+      switch self {
+      case .wallet(let source): source.rawValue
+      case .exchange: AssetSource.exchange.rawValue
+      case .manual: "manual"
+      }
+    }
+  }
+
+  /// Manual holdings are stored as exchange-family rows (see the scan in
+  /// `AppStateScanning` and the semantic validator), but they are entered by
+  /// the user rather than read from an exchange, so the report says `manual`.
+  private static func exportSource(for asset: TrackedAsset) -> ExportSource {
+    guard asset.source == .exchange || asset.family == .exchange else {
+      return .wallet(asset.source)
+    }
+    if asset.exchangeId == nil, asset.id.hasPrefix("manual-"), asset.chainId.hasPrefix("manual-") {
+      return .manual
+    }
+    return .exchange
   }
 
   private static func csvEscape(_ value: String) -> String {
@@ -313,5 +361,42 @@ public enum AddressAtlasExporter {
       return "\"\(sanitized.replacingOccurrences(of: "\"", with: "\"\""))\""
     }
     return sanitized
+  }
+}
+
+/// Plain decimal rendering for export columns: no exponent notation, no
+/// binary floating-point tails, and always `.` as the decimal separator.
+enum ExportDecimal {
+  private static let posix = Locale(identifier: "en_US_POSIX")
+
+  /// Token amounts keep every digit a Double reliably carries.
+  static func amount(_ value: Double) -> String {
+    plain(value, significantDigits: 15, maximumFractionDigits: 18)
+  }
+
+  /// Unit prices of small tokens can be far below one cent.
+  static func price(_ value: Double) -> String {
+    plain(value, significantDigits: 10, maximumFractionDigits: 12)
+  }
+
+  /// Holding values in USD.
+  static func value(_ value: Double) -> String {
+    plain(value, significantDigits: 15, maximumFractionDigits: 6)
+  }
+
+  static func plain(_ value: Double, significantDigits: Int, maximumFractionDigits: Int) -> String {
+    guard value.isFinite else { return "" }
+    guard value != 0 else { return "0" }
+    let magnitude = Int(floor(log10(abs(value))))
+    let scale = min(maximumFractionDigits, significantDigits - 1 - magnitude)
+    // `String(Double)` is the shortest text that round-trips, so parsing it as
+    // a Decimal keeps exactly the intended digits before rounding.
+    guard var decimal = Decimal(string: String(value), locale: posix), !decimal.isNaN else {
+      return String(format: "%.\(max(0, scale))f", locale: posix, value)
+    }
+    var rounded = Decimal()
+    NSDecimalRound(&rounded, &decimal, scale, .plain)
+    let text = rounded.description
+    return text == "-0" ? "0" : text
   }
 }

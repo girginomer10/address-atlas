@@ -32,13 +32,13 @@ extension NativeScanner {
       try throwIfCancellation(error)
       return NativeScanResult(
         warnings: [
-          "A height-bound Cosmos snapshot could not be established; liquid, staked, and reward balances were skipped."
+          "Couldn't get a consistent snapshot from the network; available, staked, and reward balances were skipped."
         ])
     }
     guard let snapshotHeight = liquidScan.height else {
       return NativeScanResult(
         warnings: [
-          "The Cosmos provider omitted its block height; liquid, staked, and reward balances were skipped."
+          "The network provider didn't report a block height; available, staked, and reward balances were skipped."
         ])
     }
 

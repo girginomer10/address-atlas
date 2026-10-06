@@ -6,23 +6,23 @@ extension AppState {
   func startScan() {
     guard acceptsNewOperations else { return }
     guard !syncing else {
-      error = "Wait for the active sync operation before scanning."
+      error = "Wait for the sync to finish before scanning."
       return
     }
     guard !syncPersistencePending else {
-      error = "Save the pending sync state locally before scanning."
+      error = "Retry the pending save in Sync before scanning."
       return
     }
     guard !hasPendingAccountDeletion else {
-      error = "Finish or retry the pending account deletion before scanning."
+      error = "Finish deleting your sync account before scanning."
       return
     }
     guard !isPersisting else {
-      error = "Wait for the current local save before scanning."
+      error = "Wait for the current save to finish before scanning."
       return
     }
     guard !isValidatingExchangeCredentials else {
-      error = "Wait for the exchange credential check before scanning."
+      error = "Wait for the exchange key check to finish before scanning."
       return
     }
     guard scanTask == nil, !scanning else {
@@ -43,7 +43,7 @@ extension AppState {
   func scanSavedWallets() async {
     guard acceptsNewOperations else { return }
     guard let vaultKey else {
-      error = "Vault must be unlocked before scanning."
+      error = "Unlock Address Atlas before scanning."
       return
     }
     guard !scanning else {
@@ -51,23 +51,23 @@ extension AppState {
       return
     }
     guard !syncing else {
-      error = "Wait for the active sync operation before scanning."
+      error = "Wait for the sync to finish before scanning."
       return
     }
     guard !syncPersistencePending else {
-      error = "Save the pending sync state locally before scanning."
+      error = "Retry the pending save in Sync before scanning."
       return
     }
     guard !hasPendingAccountDeletion else {
-      error = "Finish or retry the pending account deletion before scanning."
+      error = "Finish deleting your sync account before scanning."
       return
     }
     guard !isPersisting else {
-      error = "Wait for the current local save before scanning."
+      error = "Wait for the current save to finish before scanning."
       return
     }
     guard !isValidatingExchangeCredentials else {
-      error = "Wait for the exchange credential check before scanning."
+      error = "Wait for the exchange key check to finish before scanning."
       return
     }
     scanning = true
@@ -87,11 +87,11 @@ extension AppState {
           guard acceptedEndpointConfigServerURL == serverURL else {
             throw UserFacingAppError(
               message:
-                "The sync endpoint policy could not be verified. Scanning stayed offline so a previously accepted minimum-version rule cannot be bypassed."
+                "Address Atlas couldn't confirm that this version is still supported, so the scan didn't run. Check your connection and try again."
             )
           }
           endpointPolicyWarning =
-            "The sync endpoint policy could not be refreshed; this local snapshot used the last policy trusted for this server in the current app session."
+            "Couldn't check the sync server's latest settings; this scan used the ones confirmed earlier in this session."
         }
       }
       // A transport failure may fall back to an already trusted policy, but a
@@ -114,6 +114,7 @@ extension AppState {
       var scan = try await scanner.scan(addresses: input, customTokens: document.customTokens)
       try Task.checkCancellation()
       scan.holdings = AppState.applyingWalletLabels(to: scan.holdings, wallets: document.wallets)
+      scan.warnings = ScanWarningCopy.namingWallets(in: scan.warnings, wallets: document.wallets)
       let exchangeClient = NativeExchangeBalanceClient(
         http: httpClient,
         endpointConfig: endpointConfig
@@ -164,7 +165,7 @@ extension AppState {
       let invalidHoldingCount = holdingCountBeforeValidation - scan.holdings.count
       if invalidHoldingCount > 0 {
         scan.warnings.append(
-          "Ignored \(invalidHoldingCount) invalid holding value\(invalidHoldingCount == 1 ? "" : "s")."
+          "Skipped \(invalidHoldingCount) holding\(invalidHoldingCount == 1 ? "" : "s") with an invalid amount or value."
         )
       }
       guard let totalUsd = AppState.validatedPortfolioTotal(scan.holdings) else {

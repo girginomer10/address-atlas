@@ -325,10 +325,135 @@ final class ExporterTests: XCTestCase {
 
     XCTAssertEqual(
       lines[0],
-      "wallet_or_exchange,chain,symbol,name,amount,price_usd,value_usd,pricing_status,source"
+      "wallet_or_exchange,address,chain,symbol,name,amount,price_usd,value_usd,pricing_status,source"
     )
-    XCTAssertTrue(lines[1].contains(",1.0,,,unpriced,native"))
-    XCTAssertTrue(lines[2].contains(",1.0,0.0,0.0,priced,native"))
+    XCTAssertTrue(lines[1].contains(",1,,,unpriced,native"))
+    XCTAssertTrue(lines[2].contains(",1,0,0,priced,native"))
+  }
+
+  func testCSVIncludesTheWalletAddressAndLabelsManualHoldingsAsManual() throws {
+    let walletAddress = "0x0000000000000000000000000000000000000001"
+    let wallet = asset(walletLabel: "Ethereum wallet")
+    let exchangeID = UUID(uuidString: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")!
+    let exchange = TrackedAsset(
+      id: "\(exchangeID.uuidString)-binance-BTC",
+      address: "Binance",
+      chainId: "binance",
+      chainName: "Binance",
+      family: .exchange,
+      symbol: "BTC",
+      name: "BTC",
+      amount: 0.5,
+      priceUsd: 60_000,
+      valueUsd: 30_000,
+      source: .exchange,
+      walletLabel: "Binance",
+      exchangeId: exchangeID,
+      exchangeProvider: .binance
+    )
+    let manualID = UUID(uuidString: "11111111-2222-4333-8444-555555555555")!
+    let manual = TrackedAsset(
+      id: "manual-\(manualID.uuidString)",
+      address: "Cold storage",
+      chainId: "manual-Manual",
+      chainName: "Manual",
+      family: .exchange,
+      symbol: "ETH",
+      name: "Ether",
+      amount: 1.5,
+      priceUsd: 1_000 / 1.5,
+      valueUsd: 1.5 * (1_000 / 1.5),
+      source: .exchange
+    )
+
+    let lines = try AddressAtlasExporter.csv(for: [wallet, exchange, manual])
+      .split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+
+    XCTAssertEqual(lines.count, 4)
+    XCTAssertTrue(lines[1].hasPrefix("Ethereum wallet,\(walletAddress),Ethereum,TEST,"))
+    XCTAssertTrue(lines[2].hasPrefix("Binance,,Binance,BTC,BTC,0.5,60000,30000,"))
+    XCTAssertTrue(lines[2].hasSuffix(",priced,exchange"))
+    XCTAssertEqual(lines[3], "Cold storage,,Manual,ETH,Ether,1.5,666.6666667,1000,priced,manual")
+  }
+
+  func testCSVWritesPlainDecimalsWithoutExponentsOrFloatingPointTails() throws {
+    let tiny = TrackedAsset(
+      id: "tiny",
+      address: "0x0000000000000000000000000000000000000001",
+      chainId: "ethereum",
+      chainName: "Ethereum",
+      family: .evm,
+      symbol: "STETH",
+      name: "Lido Staked Ether",
+      amount: 7.0773721770203e-05,
+      priceUsd: 2_692.1,
+      valueUsd: 7.0773721770203e-05 * 2_692.1,
+      pricingStatus: .priced,
+      source: .erc20,
+      walletLabel: "Main"
+    )
+
+    let csv = try AddressAtlasExporter.csv(for: [tiny])
+    let row = try XCTUnwrap(csv.split(separator: "\n").last.map(String.init))
+
+    XCTAssertFalse(row.contains("e-"), row)
+    XCTAssertFalse(row.contains("e+"), row)
+    XCTAssertTrue(row.contains(",0.000070773721770203,2692.1,0.19053,"), row)
+    XCTAssertEqual(ExportDecimal.price(5.78e-06), "0.00000578")
+    XCTAssertEqual(ExportDecimal.value(15_495.967_774_650_46), "15495.967775")
+    XCTAssertEqual(ExportDecimal.amount(1.465_109_424_750_436), "1.46510942475044")
+    XCTAssertEqual(ExportDecimal.value(291.351_611_011_517_04), "291.351611")
+    XCTAssertEqual(ExportDecimal.value(0), "0")
+    XCTAssertEqual(ExportDecimal.amount(12_345_678_901_234_567_890), "12345678901234600000")
+  }
+
+  func testShareSafeCSVStatesThePrivacyNoticeOnceAndStaysRectangular() throws {
+    let holdings = [
+      shareSafeAsset(
+        id: "a", source: .erc20, priceUsd: 1, valueUsd: 1, pricingStatus: .priced),
+      shareSafeAsset(
+        id: "b", source: .native, priceUsd: 0, valueUsd: 0, pricingStatus: .unpriced),
+    ]
+    let document = VaultDocument(
+      scanRuns: [ScanRunRecord(totalUsd: 1, inputCount: 1, holdings: holdings)]
+    )
+
+    let csv = try AddressAtlasExporter.shareSafeCSV(for: document)
+    let lines = csv.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+
+    XCTAssertEqual(lines.count, 3)
+    XCTAssertEqual(csv.components(separatedBy: ShareSafePortfolioReport.privacyNotice).count, 2)
+    XCTAssertTrue(lines[1].hasPrefix("\"\(ShareSafePortfolioReport.privacyNotice)\",evm,"))
+    XCTAssertEqual(lines[2], ",evm,native,unpriced,1_to_2,not_available")
+
+    let empty = try AddressAtlasExporter.shareSafeCSV(for: VaultDocument())
+      .split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    XCTAssertEqual(empty.count, 2)
+    XCTAssertEqual(empty[1], "\"\(ShareSafePortfolioReport.privacyNotice)\",,,,,")
+  }
+
+  func testJSONExportsArePrettyPrintedAndStillDecode() throws {
+    let document = VaultDocument(
+      wallets: [
+        WalletRecord(
+          label: "Main",
+          address: "0x0000000000000000000000000000000000000001",
+          chainKind: .evm
+        )
+      ]
+    )
+
+    let full = try AddressAtlasExporter.json(for: document)
+    let summary = try AddressAtlasExporter.shareSafeJSON(for: document)
+
+    XCTAssertTrue(String(decoding: full, as: UTF8.self).contains("\n  \"exportFormatVersion\" : 1"))
+    XCTAssertTrue(String(decoding: summary, as: UTF8.self).contains("\n  \"exportFormatVersion\" : 1"))
+    XCTAssertEqual(
+      try JSONDecoder.addressAtlas.decode(VaultDocument.self, from: full).wallets.first?.address,
+      "0x0000000000000000000000000000000000000001"
+    )
+    XCTAssertNoThrow(
+      try JSONDecoder.addressAtlas.decode(ShareSafePortfolioReport.self, from: summary))
   }
 
   private func asset(

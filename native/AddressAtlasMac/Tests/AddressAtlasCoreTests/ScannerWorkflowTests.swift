@@ -27,7 +27,7 @@ final class ScannerWorkflowTests: XCTestCase {
     XCTAssertEqual(holding.valueUsd, 0)
     XCTAssertNil(holding.change24h)
     XCTAssertEqual(result.totalUsd, 0)
-    XCTAssertTrue(result.warnings.contains { $0.contains("USD valuation exceeded") })
+    XCTAssertTrue(result.warnings.contains { $0.contains("is too large to show") })
     XCTAssertNoThrow(try JSONEncoder.addressAtlas.encode(result))
   }
 
@@ -142,7 +142,7 @@ final class ScannerWorkflowTests: XCTestCase {
     XCTAssertEqual(requests.snapshot().count, 1)
     XCTAssertTrue(
       result.warnings.contains(where: {
-        $0.contains("Stargaze is retired") && $0.contains("saved address was kept but not scanned")
+        $0.contains("Stargaze has shut down") && $0.contains("was kept but not scanned")
       }))
     XCTAssertTrue(
       result.warnings.contains(where: {
@@ -194,7 +194,7 @@ final class ScannerWorkflowTests: XCTestCase {
       }))
     XCTAssertTrue(
       result.warnings.contains(where: {
-        $0.contains("rate-limited") && $0.contains("individual retries")
+        $0.contains("rate-limiting requests") && $0.contains("Token balances were skipped")
       }))
   }
 
@@ -246,7 +246,7 @@ final class ScannerWorkflowTests: XCTestCase {
       }))
     XCTAssertTrue(
       result.warnings.contains(where: {
-        $0.contains("after one retry") && $0.contains("individual requests were skipped")
+        $0.contains("temporarily unavailable") && $0.contains("Token balances were skipped")
       }))
   }
 
@@ -617,7 +617,7 @@ final class ScannerWorkflowTests: XCTestCase {
 
     XCTAssertTrue(result.holdings.isEmpty)
     XCTAssertEqual(requests.snapshot().count, 2)
-    XCTAssertTrue(result.warnings.contains(where: { $0.contains("height-bound Cosmos snapshot") }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("consistent snapshot from the network") }))
   }
 
   func testCosmosAcceptsGrpcMetadataHeightAndPinsEveryFallbackPart() async throws {
@@ -665,7 +665,7 @@ final class ScannerWorkflowTests: XCTestCase {
 
     XCTAssertEqual(result.holdings.first(where: { $0.source == .native })?.amount, 1)
     XCTAssertEqual(requests.snapshot().count, 4)
-    XCTAssertFalse(result.warnings.contains(where: { $0.contains("height-bound Cosmos snapshot") }))
+    XCTAssertFalse(result.warnings.contains(where: { $0.contains("consistent snapshot from the network") }))
     XCTAssertFalse(result.warnings.contains(where: { $0.contains("could not be read") }))
   }
 
@@ -727,7 +727,7 @@ final class ScannerWorkflowTests: XCTestCase {
 
     XCTAssertTrue(result.holdings.isEmpty)
     XCTAssertEqual(requests.snapshot().count, 1)
-    XCTAssertTrue(result.warnings.contains(where: { $0.contains("height-bound Cosmos snapshot") }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("consistent snapshot from the network") }))
   }
 
   func testCosmosDelegationPaginationDeduplicatesAndRejectsConflicts() async throws {
@@ -987,7 +987,7 @@ final class ScannerWorkflowTests: XCTestCase {
     XCTAssertEqual(result.holdings.first?.amount, 1.5)
     XCTAssertEqual(result.holdings.first?.priceUsd, 0)
     XCTAssertTrue(
-      result.warnings.contains(where: { $0.contains("pricing is temporarily unavailable") }))
+      result.warnings.contains(where: { $0.contains("Prices are temporarily unavailable") }))
   }
 
   func testXrpAccountInfoAndTrustLinePaginationStayPinnedToOneValidatedLedger() async throws {

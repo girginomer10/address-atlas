@@ -139,23 +139,23 @@ final class AppStateBehaviorTests: XCTestCase {
     XCTAssertEqual(state.notice, "")
     XCTAssertEqual(state.error, "")
     XCTAssertEqual(state.persistentOperationGuidance, localSaveGuidance)
-    XCTAssertTrue(localSaveGuidance?.contains("local save") == true)
+    XCTAssertTrue(localSaveGuidance?.contains("retry the save") == true)
 
     state.pendingVaultUploadHasRemoteConflict = true
-    XCTAssertTrue(state.persistentOperationGuidance?.contains("remote conflict") == true)
+    XCTAssertTrue(state.persistentOperationGuidance?.contains("conflicts with the server copy") == true)
 
     state.pendingVaultUploadHasRemoteConflict = false
     state.syncPersistencePending = false
     state.document.syncState.accountDeletionIdempotencyKey = Base64URL.encode(
       Data(repeating: 0x6B, count: AccountDeletionIdempotencyKey.decodedByteCount)
     )
-    XCTAssertTrue(state.persistentOperationGuidance?.contains("deletion") == true)
+    XCTAssertTrue(state.persistentOperationGuidance?.contains("Deleting your sync account") == true)
 
     state.document.syncState.accountDeletionIdempotencyKey = nil
     state.document.syncState.remoteOutcomeUncertain = true
-    XCTAssertTrue(state.persistentOperationGuidance?.contains("may or may not") == true)
+    XCTAssertTrue(state.persistentOperationGuidance?.contains("unclear whether the last upload") == true)
     state.clearTransientMessagesForNavigation()
-    XCTAssertTrue(state.persistentOperationGuidance?.contains("reconcile") == true)
+    XCTAssertTrue(state.persistentOperationGuidance?.contains("Open Sync to check") == true)
 
     state.document.syncState.remoteOutcomeUncertain = false
     XCTAssertNil(state.persistentOperationGuidance)
@@ -180,6 +180,68 @@ final class AppStateBehaviorTests: XCTestCase {
         persisted: "https://sync.example"
       )
     )
+  }
+
+  func testScanWarningsNameTheWalletInsteadOfItsShortAddress() {
+    let named = WalletRecord(
+      label: "Treasury",
+      address: "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+      chainKind: .evm
+    )
+    let legacy = WalletRecord(
+      label: AddressDetection.defaultWalletLabel("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"),
+      address: "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+      chainKind: .bitcoin
+    )
+    let warnings = [
+      "Base · 0xd8dA...6045: Couldn't check the balance of AERO; some tokens may be missing.",
+      "Bitcoin · 1A1zP1...vfNa: BTC balance couldn't be read: The network provider is rate-limiting requests. (Error 429)",
+      "Solana · So1ana...wxyz: SOL balance couldn't be read.",
+      "Prices are temporarily unavailable, so balances are shown without USD values.",
+    ]
+
+    let renamed = ScanWarningCopy.namingWallets(in: warnings, wallets: [named, legacy])
+
+    XCTAssertEqual(
+      renamed[0],
+      "Base · Treasury: Couldn't check the balance of AERO; some tokens may be missing."
+    )
+    XCTAssertTrue(renamed[1].hasPrefix("Bitcoin · Bitcoin wallet: BTC balance couldn't be read"))
+    XCTAssertEqual(renamed[2], warnings[2])
+    XCTAssertEqual(renamed[3], warnings[3])
+    XCTAssertFalse(renamed.joined().contains("["))
+  }
+
+  func testScanWarningsKeepTheShortAddressWhenTwoWalletsShareIt() {
+    let first = WalletRecord(
+      label: "One", address: "0xd8dA000000000000000000000000000000006045", chainKind: .evm)
+    let second = WalletRecord(
+      label: "Two", address: "0xd8dA111111111111111111111111111111116045", chainKind: .evm)
+    let warning = "Base · 0xd8dA...6045: Token balances were skipped."
+
+    XCTAssertEqual(
+      ScanWarningCopy.namingWallets(in: [warning], wallets: [first, second]),
+      [warning]
+    )
+  }
+
+  func testUserFacingErrorsUsePlainLanguageInsteadOfVaultJargon() {
+    let messages = [
+      UserFacingErrorMapper.message(for: KeychainVaultKeyStoreError.invalidItem),
+      UserFacingErrorMapper.message(for: VaultCryptoError.authenticationFailed),
+      UserFacingErrorMapper.message(for: VaultCryptoError.invalidEnvelope),
+      UserFacingErrorMapper.message(for: EncryptedSQLiteVaultStoreError.staleDocument),
+      UserFacingErrorMapper.message(for: URLError(.notConnectedToInternet)),
+      UserFacingErrorMapper.message(
+        for: ExchangeClientError.httpError(statusCode: 400, message: "Invalid Api-Key ID.")),
+    ].compactMap { $0 }
+
+    XCTAssertEqual(messages.count, 6)
+    for message in messages {
+      XCTAssertFalse(message.lowercased().contains("vault"), message)
+    }
+    XCTAssertTrue(messages[5].contains("didn't accept this API key"))
+    XCTAssertTrue(messages[5].hasSuffix("(Error 400)"))
   }
 
   func testUserFacingErrorBoundaryNeverRendersRawFrameworkOrSwiftTypeNames() {
@@ -238,7 +300,11 @@ final class AppStateBehaviorTests: XCTestCase {
     let didSave = await state.save()
     XCTAssertFalse(didSave)
     XCTAssertEqual(state.document.updatedAt, originalTimestamp)
-    XCTAssertEqual(state.error, EncryptedSQLiteVaultStoreError.staleDocument.localizedDescription)
+    XCTAssertEqual(
+      state.error,
+      UserFacingErrorMapper.message(for: EncryptedSQLiteVaultStoreError.staleDocument)
+    )
+    XCTAssertTrue(state.error.contains("Reopen the app before saving again"))
   }
 
   func testSyncedOrdinarySaveRetainsAllRunsDespiteWireLimit() async throws {
@@ -289,7 +355,7 @@ final class AppStateBehaviorTests: XCTestCase {
       originalContentBaseline
     )
     XCTAssertFalse(state.hasUnsyncedLocalChanges)
-    XCTAssertEqual(state.notice, "Saved locally.")
+    XCTAssertEqual(state.notice, "")
     let verifier = try EncryptedSQLiteVaultStore(
       path: fixture.database,
       vaultKey: fixture.vaultKey
@@ -395,7 +461,7 @@ final class AppStateBehaviorTests: XCTestCase {
 
     XCTAssertEqual(
       state.error,
-      "Network unavailable. Removed 2 oldest scan snapshots to stay within the sync size limit."
+      "Network unavailable. Removed the 2 oldest snapshots to stay within the size limit."
     )
   }
 

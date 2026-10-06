@@ -219,7 +219,7 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertFalse(try verifier.containsRollbackCheckpoint())
 
     await state.restoreVaultRollbackCheckpoint()
-    XCTAssertEqual(state.error, "No local rollback checkpoint is available.")
+    XCTAssertEqual(state.error, "There's no earlier copy to restore.")
     XCTAssertNil(state.document.syncState.accountId)
     XCTAssertTrue(state.document.syncState.sessionToken.isEmpty)
   }
@@ -455,7 +455,7 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertFalse(try verifier.containsRollbackCheckpoint())
 
     await state.restoreVaultRollbackCheckpoint()
-    XCTAssertEqual(state.error, "No local rollback checkpoint is available.")
+    XCTAssertEqual(state.error, "There's no earlier copy to restore.")
     XCTAssertNil(state.document.syncState.accountId)
     XCTAssertTrue(state.document.syncState.sessionToken.isEmpty)
   }

@@ -533,7 +533,7 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertFalse(relaunchedState.syncPersistencePending)
     XCTAssertNil(relaunchedState.pendingVaultUpload)
     XCTAssertEqual(relaunchedState.error, "")
-    XCTAssertEqual(relaunchedState.notice, "Interrupted encrypted vault upload recovered.")
+    XCTAssertEqual(relaunchedState.notice, "The interrupted upload finished.")
     XCTAssertEqual(recoveryHTTP.requests.map(\.httpMethod), ["GET"])
     XCTAssertEqual(relaunchedState.endpointConfig.configVersion, 10)
     let verifier = try EncryptedSQLiteVaultStore(

@@ -48,7 +48,7 @@ final class AppStateDamagedVaultRecoveryTests: XCTestCase {
       state.damagedVaultRecoveryAvailability,
       .validatedRollbackCheckpoint
     )
-    XCTAssertTrue(state.error.contains("Nothing has been reset"))
+    XCTAssertTrue(state.error.contains("Nothing has been deleted"))
     XCTAssertEqual(try Data(contentsOf: fixture.database), damagedBytes)
 
     await state.recoverDamagedVaultFromRollbackCheckpoint()
@@ -100,8 +100,8 @@ final class AppStateDamagedVaultRecoveryTests: XCTestCase {
     XCTAssertNil(state.damagedVaultRecoveryAvailability)
     XCTAssertTrue(state.document.wallets.isEmpty)
     XCTAssertEqual(try fixture.keyStore.loadVaultKey(), fixture.key)
-    XCTAssertTrue(state.notice.contains("no remote data was downloaded"))
-    XCTAssertTrue(state.notice.contains("Open Sync, sign in"))
+    XCTAssertTrue(state.notice.contains("started fresh with the same encryption key"))
+    XCTAssertTrue(state.notice.contains("Restore a saved copy"))
     let quarantine = try XCTUnwrap(quarantineDirectories(in: fixture.support).first)
     XCTAssertEqual(
       try Data(contentsOf: quarantine.appending(path: "vault.sqlite")),

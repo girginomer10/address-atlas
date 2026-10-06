@@ -10,6 +10,13 @@ enum ExportCopy {
     "It omits addresses, labels, symbols, names, record IDs, URLs, notes, history, timestamps, settings, credentials, sessions, and exact amounts, prices, and values. The latest holdings are grouped only by closed source categories and coarse ranges."
   static let fullIdentifyingExplanation =
     "Full exports are credential-free but identifying. CSV includes the latest addresses, labels, asset names, and exact balances. JSON also includes portfolio records, settings, timestamps, and scan history. They omit exchange credentials and sync authentication, and they are not backups."
+  static let fullIdentifyingConfirmationTitle = "Export a report that identifies you?"
+  static let fullIdentifyingConfirmationMessage =
+    "Anyone with this file can see your wallet addresses, names, and exact balances. It has no exchange keys and isn't a backup."
+
+  static func fullIdentifyingConfirmationAction(saves: Bool) -> String {
+    saves ? "Save full report" : "Share full report"
+  }
 }
 
 enum ExportPayload: Sendable {
@@ -176,6 +183,13 @@ struct ExportPreviewAccessibilityModel: Equatable, Sendable {
     while start < bytes.count {
       var end = min(start + maximumNodeValueByteCount, bytes.count)
       if end < bytes.count {
+        // Prefer ending a part after a space or comma in its second half so
+        // a word or value is not split across two rows.
+        let earliestBreak = start + maximumNodeValueByteCount / 2
+        if let breakIndex = bytes[earliestBreak..<end].lastIndex(where: { $0 == 0x20 || $0 == 0x2C })
+        {
+          end = breakIndex + 1
+        }
         while end > start, bytes[end] & 0xC0 == 0x80 {
           end -= 1
         }

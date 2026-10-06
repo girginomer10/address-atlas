@@ -25,6 +25,9 @@ struct ExportScreen: View {
   @State private var shareItem: ExportScreenShareItem?
   @State private var activeShare: ExportScreenShareItem?
   @State private var preparationTask: Task<Void, Never>?
+  /// A Save or Share of a full identifying report waiting for the explicit
+  /// confirmation alert; previews never leave the device and need none.
+  @State private var pendingFullReportAction: ExportScreenAction?
 
   private var latestAssetCount: Int {
     state.latestScan?.holdings.count ?? 0
@@ -74,6 +77,27 @@ struct ExportScreen: View {
         displayName: previewDisplayName,
         exportedPreview: exportedPreview
       )
+    }
+    .alert(
+      ExportCopy.fullIdentifyingConfirmationTitle,
+      isPresented: Binding(
+        get: { pendingFullReportAction != nil },
+        set: { if !$0 { pendingFullReportAction = nil } }
+      ),
+      presenting: pendingFullReportAction
+    ) { action in
+      Button(
+        ExportCopy.fullIdentifyingConfirmationAction(saves: action.kind == .saveToFiles)
+      ) {
+        pendingFullReportAction = nil
+        perform(action.kind, for: action.key, confirmed: true)
+      }
+      .accessibilityIdentifier("full-identifying-export-confirm")
+      Button("Cancel", role: .cancel) {
+        pendingFullReportAction = nil
+      }
+    } message: { _ in
+      Text(ExportCopy.fullIdentifyingConfirmationMessage)
     }
     .onDisappear {
       // Leaving the page while a file is still being rendered would
@@ -298,7 +322,14 @@ struct ExportScreen: View {
   /// One shared lane for preview, Files, and share: the export flag is claimed
   /// before any rendering starts and released on every completion path,
   /// including the page disappearing while the file is still being rendered.
-  private func perform(_ kind: ExportScreenAction.Kind, for key: ExportScreenExportKey) {
+  private func perform(
+    _ kind: ExportScreenAction.Kind, for key: ExportScreenExportKey, confirmed: Bool = false
+  ) {
+    if key.isFullIdentifying, kind != .preview, !confirmed {
+      guard !state.isExportOperationInProgress else { return }
+      pendingFullReportAction = ExportScreenAction(kind: kind, key: key)
+      return
+    }
     guard let payload = payload(for: key) else { return }
     guard state.beginExportOperation() else { return }
     state.error = ""
@@ -409,6 +440,10 @@ private enum ExportScreenExportKey: Equatable {
   case shareSafeJSON
   case fullCSV
   case fullJSON
+
+  var isFullIdentifying: Bool {
+    self == .fullCSV || self == .fullJSON
+  }
 
   var detail: String {
     switch self {

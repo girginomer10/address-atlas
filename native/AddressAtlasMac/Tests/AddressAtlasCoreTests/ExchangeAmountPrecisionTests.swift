@@ -74,7 +74,7 @@ final class ExchangeAmountPrecisionTests: XCTestCase {
     XCTAssertEqual(holding.exactAmount, canonical)
     XCTAssertEqual(holding.canonicalAmount, canonical)
     XCTAssertEqual(holding.displayedAmount, canonical)
-    XCTAssertTrue(try AddressAtlasExporter.csv(for: [holding]).contains(",\(canonical),1.0,"))
+    XCTAssertTrue(try AddressAtlasExporter.csv(for: [holding]).contains(",\(canonical),1,"))
 
     let encoded = try JSONEncoder().encode(holding)
     let decoded = try JSONDecoder().decode(TrackedAsset.self, from: encoded)

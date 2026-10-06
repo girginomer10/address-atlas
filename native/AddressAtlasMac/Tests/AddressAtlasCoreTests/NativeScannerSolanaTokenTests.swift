@@ -322,7 +322,7 @@ extension NativeScannerTokenTests {
 
     XCTAssertEqual(result.holdings.first(where: { $0.symbol == "SOL" })?.amount, 2)
     XCTAssertEqual(result.holdings.first(where: { $0.symbol == "USDC" })?.amount, 1)
-    XCTAssertFalse(result.warnings.contains(where: { $0.contains("coherent context slot") }))
+    XCTAssertFalse(result.warnings.contains(where: { $0.contains("consistent snapshot after") }))
 
     let requestSnapshot = requests.snapshot()
     XCTAssertEqual(
@@ -394,7 +394,7 @@ extension NativeScannerTokenTests {
     XCTAssertTrue(result.holdings.isEmpty)
     XCTAssertTrue(
       result.warnings.contains(where: {
-        $0.contains("coherent context slot") && $0.contains("3 bounded snapshot attempts")
+        $0.contains("consistent snapshot after 3 tries")
       }))
     XCTAssertEqual(requests.snapshot().count, 7)
   }
@@ -546,7 +546,7 @@ extension NativeScannerTokenTests {
     XCTAssertEqual(result.holdings.first(where: { $0.symbol == "SOL" })?.amount, 1)
     XCTAssertEqual(result.holdings.first(where: { $0.symbol == "USDC" })?.amount, 1)
     XCTAssertTrue(result.warnings.contains(where: { $0.contains("Token-2022") }))
-    XCTAssertFalse(result.warnings.contains(where: { $0.contains("coherent context slot") }))
+    XCTAssertFalse(result.warnings.contains(where: { $0.contains("consistent snapshot after") }))
   }
 
   func testSolanaSnapshotCancellationPropagatesWithoutConvergenceRetries() async throws {
@@ -1180,11 +1180,11 @@ extension NativeScannerTokenTests {
     XCTAssertEqual(result.holdings.first?.valueUsd, 10)
     XCTAssertTrue(
       result.warnings.contains { warning in
-        warning.contains("Solana") && warning.contains("SPL Token token account scan failed")
+        warning.contains("Solana") && warning.contains("SPL Token balances couldn't be read")
       })
     XCTAssertTrue(
       result.warnings.contains { warning in
-        warning.contains("Solana") && warning.contains("Token-2022 token account scan failed")
+        warning.contains("Solana") && warning.contains("Token-2022 balances couldn't be read")
       })
   }
 
@@ -1249,7 +1249,7 @@ extension NativeScannerTokenTests {
         .sorted(),
       [123, 124]
     )
-    XCTAssertFalse(result.warnings.contains(where: { $0.contains("snapshot slot could not") }))
+    XCTAssertFalse(result.warnings.contains(where: { $0.contains("didn't return a consistent snapshot:") }))
   }
 
   func testSolanaRejectsMismatchedSlotFallbackBeforeTokenReads() async throws {
@@ -1284,7 +1284,7 @@ extension NativeScannerTokenTests {
 
     XCTAssertTrue(result.holdings.isEmpty)
     XCTAssertEqual(requests.snapshot().count, 2)
-    XCTAssertTrue(result.warnings.contains(where: { $0.contains("snapshot slot could not") }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("didn't return a consistent snapshot:") }))
   }
 
 }

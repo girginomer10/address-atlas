@@ -18,7 +18,7 @@ public struct WorkflowTimeoutError: Error, Equatable, LocalizedError, Sendable {
   }
 
   public var errorDescription: String? {
-    "The operation exceeded its \(displaySeconds)-second deadline."
+    "This took longer than \(displaySeconds) seconds and was stopped."
   }
 }
 
@@ -34,9 +34,16 @@ public enum JSONHTTPClientError: Error, Equatable, LocalizedError, Sendable {
   public var errorDescription: String? {
     switch self {
     case .httpStatus(let statusCode):
-      return "HTTP request failed with status \(statusCode)."
+      switch statusCode {
+      case 429:
+        return "The network provider is rate-limiting requests. (Error 429)"
+      case 500...599:
+        return "The network provider is temporarily unavailable. (Error \(statusCode))"
+      default:
+        return "The network provider returned an error. (Error \(statusCode))"
+      }
     case .responseTooLarge:
-      return "HTTP response exceeded the supported size limit."
+      return "The network provider sent a response that was too large to read."
     }
   }
 }

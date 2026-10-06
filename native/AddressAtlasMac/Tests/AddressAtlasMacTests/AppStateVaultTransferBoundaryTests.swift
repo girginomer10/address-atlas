@@ -92,7 +92,7 @@ extension AppStateNetworkBoundaryTests {
     await state.uploadEncryptedVault(expectedServerURL: expectedServerURL)
 
     XCTAssertEqual(state.error, "")
-    XCTAssertEqual(state.notice, "Encrypted vault uploaded.")
+    XCTAssertEqual(state.notice, "Encrypted copy uploaded.")
     XCTAssertEqual(http.requests.map(\.httpMethod), ["GET", "PUT"])
     let put = try XCTUnwrap(http.requests.last)
     XCTAssertEqual(put.url?.path, "/vault/latest")
@@ -216,7 +216,7 @@ extension AppStateNetworkBoundaryTests {
 
     await state.uploadEncryptedVault(expectedServerURL: expectedServerURL)
 
-    XCTAssertTrue(state.error.contains("Remote vault snapshot is newer"))
+    XCTAssertTrue(state.error.contains("The server copy is newer"))
     XCTAssertEqual(http.requests.map(\.httpMethod), ["GET"])
     XCTAssertEqual(state.document.syncState.latestRemoteVersion, 1)
     XCTAssertEqual(state.document.syncState.lastChecksum, staleLocalChecksum)
@@ -371,7 +371,7 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertEqual(state.document.syncState.latestRemoteVersion, 0)
     XCTAssertNil(state.document.syncState.lastChecksum)
     XCTAssertNotNil(state.pendingVaultUpload)
-    XCTAssertTrue(state.error.contains("remains safely pending"))
+    XCTAssertTrue(state.error.contains("interrupted upload is still waiting"))
     XCTAssertEqual(
       try EncryptedSQLiteVaultStore(
         path: fixture.database,
@@ -498,7 +498,7 @@ extension AppStateNetworkBoundaryTests {
     await state.downloadEncryptedVault(expectedServerURL: expectedServerURL)
 
     XCTAssertEqual(state.error, "")
-    XCTAssertEqual(state.notice, "Encrypted vault downloaded.")
+    XCTAssertEqual(state.notice, "Encrypted copy downloaded.")
     XCTAssertEqual(http.requests.map(\.httpMethod), ["GET"])
     XCTAssertEqual(
       http.requests.first?.value(forHTTPHeaderField: "authorization"),
@@ -608,7 +608,7 @@ extension AppStateNetworkBoundaryTests {
     await state.uploadEncryptedVault(expectedServerURL: expectedServerURL)
 
     XCTAssertEqual(state.error, "")
-    XCTAssertEqual(state.notice, "Encrypted vault uploaded.")
+    XCTAssertEqual(state.notice, "Encrypted copy uploaded.")
     XCTAssertEqual(http.requests.map(\.httpMethod), ["GET", "GET", "PUT"])
     let uploaded = try JSONDecoder.addressAtlas.decode(
       RemoteVaultSnapshot.self,

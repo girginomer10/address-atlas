@@ -134,7 +134,7 @@ extension NativeScanner {
         } catch {
           try throwIfCancellation(error)
           warnings.append(
-            "SPL token balances were skipped because a confirmed snapshot slot could not be established: \(error.localizedDescription)"
+            "Solana token balances were skipped because the network didn't return a consistent snapshot: \(error.localizedDescription)"
           )
         }
       }
@@ -437,7 +437,7 @@ extension NativeScanner {
               "Native SOL balance could not be aligned to the coherent snapshot and was skipped: \(error.localizedDescription)"
           case .tokenProgram(let program):
             warning =
-              "\(Self.solanaProgramLabel(program)) token account scan failed; SPL balances may be incomplete."
+              "\(Self.solanaProgramLabel(program)) balances couldn't be read; some Solana tokens may be missing."
           }
           return SolanaComponentFetch(
             component: component,
@@ -482,9 +482,9 @@ extension NativeScanner {
       )
     }
 
-    let scope = initialNative == nil ? "SPL token balances" : "SOL and SPL balances"
+    let scope = initialNative == nil ? "Solana token balances" : "SOL and Solana token balances"
     warnings.append(
-      "\(scope) were skipped because the RPC did not return one coherent context slot after \(Self.maxSolanaSnapshotAttempts) bounded snapshot attempts."
+      "\(scope) were skipped because the network didn't return a consistent snapshot after \(Self.maxSolanaSnapshotAttempts) tries."
     )
     return SolanaCoherentSnapshot(
       native: nil,

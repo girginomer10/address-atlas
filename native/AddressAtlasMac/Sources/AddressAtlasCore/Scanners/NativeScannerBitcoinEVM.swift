@@ -159,7 +159,7 @@ extension NativeScanner {
         contentsOf: assetIfPositive(amount: amount, address: address, chain: chain, prices: prices))
     } catch {
       try throwIfCancellation(error)
-      warnings.append("\(chain.name) native balance failed: \(error.localizedDescription)")
+      warnings.append("\(chain.symbol) balance couldn't be read: \(error.localizedDescription)")
     }
     let tokenScan = try await scanErc20Balances(
       address: address, chain: chain, tokens: tokens, prices: prices, blockTag: blockTag)
@@ -208,20 +208,20 @@ extension NativeScanner {
     } catch let error as JSONHTTPClientError where error.statusCode == 429 {
       return NativeScanResult(
         warnings: [
-          "\(chain.name) token balance batch was rate-limited; individual retries were skipped to avoid amplifying the limit."
+          "Token balances were skipped because the network provider is rate-limiting requests. Scan again in a few minutes."
         ]
       )
     } catch let error where JSONHTTPClient.isTransientFailure(error) {
       return NativeScanResult(
         warnings: [
-          "\(chain.name) token balance batch remained temporarily unavailable after one retry; individual requests were skipped to avoid amplifying the provider failure."
+          "Token balances were skipped because the network provider is temporarily unavailable. Scan again later."
         ]
       )
     } catch {
       try throwIfCancellation(error)
       return NativeScanResult(
         warnings: [
-          "\(chain.name) token balance batch returned an invalid response; individual requests were skipped to avoid amplifying a provider failure."
+          "Token balances were skipped because the network provider sent an unexpected response. Scan again later."
         ]
       )
     }
@@ -254,7 +254,7 @@ extension NativeScanner {
       failedTokens.isEmpty
       ? []
       : [
-        "ERC-20 token balance checks failed for \(Self.formattedSymbols(failedTokens)); token balances may be incomplete."
+        "Couldn't check the balance of \(Self.formattedSymbols(failedTokens)); some tokens may be missing."
       ]
     return NativeScanResult(assets: assets, warnings: warnings)
   }
@@ -333,7 +333,7 @@ extension NativeScanner {
     }
     if !failedTokens.isEmpty {
       warnings.append(
-        "ERC-20 token balance checks failed for \(Self.formattedSymbols(failedTokens)); token balances may be incomplete."
+        "Couldn't check the balance of \(Self.formattedSymbols(failedTokens)); some tokens may be missing."
       )
     }
     return NativeScanResult(assets: assets, warnings: warnings)

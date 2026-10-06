@@ -19,30 +19,37 @@ enum UserFacingErrorMapper {
       switch keychain {
       case .unexpectedStatus:
         return
-          "Address Atlas could not access the vault key in Keychain. Unlock this \(PlatformCopy.deviceNoun), then try again."
+          "Address Atlas couldn't read its encryption key from Keychain. Unlock this \(PlatformCopy.deviceNoun), then try again."
       case .invalidItem:
-        return "The saved vault key is invalid. Restore your recovery kit before making changes."
+        return
+          "This \(PlatformCopy.deviceNounPossessive) encryption key is damaged. Restore your recovery kit before making changes."
       }
     }
     if let crypto = error as? VaultCryptoError {
       switch crypto {
       case .authenticationFailed:
-        return "Vault integrity verification failed. No data was changed."
+        return "Your encrypted data couldn't be verified. Nothing was changed."
       case .invalidKeyLength:
-        return "The vault key is invalid. Restore your recovery kit before making changes."
+        return "The encryption key isn't valid. Restore your recovery kit before making changes."
       case .invalidBase64, .invalidHex, .invalidEnvelope:
-        return "Encrypted vault data is invalid or damaged. No data was changed."
+        return "Your encrypted data is damaged or unreadable. Nothing was changed."
       }
     }
     if let store = error as? EncryptedSQLiteVaultStoreError {
       if store == .staleDocument {
-        return store.errorDescription
+        return
+          "Your portfolio changed in another Address Atlas window. Reopen the app before saving again."
       }
       return
-        "The encrypted local vault could not be read or saved. Check available disk space and file permissions, then try again."
+        "Your portfolio couldn't be read or saved on this \(PlatformCopy.deviceNoun). Check that there's free storage space, then try again."
     }
     if error is URLError {
-      return "The network request could not be completed. Check your connection and try again."
+      return "Couldn't connect. Check your internet connection and try again."
+    }
+    if let exchange = error as? ExchangeClientError,
+      case .httpError(let statusCode, let message) = exchange
+    {
+      return ExchangeClientError.friendlyHTTPMessage(statusCode: statusCode, providerMessage: message)
     }
 
     // Domain errors intentionally conform to LocalizedError with reviewed,
@@ -68,5 +75,45 @@ enum UserFacingErrorMapper {
     let scalars = collapsed.unicodeScalars
     guard scalars.count > 500 else { return collapsed }
     return String(String.UnicodeScalarView(scalars.prefix(500))) + "…"
+  }
+}
+
+/// Scan warnings are produced by the scanner, which only sees addresses, as
+/// "<Network> · <0x1234...abcd>: <message>". Before a snapshot is saved the
+/// short address is replaced with the wallet's readable name, giving
+/// "Base · Ethereum wallet: …". A short address shared by two saved wallets
+/// is left as is rather than guessed.
+enum ScanWarningCopy {
+  static func namingWallets(in warnings: [String], wallets: [WalletRecord]) -> [String] {
+    let displayNames = AppState.walletDisplayNames(wallets)
+    var nameByHint: [String: String] = [:]
+    var ambiguousHints = Set<String>()
+    for wallet in wallets {
+      guard let hint = shortAddress(wallet.address), let name = displayNames[wallet.id] else {
+        continue
+      }
+      if let existing = nameByHint[hint], existing != name {
+        ambiguousHints.insert(hint)
+      }
+      nameByHint[hint] = name
+    }
+    for hint in ambiguousHints { nameByHint.removeValue(forKey: hint) }
+    guard !nameByHint.isEmpty else { return warnings }
+    return warnings.map { warning in
+      guard let separator = warning.range(of: " · "),
+        let colon = warning.range(of: ": ", range: separator.upperBound..<warning.endIndex)
+      else { return warning }
+      let hint = String(warning[separator.upperBound..<colon.lowerBound])
+      guard let name = nameByHint[hint] else { return warning }
+      return warning.replacingCharacters(in: separator.upperBound..<colon.lowerBound, with: name)
+    }
+  }
+
+  /// Mirrors the scanner's short address form (first six and last four
+  /// characters); addresses too short to abbreviate have no hint.
+  private static func shortAddress(_ address: String) -> String? {
+    let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed.count > 12 else { return nil }
+    return "\(trimmed.prefix(6))...\(trimmed.suffix(4))"
   }
 }

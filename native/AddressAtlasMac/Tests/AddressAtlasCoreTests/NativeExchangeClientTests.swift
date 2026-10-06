@@ -184,6 +184,33 @@ final class NativeExchangeClientTests: XCTestCase {
     }
   }
 
+  func testExchangeHTTPFailuresReadAsPlainLanguageWithTheStatusCode() {
+    let invalidKey = ExchangeClientError.httpError(
+      statusCode: 400, message: "Invalid Api-Key ID."
+    ).errorDescription
+    XCTAssertEqual(
+      invalidKey,
+      "The exchange didn't accept this API key. Check that the key and secret are correct and the key is still active. (Error 400)"
+    )
+    XCTAssertFalse(invalidKey?.contains("Invalid Api-Key ID") ?? true)
+    XCTAssertTrue(
+      ExchangeClientError.httpError(statusCode: 401, message: "Unauthorized")
+        .errorDescription?.hasPrefix("The exchange didn't accept this API key.") == true)
+    XCTAssertEqual(
+      ExchangeClientError.httpError(statusCode: 429, message: "Too many requests")
+        .errorDescription,
+      "The exchange is limiting requests right now. Wait a few minutes, then try again. (Error 429)"
+    )
+    XCTAssertEqual(
+      ExchangeClientError.httpError(statusCode: 503, message: "").errorDescription,
+      "The exchange is temporarily unavailable. Try again later. (Error 503)"
+    )
+    XCTAssertEqual(
+      ExchangeClientError.httpError(statusCode: 400, message: "Bad request").errorDescription,
+      "The exchange couldn't complete the request. Try again later. (Error 400)"
+    )
+  }
+
   func testExchangeClientRedactsAndCapsUntrustedErrorBody() async throws {
     let rawSecret = String(repeating: "s", count: 80)
     let http = StubHTTPClient { request in

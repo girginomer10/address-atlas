@@ -98,11 +98,11 @@ public enum ExchangeClientError: Error, Equatable, LocalizedError, Sendable {
   public var errorDescription: String? {
     switch self {
     case .httpError(let statusCode, let message):
-      return "Exchange request failed (\(statusCode)): \(message)"
+      return Self.friendlyHTTPMessage(statusCode: statusCode, providerMessage: message)
     case .invalidResponse(let message):
-      return "Exchange returned invalid data: \(message)"
+      return "The exchange sent an unexpected response: \(message)"
     case .paginationLimit(let provider, let pages):
-      return "\(provider) pagination exceeded the \(pages)-page safety limit."
+      return "\(provider) returned more than \(pages) pages of accounts, so the rest were skipped."
     case .legacyKrakenCredentialRequiresMigration:
       return
         "This Kraken connection predates device-safe nonces. Remove it, then add a new read-only Kraken API key created only for this \(PlatformCopy.deviceNoun). Use a different Kraken API key on every device."
@@ -122,6 +122,29 @@ public enum ExchangeClientError: Error, Equatable, LocalizedError, Sendable {
     case .missingReadPermission(let provider):
       return
         "\(provider.label) did not confirm balance/read permission for this API key. No credentials were saved."
+    }
+  }
+
+  /// Plain-language copy for an exchange HTTP failure. The raw provider text
+  /// (for example Binance's "Invalid Api-Key ID.") only decides whether the
+  /// failure is about the key; the HTTP status stays visible as a short
+  /// diagnostic code for support.
+  public static func friendlyHTTPMessage(statusCode: Int, providerMessage: String) -> String {
+    let code = "(Error \(statusCode))"
+    let lowered = providerMessage.lowercased()
+    let mentionsKey = ["api-key", "api key", "apikey", "signature", "permission", "credential"]
+      .contains { lowered.contains($0) }
+    if statusCode == 401 || statusCode == 403 || (statusCode == 400 && mentionsKey) {
+      return
+        "The exchange didn't accept this API key. Check that the key and secret are correct and the key is still active. \(code)"
+    }
+    switch statusCode {
+    case 418, 429:
+      return "The exchange is limiting requests right now. Wait a few minutes, then try again. \(code)"
+    case 500...599:
+      return "The exchange is temporarily unavailable. Try again later. \(code)"
+    default:
+      return "The exchange couldn't complete the request. Try again later. \(code)"
     }
   }
 }
@@ -196,7 +219,7 @@ public struct NativeExchangeScanner: Sendable {
               connection: job.connection,
               warnings: [
                 ProviderErrorSanitizer.sanitize(
-                  "\(job.connection.label): skipped on this \(PlatformCopy.deviceNoun) because this Kraken connection is bound to another \(PlatformCopy.deviceNoun)."
+                  "\(job.connection.label): skipped on this \(PlatformCopy.deviceNoun) because this Kraken key belongs to another \(PlatformCopy.deviceNoun)."
                 )
               ]
             )
@@ -229,7 +252,7 @@ public struct NativeExchangeScanner: Sendable {
       let skipped = max(0, jobs.count - completed.count)
       let deadline = WorkflowTimeoutError(seconds: workflowDeadline).displaySeconds
       globalWarnings.append(
-        "The overall exchange scan reached its \(deadline)-second deadline; \(skipped) unfinished connections were skipped and completed results were kept."
+        "The overall exchange scan reached its \(deadline)-second time limit; \(skipped) exchanges were skipped and completed results were kept."
       )
     } catch {
       try throwIfCancellation(error)
@@ -246,7 +269,7 @@ public struct NativeExchangeScanner: Sendable {
       }
       return ExchangeConnectionOutcome(
         connection: unfinished,
-        warnings: ["\(job.connection.label): not scanned before the overall deadline."]
+        warnings: ["\(job.connection.label): skipped because the scan ran out of time."]
       )
     }
 

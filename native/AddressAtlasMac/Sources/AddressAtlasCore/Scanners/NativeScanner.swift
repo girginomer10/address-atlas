@@ -61,14 +61,14 @@ public struct NativeScanner: Sendable {
     var priceRequestFailed = false
     if parsedInput.wasTruncated {
       warnings.append(
-        "Only the first 24 unique input entries were scanned; additional entries were skipped.")
+        "Only the first 24 addresses were scanned; the rest were skipped.")
     }
     let remainingBeforePricing =
       workflowDeadline - (ProcessInfo.processInfo.systemUptime - workflowStartedAt)
     if remainingBeforePricing <= 0 {
       priceRequestFailed = true
       warnings.append(
-        "USD pricing was skipped because the overall scan deadline was already exhausted.")
+        "Prices were skipped because the scan ran out of time.")
     } else {
       do {
         let fetchedPrices = try await withWorkflowTimeout(seconds: min(25, remainingBeforePricing))
@@ -83,7 +83,7 @@ public struct NativeScanner: Sendable {
         try throwIfCancellation(error)
         priceRequestFailed = true
         warnings.append(
-          "USD pricing is temporarily unavailable; successful balances will be shown unpriced.")
+          "Prices are temporarily unavailable, so balances are shown without USD values.")
       }
     }
     let resolvedPrices = prices
@@ -95,10 +95,10 @@ public struct NativeScanner: Sendable {
       if chains.isEmpty {
         if let network = AddressDetection.retiredCosmosNetworkName(for: address) {
           warnings.append(
-            "\(network) is retired and no longer supported; the saved address was kept but not scanned: \(Self.displayAddress(address))."
+            "\(network) has shut down, so \(Self.displayAddress(address)) was kept but not scanned."
           )
         } else {
-          warnings.append("Unsupported address skipped: \(Self.displayAddress(address)).")
+          warnings.append("Skipped \(Self.displayAddress(address)) because its network isn't supported.")
         }
         continue
       }
@@ -121,7 +121,7 @@ public struct NativeScanner: Sendable {
       outcomes = []
       let deadline = WorkflowTimeoutError(seconds: workflowDeadline).displaySeconds
       warnings.append(
-        "The overall scan reached its \(deadline)-second deadline before chain checks began; all chain checks were skipped."
+        "The overall scan reached its \(deadline)-second time limit before any network was checked; no balances were read."
       )
     } else {
       do {
@@ -163,7 +163,7 @@ public struct NativeScanner: Sendable {
         let skipped = max(0, chainJobs.count - outcomes.count)
         let deadline = WorkflowTimeoutError(seconds: workflowDeadline).displaySeconds
         warnings.append(
-          "The overall scan reached its \(deadline)-second deadline; \(skipped) unfinished chain checks were skipped and completed results were kept."
+          "The overall scan reached its \(deadline)-second time limit; \(skipped) network checks were skipped and completed results were kept."
         )
       } catch {
         try throwIfCancellation(error)
@@ -175,7 +175,7 @@ public struct NativeScanner: Sendable {
     warnings.append(
       contentsOf: ordered.flatMap { outcome in
         outcome.result.warnings.map {
-          "\(outcome.chainName) [\(outcome.addressHint)]: \($0)"
+          "\(outcome.chainName) · \(outcome.addressHint): \($0)"
         }
       })
     let unpricedSymbols =
@@ -184,7 +184,7 @@ public struct NativeScanner: Sendable {
       .map(\.symbol)
     if !priceRequestFailed, !unpricedSymbols.isEmpty {
       warnings.append(
-        "No USD price was available for \(Self.formattedSymbols(unpricedSymbols)); balances are still included."
+        "No USD price was available for \(Self.formattedSymbols(unpricedSymbols)); those balances are shown without a value."
       )
     }
 
@@ -197,7 +197,7 @@ public struct NativeScanner: Sendable {
     }
     if !valuationOverflowSymbols.isEmpty {
       warnings.append(
-        "USD valuation exceeded the supported numeric range for \(Self.formattedSymbols(valuationOverflowSymbols)); those balances are shown without a USD value."
+        "The USD value of \(Self.formattedSymbols(valuationOverflowSymbols)) is too large to show; those balances are shown without a value."
       )
     }
     guard let totalUsd = FiniteValueMath.sumNonnegative(assets.map(\.valueUsd)) else {

@@ -486,7 +486,7 @@ extension NativeScannerTokenTests {
       [
         "The EVM RPC repeated one identical token response; the duplicate was skipped.",
         "The EVM RPC returned conflicting responses for one token request; every conflicting version was skipped.",
-        "ERC-20 token balance checks failed for TWO; token balances may be incomplete.",
+        "Couldn't check the balance of TWO; some tokens may be missing.",
       ]
     )
   }
@@ -618,7 +618,7 @@ extension NativeScannerTokenTests {
         result.warnings,
         [
           "The EVM RPC returned conflicting responses for one token request; every conflicting version was skipped.",
-          "ERC-20 token balance checks failed for ONE; token balances may be incomplete.",
+          "Couldn't check the balance of ONE; some tokens may be missing.",
         ]
       )
     }
@@ -734,7 +734,7 @@ extension NativeScannerTokenTests {
 
     XCTAssertTrue(result.assets.isEmpty)
     XCTAssertEqual(recorder.snapshot().count, 1)
-    XCTAssertTrue(result.warnings.contains { $0.contains("individual requests were skipped") })
+    XCTAssertTrue(result.warnings.contains { $0.contains("Token balances were skipped because the network provider") })
   }
 
   func testHttpStatusEvmBatchFailuresDoNotAmplifyIntoIndividualCalls() async throws {
@@ -771,7 +771,7 @@ extension NativeScannerTokenTests {
       XCTAssertTrue(result.assets.isEmpty, "status \(statusCode)")
       XCTAssertEqual(recorder.snapshot().count, statusCode == 501 ? 2 : 1)
       XCTAssertTrue(
-        result.warnings.contains { $0.contains("individual requests were skipped") },
+        result.warnings.contains { $0.contains("Token balances were skipped because the network provider") },
         "status \(statusCode)"
       )
     }

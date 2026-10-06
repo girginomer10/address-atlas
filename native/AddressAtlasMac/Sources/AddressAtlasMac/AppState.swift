@@ -28,15 +28,15 @@ enum SyncActivity: String, CaseIterable, Equatable, Sendable {
     switch self {
     case .creatingPasskeyAccount: "Creating passkey account"
     case .signingIn: "Signing in with passkey"
-    case .uploadingVault: "Uploading encrypted vault"
-    case .downloadingVault: "Downloading encrypted vault"
+    case .uploadingVault: "Uploading encrypted copy"
+    case .downloadingVault: "Downloading encrypted copy"
     case .recoveringUpload: "Recovering interrupted upload"
     case .retryingLocalSave: "Retrying local save"
     case .stoppingUploadRecovery: "Stopping upload recovery"
     case .revokingSession: "Revoking this \(PlatformCopy.deviceNounPossessive) session"
     case .deletingAccount: "Deleting sync account"
     case .disconnectingAccount: "Disconnecting sync account"
-    case .restoringRollbackCheckpoint: "Restoring encrypted rollback point"
+    case .restoringRollbackCheckpoint: "Restoring the earlier copy"
     }
   }
 
@@ -430,31 +430,31 @@ final class AppState: ObservableObject {
   var persistentOperationGuidance: String? {
     if quarantinedPendingVaultUpload != nil {
       return
-        "The encrypted upload recovery record is quarantined. Your local vault is available read-only; open Sync to explicitly discard only the damaged recovery record."
+        "A damaged upload record was set aside. Your portfolio is read-only until you discard that record in Sync."
     }
     if pendingVaultUploadHasRemoteConflict {
       return
-        "Encrypted upload recovery has a remote conflict. Open Sync to review it before changing the vault."
+        "An interrupted upload conflicts with the server copy. Open Sync to review it before making changes."
     }
     if pendingVaultUpload != nil {
       return
-        "An encrypted vault upload still needs recovery. Open Sync and retry upload recovery before changing the vault."
+        "An interrupted upload still needs to finish. Open Sync and retry it before making changes."
     }
     if syncPersistencePending {
       return
-        "A completed sync still needs a local save. Open Sync and retry the local save before changing the vault."
+        "A finished sync still needs to be saved on this \(PlatformCopy.deviceNoun). Open Sync and retry the save before making changes."
     }
     if hasPendingAccountDeletion {
       return
-        "Sync account deletion is still pending. Open Sync and retry the saved deletion operation."
+        "Deleting your sync account isn't finished. Open Sync and try again."
     }
     if document.syncState.remoteOutcomeUncertain {
       return
-        "The last encrypted upload may or may not have reached the server. Open Sync to reconcile the unknown remote outcome before trusting remote status or replacing this local vault."
+        "It's unclear whether the last upload reached the server. Open Sync to check before relying on the server copy or replacing this one."
     }
     if document.syncState.pendingExchangeCredentialCleanup {
       return
-        "Exchange credentials were removed locally, but the last confirmed remote snapshot may still contain them. Open Sync and upload the replacement encrypted vault to complete remote cleanup."
+        "Exchange keys were removed here, but the last server copy may still contain them. Open Sync and upload to finish removing them."
     }
     return nil
   }
@@ -615,9 +615,9 @@ final class AppState: ObservableObject {
       if quarantinedUpload != nil {
         notice = ""
         error =
-          "The encrypted upload recovery record is damaged and has been quarantined. Your full local vault is available read-only. Open Sync to explicitly discard only that recovery record."
+          "A damaged upload record was set aside. Your portfolio is read-only until you discard that record in Sync."
       } else {
-        notice = pendingUpload == nil ? "" : "Recovering an interrupted encrypted vault upload."
+        notice = pendingUpload == nil ? "" : "Finishing an interrupted upload."
         error = ""
       }
       if pendingUpload != nil, legacyServerSyncEnabled {
@@ -643,8 +643,8 @@ final class AppState: ObservableObject {
         notice = ""
         self.error =
           hasValidatedRollback
-          ? "The primary encrypted vault is damaged, but its automatic encrypted rollback point was independently validated. Restore that rollback point first, or explicitly quarantine the damaged database and start with a clean local vault. Nothing has been reset."
-          : "The primary encrypted vault is damaged and no valid automatic rollback point is available. You can explicitly preserve the database and its SQLite sidecars in a private quarantine, then start with a clean local vault and sign in to download the remote copy. Nothing has been reset."
+          ? "Your saved portfolio on this \(PlatformCopy.deviceNoun) is damaged, but an earlier copy was checked and is intact. Restore the earlier copy, or set the damaged data aside and start fresh. Nothing has been deleted."
+          : "Your saved portfolio on this \(PlatformCopy.deviceNoun) is damaged and no earlier copy is available. You can set the damaged data aside, start fresh, and then restore a copy you saved elsewhere. Nothing has been deleted."
         isUnlocked = false
         return
       }
@@ -704,7 +704,7 @@ final class AppState: ObservableObject {
     }
     guard let persistence else {
       notice = ""
-      error = "Unlock the vault before saving."
+      error = "Unlock Address Atlas before saving."
       return false
     }
     guard !isPersisting else {
@@ -733,7 +733,7 @@ final class AppState: ObservableObject {
         recordDiagnosticFailure(.storageSaveFailed)
         syncPersistencePending = true
         error =
-          "The vault changed while a local save was finishing. Reopen Address Atlas before making more changes."
+          "Your portfolio changed while it was being saved. Reopen Address Atlas before making more changes."
         return false
       }
       document = result.document
@@ -748,7 +748,10 @@ final class AppState: ObservableObject {
       {
         syncPersistencePending = false
       }
-      notice = "Saved locally." + pruningNoticeSuffix(result.removedScanRunCount)
+      // Ordinary edits are visible where they happen; only a save that also
+      // pruned history needs to say so.
+      notice = pruningNoticeSuffix(result.removedScanRunCount)
+        .trimmingCharacters(in: .whitespaces)
       error = ""
       persistenceSucceeded = true
       return true
@@ -773,7 +776,7 @@ final class AppState: ObservableObject {
     }
     guard let persistence else {
       notice = ""
-      error = "Unlock the vault before saving."
+      error = "Unlock Address Atlas before saving."
       return false
     }
     guard !isPersisting else {
@@ -795,7 +798,7 @@ final class AppState: ObservableObject {
         recordDiagnosticFailure(.storageProtectedTransitionFailed)
         syncPersistencePending = true
         error =
-          "The vault changed while a protected local transition was finishing. Reopen Address Atlas before making more changes."
+          "Your portfolio changed while it was being saved. Reopen Address Atlas before making more changes."
         return false
       }
       document = result.document
@@ -806,7 +809,7 @@ final class AppState: ObservableObject {
       {
         syncPersistencePending = false
       }
-      notice = "Saved locally."
+      notice = ""
       error = ""
       persistenceSucceeded = true
       return true
@@ -823,7 +826,7 @@ final class AppState: ObservableObject {
     guard syncPersistencePending else { return }
     if quarantinedPendingVaultUpload != nil {
       error =
-        "The damaged encrypted upload recovery record cannot be replayed. Review it in Sync and explicitly discard only that record to keep the full local vault."
+        "The damaged upload record can't be retried. Discard it in Sync to keep using your portfolio."
       return
     }
     if pendingVaultUpload != nil {
@@ -881,7 +884,7 @@ final class AppState: ObservableObject {
   func pruningNoticeSuffix(_ removedScanRunCount: Int) -> String {
     guard removedScanRunCount > 0 else { return "" }
     return
-      " Removed \(removedScanRunCount) oldest scan snapshot\(removedScanRunCount == 1 ? "" : "s") to stay within the sync size limit."
+      " Removed the \(removedScanRunCount == 1 ? "oldest snapshot" : "\(removedScanRunCount) oldest snapshots") to stay within the size limit."
   }
 
   func normalizedLoadedDocument(_ input: VaultDocument) -> VaultDocument {
@@ -926,36 +929,36 @@ final class AppState: ObservableObject {
       return false
     }
     guard !syncing else {
-      error = "Wait for the active sync operation before editing the vault."
+      error = "Wait for the sync to finish before making changes."
       return false
     }
     guard !isValidatingExchangeCredentials else {
-      error = "Wait for the exchange credential check before editing the vault."
+      error = "Wait for the exchange key check to finish before making changes."
       return false
     }
     guard !scanning else {
-      error = "Cancel or finish the active scan before editing the vault."
+      error = "Wait for the scan to finish, or cancel it, before making changes."
       return false
     }
     guard !syncPersistencePending else {
       error =
         quarantinedPendingVaultUpload != nil
-        ? "Discard the quarantined upload recovery record explicitly before editing the read-only vault."
+        ? "Discard the damaged upload record in Sync before making changes."
         : pendingVaultUpload == nil
-          ? "Save the pending sync state locally before editing the vault."
-          : "Recover the interrupted encrypted vault upload before editing the vault."
+          ? "Retry the pending save in Sync before making changes."
+          : "Finish the interrupted upload in Sync before making changes."
       return false
     }
     guard allowPendingAccountDeletion || !hasPendingAccountDeletion else {
-      error = "Finish or retry the pending account deletion before editing the vault."
+      error = "Finish deleting your sync account before making changes."
       return false
     }
     guard !isPersisting else {
-      error = "Wait for the current local save before editing the vault."
+      error = "Wait for the current save to finish before making changes."
       return false
     }
     guard !isUnlocking else {
-      error = "Wait for vault recovery to finish before editing the vault."
+      error = "Wait for recovery to finish before making changes."
       return false
     }
     return true

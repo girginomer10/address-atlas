@@ -86,7 +86,8 @@ final class ApplicationTerminationTests: XCTestCase {
     let csv = try AddressAtlasExporter.csv(for: exportHoldings)
 
     XCTAssertEqual(exportHoldings.first?.walletLabel, "Visible Draft")
-    XCTAssertTrue(csv.contains("Visible Draft,Ethereum,ETH"))
+    XCTAssertTrue(
+      csv.contains("Visible Draft,0x0000000000000000000000000000000000000001,Ethereum,ETH"))
     XCTAssertEqual(state.document, sourceDocument)
     XCTAssertEqual(state.latestScan?.holdings.first?.walletLabel, "Treasury")
     XCTAssertEqual(state.walletLabelDrafts[wallet.id], "Visible Draft")
