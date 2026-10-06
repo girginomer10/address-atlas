@@ -461,7 +461,7 @@ struct AssetsScreen: View {
       value.isFinite, value >= 0
     else {
       state.notice = ""
-      state.error = "Dust threshold must be a finite, non-negative USD value."
+      state.error = "Enter a dollar amount of 0 or more."
       return
     }
     guard value != current else { return }
