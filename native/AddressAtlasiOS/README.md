@@ -2,7 +2,7 @@
 
 Native SwiftUI iOS app for Address Atlas, for iPhone (iOS 17 or newer) and iPad. It is the same product as the Mac app with the same read-only boundary: public wallet addresses and balance-only exchange credentials, never seed phrases, private keys, signing, trading, or withdrawal permission.
 
-This target is a **source-only preview**. It has been built and exercised on the iPhone 17 Pro simulator (the vault key is created in the Keychain, the encrypted SQLite vault initializes with the strict durability pragmas, and the tab shell renders). No physical device, signed device build, TestFlight build, App Store Connect record, or Mac-to-iPhone iCloud restore has been verified.
+This target is a **preview** with its own App Store Connect record. See the [release checkpoint](../../app-store/README.md#release-checkpoint--october-6-2026) for signing, processing, and TestFlight distribution evidence. It has been built and exercised on the iPhone 17 Pro simulator (the vault key is created in the Keychain, the encrypted SQLite vault initializes with the strict durability pragmas, and the tab shell renders). Physical-device acceptance and Mac-to-iPhone iCloud restore remain unverified.
 
 ## Directory layout
 
@@ -56,7 +56,8 @@ Both apps therefore report one product version and one build number. The CI job 
 
 - **Simulator builds are ad-hoc signed by Xcode on purpose.** Without an application identifier the iOS Keychain refuses every request with `errSecMissingEntitlement`, and the vault cannot unlock. `npm run native:ios:build` and `npm run native:ios:run` keep signing enabled for that reason.
 - `--unsigned` (`npm run native:ios:build:unsigned`) disables code signing for a compile-only check on machines without any signing identity. The resulting app carries no entitlements, so the Keychain and iCloud paths cannot be exercised with it.
-- Device builds use automatic signing with team `VWW3GZL279` (`DEVELOPMENT_TEAM` in `project.yml`, `CODE_SIGN_STYLE = Automatic`). They require the explicit App ID `com.addressatlas.ios` registered under that team with iCloud (CloudKit) and Keychain Sharing enabled and the existing container assigned, plus an iOS provisioning profile for that App ID. Neither exists yet, so `--device` cannot currently produce a signed bundle.
+- Device builds use automatic signing with team `VWW3GZL279` (`DEVELOPMENT_TEAM` in `project.yml`, `CODE_SIGN_STYLE = Automatic`). The explicit App ID `com.addressatlas.ios` and an iOS distribution profile now exist with the shared iCloud container, Production environment, and keychain groups. Verify these grants on the actual signed bundle; profile creation alone does not prove runtime iCloud operation. The [release checkpoint](../../app-store/README.md#release-checkpoint--october-6-2026) records the identities and artifact outcome.
+- For a manually provisioned archive, scope `PROVISIONING_PROFILE_SPECIFIER` to the iOS app target. Passing it globally to `xcodebuild` also applies it to the SwiftPM library and causes signing to fail. The first distribution archive used a temporary copy of the Xcode project with app-target signing settings so the repository and embedded source provenance stayed unchanged.
 - There is no iOS packaging, validation, or upload script. The `native:mas:*` scripts, the Mac App Store profile, and the Mac record's numeric Apple ID are Mac-only and must not be reused.
 
 ## Entitlements
@@ -70,7 +71,7 @@ Both apps therefore report one product version and one build number. The CI job 
 
 At runtime the shared `ICloudVaultService` checks whether the running build actually carries the container grant. The iOS SDK has no `SecTask` API, so it reads the executable's `__TEXT,__entitlements` section (simulator builds) or the embedded `embedded.mobileprovision` (device, TestFlight, and App Store builds), and fails closed otherwise: simulator, unsigned, and unprovisioned builds show an iCloud unavailable message and never initialize `CKContainer`. The simulator also cannot sync iCloud Keychain, so even a provisioned simulator build could not receive the cloud key.
 
-`Info.plist` sets `AddressAtlasDistributionChannel` to `app-store` and `AddressAtlasUpdateURL` to the generic `https://apps.apple.com` storefront on purpose: there is no iOS App Store record, so the update route fails closed until one exists. The Mac-only `AddressAtlasUseDataProtectionKeychain` key must never be added here; CI rejects a bundle that contains it.
+`Info.plist` sets `AddressAtlasDistributionChannel` to `app-store` and still leaves `AddressAtlasUpdateURL` at the generic `https://apps.apple.com` storefront. The iOS record now exists, but the source update URL has not been changed; configuring a verified product-page destination remains a separate task. TestFlight distribution does not prove a live public storefront. The Mac-only `AddressAtlasUseDataProtectionKeychain` key must never be added here; CI rejects a bundle that contains it.
 
 ## Storage and lifecycle
 
@@ -91,12 +92,12 @@ Platform differences inside shared files sit behind `#if canImport(AppKit)` / `#
 
 ## Open external gates
 
-None of the following has been done. Do not mark any of them complete without evidence from the Apple Developer portal or App Store Connect.
+The App ID, shared-container association, distribution profile, and separate App Store Connect record have been created; see the [release checkpoint](../../app-store/README.md#release-checkpoint--october-6-2026). Keep these remaining gates separate from upload, processing, and TestFlight group assignment:
 
-1. Register the explicit App ID `com.addressatlas.ios` under team `VWW3GZL279` with iCloud (CloudKit) and Keychain Sharing enabled, and assign the existing `iCloud.com.addressatlas.mac` container.
-2. Create an iOS distribution provisioning profile for that App ID.
-3. Create the App Store Connect iOS record and record its numeric Apple ID; see `../../app-store/README.md`. Point `AddressAtlasUpdateURL` at the real product page only after that.
-4. Prove a Mac→iPhone encrypted restore on a physical device with iCloud Passwords & Keychain enabled, between builds on the same CloudKit environment (the entitlements pin Production for every iOS build, matching the Mac App Store build). The simulator cannot perform this test.
+1. Verify entitlements and install the distributed build on a physical iPhone or iPad; complete the manual smoke list and resolve or explicitly track the known review findings.
+2. Prove a Mac→iPhone encrypted restore on a physical device with iCloud Passwords & Keychain enabled, between builds on the same CloudKit environment (the entitlements pin Production for every iOS build, matching the Mac App Store build). The simulator cannot perform this test.
+3. Configure and verify the iOS product-page update destination when appropriate; the source `AddressAtlasUpdateURL` is still generic.
+4. Complete the separate App Review and public-release requirements; TestFlight availability is not storefront publication.
 5. Kraken connections stay bound to the device that created them; a restored copy needs a separate read-only Kraken key per device. Keep that in the review notes.
 
 The release contract, including the manual iPhone/iPad smoke list, is in `../../docs/RELEASE_CHECKLIST.md`; the iCloud provisioning details are in `../../docs/ICLOUD.md`.

@@ -14,7 +14,14 @@ below was created and the console confirmed **Changes Deployed** to Production.
 For this type, `_world` has no access, `_icloud` has create only, and `_creator`
 has read/write. The app still uses the private database; these schema role
 settings do not replace private-database isolation. Distribution signing,
-matching provisioning, and signed two-device transfer remain unverified.
+matching provisioning, and signed two-device transfer were unverified at that
+checkpoint.
+
+October 6, 2026: the Mac distribution artifact and the separate iOS App ID,
+shared-container association, and distribution profile are recorded in the
+[release checkpoint](../app-store/README.md#release-checkpoint--october-6-2026).
+Signed two-device transfer remains unverified; provisioning and TestFlight
+state do not prove CloudKit or iCloud Keychain operation.
 
 1. Enable CloudKit for App ID `com.addressatlas.mac` in the existing developer team.
 2. Register and associate `iCloud.com.addressatlas.mac` with that App ID.
@@ -53,14 +60,18 @@ Mac group is required: the Mac app writes the synchronizable cloud-key item in
 its default group, and iOS can only read that item through iCloud Keychain
 when it shares the group.
 
-None of this is provisioned yet. Before a signed iOS build can reach iCloud:
+The iOS App ID, container association, and distribution profile now exist;
+see the [release checkpoint](../app-store/README.md#release-checkpoint--october-6-2026).
+Before claiming that a distributed iOS build can use iCloud:
 
-1. Register the explicit App ID `com.addressatlas.ios` under team
-   `VWW3GZL279` with iCloud (CloudKit) and Keychain Sharing enabled, and assign
-   the existing `iCloud.com.addressatlas.mac` container to it. Both App IDs
-   must stay in the same team so `$(AppIdentifierPrefix)` matches.
-2. Create an iOS distribution provisioning profile for that App ID. Xcode
-   automatic signing uses the same team.
+1. Verify the explicit App ID `com.addressatlas.ios` under team
+   `VWW3GZL279` retains iCloud (CloudKit), Keychain Sharing, and the existing
+   `iCloud.com.addressatlas.mac` container association. Both App IDs must stay
+   in the same team so `$(AppIdentifierPrefix)` matches.
+2. Inspect the profile and the actual signed app's grants. The created iOS
+   distribution profile authorizes the shared container, Production
+   environment, and keychain groups; Xcode automatic signing uses the same
+   team.
 3. The iOS entitlements pin `com.apple.developer.icloud-container-environment`
    to **Production**, matching the Mac App Store build, so a signed Debug
    device build reads the same database as a Mac. Xcode would otherwise

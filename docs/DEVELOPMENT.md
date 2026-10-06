@@ -7,7 +7,7 @@ Address Atlas is a local-first, read-only crypto portfolio tracker. It accepts p
 There are three runtime components:
 
 - `native/AddressAtlasMac`: the SwiftUI macOS product. It owns plaintext portfolio data, network scans, exchange credentials, local encryption, recovery, export, and sync encryption. Its package also hosts `AddressAtlasCore` and the shared state layer that the iOS app compiles.
-- `native/AddressAtlasiOS`: the SwiftUI iOS product for iPhone and iPad. It is an xcodegen-generated Xcode project that links `AddressAtlasCore` and compiles the shared state layer and design system directly from the Mac package sources, adding only its own screens. It is source-only today: verified on the iPhone 17 Pro simulator, with no physical-device, TestFlight, or App Store Connect evidence.
+- `native/AddressAtlasiOS`: the SwiftUI iOS product for iPhone and iPad. It is an xcodegen-generated Xcode project that links `AddressAtlasCore` and compiles the shared state layer and design system directly from the Mac package sources, adding only its own screens. It has been exercised on the iPhone 17 Pro simulator and now has a separate App Store Connect record; see the [release checkpoint](../app-store/README.md#release-checkpoint--october-6-2026) for signing and TestFlight evidence. Physical-device acceptance remains unverified.
 - The current Mac app uses private CloudKit copies and iCloud Keychain; see `docs/ICLOUD.md`. The repository-root Next.js service plus `server/sync` is retained legacy code, no longer a native product dependency. Server-specific invariants below apply to legacy regression testing and separately maintained deployments.
 
 The old Prisma/SQLite web portfolio and ccxt runtime no longer exist. Do not reintroduce them.

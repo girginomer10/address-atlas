@@ -135,22 +135,20 @@ The direct-download and Mac App Store channels use different certificates, packa
 
 ### iOS App Store
 
-- No iOS App Store Connect record, iOS distribution provisioning profile,
-  TestFlight build, or upload exists. None of the steps below has been
-  performed; the iOS app has been exercised only on the iPhone 17 Pro
-  simulator. Do not record any of them as done without App Store Connect
-  evidence.
-- External gates, in order: register the explicit App ID `com.addressatlas.ios`
-  under team `VWW3GZL279` with iCloud (CloudKit) and Keychain Sharing enabled
-  and the existing `iCloud.com.addressatlas.mac` container assigned; create an
-  iOS App Store distribution provisioning profile for that App ID; create the
-  App Store Connect iOS record and record its numeric Apple ID rather than
-  inventing one; prove a Mac→iPhone encrypted restore on a physical device with
+- The iOS App ID, shared-container association, distribution profile, and
+  separate App Store Connect record now exist. The [release checkpoint](../app-store/README.md#release-checkpoint--october-6-2026)
+  records the exact identities and current artifact/distribution state. Treat
+  upload, processing, group assignment, installation, and device acceptance
+  as separate evidence.
+- Verify the explicit App ID `com.addressatlas.ios` under team `VWW3GZL279`
+  and the signed bundle's CloudKit, Production-container, and Keychain Sharing
+  grants. Prove a Mac→iPhone encrypted restore on a physical device with
   iCloud Passwords & Keychain enabled (the simulator cannot sync iCloud
-  Keychain). See `docs/ICLOUD.md`.
-- Until the record exists, `AddressAtlasUpdateURL` in the iOS `Info.plist`
-  stays the generic `https://apps.apple.com` storefront on purpose (fail
-  closed). Point it at the real product page only after the record exists.
+  Keychain). See `docs/ICLOUD.md`; this transfer gate remains unverified.
+- `AddressAtlasUpdateURL` in the iOS `Info.plist` still uses the generic
+  `https://apps.apple.com` storefront. Configuring a verified iOS product-page
+  destination remains a separate task; a TestFlight build does not establish
+  public storefront availability.
 - Run `npm run native:ios:build:unsigned` and `npm run native:ios:build` from a
   clean `main` checkout; the `native-ios` CI job must be green for the exact
   commit. It checks that the committed project references every shared

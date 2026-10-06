@@ -6,7 +6,7 @@ This directory is the source-controlled submission packet for Address Atlas 0.2.
 
 - Platform: macOS
 - Bundle ID: `com.addressatlas.mac`
-- App Store Connect Apple ID: `6809515105` (0.2.0 build 82 uploaded September 7, 2026; UI processing, not submitted for review)
+- App Store Connect Apple ID: `6809515105`; current build and distribution evidence is recorded below
 - SKU: `address-atlas-macos-001`
 - Version: `0.2.0`
 - Primary language: English (U.S.)
@@ -19,29 +19,42 @@ This directory is the source-controlled submission packet for Address Atlas 0.2.
 
 The App Store Connect record's numeric Apple ID must be supplied as `ADDRESS_ATLAS_APP_STORE_ID`. Do not invent or reuse an ID from another product.
 
-## iOS product record (not created)
+## Release checkpoint — October 6, 2026
 
-No App Store Connect iOS record, iOS distribution provisioning profile, TestFlight build, or upload exists. The values below are the intended record, written down so nobody invents them later; the iOS app has been exercised only on the simulator.
+Both release artifacts use source commit `4782ce544e9fbca69f255bb3312e8c392ddbfb01`. No product/UI fixes were made for this release; the findings in [the native review](../docs/NATIVE-UI-REVIEW-2026-10-06.md) remain open.
+
+- **macOS:** `0.2.0 (91)`, App Store Connect record `6809515105`, build/delivery `e206279c-5c82-435c-b83d-1116067ef647`. Processing is `VALID`; internal state is `IN_BETA_TESTING`. The `Internal Testing` group (`a916d6ad-16d5-43d2-99db-f1a38ec90cab`) contains only build 91, has one owner tester in `INVITED` state, and does not automatically distribute all builds. External state is `READY_FOR_BETA_SUBMISSION`; external review/distribution is not claimed. Package SHA-256: `621e3d49f15e32c9a1758576d3a6b1e2a1add7af2f106d113d22e98d20d2afce`.
+- **iOS:** App Store Connect record `6819783390`, named `Address Atlas iOS`, bundle `com.addressatlas.ios`. App ID resource `38F5FS52SQ` is associated with the existing `iCloud.com.addressatlas.mac` container. Distribution profile `Q4256KXLR2` (UUID `4300beff-0b0a-453b-829c-ec222820c860`) was created with the shared container, Production environment, and keychain groups. Signed archive and exported IPA were verified without changing repository source. IPA SHA-256: `facde6da2f234d6d395750a47a1e6890497117d9e7082655e88815b255b665ef`. Apple validation passed and upload completed successfully for `0.2.0 (91)`, build/delivery `84674af4-e59e-418e-8686-a5bda9755dbd`. Processing is `VALID`, `usesNonExemptEncryption=false`, and internal state is `IN_BETA_TESTING`. The `Internal Testing` group (`e4e697e6-0d4d-4a72-9d1c-86edd2375014`) contains only build 91, has one sole-account-owner tester in `INVITED` state, and has `hasAccessToAllBuilds=false`. External state is `READY_FOR_BETA_SUBMISSION`; external review/distribution is not claimed. The final iOS readback was verified at 19:03 Europe/Paris.
+- Physical-device installation/acceptance, Mac-to-iPhone iCloud restore, App Review approval, and public storefront availability are not established by these release steps.
+
+## iOS product record
+
+The iOS App Store Connect record is separate from the Mac record. Apple rejected reuse of `Address Atlas` for this new record, so its App Store Connect name is `Address Atlas iOS`; the native app's display name remains `Address Atlas`.
 
 - Platform: iOS (iPhone and iPad)
 - Bundle ID: `com.addressatlas.ios`
-- App Store Connect Apple ID: to be recorded from App Store Connect once the record exists; never invent one, and never reuse the Mac record's `6809515105`
-- SKU (suggested): `address-atlas-ios-001`
-- Version: `0.2.0`, derived from the same `currentAppVersion` and build number as the Mac app
+- App Store Connect Apple ID: `6819783390`; do not reuse the Mac record's `6809515105`
+- SKU: `address-atlas-ios-001`
+- Binary marketing version: `0.2.0`, derived from the same `currentAppVersion` and build number as the Mac app
+- App Store distribution draft: Apple created version `1.0` in `Prepare for Submission`; it remains unchanged and unsubmitted. This release task covers TestFlight only.
 - Primary language: English (U.S.)
+
+### Planned public-store metadata (not applied or verified in this TestFlight task)
+
+These are proposed submission values, not the live iOS record's configured metadata. The new record's default automatic release setting was left unchanged; category, price, public-store URLs, and privacy answers were not entered or verified in this task.
+
 - Primary category: Finance
 - Price: Free
 - Release method: Manual release after approval
 - Privacy policy, Terms of Use, and Support URLs: the same three links as the macOS record
-- Privacy answers: identical to the macOS record; see `privacy-label.md`
+- Privacy answers: intended parity with the macOS record, subject to the exact signed build and Apple's questionnaire; see `privacy-label.md`
 
-External gates before an iOS build can be signed for a device or uploaded:
+### Remaining iOS release and device gates
 
-- Register the explicit App ID `com.addressatlas.ios` under team `VWW3GZL279` with iCloud (CloudKit) and Keychain Sharing enabled and the existing `iCloud.com.addressatlas.mac` container assigned.
-- Create an iOS App Store distribution provisioning profile for that App ID. The Mac App Store profile, `ADDRESS_ATLAS_PROVISIONING_PROFILE`, `ADDRESS_ATLAS_APP_STORE_ID`, and the Mac numeric Apple ID must not be reused.
-- Prove a Mac→iPhone encrypted restore on a physical device with iCloud Passwords & Keychain enabled; the simulator cannot sync iCloud Keychain. Kraken connections need a separate read-only key per device.
-- Produce iPhone and iPad screenshots with fictional data; none exist yet.
-- Until the record exists, the iOS `Info.plist` keeps `AddressAtlasUpdateURL` at the generic `https://apps.apple.com` storefront on purpose.
+- Verify the signed artifact uses `com.addressatlas.ios`, team `VWW3GZL279`, and the created iOS profile's CloudKit/Production/shared-keychain grants. The Mac App Store profile, `ADDRESS_ATLAS_PROVISIONING_PROFILE`, `ADDRESS_ATLAS_APP_STORE_ID`, and the Mac numeric Apple ID must not be reused.
+- Install and accept the distributed build on a physical iPhone or iPad. Prove a Mac→iPhone encrypted restore with iCloud Passwords & Keychain enabled; the simulator cannot sync iCloud Keychain. Kraken connections need a separate read-only key per device.
+- Produce App Store iPhone and iPad screenshots with fictional data; the local review captures are not a submission screenshot set.
+- The iOS `Info.plist` still leaves `AddressAtlasUpdateURL` at the generic `https://apps.apple.com` storefront. Configuring a verified product-page destination remains a separate task; TestFlight distribution does not establish public storefront availability.
 
 The `native:mas:*` scripts are Mac-only. There is no iOS packaging, validation, or upload script yet; see `docs/RELEASE_CHECKLIST.md` and `docs/ICLOUD.md` for the iOS gates.
 

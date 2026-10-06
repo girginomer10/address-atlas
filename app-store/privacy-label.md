@@ -19,7 +19,7 @@ exact signed build and current Apple questionnaire before submission.
   questionnaire. Do not infer “no data collected” for the entire app from using
   private iCloud: provider requests remain a separate boundary.
 
-The iOS record (`com.addressatlas.ios`, not yet created) must answer this
+The iOS record (`6819783390`, bundle `com.addressatlas.ios`) must answer this
 questionnaire identically: the iOS app compiles the same state layer, contacts
 the same providers, and uses the same private CloudKit container. Do not answer
 "no data collected" on one platform while disclosing provider requests on the

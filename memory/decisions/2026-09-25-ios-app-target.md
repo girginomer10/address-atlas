@@ -68,10 +68,24 @@ AppKit leaves.
   that every shared and iOS source is referenced.
 - A new Mac-only file must be added to the `excludes` list in `project.yml`,
   otherwise the iOS build fails on the AppKit import.
-- There is no iOS App Store Connect record, App ID registration, iCloud
-  container association, distribution profile, physical-device run, or
-  Mac-to-iPhone iCloud restore evidence. Do not claim any of them; the
-  simulator cannot sync iCloud Keychain, so the shared cloud key is a
-  physical-device gate.
+- Release identities were established on 2026-10-06: iOS App Store Connect
+  record `6819783390`, bundle `com.addressatlas.ios`, App ID resource
+  `38F5FS52SQ`, team `VWW3GZL279`, and shared container
+  `iCloud.com.addressatlas.mac`. This is separate from Mac record
+  `6809515105`. The iOS App Store Connect name is `Address Atlas iOS`
+  because reuse of the Mac name was rejected; the native display name remains
+  `Address Atlas`. An iOS distribution profile was created with Production
+  CloudKit and the shared keychain groups; verify the actual signed artifact.
+- Keep mutable build, processing, group, and tester state in `app-store/README.md`
+  and chronological evidence in `docs/handoff/`, not this architecture note.
+  Upload, `VALID`, group assignment, tester invitation, installation, and
+  physical-device acceptance are separate outcomes. The simulator cannot sync
+  iCloud Keychain; Mac-to-iPhone restore remains a physical-device gate.
+- A global `PROVISIONING_PROFILE_SPECIFIER` passed to `xcodebuild` also
+  reaches the SwiftPM library target, which does not support provisioning
+  profiles. Scope manual signing settings to the iOS app target. The first
+  distribution archive used a temporary copied Xcode project for this scope,
+  preserving the clean repository and source-commit provenance; verify the
+  resulting archive and exported IPA independently.
 - Kraken connections stay bound to the device that created them; a restored
   copy needs a separate read-only Kraken key per device.

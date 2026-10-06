@@ -36,8 +36,9 @@ permissions remain a separate release check; no paid subscription was added.
 
 ## iOS
 
-The iOS app (`com.addressatlas.ios`) has no App Store Connect record yet; these
-notes apply once one exists. It compiles the Mac app's shared state layer and
+The iOS app (`com.addressatlas.ios`) uses App Store Connect record `6819783390`
+(`Address Atlas iOS`). These notes are a submission draft, not evidence of
+App Review submission or approval. It compiles the Mac app's shared state layer and
 keeps the same read-only boundary: it does not create or custody wallets,
 request seed phrases or private keys, sign transactions, trade, mine, issue
 crypto rewards, or provide personalized investment advice.
@@ -51,7 +52,9 @@ crypto rewards, or provide personalized investment advice.
 - Simulator and unsigned builds show a clear iCloud unavailable message and make
   no CloudKit request. Live transfers can only be reviewed on a signed,
   provisioned build on a physical device with iCloud Passwords & Keychain
-  enabled; that build has not been produced yet.
+  enabled. The [release checkpoint](README.md#release-checkpoint--october-6-2026)
+  records artifact/distribution evidence; physical-device iCloud transfer
+  remains unverified.
 - Kraken connections are bound to the device that created them; a restored copy
   needs a separate read-only Kraken key on the iPhone or iPad.
 - Scans and iCloud transfers run in the foreground only. Exports use the system

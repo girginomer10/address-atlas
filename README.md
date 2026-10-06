@@ -20,7 +20,7 @@
 Address Atlas is a local-first, read-only portfolio tracker for public wallet addresses and supported exchanges. It maps assets across **20 active networks** without taking custody, asking for a seed phrase, or requesting signing, trading, or withdrawal permission.
 
 > [!IMPORTANT]
-> Address Atlas is currently a **source-first preview**. There is no signed and notarized public download yet. Build it from source, and treat every result as portfolio visibility—not accounting-grade proof or financial advice. The iOS app is source-only as well: it has no TestFlight build, App Store record, or public download, and it has been exercised only on the simulator.
+> Address Atlas is currently a **preview**. Source builds are available; see the [release checkpoint](app-store/README.md#release-checkpoint--october-6-2026) for the separate macOS and iOS TestFlight states. There is no signed and notarized public direct download yet. Treat every result as portfolio visibility—not accounting-grade proof or financial advice. Physical-device acceptance and Mac-to-iPhone iCloud restore remain unverified.
 
 ## Why Address Atlas
 
@@ -110,7 +110,7 @@ npm run native:ios:run        # build, then install and launch on the booted sim
 npm run native:ios:generate   # only after editing project.yml; commit the regenerated project
 ```
 
-Alternatively, open `native/AddressAtlasiOS/AddressAtlasiOS.xcodeproj` in Xcode and run the `AddressAtlasiOS` scheme on a simulator. The iOS app has no TestFlight build, App Store record, or public download, and no physical-device or signed build has been verified. See the [iOS app guide](native/AddressAtlasiOS/README.md) for versioning, signing, entitlements, and the shared-source layout.
+Alternatively, open `native/AddressAtlasiOS/AddressAtlasiOS.xcodeproj` in Xcode and run the `AddressAtlasiOS` scheme on a simulator. The separate iOS App Store Connect record now exists; current build and distribution evidence is in the [release checkpoint](app-store/README.md#release-checkpoint--october-6-2026). Physical-device acceptance remains unverified. See the [iOS app guide](native/AddressAtlasiOS/README.md) for versioning, signing, entitlements, and the shared-source layout.
 
 ## Run optional encrypted sync
 

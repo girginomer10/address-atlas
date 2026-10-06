@@ -57,7 +57,7 @@ TLS certificate pinning is deliberately not used: the app talks only to third-pa
 
 ## iOS target
 
-The iOS app lives in [`../AddressAtlasiOS`](../AddressAtlasiOS/README.md). It is an xcodegen-generated Xcode project, not a second SwiftPM package: it links the `AddressAtlasCore` library product from this package (which declares `.iOS(.v17)` alongside `.macOS(.v14)`) and compiles most of `Sources/AddressAtlasMac` as its own sources. It has no App Store record, TestFlight build, or physical-device verification yet.
+The iOS app lives in [`../AddressAtlasiOS`](../AddressAtlasiOS/README.md). It is an xcodegen-generated Xcode project, not a second SwiftPM package: it links the `AddressAtlasCore` library product from this package (which declares `.iOS(.v17)` alongside `.macOS(.v14)`) and compiles most of `Sources/AddressAtlasMac` as its own sources. It now has a separate App Store Connect record; see the [release checkpoint](../../app-store/README.md#release-checkpoint--october-6-2026) for its build and TestFlight state. Physical-device acceptance remains unverified.
 
 Shared with iOS (every file in `Sources/AddressAtlasMac` is shared unless it is listed in the exclusion list in `../AddressAtlasiOS/project.yml`):
 
