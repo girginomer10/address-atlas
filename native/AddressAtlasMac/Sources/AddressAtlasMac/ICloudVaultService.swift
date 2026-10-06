@@ -44,10 +44,12 @@ actor ICloudVaultService: ICloudVaultSyncing {
     }
   #else
     /// The iOS SDK has no SecTask API, so the running build's entitlements are
-    /// read from the executable itself (simulator builds embed them in a
-    /// `__TEXT,__entitlements` section) or from the embedded provisioning
-    /// profile (device, TestFlight, and App Store builds). Anything else fails
-    /// closed so CloudKit is never initialized without the container grant.
+    /// read from the executable itself: simulator builds embed them in a
+    /// `__TEXT,__entitlements` section, and every device build (development,
+    /// TestFlight, App Store) carries them in its code signature. App Store and
+    /// TestFlight builds have no embedded provisioning profile (Apple TN3125),
+    /// so the profile is only a last resort. Anything else fails closed so
+    /// CloudKit is never initialized without the container grant.
     static var isConfigured: Bool {
       EmbeddedEntitlements.iCloudContainerIdentifiers().contains(containerIdentifier)
     }
@@ -178,8 +180,9 @@ actor ICloudVaultService: ICloudVaultSyncing {
   import MachO
 
   /// Reads the running iOS build's code-signing entitlements without SecTask.
-  /// Only the two sources Xcode actually produces are consulted; a missing or
-  /// unparseable source yields an empty result so callers fail closed.
+  /// Only sources the signing toolchain actually produces are consulted; a
+  /// missing or unparseable source yields an empty result so callers fail
+  /// closed.
   enum EmbeddedEntitlements {
     static let iCloudContainersKey = "com.apple.developer.icloud-container-identifiers"
 
@@ -187,10 +190,139 @@ actor ICloudVaultService: ICloudVaultSyncing {
       if let entitlements = executableEntitlements() {
         return entitlements[iCloudContainersKey] as? [String] ?? []
       }
+      if let containers = codeSignatureICloudContainers {
+        return containers
+      }
       if let entitlements = provisioningProfileEntitlements() {
         return entitlements[iCloudContainersKey] as? [String] ?? []
       }
       return []
+    }
+
+    /// The signature cannot change while the process runs, so the executable
+    /// is parsed once.
+    private static let codeSignatureICloudContainers: [String]? = {
+      guard let entitlements = codeSignatureEntitlements(), !entitlements.isEmpty else {
+        return nil
+      }
+      return entitlements[iCloudContainersKey] as? [String] ?? []
+    }()
+
+    /// Device builds: the entitlements blob (`CSSLOT_ENTITLEMENTS`, magic
+    /// `0xfade7171`) inside the code-signature superblob that the main
+    /// executable's `LC_CODE_SIGNATURE` load command points at. The file on
+    /// disk is the one the kernel validated at launch.
+    static func codeSignatureEntitlements() -> [String: Any]? {
+      guard let url = Bundle.main.executableURL,
+        let file = try? Data(contentsOf: url, options: .alwaysMapped)
+      else { return nil }
+      let cpuType = mainExecutableHeader()?.pointee.cputype
+      return codeSignatureEntitlements(inExecutable: file, cpuType: cpuType)
+    }
+
+    static func codeSignatureEntitlements(inExecutable file: Data, cpuType: cpu_type_t?)
+      -> [String: Any]?
+    {
+      let bytes = [UInt8](file)
+      guard let slice = machOSlice(bytes, cpuType: cpuType),
+        let signature = codeSignatureRange(bytes, slice: slice),
+        let blob = entitlementsBlob(bytes, superblob: signature)
+      else { return nil }
+      return parsePlist(Data(bytes[blob]))
+    }
+
+    private static func readLE32(_ bytes: [UInt8], _ offset: Int) -> UInt32? {
+      guard offset >= 0, offset + 4 <= bytes.count else { return nil }
+      return UInt32(bytes[offset]) | UInt32(bytes[offset + 1]) << 8
+        | UInt32(bytes[offset + 2]) << 16 | UInt32(bytes[offset + 3]) << 24
+    }
+
+    private static func readBE32(_ bytes: [UInt8], _ offset: Int) -> UInt32? {
+      guard offset >= 0, offset + 4 <= bytes.count else { return nil }
+      return UInt32(bytes[offset]) << 24 | UInt32(bytes[offset + 1]) << 16
+        | UInt32(bytes[offset + 2]) << 8 | UInt32(bytes[offset + 3])
+    }
+
+    /// The thin 64-bit Mach-O image, or the slice of a universal binary that
+    /// matches the running CPU type.
+    private static func machOSlice(_ bytes: [UInt8], cpuType: cpu_type_t?) -> Range<Int>? {
+      guard let magic = readBE32(bytes, 0) else { return nil }
+      if magic == FAT_MAGIC || magic == FAT_MAGIC_64 {
+        guard let count = readBE32(bytes, 4), count > 0, count < 64 else { return nil }
+        let entrySize = magic == FAT_MAGIC_64 ? 32 : 20
+        for index in 0..<Int(count) {
+          let entry = 8 + index * entrySize
+          guard let type = readBE32(bytes, entry) else { return nil }
+          let offset: Int
+          let size: Int
+          if magic == FAT_MAGIC_64 {
+            guard let offHigh = readBE32(bytes, entry + 8), let offLow = readBE32(bytes, entry + 12),
+              let sizeHigh = readBE32(bytes, entry + 16), let sizeLow = readBE32(bytes, entry + 20)
+            else { return nil }
+            offset = Int(UInt64(offHigh) << 32 | UInt64(offLow))
+            size = Int(UInt64(sizeHigh) << 32 | UInt64(sizeLow))
+          } else {
+            guard let off = readBE32(bytes, entry + 8), let length = readBE32(bytes, entry + 12)
+            else { return nil }
+            offset = Int(off)
+            size = Int(length)
+          }
+          guard cpuType == nil || cpu_type_t(bitPattern: type) == cpuType else { continue }
+          guard offset >= 0, size > 0, offset <= bytes.count - size else { return nil }
+          return offset..<(offset + size)
+        }
+        return nil
+      }
+      guard readLE32(bytes, 0) == MH_MAGIC_64 else { return nil }
+      return 0..<bytes.count
+    }
+
+    /// Absolute byte range of the code-signature superblob in the file.
+    private static func codeSignatureRange(_ bytes: [UInt8], slice: Range<Int>) -> Range<Int>? {
+      let base = slice.lowerBound
+      guard readLE32(bytes, base) == MH_MAGIC_64,
+        let commandCount = readLE32(bytes, base + 16), commandCount < 4096
+      else { return nil }
+      var cursor = base + MemoryLayout<mach_header_64>.size
+      for _ in 0..<Int(commandCount) {
+        guard let command = readLE32(bytes, cursor), let size = readLE32(bytes, cursor + 4),
+          size >= 8, cursor + Int(size) <= slice.upperBound
+        else { return nil }
+        if command == UInt32(LC_CODE_SIGNATURE) {
+          guard let dataOffset = readLE32(bytes, cursor + 8),
+            let dataSize = readLE32(bytes, cursor + 12)
+          else { return nil }
+          let start = base + Int(dataOffset)
+          let end = start + Int(dataSize)
+          guard dataSize > 0, start >= base, end <= slice.upperBound else { return nil }
+          return start..<end
+        }
+        cursor += Int(size)
+      }
+      return nil
+    }
+
+    /// The XML payload of the entitlements blob inside the superblob.
+    private static func entitlementsBlob(_ bytes: [UInt8], superblob: Range<Int>) -> Range<Int>? {
+      let base = superblob.lowerBound
+      guard readBE32(bytes, base) == 0xfade_0cc0,
+        let length = readBE32(bytes, base + 4), Int(length) <= superblob.count,
+        let count = readBE32(bytes, base + 8), count < 64
+      else { return nil }
+      for index in 0..<Int(count) {
+        let entry = base + 12 + index * 8
+        guard entry + 8 <= base + Int(length), let type = readBE32(bytes, entry),
+          let offset = readBE32(bytes, entry + 4)
+        else { return nil }
+        guard type == 5 else { continue }
+        let blob = base + Int(offset)
+        guard readBE32(bytes, blob) == 0xfade_7171,
+          let blobLength = readBE32(bytes, blob + 4), blobLength > 8,
+          blob + Int(blobLength) <= base + Int(length)
+        else { return nil }
+        return (blob + 8)..<(blob + Int(blobLength))
+      }
+      return nil
     }
 
     /// Simulator builds carry the signed entitlements plist in a
