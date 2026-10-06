@@ -15,6 +15,7 @@
 		2A94988F6444A42C36C5A438 /* ExportScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D52FBF704ADD4D782C73EF6 /* ExportScreen.swift */; };
 		2CA0D0C8D880A88CE0A06062 /* PortfolioScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 084E3DF7E79C8C8A2BC7C779 /* PortfolioScreen.swift */; };
 		2E98CDB2ED71CDDF3C581679 /* AppStateDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 533EC174E4E518D135EF3EFD /* AppStateDiagnostics.swift */; };
+		362FFBE7F6BA38363B97A8DD /* IOSComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96E46AE1BF72888A837ACFAA /* IOSComponents.swift */; };
 		3A4DE02A5C1046DE6B93E213 /* PasskeyWebAuthenticator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 696B657AF51571D531104B22 /* PasskeyWebAuthenticator.swift */; };
 		3CF2DDA060EAA7232F5304E0 /* AppStateExchangeConnections.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B7C9BE5A425C44D1BBF6F3B /* AppStateExchangeConnections.swift */; };
 		4E8478200BDB3861FFBEEDBC /* AssetsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 478987FC2E1C1206E20F758E /* AssetsScreen.swift */; };
@@ -33,6 +34,7 @@
 		887E5A7B0C419A0C206C23D3 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 4F04D2CEE0AC93D87843CC0A /* PrivacyInfo.xcprivacy */; };
 		98DE6CC7C48241240405BF94 /* AtlasFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA68BBA92A4983A0704EA966 /* AtlasFormatting.swift */; };
 		9B7E5EC08CB8A1BF722781C6 /* AtlasDesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 933502CCA3204D600DEC264D /* AtlasDesignSystem.swift */; };
+		9CEB3517BE932E3FE1EA0B77 /* OnboardingScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1693EBD1E006CBDCBA9814D7 /* OnboardingScreen.swift */; };
 		9FA8EB661F0A60FA57768699 /* MainShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3FE2888AB7E4FA0A1465760 /* MainShell.swift */; };
 		B026FF23FEDC3C3010BBCCA0 /* UserFacingErrors.swift in Sources */ = {isa = PBXBuildFile; fileRef = 494600BE507D8CD4AE731861 /* UserFacingErrors.swift */; };
 		B5106DC7C5F6D58B8F63FD0A /* AppStateVaultSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F46649DE17C5B4463770E88 /* AppStateVaultSync.swift */; };
@@ -51,6 +53,7 @@
 		0D52FBF704ADD4D782C73EF6 /* ExportScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportScreen.swift; sourceTree = "<group>"; };
 		0DA31591CD25C1D10EA3119E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		11D1EE5B95AC1FE1A52CC6D9 /* AppStateVaultMutations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateVaultMutations.swift; sourceTree = "<group>"; };
+		1693EBD1E006CBDCBA9814D7 /* OnboardingScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingScreen.swift; sourceTree = "<group>"; };
 		181AA1E44268FF2873AFFCB4 /* AppStateValidation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateValidation.swift; sourceTree = "<group>"; };
 		1A42E9764A079F1DE8C8F572 /* ICloudVaultService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ICloudVaultService.swift; sourceTree = "<group>"; };
 		1F46649DE17C5B4463770E88 /* AppStateVaultSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateVaultSync.swift; sourceTree = "<group>"; };
@@ -70,6 +73,7 @@
 		7E36EA502005E2033B62F7B9 /* AddressAtlasiOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddressAtlasiOSApp.swift; sourceTree = "<group>"; };
 		8B7C9BE5A425C44D1BBF6F3B /* AppStateExchangeConnections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateExchangeConnections.swift; sourceTree = "<group>"; };
 		933502CCA3204D600DEC264D /* AtlasDesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasDesignSystem.swift; sourceTree = "<group>"; };
+		96E46AE1BF72888A837ACFAA /* IOSComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSComponents.swift; sourceTree = "<group>"; };
 		99E3451BFA9F65AFC461CE22 /* AppStateTermination.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateTermination.swift; sourceTree = "<group>"; };
 		9EF4CAB228D89D371EE0BB39 /* ExportPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportPipeline.swift; sourceTree = "<group>"; };
 		AC93E4A10CF81A60F0D50C66 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
@@ -159,8 +163,10 @@
 				35DD59B780459F2D86827A3F /* ExchangesScreen.swift */,
 				0D52FBF704ADD4D782C73EF6 /* ExportScreen.swift */,
 				E776BCC56C7A58C6ADC73F23 /* ICloudScreen.swift */,
+				96E46AE1BF72888A837ACFAA /* IOSComponents.swift */,
 				794806A4DD437BC916CAD7A7 /* IOSSupport.swift */,
 				D3FE2888AB7E4FA0A1465760 /* MainShell.swift */,
+				1693EBD1E006CBDCBA9814D7 /* OnboardingScreen.swift */,
 				084E3DF7E79C8C8A2BC7C779 /* PortfolioScreen.swift */,
 				5301917867ACFE8CBB9F33FA /* RootView.swift */,
 				EB6599F39A81C8F170E79B74 /* SettingsScreen.swift */,
@@ -327,8 +333,10 @@
 				2A94988F6444A42C36C5A438 /* ExportScreen.swift in Sources */,
 				001D86EF3E9452AD1BF9C46D /* ICloudScreen.swift in Sources */,
 				74F5AFCA1B2D58B553B863A7 /* ICloudVaultService.swift in Sources */,
+				362FFBE7F6BA38363B97A8DD /* IOSComponents.swift in Sources */,
 				5362D54DF67A225118265A96 /* IOSSupport.swift in Sources */,
 				9FA8EB661F0A60FA57768699 /* MainShell.swift in Sources */,
+				9CEB3517BE932E3FE1EA0B77 /* OnboardingScreen.swift in Sources */,
 				3A4DE02A5C1046DE6B93E213 /* PasskeyWebAuthenticator.swift in Sources */,
 				2CA0D0C8D880A88CE0A06062 /* PortfolioScreen.swift in Sources */,
 				6C98C84D5ED74C0F80410E5C /* RootView.swift in Sources */,

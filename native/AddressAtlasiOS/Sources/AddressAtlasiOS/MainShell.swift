@@ -20,8 +20,12 @@ enum MainTab: Hashable, Sendable {
 }
 
 /// iPhone: four primary tabs plus a "More" list for the remaining sections.
+/// The selected section lives in `IOSNavigationModel` so onboarding and
+/// empty-state buttons can switch tabs; a "More" section is pushed onto the
+/// More stack.
 struct TabShell: View {
   @EnvironmentObject private var state: AppState
+  @EnvironmentObject private var navigation: IOSNavigationModel
   @State private var selectedTab: MainTab = .section(.portfolio)
   @State private var morePath = NavigationPath()
 
@@ -62,6 +66,24 @@ struct TabShell: View {
     }
     .toolbarBackground(AtlasTheme.surface, for: .tabBar)
     .toolbarBackground(.visible, for: .tabBar)
+    .onAppear {
+      if navigation.openRequest > 0 { follow(navigation.selectedSection) }
+    }
+    .onChange(of: navigation.openRequest) { _, _ in
+      follow(navigation.selectedSection)
+    }
+  }
+
+  private func follow(_ section: AtlasSection) {
+    if AtlasSection.primaryTabs.contains(section) {
+      guard selectedTab != .section(section) else { return }
+      selectedTab = .section(section)
+    } else {
+      selectedTab = .more
+      var path = NavigationPath()
+      path.append(section)
+      morePath = path
+    }
   }
 }
 
@@ -115,6 +137,7 @@ struct MoreList: View {
 
       Section {
         PrivacyCard()
+          .frame(maxWidth: .infinity, alignment: .leading)
           .listRowInsets(EdgeInsets())
           .listRowBackground(Color.clear)
       }
@@ -128,6 +151,7 @@ struct MoreList: View {
 /// iPad: every section in a sidebar with the brand lockup and privacy card.
 struct SplitShell: View {
   @EnvironmentObject private var state: AppState
+  @EnvironmentObject private var navigation: IOSNavigationModel
   @State private var selectedSection: AtlasSection? = .portfolio
 
   private var sectionSelection: Binding<AtlasSection?> {
@@ -172,5 +196,9 @@ struct SplitShell: View {
       }
     }
     .navigationSplitViewStyle(.balanced)
+    .onAppear { selectedSection = navigation.selectedSection }
+    .onChange(of: navigation.openRequest) { _, _ in
+      selectedSection = navigation.selectedSection
+    }
   }
 }

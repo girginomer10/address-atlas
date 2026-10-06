@@ -6,8 +6,9 @@ import UniformTypeIdentifiers
 
 // MARK: - Page container
 
-/// Compact-width page: a large navigation title, the shared status line, an
-/// optional subtitle, and content stacked with 16pt gutters. Screens use this
+/// Compact-width page: a large navigation title, persistent status (transient
+/// notices and errors float in `IOSStatusToast`), an optional one-line
+/// subtitle, and content stacked with 16pt gutters. Screens use this
 /// instead of the desktop `Page`, whose 42pt in-page title and 32pt gutters
 /// are sized for a window.
 struct IOSPage<Content: View>: View {
@@ -24,7 +25,7 @@ struct IOSPage<Content: View>: View {
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 18) {
-        StatusLine(presentation: .inline)
+        IOSPersistentStatus()
         if let subtitle, !subtitle.isEmpty {
           Text(subtitle)
             .font(.subheadline)
@@ -42,6 +43,7 @@ struct IOSPage<Content: View>: View {
     }
     .scrollDismissesKeyboard(.interactively)
     .background(AtlasTheme.canvas)
+    .atlasKeyboardDoneButton()
     .navigationTitle(title)
     .navigationBarTitleDisplayMode(.large)
     .toolbarBackground(AtlasTheme.canvas, for: .navigationBar)

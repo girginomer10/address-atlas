@@ -18,7 +18,15 @@ struct RootView: View {
   @Environment(\.scenePhase) private var scenePhase
   @StateObject private var reachability = NetworkReachability()
   @StateObject private var suspension = SuspensionCoordinator()
+  @StateObject private var navigation = IOSNavigationModel()
+  @AppStorage(IOSOnboarding.completedKey) private var onboardingCompleted = false
   @State private var lastAutoRefresh = Date()
+
+  /// Returning vaults (sources already saved, or restored from a recovery kit
+  /// or iCloud) never see the walkthrough, even on a fresh install.
+  private var showsOnboarding: Bool {
+    !onboardingCompleted && !state.hasScanSources
+  }
 
   private var autoRefreshTaskID: String {
     "\(state.isUnlocked)-\(state.document.preferences.autoRefresh)"
@@ -27,11 +35,30 @@ struct RootView: View {
   var body: some View {
     Group {
       if state.isUnlocked {
-        MainShell()
+        if showsOnboarding {
+          OnboardingScreen { action in
+            onboardingCompleted = true
+            if let action {
+              navigation.open(action.section, then: action)
+            }
+          }
+          .transition(.opacity)
+        } else {
+          MainShell()
+        }
       } else {
         UnlockScreen()
       }
     }
+    .overlay {
+      IOSStatusToast(bottomPadding: state.isUnlocked && !showsOnboarding ? 92 : 24)
+    }
+    .overlay {
+      if scenePhase != .active {
+        IOSPrivacyCover()
+      }
+    }
+    .environmentObject(navigation)
     .background(AtlasTheme.paper)
     .foregroundStyle(AtlasTheme.ink)
     .tint(AtlasTheme.accent)
