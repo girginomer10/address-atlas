@@ -314,6 +314,14 @@ struct TokenAllowlistView: View {
       && !decimals.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
+  private var isBuiltInToken: Bool {
+    AppState.builtInToken(
+      chainKind: chainKind,
+      chainId: chainKind == .solana ? "solana" : chainId,
+      address: address
+    ) != nil
+  }
+
   var body: some View {
     Page(
       eyebrow: "Custom assets",
@@ -335,64 +343,16 @@ struct TokenAllowlistView: View {
             systemImage: "tag.fill"
           )
 
-          AdaptiveStack(horizontalSpacing: 12, verticalSpacing: 14) {
-            VStack(alignment: .leading, spacing: 8) {
-              FieldLabel("Network family")
-              Picker("Network family", selection: $chainKind) {
-                Text("EVM").tag(ChainFamily.evm)
-                Text("Solana").tag(ChainFamily.solana)
-              }
-              .pickerStyle(.segmented)
-              .labelsHidden()
-              .frame(minWidth: 170)
-            }
-            VStack(alignment: .leading, spacing: 8) {
-              FieldLabel("Network")
-              Picker("Network", selection: $chainId) {
-                if chainKind == .evm {
-                  ForEach(ChainRegistry.evmChains, id: \.id) { chain in
-                    Text(chain.name).tag(chain.id)
-                  }
-                } else {
-                  Text("Solana").tag("solana")
-                }
-              }
-              .labelsHidden()
-              .accessibilityLabel("Network")
-              .frame(minWidth: 200, maxWidth: .infinity, alignment: .leading)
-            }
-          }
-
-          VStack(alignment: .leading, spacing: 8) {
-            FieldLabel(chainKind == .evm ? "Token contract" : "Token mint")
-            TextField(
-              chainKind == .evm ? "0x… contract address" : "Solana mint address",
-              text: $address
-            )
-            .textFieldStyle(AtlasTextFieldStyle())
-          }
-
-          AdaptiveStack(horizontalSpacing: 12, verticalSpacing: 14) {
-            tokenField(title: "Symbol", placeholder: "USDC", text: $symbol)
-            tokenField(title: "Token name", placeholder: "USD Coin", text: $name)
-            tokenField(
-              title: "Decimals", placeholder: chainKind == .evm ? "18" : "6", text: $decimals)
-          }
-
-          AdaptiveStack(horizontalSpacing: 12, verticalSpacing: 14) {
-            tokenField(
-              title: "CoinGecko ID",
-              detail: "Optional",
-              placeholder: "usd-coin",
-              text: $coinGeckoId
-            )
-            tokenField(
-              title: "Manual USD price",
-              detail: "Optional",
-              placeholder: "0.00",
-              text: $priceUsd
-            )
-          }
+          CustomTokenFormFields(
+            chainKind: $chainKind,
+            chainId: $chainId,
+            address: $address,
+            symbol: $symbol,
+            name: $name,
+            decimals: $decimals,
+            coinGeckoId: $coinGeckoId,
+            priceUsd: $priceUsd
+          )
 
           InfoCallout(
             title: "Contract addresses are authoritative",
@@ -425,7 +385,7 @@ struct TokenAllowlistView: View {
             Label("Add token", systemImage: "plus")
           }
           .buttonStyle(AtlasPrimaryButtonStyle())
-          .disabled(!hasRequiredTokenInput)
+          .disabled(!hasRequiredTokenInput || isBuiltInToken)
         }
       }
       .disabled(state.vaultEditsDisabled)
@@ -433,10 +393,6 @@ struct TokenAllowlistView: View {
       if state.document.customTokens.isEmpty {
         savedTokensSection
       }
-    }
-    .onChange(of: chainKind) { _, next in
-      chainId = next == .solana ? "solana" : "ethereum"
-      decimals = next == .solana ? "6" : "18"
     }
   }
 
@@ -466,25 +422,12 @@ struct TokenAllowlistView: View {
       }
     }
   }
-
-  private func tokenField(
-    title: String,
-    detail: String? = nil,
-    placeholder: String,
-    text: Binding<String>
-  ) -> some View {
-    VStack(alignment: .leading, spacing: 8) {
-      FieldLabel(title, detail: detail)
-      TextField(placeholder, text: text)
-        .textFieldStyle(AtlasTextFieldStyle())
-    }
-    .frame(minWidth: 130, maxWidth: .infinity, alignment: .leading)
-  }
 }
 
 struct TokenRow: View {
   @EnvironmentObject private var state: AppState
   @State private var confirmingRemoval = false
+  @State private var editing = false
   var token: CustomTokenRecord
 
   var body: some View {
@@ -527,6 +470,14 @@ struct TokenRow: View {
       .accessibilityLabel(
         "\(token.enabled ? "Disable" : "Enable") token \(AtlasAccessibility.tokenIdentity(token))"
       )
+      Button {
+        editing = true
+      } label: {
+        Image(systemName: "pencil")
+      }
+      .buttonStyle(IconButtonStyle())
+      .help("Edit token")
+      .accessibilityLabel("Edit token \(AtlasAccessibility.tokenIdentity(token))")
       Button(role: .destructive) {
         confirmingRemoval = true
       } label: {
@@ -549,6 +500,11 @@ struct TokenRow: View {
       Button("Cancel", role: .cancel) {}
     }
     .disabled(state.vaultEditsDisabled)
+    // Presented outside `.disabled` so Cancel stays usable if edits pause.
+    .sheet(isPresented: $editing) {
+      CustomTokenEditSheet(token: token)
+        .environmentObject(state)
+    }
   }
 }
 
@@ -580,11 +536,7 @@ struct SnapshotsView: View {
             subtitle: "Included in the next portfolio snapshot",
             systemImage: "pencil.and.list.clipboard"
           )
-          AdaptiveStack(horizontalSpacing: 12, verticalSpacing: 14) {
-            manualField(title: "Asset symbol", placeholder: "BTC", text: $symbol)
-            manualField(title: "Amount", placeholder: "0.00", text: $amount)
-            manualField(title: "Total value (USD)", placeholder: "0.00", text: $value)
-          }
+          ManualHoldingFormFields(symbol: $symbol, amount: $amount, value: $value)
           AdaptiveStack(horizontalSpacing: 12) {
             Button {
               Task {
@@ -622,19 +574,6 @@ struct SnapshotsView: View {
         }
       }
     }
-  }
-
-  private func manualField(
-    title: String,
-    placeholder: String,
-    text: Binding<String>
-  ) -> some View {
-    VStack(alignment: .leading, spacing: 8) {
-      FieldLabel(title)
-      TextField(placeholder, text: text)
-        .textFieldStyle(AtlasTextFieldStyle())
-    }
-    .frame(minWidth: 130, maxWidth: .infinity, alignment: .leading)
   }
 }
 
@@ -726,6 +665,7 @@ struct SnapshotList: View {
 struct ManualHoldingList: View {
   @EnvironmentObject private var state: AppState
   @State private var pendingRemoval: UUID?
+  @State private var editingHolding: ManualHoldingRecord?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -770,6 +710,16 @@ struct ManualHoldingList: View {
                 .accessibilityLabel(
                   "\(holding.enabled ? "Disable" : "Enable") manual holding \(AtlasAccessibility.manualHoldingIdentity(holding))"
                 )
+                Button {
+                  editingHolding = holding
+                } label: {
+                  Image(systemName: "pencil")
+                }
+                .buttonStyle(IconButtonStyle())
+                .help("Edit manual holding")
+                .accessibilityLabel(
+                  "Edit manual holding \(AtlasAccessibility.manualHoldingIdentity(holding))"
+                )
                 Button(role: .destructive) {
                   pendingRemoval = holding.id
                 } label: {
@@ -809,6 +759,11 @@ struct ManualHoldingList: View {
       Button("Cancel", role: .cancel) { pendingRemoval = nil }
     }
     .disabled(state.vaultEditsDisabled)
+    // Presented outside `.disabled` so Cancel stays usable if edits pause.
+    .sheet(item: $editingHolding) { holding in
+      ManualHoldingEditSheet(holding: holding)
+        .environmentObject(state)
+    }
   }
 
   private var pendingRemovalIdentity: String {
@@ -816,5 +771,341 @@ struct ManualHoldingList: View {
       let holding = state.document.manualHoldings.first(where: { $0.id == pendingRemoval })
     else { return "this manual holding" }
     return AtlasAccessibility.manualHoldingIdentity(holding)
+  }
+}
+
+// MARK: - Shared add/edit form fields
+
+private struct PortfolioFormField: View {
+  var title: String
+  var detail: String?
+  var placeholder: String
+  @Binding var text: String
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      FieldLabel(title, detail: detail)
+      TextField(placeholder, text: $text)
+        .textFieldStyle(AtlasTextFieldStyle())
+    }
+    .frame(minWidth: 130, maxWidth: .infinity, alignment: .leading)
+  }
+}
+
+/// Custom-token fields shared by the add form and the edit sheet.
+private struct CustomTokenFormFields: View {
+  @Binding var chainKind: ChainFamily
+  @Binding var chainId: String
+  @Binding var address: String
+  @Binding var symbol: String
+  @Binding var name: String
+  @Binding var decimals: String
+  @Binding var coinGeckoId: String
+  @Binding var priceUsd: String
+
+  /// The shared state refuses a custom copy of a built-in registry token
+  /// because the scanner would ignore it; say so before the user submits.
+  private var builtIn: TokenConfig? {
+    AppState.builtInToken(
+      chainKind: chainKind,
+      chainId: chainKind == .solana ? "solana" : chainId,
+      address: address
+    )
+  }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 20) {
+      AdaptiveStack(horizontalSpacing: 12, verticalSpacing: 14) {
+        VStack(alignment: .leading, spacing: 8) {
+          FieldLabel("Network family")
+          Picker("Network family", selection: $chainKind) {
+            Text("EVM").tag(ChainFamily.evm)
+            Text("Solana").tag(ChainFamily.solana)
+          }
+          .pickerStyle(.segmented)
+          .labelsHidden()
+          .frame(minWidth: 170)
+        }
+        VStack(alignment: .leading, spacing: 8) {
+          FieldLabel("Network")
+          Picker("Network", selection: $chainId) {
+            if chainKind == .evm {
+              ForEach(ChainRegistry.evmChains, id: \.id) { chain in
+                Text(chain.name).tag(chain.id)
+              }
+            } else {
+              Text("Solana").tag("solana")
+            }
+          }
+          .labelsHidden()
+          .accessibilityLabel("Network")
+          .frame(minWidth: 200, maxWidth: .infinity, alignment: .leading)
+        }
+      }
+
+      VStack(alignment: .leading, spacing: 8) {
+        FieldLabel(chainKind == .evm ? "Token contract" : "Token mint")
+        TextField(
+          chainKind == .evm ? "0x… contract address" : "Solana mint address",
+          text: $address
+        )
+        .textFieldStyle(AtlasTextFieldStyle())
+        if let builtIn {
+          Label(
+            "\(builtIn.symbol) is built in and scanned automatically; a custom copy would be ignored.",
+            systemImage: "checkmark.seal"
+          )
+          .font(.caption)
+          .foregroundStyle(AtlasTheme.warning)
+          .accessibilityLabel(
+            "Notice: \(builtIn.symbol) is built in and scanned automatically; a custom copy would be ignored."
+          )
+        }
+      }
+
+      AdaptiveStack(horizontalSpacing: 12, verticalSpacing: 14) {
+        PortfolioFormField(title: "Symbol", placeholder: "USDC", text: $symbol)
+        PortfolioFormField(title: "Token name", placeholder: "USD Coin", text: $name)
+        PortfolioFormField(
+          title: "Decimals", placeholder: chainKind == .evm ? "18" : "6", text: $decimals)
+      }
+
+      AdaptiveStack(horizontalSpacing: 12, verticalSpacing: 14) {
+        PortfolioFormField(
+          title: "CoinGecko ID",
+          detail: "Optional",
+          placeholder: "usd-coin",
+          text: $coinGeckoId
+        )
+        PortfolioFormField(
+          title: "Manual USD price",
+          detail: "Optional",
+          placeholder: "0.00",
+          text: $priceUsd
+        )
+      }
+    }
+    .onChange(of: chainKind) { _, next in
+      chainId = next == .solana ? "solana" : "ethereum"
+      decimals = next == .solana ? "6" : "18"
+    }
+  }
+}
+
+/// Manual-holding fields shared by the add form and the edit sheet.
+private struct ManualHoldingFormFields: View {
+  @Binding var symbol: String
+  @Binding var amount: String
+  @Binding var value: String
+
+  var body: some View {
+    AdaptiveStack(horizontalSpacing: 12, verticalSpacing: 14) {
+      PortfolioFormField(title: "Asset symbol", placeholder: "BTC", text: $symbol)
+      PortfolioFormField(title: "Amount", placeholder: "0.00", text: $amount)
+      PortfolioFormField(title: "Total value (USD)", placeholder: "0.00", text: $value)
+    }
+  }
+}
+
+// MARK: - Edit sheets
+
+enum PortfolioEditing {
+  /// A stored number in the current locale without grouping, so it parses
+  /// back through `UserInputValidation.nonnegativeFiniteNumber` (which uses
+  /// `Locale.current`) unchanged when the edit is saved.
+  static func editableNumber(_ value: Double, locale: Locale = .current) -> String {
+    value.formatted(
+      .number.grouping(.never).precision(.fractionLength(0...12)).locale(locale))
+  }
+}
+
+/// Sheet chrome shared by the edit flows: header, fields, inline error from
+/// `state.error`, and Cancel/Save. Errors are cleared on open, on every edit,
+/// and on close so a stale message never describes the current input.
+private struct VaultRecordEditSheet<Fields: View>: View {
+  @EnvironmentObject private var state: AppState
+  @Environment(\.dismiss) private var dismiss
+  @State private var isSaving = false
+
+  var title: String
+  var subtitle: String
+  var systemImage: String
+  var canSave: Bool
+  var editedValues: [String]
+  var save: () async -> Bool
+  @ViewBuilder var fields: () -> Fields
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 20) {
+      PanelHeader(title: title, subtitle: subtitle, systemImage: systemImage)
+
+      fields()
+        .disabled(state.vaultEditsDisabled || isSaving)
+
+      if state.vaultEditsDisabled && !isSaving {
+        InfoCallout(
+          title: "Editing is paused",
+          copy: "Wait for the active scan, sync, or save to finish before saving changes.",
+          tone: .warning
+        )
+      }
+
+      if !state.error.isEmpty {
+        InfoCallout(title: "Not saved", copy: state.error, tone: .danger)
+          .accessibilityLabel("Error: \(state.error)")
+      }
+
+      HStack(spacing: 10) {
+        Spacer()
+        Button("Cancel") { dismiss() }
+          .buttonStyle(AtlasSecondaryButtonStyle())
+          .keyboardShortcut(.cancelAction)
+          .disabled(isSaving)
+        Button {
+          submit()
+        } label: {
+          Label("Save", systemImage: "checkmark")
+        }
+        .buttonStyle(AtlasPrimaryButtonStyle())
+        .keyboardShortcut(.defaultAction)
+        .disabled(!canSave || isSaving || state.vaultEditsDisabled)
+      }
+    }
+    .padding(24)
+    .frame(minWidth: 560, idealWidth: 600, maxWidth: 680, alignment: .topLeading)
+    .background(AtlasTheme.canvas)
+    .interactiveDismissDisabled(isSaving)
+    .onAppear { clearError() }
+    .onDisappear { clearError() }
+    .onChange(of: editedValues) { _, _ in clearError() }
+  }
+
+  private func clearError() {
+    if !state.error.isEmpty { state.error = "" }
+  }
+
+  private func submit() {
+    guard !isSaving, canSave, !state.vaultEditsDisabled else { return }
+    clearError()
+    isSaving = true
+    Task {
+      let saved = await save()
+      isSaving = false
+      if saved { dismiss() }
+    }
+  }
+}
+
+struct CustomTokenEditSheet: View {
+  @EnvironmentObject private var state: AppState
+  private let tokenID: UUID
+  private let originalSymbol: String
+  @State private var chainKind: ChainFamily
+  @State private var chainId: String
+  @State private var address: String
+  @State private var symbol: String
+  @State private var name: String
+  @State private var decimals: String
+  @State private var coinGeckoId: String
+  @State private var priceUsd: String
+
+  init(token: CustomTokenRecord) {
+    tokenID = token.id
+    originalSymbol = token.symbol
+    _chainKind = State(initialValue: token.chainKind)
+    _chainId = State(initialValue: token.chainId)
+    _address = State(initialValue: token.address)
+    _symbol = State(initialValue: token.symbol)
+    _name = State(initialValue: token.name)
+    _decimals = State(initialValue: "\(token.decimals)")
+    _coinGeckoId = State(initialValue: token.coinGeckoId ?? "")
+    _priceUsd = State(
+      initialValue: token.priceUsd.map { PortfolioEditing.editableNumber($0) } ?? "")
+  }
+
+  private var effectiveChainId: String { chainKind == .solana ? "solana" : chainId }
+
+  private var canSave: Bool {
+    !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && !symbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && !decimals.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && AppState.builtInToken(
+        chainKind: chainKind, chainId: effectiveChainId, address: address) == nil
+  }
+
+  var body: some View {
+    VaultRecordEditSheet(
+      title: "Edit token",
+      subtitle: "\(originalSymbol) · changes apply from the next scan",
+      systemImage: "pencil",
+      canSave: canSave,
+      editedValues: [
+        chainKind.rawValue, chainId, address, symbol, name, decimals, coinGeckoId, priceUsd,
+      ],
+      save: {
+        await state.updateCustomToken(
+          id: tokenID,
+          chainKind: chainKind,
+          chainId: effectiveChainId,
+          address: address,
+          symbol: symbol,
+          name: name,
+          decimals: decimals,
+          coinGeckoId: coinGeckoId,
+          priceUsd: priceUsd
+        )
+      }
+    ) {
+      CustomTokenFormFields(
+        chainKind: $chainKind,
+        chainId: $chainId,
+        address: $address,
+        symbol: $symbol,
+        name: $name,
+        decimals: $decimals,
+        coinGeckoId: $coinGeckoId,
+        priceUsd: $priceUsd
+      )
+    }
+  }
+}
+
+struct ManualHoldingEditSheet: View {
+  @EnvironmentObject private var state: AppState
+  private let holdingID: UUID
+  private let originalSymbol: String
+  @State private var symbol: String
+  @State private var amount: String
+  @State private var value: String
+
+  init(holding: ManualHoldingRecord) {
+    holdingID = holding.id
+    originalSymbol = holding.symbol
+    _symbol = State(initialValue: holding.symbol)
+    _amount = State(initialValue: PortfolioEditing.editableNumber(holding.amount))
+    _value = State(initialValue: PortfolioEditing.editableNumber(holding.valueUsd))
+  }
+
+  private var canSave: Bool {
+    !symbol.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && !amount.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  var body: some View {
+    VaultRecordEditSheet(
+      title: "Edit manual holding",
+      subtitle: "\(originalSymbol) · included in the next portfolio snapshot",
+      systemImage: "pencil",
+      canSave: canSave,
+      editedValues: [symbol, amount, value],
+      save: {
+        await state.updateManualHolding(
+          id: holdingID, symbol: symbol, amount: amount, valueUsd: value)
+      }
+    ) {
+      ManualHoldingFormFields(symbol: $symbol, amount: $amount, value: $value)
+    }
   }
 }
