@@ -3,22 +3,27 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-/// Preferences, recovery kit export and restore, the update route, policy
-/// links, privacy-safe diagnostics, and the version line. iOS port of the
-/// macOS `SettingsView`: folder and file panels become the Files picker, the
-/// clipboard is `UIPasteboard`, and the recovery code is revealed only after
-/// the recovery file has actually been saved outside the app's scratch space.
+/// Preferences, recovery kit export and restore, policy links, privacy-safe
+/// diagnostics, and the About block, laid out as grouped iOS settings lists.
+/// iOS port of the macOS `SettingsView`: folder and file panels become the
+/// Files picker, the clipboard is `UIPasteboard`, and the recovery code is
+/// revealed only after the recovery file has actually been saved outside the
+/// app's scratch space.
 struct SettingsScreen: View {
   @EnvironmentObject private var state: AppState
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.scenePhase) private var scenePhase
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   @FocusState private var focusedField: SettingsField?
 
   @State private var dustThresholdText = ""
+  @State private var dustThresholdError: String?
   @State private var restoreCode = ""
   @State private var revealedRecoveryCode = ""
   @State private var pendingRecoveryExport: SettingsRecoveryExport?
   @State private var isRecoveryExportRunning = false
   @State private var isRecoveryMoverPresented = false
+  @State private var isRestoreFormExpanded = false
   @State private var isRestoreConfirmationPresented = false
   @State private var isRecoveryImporterPresented = false
   @State private var isRecoveryRestoreRunning = false
@@ -32,44 +37,47 @@ struct SettingsScreen: View {
     .locale(AtlasFormatting.locale)
     .precision(.fractionLength(0...2))
 
+  private static let dustThresholdErrorMessage = "Enter a dollar amount of 0 or more."
+
   private var trimmedRestoreCode: String {
     restoreCode.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
+  private var animation: Animation? {
+    AtlasMotion.animation(AtlasMotion.standard, reduceMotion: reduceMotion)
+  }
+
   var body: some View {
-    IOSPage(
-      title: "Settings",
-      subtitle:
-        "Control refresh behavior, portfolio display, recovery, and privacy-safe support tools."
-    ) {
-      preferencesSection
+    IOSPage(title: "Settings") {
+      portfolioSection
       recoverySection
-      updatesSection
-      privacySection
+      supportSection
       diagnosticsSection
-      versionLine
+      aboutSection
+      disclaimer
     }
     .onAppear(perform: syncDustThresholdText)
     .onDisappear {
       // The code is shown once; leaving the screen must not leave it behind.
       revealedRecoveryCode = ""
     }
+    .onChange(of: scenePhase) { _, phase in
+      // Backgrounding or the app switcher hides the code for good.
+      if phase != .active {
+        revealedRecoveryCode = ""
+      }
+    }
     .onChange(of: state.document.preferences.dustThreshold) { _, _ in
       if focusedField != .dustThreshold {
         syncDustThresholdText()
       }
     }
+    .onChange(of: state.document.preferences.hideDust) { _, _ in
+      dustThresholdError = nil
+    }
     .onChange(of: focusedField) { previous, _ in
       if previous == .dustThreshold {
         commitDustThreshold()
-      }
-    }
-    .toolbar {
-      ToolbarItemGroup(placement: .keyboard) {
-        Spacer()
-        Button("Done") {
-          focusedField = nil
-        }
       }
     }
     .fileMover(
@@ -93,7 +101,7 @@ struct SettingsScreen: View {
       Button("Cancel", role: .cancel) {}
     } message: {
       Text(
-        "The recovery file is opened with your code and checked against the vault on this device before anything in Keychain is changed. If the recovered key does not open this vault, nothing changes."
+        "The file is opened with your code and checked against this device's vault first. If the key doesn't open this vault, nothing changes."
       )
     }
     .fileImporter(
@@ -109,184 +117,245 @@ struct SettingsScreen: View {
     }
   }
 
-  // MARK: - Preferences
+  // MARK: - Portfolio
 
-  private var preferencesSection: some View {
-    Surface {
-      VStack(alignment: .leading, spacing: 18) {
-        PanelHeader(
-          title: "Portfolio preferences",
-          subtitle: "Stored inside your encrypted local vault",
-          systemImage: "slider.horizontal.3"
-        )
-        SettingsPreferenceToggleRow(
-          title: "Automatic refresh",
-          copy:
-            "Refresh saved sources every 15 minutes while the app is in the foreground and unlocked.",
-          systemImage: "arrow.clockwise",
-          isOn: Binding(
-            get: { state.document.preferences.autoRefresh },
-            set: { value in
-              Task { await state.setAutoRefresh(value) }
-            })
-        )
-        Divider().overlay(AtlasTheme.ruleSoft)
-        SettingsPreferenceToggleRow(
-          title: "Hide small balances",
-          copy: "Keep low-value holdings out of the main asset list without deleting them.",
-          systemImage: "line.3.horizontal.decrease.circle",
-          isOn: Binding(
-            get: { state.document.preferences.hideDust },
-            set: { value in
-              Task { await state.setHideDust(value) }
-            })
-        )
-        Divider().overlay(AtlasTheme.ruleSoft)
-        VStack(alignment: .leading, spacing: 7) {
-          FieldLabel("Small-balance threshold", detail: "USD")
-          TextField("0.00", text: $dustThresholdText)
-            .textFieldStyle(AtlasTextFieldStyle())
-            .atlasDecimalInput()
-            .focused($focusedField, equals: .dustThreshold)
-            .accessibilityLabel("Dust threshold in US dollars")
-            .accessibilityHint("Applied when you leave the field.")
-        }
-        VStack(alignment: .leading, spacing: 7) {
-          FieldLabel("Display currency")
-          HStack {
-            Text("USD")
-              .font(.callout.weight(.semibold))
-            Spacer()
-            Badge("Current")
-          }
-          .padding(.horizontal, 13)
-          .frame(minHeight: 44)
-          .background(AtlasTheme.surfaceMuted.opacity(0.44))
-          .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
-          .overlay {
-            RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
-              .stroke(AtlasTheme.ruleSoft, lineWidth: 1)
-          }
-          .accessibilityElement(children: .combine)
-          .accessibilityLabel("Display currency, USD, current")
-        }
+  private var portfolioSection: some View {
+    SettingsGroup(
+      title: "Portfolio",
+      footer: "Automatic refresh runs every 15 minutes while the app is open and unlocked."
+    ) {
+      SettingsToggleRow(
+        title: "Automatic refresh",
+        systemImage: "arrow.clockwise",
+        tint: AtlasTheme.accent,
+        hint: "Refreshes saved sources every 15 minutes while the app is in the foreground and unlocked.",
+        isOn: Binding(
+          get: { state.document.preferences.autoRefresh },
+          set: { value in
+            Task { await state.setAutoRefresh(value) }
+          })
+      )
+      SettingsDivider()
+      SettingsToggleRow(
+        title: "Hide small balances",
+        systemImage: "eye.slash",
+        tint: AtlasTheme.ink2,
+        hint: "Keeps low-value holdings out of the asset list without deleting them.",
+        isOn: Binding(
+          get: { state.document.preferences.hideDust },
+          set: { value in
+            Task { await state.setHideDust(value) }
+          })
+      )
+      if state.document.preferences.hideDust {
+        SettingsDivider()
+        dustThresholdRow
+          .transition(.opacity)
       }
+      SettingsDivider()
+      SettingsRowLabel(title: "Display currency", systemImage: "dollarsign", tint: AtlasTheme.gain) {
+        Text("USD")
+          .foregroundStyle(AtlasTheme.ink3)
+      }
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel("Display currency, USD")
     }
     .disabled(state.vaultEditsDisabled)
+    .animation(animation, value: state.document.preferences.hideDust)
+  }
+
+  private var dustThresholdRow: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      let field = HStack(spacing: 4) {
+        Text("$")
+          .foregroundStyle(AtlasTheme.ink3)
+          .accessibilityHidden(true)
+        TextField("0.00", text: $dustThresholdText)
+          .atlasDecimalInput()
+          .multilineTextAlignment(dynamicTypeSize.isAccessibilitySize ? .leading : .trailing)
+          .focused($focusedField, equals: .dustThreshold)
+          .accessibilityLabel("Dust threshold in US dollars")
+          .accessibilityHint("Applied when you leave the field.")
+          .accessibilityIdentifier("settings.dustThreshold")
+          .onChange(of: dustThresholdText) { _, _ in
+            if focusedField == .dustThreshold {
+              dustThresholdError = nil
+            }
+          }
+      }
+      .font(.body.monospacedDigit())
+      .padding(.horizontal, 10)
+      .frame(minHeight: 36)
+      .background(AtlasTheme.surfaceMuted.opacity(0.6))
+      .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.small, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: AtlasRadius.small, style: .continuous)
+          .stroke(
+            dustThresholdError == nil ? Color.clear : AtlasTheme.loss.opacity(0.6), lineWidth: 1)
+      }
+
+      if dynamicTypeSize.isAccessibilitySize {
+        SettingsRowLabel(title: "Hide below", systemImage: "line.3.horizontal.decrease", tint: AtlasTheme.ink2) {
+          EmptyView()
+        }
+        field
+          .padding(.horizontal, 14)
+      } else {
+        SettingsRowLabel(title: "Hide below", systemImage: "line.3.horizontal.decrease", tint: AtlasTheme.ink2) {
+          field.frame(maxWidth: 130)
+        }
+      }
+
+      if let dustThresholdError {
+        Label(dustThresholdError, systemImage: "exclamationmark.circle.fill")
+          .font(.footnote)
+          .foregroundStyle(AtlasTheme.loss)
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(.horizontal, 14)
+          .padding(.leading, dynamicTypeSize.isAccessibilitySize ? 0 : 42)
+          .accessibilityLabel("Error: \(dustThresholdError)")
+          .accessibilityIdentifier("settings.dustThreshold.error")
+      }
+    }
+    .padding(.bottom, dustThresholdError == nil && !dynamicTypeSize.isAccessibilitySize ? 0 : 12)
   }
 
   // MARK: - Recovery kit
 
   private var recoverySection: some View {
-    Surface(style: .warning) {
-      VStack(alignment: .leading, spacing: 16) {
-        PanelHeader(
-          title: "Recovery kit",
-          subtitle:
-            "A recovery file and separately stored code restore this device's vault key",
+    SettingsGroup(
+      title: "Recovery kit",
+      footer: "Keep the file and its code in different places. Anyone with both can recover your vault key."
+    ) {
+      Button {
+        exportRecoveryKit()
+      } label: {
+        SettingsRowLabel(
+          title: "Export recovery kit",
+          subtitle: "A key file plus a code shown once.",
           systemImage: "key.fill",
           tint: AtlasTheme.warning
-        )
-        Text(
-          "The recovery file holds your vault key, encrypted with a code that is shown once. Keep the file in Files or iCloud Drive and the code somewhere else; anyone holding both can recover the key."
-        )
-        .font(.caption)
-        .foregroundStyle(AtlasTheme.ink2)
-        .lineSpacing(2)
-        .fixedSize(horizontal: false, vertical: true)
-
-        Button {
-          exportRecoveryKit()
-        } label: {
-          HStack(spacing: 8) {
-            if isRecoveryExportRunning {
-              ProgressView()
-                .controlSize(.small)
-                .tint(AtlasTheme.paper)
-            }
-            Label("Export recovery kit", systemImage: "arrow.down.doc")
+        ) {
+          if isRecoveryExportRunning {
+            ProgressView().controlSize(.small)
+          } else {
+            SettingsChevron()
           }
-          .settingsControlLabel()
         }
-        .buttonStyle(AtlasPrimaryButtonStyle())
-        .disabled(state.isExportOperationInProgress || state.isTerminationInProgress)
-        .accessibilityHint(
-          "Writes an encrypted recovery file, then lets you save it in Files. The code is shown after the file is saved."
-        )
+      }
+      .buttonStyle(SettingsRowButtonStyle())
+      .disabled(state.isExportOperationInProgress || state.isTerminationInProgress)
+      .accessibilityHint(
+        "Writes an encrypted recovery file, then lets you save it in Files. The code is shown after the file is saved."
+      )
+      .accessibilityIdentifier("settings.exportRecoveryKit")
 
-        if !revealedRecoveryCode.isEmpty {
-          revealedCodePanel
-        }
+      if !revealedRecoveryCode.isEmpty {
+        revealedCodePanel
+          .padding(.horizontal, 14)
+          .padding(.bottom, 14)
+      }
 
-        Divider().overlay(AtlasTheme.warning.opacity(0.24))
+      SettingsDivider()
 
-        VStack(alignment: .leading, spacing: 8) {
-          FieldLabel("Recovery code")
-          SecureField("Enter recovery code", text: $restoreCode)
-            .textFieldStyle(AtlasTextFieldStyle())
-            .atlasIdentifierInput()
-            .focused($focusedField, equals: .restoreCode)
-            .submitLabel(.done)
-            .accessibilityLabel("Recovery code for restore")
-        }
-        Button {
+      Button {
+        isRestoreFormExpanded.toggle()
+        if !isRestoreFormExpanded {
           focusedField = nil
-          isRestoreConfirmationPresented = true
-        } label: {
-          HStack(spacing: 8) {
-            if isRecoveryRestoreRunning {
-              ProgressView()
-                .controlSize(.small)
-            }
-            Label("Choose recovery file", systemImage: "folder")
-          }
-          .settingsControlLabel()
         }
-        .buttonStyle(AtlasSecondaryButtonStyle())
-        .disabled(
-          state.vaultEditsDisabled || isRecoveryRestoreRunning || trimmedRestoreCode.isEmpty
-        )
-        .accessibilityHint(
-          "Asks for confirmation, then opens the Files picker to choose the recovery file."
-        )
-        Text(
-          "The recovery file is verified against the vault on this device before anything in Keychain is changed."
-        )
-        .font(.caption)
+      } label: {
+        SettingsRowLabel(
+          title: "Restore from recovery kit",
+          subtitle: "Use a saved file and its code.",
+          systemImage: "arrow.counterclockwise",
+          tint: AtlasTheme.accent
+        ) {
+          Image(systemName: "chevron.down")
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(AtlasTheme.ink3)
+            .rotationEffect(.degrees(isRestoreFormExpanded ? 180 : 0))
+        }
+      }
+      .buttonStyle(SettingsRowButtonStyle())
+      .accessibilityValue(isRestoreFormExpanded ? "Expanded" : "Collapsed")
+      .accessibilityIdentifier("settings.restoreRecoveryKit")
+
+      if isRestoreFormExpanded {
+        restoreForm
+          .padding(.horizontal, 14)
+          .padding(.bottom, 14)
+          .transition(.opacity)
+      }
+    }
+    .animation(animation, value: revealedRecoveryCode.isEmpty)
+    .animation(animation, value: isRestoreFormExpanded)
+  }
+
+  private var restoreForm: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      SecureField("Recovery code", text: $restoreCode)
+        .textFieldStyle(AtlasTextFieldStyle())
+        .atlasIdentifierInput()
+        .focused($focusedField, equals: .restoreCode)
+        .submitLabel(.done)
+        .accessibilityLabel("Recovery code for restore")
+      Button {
+        focusedField = nil
+        isRestoreConfirmationPresented = true
+      } label: {
+        HStack(spacing: 8) {
+          if isRecoveryRestoreRunning {
+            ProgressView()
+              .controlSize(.small)
+          }
+          Label("Choose recovery file", systemImage: "folder")
+        }
+        .settingsControlLabel()
+      }
+      .buttonStyle(AtlasSecondaryButtonStyle())
+      .disabled(
+        state.vaultEditsDisabled || isRecoveryRestoreRunning || trimmedRestoreCode.isEmpty
+      )
+      .accessibilityHint(
+        "Asks for confirmation, then opens the Files picker to choose the recovery file."
+      )
+      Text("Checked against this device's vault before Keychain changes.")
+        .font(.footnote)
         .foregroundStyle(AtlasTheme.ink3)
         .fixedSize(horizontal: false, vertical: true)
-      }
-      .animation(
-        AtlasMotion.animation(AtlasMotion.standard, reduceMotion: reduceMotion),
-        value: revealedRecoveryCode.isEmpty
-      )
     }
   }
 
+  /// The code has no system text selection: the only copy path is the Copy
+  /// button, which keeps the clipboard entry local and expiring (F08).
   private var revealedCodePanel: some View {
     VStack(alignment: .leading, spacing: 10) {
-      InfoCallout(
-        title: "Store this code separately from the recovery file",
-        copy:
-          "You need both the file and this code to restore. Address Atlas keeps no copy of the code; it disappears when you hide it or leave this screen.",
-        tone: .warning
-      )
-      VStack(alignment: .leading, spacing: 6) {
-        FieldLabel("Recovery code", detail: "Selectable")
-        Text(revealedRecoveryCode)
-          .font(.callout.monospaced())
-          .textSelection(.enabled)
-          .padding(14)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .background(AtlasTheme.surface)
-          .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
-          .overlay {
-            RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
-              .stroke(AtlasTheme.ruleSoft, lineWidth: 1)
-          }
-          .accessibilityLabel("Recovery code")
-          .accessibilityValue(revealedRecoveryCode)
+      Label {
+        Text("Store this code apart from the file. It won't be shown again.")
+      } icon: {
+        Image(systemName: "exclamationmark.triangle.fill")
+          .foregroundStyle(AtlasTheme.warning)
       }
+      .font(.footnote.weight(.medium))
+      .foregroundStyle(AtlasTheme.ink2)
+      .fixedSize(horizontal: false, vertical: true)
+
+      Text(revealedRecoveryCode)
+        .font(.callout.monospaced())
+        .foregroundStyle(AtlasTheme.ink)
+        .privacySensitive()
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AtlasTheme.warning.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
+        .overlay {
+          RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
+            .stroke(AtlasTheme.warning.opacity(0.3), lineWidth: 1)
+        }
+        .accessibilityLabel("Recovery code")
+        .accessibilityValue(revealedRecoveryCode)
+        .accessibilityIdentifier("settings.recoveryCode")
+
       AdaptiveStack {
         Button {
           copyRecoveryCode()
@@ -311,84 +380,25 @@ struct SettingsScreen: View {
     .transition(.opacity)
   }
 
-  // MARK: - Updates
+  // MARK: - Support and legal
 
-  private var updatesSection: some View {
-    Surface {
-      VStack(alignment: .leading, spacing: 14) {
-        PanelHeader(
-          title: "Updates",
-          subtitle: "Delivered through the \(PlatformCopy.appStoreName)",
-          systemImage: "arrow.down.circle"
-        )
-        if !state.isAppVersionSupported {
-          InfoCallout(
-            title: "Update required",
-            copy:
-              "This version is below the minimum supported version. Update Address Atlas before continuing.",
-            tone: .warning
-          )
-        }
-        VStack(spacing: 0) {
-          SettingsKeyValueRow(label: "Version", value: state.appVersion)
-          Divider().overlay(AtlasTheme.ruleSoft)
-          SettingsKeyValueRow(label: "Build", value: SettingsBuildInfo.buildNumber)
-          Divider().overlay(AtlasTheme.ruleSoft)
-          SettingsKeyValueRow(
-            label: "Source commit",
-            value: SettingsBuildInfo.shortSourceCommit ?? "Unavailable"
-          )
-        }
-        Link(destination: state.safeUpdateDownloadURL) {
-          Label(state.updateActionTitle, systemImage: "arrow.up.forward.app")
-            .settingsControlLabel()
-        }
-        .buttonStyle(AtlasSecondaryButtonStyle())
-        .accessibilityHint(state.updateActionHint)
-      }
-    }
-  }
-
-  // MARK: - Privacy and support
-
-  private var privacySection: some View {
-    Surface {
-      VStack(alignment: .leading, spacing: 14) {
-        PanelHeader(
-          title: "Privacy and support",
-          subtitle: "Review data boundaries, get help, or inspect the price-data source",
-          systemImage: "hand.raised.fill"
-        )
-        VStack(spacing: 10) {
-          Link(destination: AppState.privacyPolicyURL) {
-            Label("Privacy policy", systemImage: "lock.doc")
-              .settingsControlLabel()
-          }
-          .buttonStyle(AtlasSecondaryButtonStyle())
-          Link(destination: AppState.supportURL) {
-            Label("Support", systemImage: "questionmark.circle")
-              .settingsControlLabel()
-          }
-          .buttonStyle(AtlasSecondaryButtonStyle())
-          Link(destination: AppState.termsOfUseURL) {
-            Label("Terms of use", systemImage: "doc.text")
-              .settingsControlLabel()
-          }
-          .buttonStyle(AtlasSecondaryButtonStyle())
-          Link(destination: AppState.coinGeckoAttributionURL) {
-            Label("Data provided by CoinGecko", systemImage: "chart.line.uptrend.xyaxis")
-              .settingsControlLabel()
-          }
-          .buttonStyle(AtlasSecondaryButtonStyle())
-        }
-        Text(
-          "Address Atlas is read-only analytics software. It never creates wallets, stores private keys, signs transactions, executes trades, or provides personalized investment advice."
-        )
-        .font(.caption)
-        .foregroundStyle(AtlasTheme.ink2)
-        .lineSpacing(2)
-        .fixedSize(horizontal: false, vertical: true)
-      }
+  private var supportSection: some View {
+    SettingsGroup(title: "Support & legal") {
+      SettingsLinkRow(
+        title: "Privacy policy", systemImage: "hand.raised.fill", tint: AtlasTheme.accent,
+        destination: AppState.privacyPolicyURL)
+      SettingsDivider()
+      SettingsLinkRow(
+        title: "Support", systemImage: "questionmark.circle.fill", tint: AtlasTheme.gain,
+        destination: AppState.supportURL)
+      SettingsDivider()
+      SettingsLinkRow(
+        title: "Terms of use", systemImage: "doc.text.fill", tint: AtlasTheme.ink2,
+        destination: AppState.termsOfUseURL)
+      SettingsDivider()
+      SettingsLinkRow(
+        title: "Data provided by CoinGecko", systemImage: "chart.line.uptrend.xyaxis",
+        tint: AtlasTheme.warning, destination: AppState.coinGeckoAttributionURL)
     }
   }
 
@@ -396,56 +406,116 @@ struct SettingsScreen: View {
 
   private var diagnosticsSection: some View {
     let report = state.privacySafeDiagnosticsReport()
-    return Surface(style: .subtle) {
-      VStack(alignment: .leading, spacing: 16) {
-        PanelHeader(
-          title: "Privacy-safe diagnostics",
-          subtitle: "Useful support context without portfolio content",
-          systemImage: "stethoscope"
-        )
-        InfoCallout(
-          title: "Designed to exclude sensitive data",
-          copy:
-            "Includes app and schema versions, coarse state flags, count ranges, and stable failure codes. Excludes addresses, labels, amounts, credentials, sessions, URLs, file paths, and raw errors.",
-          tone: .success
-        )
+    return SettingsGroup(title: "Diagnostics") {
+      VStack(alignment: .leading, spacing: 12) {
+        SettingsRowLabel(
+          title: "Privacy-safe report",
+          subtitle: "For support. No addresses, amounts, or keys.",
+          systemImage: "stethoscope",
+          tint: AtlasTheme.accent
+        ) {
+          EmptyView()
+        }
+        .accessibilityElement(children: .combine)
         AdaptiveStack {
           Button {
             copyDiagnostics(report)
           } label: {
-            Label("Copy diagnostics", systemImage: "doc.on.doc")
+            Label("Copy", systemImage: "doc.on.doc")
               .settingsControlLabel()
           }
           .buttonStyle(AtlasSecondaryButtonStyle())
+          .accessibilityLabel("Copy diagnostics")
           .accessibilityHint(
             "Copies a bounded technical report that excludes portfolio content and identifiers."
           )
+          .accessibilityIdentifier("settings.copyDiagnostics")
           ShareLink(
             item: report,
             subject: Text("Address Atlas privacy-safe diagnostics")
           ) {
-            Label("Share diagnostics", systemImage: "square.and.arrow.up")
+            Label("Share", systemImage: "square.and.arrow.up")
               .settingsControlLabel()
           }
           .buttonStyle(AtlasSecondaryButtonStyle())
+          .accessibilityLabel("Share diagnostics")
           .accessibilityHint(
             "Opens the share sheet with the same bounded report, for example to attach it to a support message."
           )
         }
+        .padding(.horizontal, 14)
+        LearnMoreDisclosure("What the report contains", systemImage: "checkmark.shield") {
+          IOSFactRow(
+            systemImage: "checkmark.circle",
+            title: "Included",
+            copy: "App and schema versions, coarse state flags, count ranges, and stable failure codes.",
+            tint: AtlasTheme.gain
+          )
+          IOSFactRow(
+            systemImage: "xmark.circle",
+            title: "Never included",
+            copy:
+              "Addresses, labels, amounts, credentials, sessions, URLs, file paths, and raw errors.",
+            tint: AtlasTheme.loss
+          )
+        }
+        .padding(.horizontal, 14)
+        .padding(.bottom, 14)
       }
     }
   }
 
-  // MARK: - Version line
+  // MARK: - About
 
-  private var versionLine: some View {
-    Text(SettingsBuildInfo.versionLine(appVersion: state.appVersion))
-      .font(.caption)
-      .foregroundStyle(AtlasTheme.ink3)
-      .textSelection(.enabled)
-      .frame(maxWidth: .infinity)
-      .multilineTextAlignment(.center)
-      .padding(.top, 4)
+  private var aboutSection: some View {
+    SettingsGroup(title: "About") {
+      SettingsValueRow(label: "Version", value: state.appVersion) {
+        if !state.isAppVersionSupported {
+          Badge("Update required", color: AtlasTheme.warning)
+        }
+      }
+      SettingsDivider(inset: 14)
+      SettingsValueRow(label: "Build", value: SettingsBuildInfo.buildNumber)
+      SettingsDivider(inset: 14)
+      SettingsValueRow(
+        label: "Source commit",
+        value: SettingsBuildInfo.shortSourceCommit ?? "Unavailable"
+      )
+      SettingsDivider(inset: 14)
+      Link(destination: state.safeUpdateDownloadURL) {
+        HStack(spacing: 12) {
+          Text(
+            state.usesMacAppStoreUpdates
+              ? "View in \(PlatformCopy.appStoreName)" : "Download latest release"
+          )
+          .foregroundStyle(AtlasTheme.accent)
+          Spacer(minLength: 8)
+          Image(systemName: "arrow.up.right")
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(AtlasTheme.ink3)
+            .accessibilityHidden(true)
+        }
+        .font(.body)
+        .padding(.horizontal, 14)
+        .frame(minHeight: 48)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(SettingsRowButtonStyle())
+      .accessibilityLabel(state.updateActionTitle)
+      .accessibilityHint(state.updateActionHint)
+    }
+  }
+
+  private var disclaimer: some View {
+    Text(
+      "Address Atlas is read-only analytics. It never stores private keys, signs transactions, trades, or gives investment advice."
+    )
+    .font(.footnote)
+    .foregroundStyle(AtlasTheme.ink3)
+    .multilineTextAlignment(.center)
+    .frame(maxWidth: .infinity)
+    .fixedSize(horizontal: false, vertical: true)
+    .padding(.horizontal, 12)
   }
 
   // MARK: - Preference actions
@@ -460,7 +530,8 @@ struct SettingsScreen: View {
 
   /// Commits the typed threshold when focus leaves the field. The decimal
   /// keyboard has no return key, so this is the only commit path besides the
-  /// keyboard toolbar's Done button, which also clears focus.
+  /// keyboard toolbar's Done button, which also clears focus. An invalid
+  /// value is reverted and explained right under the field.
   private func commitDustThreshold() {
     let current = state.document.preferences.dustThreshold
     let trimmed = dustThresholdText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -472,10 +543,11 @@ struct SettingsScreen: View {
       value.isFinite, value >= 0
     else {
       syncDustThresholdText()
-      state.notice = ""
-      state.error = "Dust threshold must be a finite, non-negative USD value."
+      dustThresholdError = Self.dustThresholdErrorMessage
+      AtlasAccessibilityAnnouncer.shared.announceEvent(Self.dustThresholdErrorMessage, kind: .error)
       return
     }
+    dustThresholdError = nil
     guard value != current else {
       syncDustThresholdText()
       return
@@ -544,8 +616,7 @@ struct SettingsScreen: View {
       state.presentUserFacingError(error)
     case nil:
       revealedRecoveryCode = ""
-      state.notice =
-        "Recovery kit export cancelled. The temporary file was deleted and no code was shown."
+      state.notice = "Export cancelled. The temporary file was deleted and no code was shown."
       state.error = ""
     }
   }
@@ -559,8 +630,7 @@ struct SettingsScreen: View {
         .expirationDate: Date().addingTimeInterval(60),
       ]
     )
-    state.notice =
-      "Recovery code copied. The clipboard entry stays on this device and expires in one minute."
+    state.notice = "Code copied to this device only. It expires in one minute."
     state.error = ""
   }
 
@@ -608,59 +678,229 @@ private struct SettingsRecoveryExport {
   var code: String
 }
 
-private struct SettingsPreferenceToggleRow: View {
+/// iOS-style grouped section: small header, rounded card of rows, optional
+/// footnote.
+private struct SettingsGroup<Content: View>: View {
   var title: String
-  var copy: String
-  var systemImage: String
-  @Binding var isOn: Bool
+  var footer: String?
+  var content: Content
+
+  init(title: String, footer: String? = nil, @ViewBuilder content: () -> Content) {
+    self.title = title
+    self.footer = footer
+    self.content = content()
+  }
 
   var body: some View {
-    HStack(alignment: .center, spacing: 14) {
-      Image(systemName: systemImage)
-        .font(.body.weight(.semibold))
-        .foregroundStyle(AtlasTheme.accent)
-        .frame(width: 38, height: 38)
-        .background(AtlasTheme.accent.opacity(0.10))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .accessibilityHidden(true)
-      VStack(alignment: .leading, spacing: 3) {
-        Text(title)
-          .font(.callout.weight(.semibold))
-        Text(copy)
-          .font(.caption)
+    VStack(alignment: .leading, spacing: 7) {
+      Text(title)
+        .font(.footnote.weight(.semibold))
+        .foregroundStyle(AtlasTheme.ink3)
+        .padding(.horizontal, 4)
+        .accessibilityAddTraits(.isHeader)
+      VStack(alignment: .leading, spacing: 0) {
+        content
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(AtlasTheme.surface)
+      .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.card, style: .continuous))
+      .overlay {
+        RoundedRectangle(cornerRadius: AtlasRadius.card, style: .continuous)
+          .stroke(AtlasTheme.ruleSoft, lineWidth: 1)
+      }
+      if let footer {
+        Text(footer)
+          .font(.footnote)
           .foregroundStyle(AtlasTheme.ink3)
+          .padding(.horizontal, 4)
           .fixedSize(horizontal: false, vertical: true)
       }
-      .accessibilityHidden(true)
-      Spacer(minLength: 12)
-      Toggle(title, isOn: $isOn)
-        .labelsHidden()
-        .tint(AtlasTheme.accent)
-        .accessibilityLabel(title)
-        .accessibilityHint(copy)
     }
-    .frame(minHeight: 44)
+    .padding(.top, 4)
   }
 }
 
-private struct SettingsKeyValueRow: View {
-  var label: String
-  var value: String
+private struct SettingsDivider: View {
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+  var inset: CGFloat = 56
 
   var body: some View {
-    HStack(alignment: .firstTextBaseline, spacing: 12) {
-      Text(label)
-        .font(.callout.weight(.medium))
-        .foregroundStyle(AtlasTheme.ink3)
-      Spacer(minLength: 12)
-      Text(value)
-        .font(.callout.monospacedDigit())
-        .foregroundStyle(AtlasTheme.ink2)
-        .textSelection(.enabled)
-        .multilineTextAlignment(.trailing)
+    Divider()
+      .overlay(AtlasTheme.ruleSoft)
+      .padding(.leading, dynamicTypeSize.isAccessibilitySize ? 14 : inset)
+  }
+}
+
+/// Row icon tile. Dropped at accessibility text sizes so the title keeps the
+/// full row width.
+private struct SettingsIcon: View {
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+  var systemImage: String
+  var tint: Color
+
+  var body: some View {
+    if !dynamicTypeSize.isAccessibilitySize {
+      tile
     }
-    .padding(.vertical, 11)
+  }
+
+  private var tile: some View {
+    Image(systemName: systemImage)
+      .font(.subheadline.weight(.semibold))
+      .foregroundStyle(tint)
+      .frame(width: 30, height: 30)
+      .background(tint.opacity(0.12))
+      .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+      .accessibilityHidden(true)
+  }
+}
+
+private struct SettingsChevron: View {
+  var systemImage = "chevron.right"
+
+  var body: some View {
+    Image(systemName: systemImage)
+      .font(.footnote.weight(.semibold))
+      .foregroundStyle(AtlasTheme.ink3)
+      .accessibilityHidden(true)
+  }
+}
+
+/// Icon tile, title, optional one-line subtitle, and trailing accessory.
+private struct SettingsRowLabel<Trailing: View>: View {
+  @Environment(\.isEnabled) private var isEnabled
+  var title: String
+  var subtitle: String?
+  var systemImage: String
+  var tint: Color
+  var trailing: Trailing
+
+  init(
+    title: String,
+    subtitle: String? = nil,
+    systemImage: String,
+    tint: Color,
+    @ViewBuilder trailing: () -> Trailing
+  ) {
+    self.title = title
+    self.subtitle = subtitle
+    self.systemImage = systemImage
+    self.tint = tint
+    self.trailing = trailing()
+  }
+
+  var body: some View {
+    HStack(spacing: 12) {
+      SettingsIcon(systemImage: systemImage, tint: isEnabled ? tint : AtlasTheme.ink3)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(title)
+          .font(.body)
+          .foregroundStyle(isEnabled ? AtlasTheme.ink : AtlasTheme.ink3)
+        if let subtitle {
+          Text(subtitle)
+            .font(.footnote)
+            .foregroundStyle(AtlasTheme.ink3)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+      .multilineTextAlignment(.leading)
+      Spacer(minLength: 8)
+      trailing
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 8)
+    .frame(minHeight: 52)
+    .contentShape(Rectangle())
+  }
+}
+
+private struct SettingsToggleRow: View {
+  var title: String
+  var systemImage: String
+  var tint: Color
+  var hint: String
+  @Binding var isOn: Bool
+
+  var body: some View {
+    Toggle(isOn: $isOn) {
+      HStack(spacing: 12) {
+        SettingsIcon(systemImage: systemImage, tint: tint)
+        Text(title)
+          .font(.body)
+          .foregroundStyle(AtlasTheme.ink)
+      }
+    }
+    .tint(AtlasTheme.accent)
+    .padding(.horizontal, 14)
+    .padding(.vertical, 8)
+    .frame(minHeight: 52)
+    .accessibilityHint(hint)
+  }
+}
+
+private struct SettingsLinkRow: View {
+  var title: String
+  var systemImage: String
+  var tint: Color
+  var destination: URL
+
+  var body: some View {
+    Link(destination: destination) {
+      SettingsRowLabel(title: title, systemImage: systemImage, tint: tint) {
+        SettingsChevron(systemImage: "arrow.up.right")
+      }
+    }
+    .buttonStyle(SettingsRowButtonStyle())
+    .accessibilityHint("Opens in your browser.")
+  }
+}
+
+private struct SettingsValueRow<Accessory: View>: View {
+  var label: String
+  var value: String
+  var accessory: Accessory
+
+  init(label: String, value: String, @ViewBuilder accessory: () -> Accessory) {
+    self.label = label
+    self.value = value
+    self.accessory = accessory()
+  }
+
+  var body: some View {
+    ViewThatFits(in: .horizontal) {
+      HStack(spacing: 12) {
+        Text(label).foregroundStyle(AtlasTheme.ink)
+        accessory
+        Spacer(minLength: 12)
+        Text(value).foregroundStyle(AtlasTheme.ink3).monospacedDigit()
+      }
+      VStack(alignment: .leading, spacing: 2) {
+        HStack(spacing: 8) {
+          Text(label).foregroundStyle(AtlasTheme.ink)
+          accessory
+        }
+        Text(value).foregroundStyle(AtlasTheme.ink3).monospacedDigit()
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    .font(.body)
+    .padding(.horizontal, 14)
+    .padding(.vertical, 8)
+    .frame(minHeight: 48)
     .accessibilityElement(children: .combine)
+  }
+}
+
+extension SettingsValueRow where Accessory == EmptyView {
+  init(label: String, value: String) {
+    self.init(label: label, value: value) { EmptyView() }
+  }
+}
+
+private struct SettingsRowButtonStyle: ButtonStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .background(configuration.isPressed ? AtlasTheme.surfaceMuted : Color.clear)
   }
 }
 
@@ -682,19 +922,11 @@ private enum SettingsBuildInfo {
     else { return nil }
     return String(raw.prefix(7))
   }
-
-  static func versionLine(appVersion: String) -> String {
-    var line = "Address Atlas \(appVersion) (\(buildNumber))"
-    if let commit = shortSourceCommit {
-      line += " · \(commit)"
-    }
-    return line
-  }
 }
 
 extension View {
-  /// Full-width, 44pt-tall control label so every button and link in Settings
-  /// meets the touch-target minimum inside the shared button styles.
+  /// Full-width, 44pt-tall control label so every button in Settings meets
+  /// the touch-target minimum inside the shared button styles.
   fileprivate func settingsControlLabel() -> some View {
     frame(maxWidth: .infinity, minHeight: 44)
   }
