@@ -51,7 +51,7 @@ struct RootView: View {
       }
     }
     .overlay {
-      IOSStatusToast(bottomPadding: state.isUnlocked && !showsOnboarding ? 92 : 24)
+      IOSStatusToast(bottomPadding: state.isUnlocked && !showsOnboarding ? 92 : nil)
     }
     .overlay {
       if scenePhase != .active {

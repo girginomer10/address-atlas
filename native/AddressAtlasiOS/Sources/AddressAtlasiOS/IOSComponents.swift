@@ -76,7 +76,7 @@ struct TokenMonogram: View {
 
   private var initials: String {
     let letters = symbol.uppercased().filter { $0.isLetter || $0.isNumber }
-    return String(letters.prefix(symbol.count > 4 ? 1 : 2))
+    return String(letters.prefix(1))
   }
 
   var body: some View {
@@ -96,7 +96,7 @@ struct TokenMonogram: View {
           .font(.system(size: size * 0.36, weight: .bold))
       } else {
         Text(initials.isEmpty ? "?" : initials)
-          .font(.system(size: size * (initials.count > 1 ? 0.34 : 0.42), weight: .bold, design: .rounded))
+          .font(.system(size: size * 0.42, weight: .bold, design: .rounded))
           .minimumScaleFactor(0.6)
           .lineLimit(1)
       }
@@ -353,7 +353,9 @@ struct IOSPersistentStatus: View {
 struct IOSStatusToast: View {
   @EnvironmentObject private var state: AppState
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  var bottomPadding: CGFloat
+  /// Bottom inset above the tab bar; nil pins the toast to the top edge
+  /// (unlock and onboarding pages keep their primary buttons at the bottom).
+  var bottomPadding: CGFloat?
 
   static let noticeDuration: Duration = .seconds(4)
 
@@ -365,7 +367,7 @@ struct IOSStatusToast: View {
 
   var body: some View {
     VStack {
-      Spacer()
+      if bottomPadding != nil { Spacer() }
       if let message {
         Button {
           if message.isError { state.error = "" } else { state.notice = "" }
@@ -407,12 +409,17 @@ struct IOSStatusToast: View {
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 16)
-        .padding(.bottom, bottomPadding)
-        .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+        .padding(.bottom, bottomPadding ?? 0)
+        .padding(.top, bottomPadding == nil ? 8 : 0)
+        .transition(
+          reduceMotion
+            ? .opacity
+            : .move(edge: bottomPadding == nil ? .top : .bottom).combined(with: .opacity))
         .accessibilityLabel(message.isError ? "Error: \(message.text)" : "Status: \(message.text)")
         .accessibilityHint("Dismisses the message.")
         .id(message.text)
       }
+      if bottomPadding == nil { Spacer() }
     }
     .animation(
       AtlasMotion.animation(AtlasMotion.standard, reduceMotion: reduceMotion),
