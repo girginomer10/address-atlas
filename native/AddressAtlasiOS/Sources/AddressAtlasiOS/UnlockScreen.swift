@@ -15,7 +15,9 @@ import UniformTypeIdentifiers
 struct UnlockScreen: View {
   @EnvironmentObject private var state: AppState
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.scenePhase) private var scenePhase
   @State private var restoreCode = ""
+  @State private var revealsRestoreCode = false
   @State private var confirmsDamagedVaultQuarantine = false
   @State private var showsRecoveryFileImporter = false
   @State private var firstAttemptFinished = false
@@ -79,9 +81,13 @@ struct UnlockScreen: View {
       }
       .fileImporter(
         isPresented: $showsRecoveryFileImporter,
-        allowedContentTypes: [AppState.recoveryKitContentType, .json, .data]
+        // Only recovery kits (.atlas-recovery), as on macOS.
+        allowedContentTypes: [AppState.recoveryKitContentType]
       ) { result in
         handleRecoveryFileSelection(result)
+      }
+      .onChange(of: scenePhase) { _, phase in
+        if phase != .active { revealsRestoreCode = false }
       }
     }
   }
@@ -217,12 +223,32 @@ struct UnlockScreen: View {
         systemImage: "key.fill",
         tint: AtlasTheme.accent
       )
-      SecureField("Recovery code", text: $restoreCode)
+      HStack(spacing: 8) {
+        Group {
+          if revealsRestoreCode {
+            TextField("Recovery code", text: $restoreCode)
+          } else {
+            SecureField("Recovery code", text: $restoreCode)
+          }
+        }
         .textFieldStyle(AtlasTextFieldStyle())
         .atlasIdentifierInput()
         .submitLabel(.done)
         .accessibilityLabel("Recovery code")
         .accessibilityHint("Enter the code you stored separately from the recovery file.")
+        Button {
+          revealsRestoreCode.toggle()
+        } label: {
+          Image(systemName: revealsRestoreCode ? "eye.slash" : "eye")
+            .font(.callout)
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+            .foregroundStyle(AtlasTheme.ink3)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(revealsRestoreCode ? "Hide recovery code" : "Show recovery code")
+      }
       Button {
         showsRecoveryFileImporter = true
       } label: {
@@ -234,7 +260,7 @@ struct UnlockScreen: View {
       .accessibilityHint(
         "Opens the Files picker. The recovery file is verified before anything in Keychain is changed."
       )
-      Text("Nothing in Keychain changes until the file is verified.")
+      Text("Nothing changes unless the kit opens the portfolio on this device.")
         .font(.caption)
         .foregroundStyle(AtlasTheme.ink3)
         .fixedSize(horizontal: false, vertical: true)
@@ -261,6 +287,16 @@ struct UnlockScreen: View {
           }
         }
         await state.restoreRecoveryKit(from: url, recoveryCode: recoveryCode)
+        guard state.error.isEmpty, state.notice.hasPrefix("Recovery kit restored") else {
+          return
+        }
+        restoreCode = ""
+        revealsRestoreCode = false
+        // Say what came back: the key, which opens the portfolio stored on
+        // this device. Follow-up notices (upload recovery) are kept.
+        if state.notice == "Recovery kit restored." {
+          state.notice = "Encryption key restored. Your portfolio on this device is open again."
+        }
       }
     case .failure:
       state.notice = ""

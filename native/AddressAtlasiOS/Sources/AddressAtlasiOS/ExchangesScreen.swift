@@ -72,19 +72,6 @@ struct ExchangesScreen: View {
     .sheet(item: $detailConnectionID) { request in
       ExchangeDetailSheet(connectionID: request.id)
     }
-    .confirmationDialog(
-      pendingRemoval.map { "Remove \($0.label)?" } ?? "Remove connection?",
-      isPresented: removalBinding,
-      titleVisibility: .visible,
-      presenting: pendingRemoval
-    ) { connection in
-      Button("Remove connection", role: .destructive) {
-        Task { await state.removeExchangeConnection(id: connection.id) }
-      }
-      Button("Cancel", role: .cancel) {}
-    } message: { _ in
-      Text(ExchangePresentation.removalMessage)
-    }
     .onAppear(perform: consumePendingAction)
     .onChange(of: navigation.pendingAction) { _, _ in
       consumePendingAction()
@@ -108,8 +95,7 @@ struct ExchangesScreen: View {
       }
       .tint(AtlasTheme.loss)
       .disabled(state.vaultEditsDisabled)
-      .accessibilityLabel(
-        "Remove exchange connection \(AtlasAccessibility.exchangeIdentity(connection))")
+      .accessibilityLabel("Remove \(connection.label)")
     }
     .contextMenu {
       Button {
@@ -124,12 +110,26 @@ struct ExchangesScreen: View {
       }
       .disabled(state.vaultEditsDisabled)
     }
+    // Attached to the row so the confirmation points at the connection it
+    // removes.
+    .confirmationDialog(
+      "Remove \(connection.label)?",
+      isPresented: removalBinding(for: connection),
+      titleVisibility: .visible
+    ) {
+      Button("Remove connection", role: .destructive) {
+        Task { await state.removeExchangeConnection(id: connection.id) }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text(ExchangePresentation.removalMessage)
+    }
   }
 
-  private var removalBinding: Binding<Bool> {
+  private func removalBinding(for connection: ExchangeConnectionRecord) -> Binding<Bool> {
     Binding(
-      get: { pendingRemoval != nil },
-      set: { if !$0 { pendingRemoval = nil } }
+      get: { pendingRemoval?.id == connection.id },
+      set: { if !$0, pendingRemoval?.id == connection.id { pendingRemoval = nil } }
     )
   }
 
@@ -204,14 +204,13 @@ extension ExchangeProvider {
   }
 
   /// One line under the fields: what the scope check does for this provider.
+  /// The permission to enable is named once, in the setup steps.
   fileprivate var exchangesScopeLine: String {
     switch self {
     case .binance:
       "Only read permissions are accepted. Keys with trading, transfer, or withdrawal rights are refused."
-    case .coinbase:
-      "Use View permission only. Coinbase scope can't be checked automatically."
-    case .kraken:
-      "Enable Query Funds only. Kraken scope can't be checked automatically."
+    case .coinbase, .kraken:
+      "\(label) can't confirm a key is read-only, so check its permissions first."
     }
   }
 
@@ -242,7 +241,15 @@ extension ExchangeProvider {
 
 private enum ExchangePresentation {
   static let removalMessage =
-    "The encrypted credentials are removed from this device and its automatic rollback point. An earlier iCloud copy may still contain them until you save the updated portfolio to iCloud or delete that copy."
+    "The encrypted keys are removed from this device, including its backup copy. An older iCloud copy may still hold them until you save to iCloud again or delete that copy."
+
+  /// The provider name under a connection's own name, unless the connection
+  /// is simply called after its provider ("Coinbase / Coinbase").
+  static func providerSubtitle(_ connection: ExchangeConnectionRecord) -> String? {
+    connection.label.trimmingCharacters(in: .whitespacesAndNewlines)
+      .caseInsensitiveCompare(connection.provider.label) == .orderedSame
+      ? nil : connection.provider.label
+  }
 
   static func hasInvalidKrakenBinding(_ connection: ExchangeConnectionRecord) -> Bool {
     connection.provider == .kraken
@@ -286,7 +293,9 @@ private enum ExchangePresentation {
   }
 
   static func rowAccessibilityLabel(_ connection: ExchangeConnectionRecord) -> String {
-    var parts = [connection.label, connection.provider.label, summary(connection)]
+    var parts = [connection.label]
+    if let provider = providerSubtitle(connection) { parts.append(provider) }
+    parts.append(summary(connection))
     if !isScopeVerified(connection) { parts.append("scope not verified") }
     return parts.joined(separator: ", ")
   }
@@ -378,6 +387,8 @@ private struct ConnectExchangeSheet: View {
   @State private var secret = ""
   @State private var revealsAPIKey = false
   @State private var revealsSecret = false
+  /// A local format problem, shown under the field it belongs to.
+  @State private var fieldIssue: ExchangeCredentialFormatIssue?
   @FocusState private var focusedField: ExchangesFormField?
 
   private var connections: [ExchangeConnectionRecord] {
@@ -404,8 +415,8 @@ private struct ConnectExchangeSheet: View {
         .disabled(state.isValidatingExchangeCredentials)
         .toolbar {
           ToolbarItem(placement: .confirmationAction) {
-            Button("Connect", action: saveConnection)
-              .disabled(!canSubmit)
+            FormToolbarConfirmButton(
+              title: "Connect", isEnabled: canSubmit, action: saveConnection)
           }
         }
 
@@ -463,7 +474,8 @@ private struct ConnectExchangeSheet: View {
           isRevealed: $revealsAPIKey,
           field: .apiKey,
           focusedField: $focusedField,
-          submitLabel: .next
+          submitLabel: .next,
+          issue: fieldIssue?.field == .apiKey ? fieldIssue?.message : nil
         ) {
           focusedField = .secret
         }
@@ -475,7 +487,8 @@ private struct ConnectExchangeSheet: View {
           isRevealed: $revealsSecret,
           field: .secret,
           focusedField: $focusedField,
-          submitLabel: .done
+          submitLabel: .done,
+          issue: fieldIssue?.field == .secret ? fieldIssue?.message : nil
         ) {
           if canSubmit {
             saveConnection()
@@ -536,12 +549,20 @@ private struct ConnectExchangeSheet: View {
       state.error = ""
     }
     .onChange(of: provider) { _, _ in
+      // Keys never carry over to another exchange's fields.
+      apiKey = ""
+      secret = ""
+      revealsAPIKey = false
+      revealsSecret = false
+      fieldIssue = nil
       if !state.error.isEmpty { state.error = "" }
     }
     .onChange(of: apiKey) { _, _ in
+      if fieldIssue?.field == .apiKey { fieldIssue = nil }
       if !state.error.isEmpty { state.error = "" }
     }
     .onChange(of: secret) { _, _ in
+      if fieldIssue?.field == .secret { fieldIssue = nil }
       if !state.error.isEmpty { state.error = "" }
     }
     .onChange(of: label) { _, _ in
@@ -565,15 +586,25 @@ private struct ConnectExchangeSheet: View {
     secret = ""
     revealsAPIKey = false
     revealsSecret = false
+    fieldIssue = nil
   }
 
   private func saveConnection() {
     guard canSubmit else { return }
-    focusedField = nil
     state.error = ""
     let provider = provider
     let label = label
-    let credentials = ExchangeCredentials(apiKey: apiKey, secret: secret, passphrase: nil)
+    let credentials = ExchangeCredentialEntry.credentials(
+      provider: provider, apiKey: apiKey, secret: secret)
+    if let issue = AppState.exchangeCredentialFormatIssue(
+      provider: provider, credentials: credentials)
+    {
+      fieldIssue = issue
+      focusedField = issue.field == .apiKey ? .apiKey : .secret
+      AtlasAccessibilityAnnouncer.shared.announceEvent(issue.message, kind: .error)
+      return
+    }
+    focusedField = nil
     Task {
       if await state.saveExchangeConnection(
         provider: provider,
@@ -667,6 +698,8 @@ private struct ExchangesSecretField: View {
   var field: ExchangesFormField
   var focusedField: FocusState<ExchangesFormField?>.Binding
   var submitLabel: SubmitLabel
+  /// A local format problem with this field's value.
+  var issue: String? = nil
   var onSubmit: () -> Void
 
   var body: some View {
@@ -685,19 +718,51 @@ private struct ExchangesSecretField: View {
         .focused(focusedField, equals: field)
         .submitLabel(submitLabel)
         .onSubmit(onSubmit)
+        .overlay {
+          if issue != nil {
+            RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
+              .stroke(AtlasTheme.loss.opacity(0.7), lineWidth: 1.5)
+              .allowsHitTesting(false)
+          }
+        }
         .accessibilityLabel(title)
+        .accessibilityValue(issue.map { "Error: \($0)" } ?? "")
 
         Button {
           isRevealed.toggle()
         } label: {
           Image(systemName: isRevealed ? "eye.slash" : "eye")
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         }
         .buttonStyle(ExchangesTouchIconButtonStyle())
         .accessibilityLabel(isRevealed ? "Hide \(title)" : "Show \(title)")
         .accessibilityHint(
           isRevealed ? "Masks the value again." : "Shows the pasted value on screen.")
       }
+      if let issue {
+        Label(issue, systemImage: "exclamationmark.circle.fill")
+          .font(.footnote)
+          .foregroundStyle(AtlasTheme.loss)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityHidden(true)
+      }
     }
+  }
+}
+
+/// Builds what a key form submits: trimmed values, with a Coinbase PEM key
+/// rebuilt from a one-line paste so the signer can read it.
+private enum ExchangeCredentialEntry {
+  static func credentials(
+    provider: ExchangeProvider, apiKey: String, secret: String
+  ) -> ExchangeCredentials {
+    ExchangeCredentials(
+      apiKey: apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
+      secret: provider == .coinbase
+        ? AppState.normalizedCoinbasePrivateKey(secret)
+        : secret.trimmingCharacters(in: .whitespacesAndNewlines),
+      passphrase: nil
+    )
   }
 }
 
@@ -708,6 +773,12 @@ private struct ExchangeDetailSheet: View {
   @Environment(\.dismiss) private var dismiss
   var connectionID: UUID
   @State private var confirmingRemoval = false
+  @State private var isRenaming = false
+  @State private var renameDraft = ""
+  @State private var isReplacingKeys = false
+  /// Shown in the sheet after a key replacement; the page toast sits behind
+  /// this sheet.
+  @State private var replacedMessage = ""
 
   private var connection: ExchangeConnectionRecord? {
     state.document.exchangeConnections.first { $0.id == connectionID }
@@ -735,8 +806,26 @@ private struct ExchangeDetailSheet: View {
             .fontWeight(.semibold)
         }
       }
+      .navigationDestination(isPresented: $isReplacingKeys) {
+        if let connection {
+          ReplaceExchangeKeysView(connection: connection) {
+            replacedMessage = state.notice.isEmpty ? "Keys replaced." : state.notice
+            state.notice = ""
+          }
+        }
+      }
     }
     .presentationDragIndicator(.visible)
+    .onAppear { state.error = "" }
+    .alert("Rename connection", isPresented: $isRenaming) {
+      TextField("Name", text: $renameDraft)
+        .textInputAutocapitalization(.words)
+        .autocorrectionDisabled()
+      Button("Save") { rename() }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("Up to 80 characters. Leave empty to use the exchange name.")
+    }
   }
 
   @ViewBuilder
@@ -748,9 +837,11 @@ private struct ExchangeDetailSheet: View {
         Text(connection.label)
           .font(.title2.weight(.semibold))
           .multilineTextAlignment(.center)
-        Text(connection.provider.label)
-          .font(.callout)
-          .foregroundStyle(AtlasTheme.ink3)
+        if let provider = ExchangePresentation.providerSubtitle(connection) {
+          Text(provider)
+            .font(.callout)
+            .foregroundStyle(AtlasTheme.ink3)
+        }
       }
       .frame(maxWidth: .infinity)
       .accessibilityElement(children: .combine)
@@ -791,7 +882,7 @@ private struct ExchangeDetailSheet: View {
       if ExchangePresentation.hasInvalidKrakenBinding(connection) {
         InfoCallout(
           title: "Legacy Kraken key",
-          copy: "Add a new per-device read-only key before scanning, then remove this one.",
+          copy: "Replace it with a new read-only key made for this device before scanning.",
           tone: .warning
         )
       }
@@ -811,32 +902,79 @@ private struct ExchangeDetailSheet: View {
         .fixedSize(horizontal: false, vertical: true)
       }
 
-      Button(role: .destructive) {
-        confirmingRemoval = true
-      } label: {
-        Label("Remove connection", systemImage: "trash")
-          .foregroundStyle(AtlasTheme.loss)
-          .frame(maxWidth: .infinity, minHeight: 44)
+      IOSInlineError()
+
+      if !replacedMessage.isEmpty {
+        Label(replacedMessage, systemImage: "checkmark.circle.fill")
+          .font(.callout)
+          .foregroundStyle(AtlasTheme.ink2)
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(12)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .background(AtlasTheme.gain.opacity(0.08))
+          .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
+          .accessibilityIdentifier("exchange.keysReplaced")
       }
-      .buttonStyle(AtlasSecondaryButtonStyle())
-      .disabled(state.vaultEditsDisabled)
-      .accessibilityLabel(
-        "Remove exchange connection \(AtlasAccessibility.exchangeIdentity(connection))")
-      .accessibilityHint("Asks for confirmation before removing the encrypted credentials.")
-      .confirmationDialog(
-        "Remove \(connection.label)?",
-        isPresented: $confirmingRemoval,
-        titleVisibility: .visible
-      ) {
-        Button("Remove connection", role: .destructive) {
-          Task {
-            await state.removeExchangeConnection(id: connection.id)
-            if self.connection == nil { dismiss() }
-          }
+
+      VStack(spacing: 10) {
+        Button {
+          state.error = ""
+          replacedMessage = ""
+          isReplacingKeys = true
+        } label: {
+          Label("Replace keys", systemImage: "key")
+            .frame(maxWidth: .infinity, minHeight: 44)
         }
-        Button("Cancel", role: .cancel) {}
-      } message: {
-        Text(ExchangePresentation.removalMessage)
+        .buttonStyle(AtlasSecondaryButtonStyle())
+        .disabled(state.vaultEditsDisabled)
+        .accessibilityHint("Opens a form to enter a new API key and secret for this connection.")
+
+        Button {
+          state.error = ""
+          renameDraft = connection.label
+          isRenaming = true
+        } label: {
+          Label("Rename", systemImage: "pencil")
+            .frame(maxWidth: .infinity, minHeight: 44)
+        }
+        .buttonStyle(AtlasSecondaryButtonStyle())
+        .disabled(state.vaultEditsDisabled)
+
+        Button(role: .destructive) {
+          confirmingRemoval = true
+        } label: {
+          Label("Remove connection", systemImage: "trash")
+            .foregroundStyle(AtlasTheme.loss)
+            .frame(maxWidth: .infinity, minHeight: 44)
+        }
+        .buttonStyle(AtlasSecondaryButtonStyle())
+        .disabled(state.vaultEditsDisabled)
+        .accessibilityLabel("Remove \(connection.label)")
+        .accessibilityHint("Asks for confirmation before removing the encrypted keys.")
+        .confirmationDialog(
+          "Remove \(connection.label)?",
+          isPresented: $confirmingRemoval,
+          titleVisibility: .visible
+        ) {
+          Button("Remove connection", role: .destructive) {
+            Task {
+              await state.removeExchangeConnection(id: connection.id)
+              if self.connection == nil { dismiss() }
+            }
+          }
+          Button("Cancel", role: .cancel) {}
+        } message: {
+          Text(ExchangePresentation.removalMessage)
+        }
+      }
+    }
+  }
+
+  private func rename() {
+    let draft = renameDraft
+    Task {
+      if await state.renameExchangeConnection(id: connectionID, label: draft) {
+        state.error = ""
       }
     }
   }
@@ -863,6 +1001,181 @@ private struct ExchangeDetailSheet: View {
     .padding(.vertical, 12)
     .frame(minHeight: 44)
     .accessibilityElement(children: .combine)
+  }
+}
+
+// MARK: - Replace keys
+
+/// New credentials for a saved connection, pushed inside its detail sheet.
+/// Same local format check, masking, and re-hiding as the connect sheet; the
+/// shared state re-runs the scope and device checks before anything changes.
+private struct ReplaceExchangeKeysView: View {
+  @EnvironmentObject private var state: AppState
+  @Environment(\.dismiss) private var dismiss
+  @Environment(\.scenePhase) private var scenePhase
+  var connection: ExchangeConnectionRecord
+  var onReplaced: () -> Void
+  @State private var apiKey = ""
+  @State private var secret = ""
+  @State private var revealsAPIKey = false
+  @State private var revealsSecret = false
+  @State private var fieldIssue: ExchangeCredentialFormatIssue?
+  @State private var isSaving = false
+  @FocusState private var focusedField: ExchangesFormField?
+
+  private var provider: ExchangeProvider { connection.provider }
+
+  private var canSubmit: Bool {
+    !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && !secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && !isSaving && !state.isValidatingExchangeCredentials && !state.vaultEditsDisabled
+  }
+
+  var body: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 18) {
+        Text("The new key replaces the saved one for \(connection.label).")
+          .font(.callout)
+          .foregroundStyle(AtlasTheme.ink2)
+          .fixedSize(horizontal: false, vertical: true)
+
+        if provider == .kraken {
+          Label(
+            "Use a key made for this device. It will work only here.",
+            systemImage: "iphone"
+          )
+          .font(.footnote)
+          .foregroundStyle(AtlasTheme.warning)
+          .fixedSize(horizontal: false, vertical: true)
+        }
+
+        VStack(alignment: .leading, spacing: 14) {
+          ExchangesSecretField(
+            title: provider.exchangesAPIKeyTitle,
+            placeholder: provider.exchangesAPIKeyPlaceholder,
+            text: $apiKey,
+            isRevealed: $revealsAPIKey,
+            field: .apiKey,
+            focusedField: $focusedField,
+            submitLabel: .next,
+            issue: fieldIssue?.field == .apiKey ? fieldIssue?.message : nil
+          ) {
+            focusedField = .secret
+          }
+          ExchangesSecretField(
+            title: provider.exchangesSecretTitle,
+            placeholder: provider.exchangesSecretPlaceholder,
+            text: $secret,
+            isRevealed: $revealsSecret,
+            field: .secret,
+            focusedField: $focusedField,
+            submitLabel: .done,
+            issue: fieldIssue?.field == .secret ? fieldIssue?.message : nil
+          ) {
+            if canSubmit { save() } else { focusedField = nil }
+          }
+        }
+        .disabled(isSaving || state.isValidatingExchangeCredentials)
+
+        Label(
+          provider.exchangesScopeLine,
+          systemImage: provider.exchangesVerifiesScope
+            ? "checkmark.shield.fill" : "exclamationmark.shield.fill"
+        )
+        .font(.footnote)
+        .foregroundStyle(provider.exchangesVerifiesScope ? AtlasTheme.ink3 : AtlasTheme.warning)
+        .fixedSize(horizontal: false, vertical: true)
+
+        IOSInlineError()
+
+        Button(action: save) {
+          Group {
+            if isSaving || state.isValidatingExchangeCredentials {
+              HStack(spacing: 8) {
+                ProgressView()
+                  .controlSize(.small)
+                  .tint(AtlasTheme.ink3)
+                Text("Checking key permissions…")
+              }
+              .accessibilityElement(children: .ignore)
+              .accessibilityLabel("Checking API key permissions")
+            } else {
+              Label("Replace keys", systemImage: "lock.fill")
+            }
+          }
+          .frame(maxWidth: .infinity, minHeight: 44)
+        }
+        .buttonStyle(AtlasPrimaryButtonStyle())
+        .disabled(!canSubmit)
+      }
+      .padding(.horizontal, 16)
+      .padding(.top, 8)
+      .padding(.bottom, 32)
+      .frame(maxWidth: 640, alignment: .leading)
+      .frame(maxWidth: .infinity)
+    }
+    .scrollDismissesKeyboard(.interactively)
+    .background(AtlasTheme.canvas)
+    .navigationTitle("Replace keys")
+    .navigationBarTitleDisplayMode(.inline)
+    .navigationBarBackButtonHidden(isSaving)
+    .toolbar {
+      ToolbarItem(placement: .confirmationAction) {
+        FormToolbarConfirmButton(title: "Save", isEnabled: canSubmit, action: save)
+      }
+    }
+    .atlasKeyboardDoneButton()
+    .interactiveDismissDisabled(isSaving)
+    .onAppear { state.error = "" }
+    .onChange(of: apiKey) { _, _ in
+      if fieldIssue?.field == .apiKey { fieldIssue = nil }
+      if !state.error.isEmpty { state.error = "" }
+    }
+    .onChange(of: secret) { _, _ in
+      if fieldIssue?.field == .secret { fieldIssue = nil }
+      if !state.error.isEmpty { state.error = "" }
+    }
+    .onChange(of: scenePhase) { _, phase in
+      if phase != .active {
+        revealsAPIKey = false
+        revealsSecret = false
+      }
+    }
+    .onDisappear {
+      apiKey = ""
+      secret = ""
+      revealsAPIKey = false
+      revealsSecret = false
+      if !isSaving { state.error = "" }
+    }
+  }
+
+  private func save() {
+    guard canSubmit else { return }
+    state.error = ""
+    let credentials = ExchangeCredentialEntry.credentials(
+      provider: provider, apiKey: apiKey, secret: secret)
+    if let issue = AppState.exchangeCredentialFormatIssue(
+      provider: provider, credentials: credentials)
+    {
+      fieldIssue = issue
+      focusedField = issue.field == .apiKey ? .apiKey : .secret
+      AtlasAccessibilityAnnouncer.shared.announceEvent(issue.message, kind: .error)
+      return
+    }
+    focusedField = nil
+    isSaving = true
+    let id = connection.id
+    Task {
+      let replaced = await state.replaceExchangeCredentials(id: id, credentials: credentials)
+      isSaving = false
+      if replaced {
+        apiKey = ""
+        secret = ""
+        onReplaced()
+        dismiss()
+      }
+    }
   }
 }
 

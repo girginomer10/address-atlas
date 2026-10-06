@@ -71,19 +71,6 @@ struct WalletsScreen: View {
     .sheet(item: $detailRequest) { request in
       WalletDetailSheet(walletID: request.walletID, focusesName: request.focusesName)
     }
-    .confirmationDialog(
-      removalTitle,
-      isPresented: removalBinding,
-      titleVisibility: .visible,
-      presenting: pendingRemoval
-    ) { wallet in
-      Button("Remove wallet", role: .destructive) {
-        Task { await state.removeWallet(id: wallet.id) }
-      }
-      Button("Cancel", role: .cancel) {}
-    } message: { _ in
-      Text("The address is removed from this vault. Existing snapshots are unchanged.")
-    }
     .onAppear(perform: consumePendingAction)
     .onChange(of: navigation.pendingAction) { _, _ in
       consumePendingAction()
@@ -91,8 +78,8 @@ struct WalletsScreen: View {
   }
 
   private func walletRow(_ wallet: WalletRecord) -> some View {
-    let name = WalletPresentation.displayName(
-      for: wallet, label: state.walletLabelDraft(for: wallet))
+    let name = state.walletDisplayName(for: wallet)
+    let shortAddress = WalletPresentation.shortAddress(wallet.address)
     return Button {
       detailRequest = WalletDetailRequest(walletID: wallet.id, focusesName: false)
     } label: {
@@ -100,7 +87,7 @@ struct WalletsScreen: View {
     }
     .listRowBackground(AtlasTheme.surface)
     .accessibilityLabel(
-      "\(name), \(WalletNetworkInfo(wallet: wallet).badge), address \(WalletPresentation.shortAddress(wallet.address))"
+      "\(name), \(WalletNetworkInfo(wallet: wallet).badge), address \(shortAddress)"
     )
     .accessibilityHint("Opens the wallet details.")
     .accessibilityAction(named: "Copy address") { copyAddress(wallet) }
@@ -112,7 +99,7 @@ struct WalletsScreen: View {
       }
       .tint(AtlasTheme.loss)
       .disabled(state.vaultEditsDisabled)
-      .accessibilityLabel("Remove wallet \(AtlasAccessibility.walletIdentity(wallet))")
+      .accessibilityLabel("Remove \(name)")
     }
     .contextMenu {
       Button {
@@ -133,19 +120,25 @@ struct WalletsScreen: View {
       }
       .disabled(state.vaultEditsDisabled)
     }
+    // Attached to the row so the confirmation points at the wallet it removes.
+    .confirmationDialog(
+      "Remove \(name)?",
+      isPresented: removalBinding(for: wallet),
+      titleVisibility: .visible
+    ) {
+      Button("Remove wallet", role: .destructive) {
+        Task { await state.removeWallet(id: wallet.id) }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("\(shortAddress) is removed from this device. Existing snapshots are unchanged.")
+    }
   }
 
-  private var removalTitle: String {
-    guard let wallet = pendingRemoval else { return "Remove wallet?" }
-    let name = WalletPresentation.displayName(
-      for: wallet, label: state.walletLabelDraft(for: wallet))
-    return "Remove \(name)?"
-  }
-
-  private var removalBinding: Binding<Bool> {
+  private func removalBinding(for wallet: WalletRecord) -> Binding<Bool> {
     Binding(
-      get: { pendingRemoval != nil },
-      set: { if !$0 { pendingRemoval = nil } }
+      get: { pendingRemoval?.id == wallet.id },
+      set: { if !$0, pendingRemoval?.id == wallet.id { pendingRemoval = nil } }
     )
   }
 
@@ -231,16 +224,7 @@ private struct WalletNetworkInfo {
 }
 
 private enum WalletPresentation {
-  /// The stored label is the truncated address until the person renames the
-  /// wallet; that default reads as noise, so the list shows a network name.
-  static func displayName(for wallet: WalletRecord, label: String) -> String {
-    let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
-    if trimmed.isEmpty || trimmed == AddressDetection.defaultWalletLabel(wallet.address) {
-      return WalletNetworkInfo(wallet: wallet).friendlyName
-    }
-    return trimmed
-  }
-
+  /// Same "…" truncation as every other short address in the app.
   static func shortAddress(_ address: String) -> String {
     guard address.count > 14 else { return address }
     return "\(address.prefix(6))…\(address.suffix(4))"
@@ -303,10 +287,13 @@ private struct WalletRowLabel: View {
           .font(.body.weight(.semibold))
           .foregroundStyle(AtlasTheme.ink)
           .lineLimit(dynamicTypeSize.isAccessibilitySize ? 4 : 1)
+        // A short address never breaks across lines; it shrinks a little
+        // instead at the largest text sizes.
         Text(WalletPresentation.shortAddress(wallet.address))
           .font(.subheadline)
           .foregroundStyle(AtlasTheme.ink3)
-          .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+          .lineLimit(1)
+          .minimumScaleFactor(0.6)
         if dynamicTypeSize.isAccessibilitySize {
           Badge(info.badge, color: AtlasTheme.accent)
         }
@@ -337,6 +324,9 @@ private struct AddWalletSheet: View {
   /// Set when the sheet itself rewrites the field after a partial add, so the
   /// error that explains the leftover entry is not cleared by that rewrite.
   @State private var programmaticInput: String?
+  /// Set when a seed phrase or private key was pasted and cleared from the
+  /// field; the explanation stays until the person types again.
+  @State private var clearedSecret = false
   @FocusState private var fieldFocused: Bool
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -450,8 +440,7 @@ private struct AddWalletSheet: View {
       }
       .toolbar {
         ToolbarItem(placement: .confirmationAction) {
-          Button("Add", action: addWallets)
-            .disabled(!canAdd)
+          FormToolbarConfirmButton(title: "Add", isEnabled: canAdd, action: addWallets)
         }
       }
 
@@ -523,6 +512,18 @@ private struct AddWalletSheet: View {
       }
       programmaticInput = nil
       if !state.error.isEmpty { state.error = "" }
+      let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !trimmed.isEmpty, !AddressDetection.isSafePublicAddress(trimmed) {
+        // A secret never stays on screen: the field is emptied and the
+        // reason stays visible instead.
+        clearedSecret = true
+        programmaticInput = ""
+        input = ""
+        AtlasAccessibilityAnnouncer.shared.announceEvent(
+          "That looked like a seed phrase or private key, so it was cleared.", kind: .error)
+      } else if !trimmed.isEmpty {
+        clearedSecret = false
+      }
     }
     .onDisappear {
       // A rejected entry's error belongs to this sheet; it must not reappear
@@ -533,7 +534,13 @@ private struct AddWalletSheet: View {
 
   @ViewBuilder
   private var detectionLine: some View {
-    if trimmedInput.isEmpty {
+    if trimmedInput.isEmpty, clearedSecret {
+      Label(
+        "That looked like a seed phrase or private key, so it was cleared. Only public addresses are accepted.",
+        systemImage: "exclamationmark.shield.fill"
+      )
+      .foregroundStyle(AtlasTheme.loss)
+    } else if trimmedInput.isEmpty {
       Text("One per line, or separated by commas.")
         .foregroundStyle(AtlasTheme.ink3)
     } else if !inputLooksSafe {
@@ -590,6 +597,14 @@ private struct AddWalletSheet: View {
   private func paste(_ strings: [String]) {
     let pasted = strings.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     guard !pasted.isEmpty else { return }
+    guard AddressDetection.isSafePublicAddress(pasted) else {
+      // Never put a pasted secret on screen; keep what was already typed.
+      clearedSecret = trimmedInput.isEmpty
+      if !trimmedInput.isEmpty {
+        state.error = "That looked like a seed phrase or private key, so it wasn't pasted."
+      }
+      return
+    }
     input = trimmedInput.isEmpty ? pasted : trimmedInput + "\n" + pasted
   }
 
@@ -643,6 +658,11 @@ private struct WalletDetailSheet: View {
   @FocusState private var nameFocused: Bool
   @State private var confirmingRemoval = false
   @State private var copied = false
+  /// The last name typed that the vault would accept, so closing the sheet
+  /// with an over-long draft saves that instead of dropping every edit.
+  @State private var lastValidDraft: String?
+
+  private static let nameLimit = VaultTextLimits.walletLabelCharacters
 
   private var wallet: WalletRecord? {
     state.document.wallets.first { $0.id == walletID }
@@ -667,8 +687,8 @@ private struct WalletDetailSheet: View {
       .toolbarBackground(AtlasTheme.canvas, for: .navigationBar)
       .toolbar {
         ToolbarItem(placement: .confirmationAction) {
-          Button("Done", action: commitAndDismiss)
-            .fontWeight(.semibold)
+          FormToolbarConfirmButton(
+            title: "Done", isEnabled: !nameIsTooLong, action: commitAndDismiss)
         }
       }
       .atlasKeyboardDoneButton()
@@ -681,33 +701,103 @@ private struct WalletDetailSheet: View {
     .onDisappear(perform: finalizeName)
   }
 
+  private var draftLength: Int {
+    guard let wallet else { return 0 }
+    let draft = state.walletLabelDraft(for: wallet)
+    guard draft != AddressDetection.defaultWalletLabel(wallet.address) else { return 0 }
+    return draft.trimmingCharacters(in: .whitespacesAndNewlines).count
+  }
+
+  private var nameIsTooLong: Bool {
+    draftLength > Self.nameLimit
+  }
+
+  /// The wallet's priced total in the latest snapshot, or nil when that
+  /// snapshot predates the wallet.
+  private func latestValue(for wallet: WalletRecord) -> (total: Double, assets: Int)? {
+    guard let scan = state.latestScan, scan.generatedAt >= wallet.createdAt else { return nil }
+    guard
+      let identity = AddressDetection.canonicalAddress(wallet.address, family: wallet.chainKind)
+    else { return nil }
+    let holdings = scan.holdings.filter {
+      $0.family == wallet.chainKind
+        && AddressDetection.canonicalAddress($0.address, family: $0.family) == identity
+    }
+    return (AppState.validatedPortfolioTotal(holdings) ?? 0, holdings.count)
+  }
+
   @ViewBuilder
   private func content(for wallet: WalletRecord) -> some View {
     let info = WalletNetworkInfo(wallet: wallet)
-    let name = WalletPresentation.displayName(
-      for: wallet, label: state.walletLabelDraft(for: wallet))
+    let name = state.walletDisplayName(for: wallet)
+    let value = latestValue(for: wallet)
     VStack(alignment: .leading, spacing: 22) {
-      VStack(spacing: 10) {
+      VStack(spacing: 8) {
         WalletNetworkMonogram(info: info, size: 60)
         Text(name)
           .font(.title2.weight(.semibold))
           .multilineTextAlignment(.center)
+          .lineLimit(3)
+        if let value {
+          Text(money(value.total))
+            .font(.title3.weight(.semibold))
+            .monospacedDigit()
+            .foregroundStyle(AtlasTheme.ink)
+          Text(
+            value.assets == 1
+              ? "1 asset · latest scan" : "\(value.assets) assets · latest scan"
+          )
+          .font(.footnote)
+          .foregroundStyle(AtlasTheme.ink3)
+        } else {
+          Text("Not in a scan yet")
+            .font(.footnote)
+            .foregroundStyle(AtlasTheme.ink3)
+        }
         Badge(info.badge, color: AtlasTheme.accent)
+          .padding(.top, 2)
       }
       .frame(maxWidth: .infinity)
       .accessibilityElement(children: .combine)
 
       VStack(alignment: .leading, spacing: 8) {
-        FieldLabel("Name")
+        HStack(alignment: .firstTextBaseline) {
+          FieldLabel("Name")
+          Spacer(minLength: 8)
+          if draftLength > Self.nameLimit - 15 {
+            Text("\(draftLength)/\(Self.nameLimit)")
+              .font(.caption.monospacedDigit())
+              .foregroundStyle(nameIsTooLong ? AtlasTheme.loss : AtlasTheme.ink3)
+              .accessibilityLabel("\(draftLength) of \(Self.nameLimit) characters")
+          }
+        }
         TextField(info.friendlyName, text: nameBinding(for: wallet))
           .textFieldStyle(AtlasTextFieldStyle())
           .textInputAutocapitalization(.words)
           .submitLabel(.done)
           .focused($nameFocused)
-          .onSubmit { Task { _ = await state.commitWalletLabelDraft(id: wallet.id) } }
-          .accessibilityLabel("Label for wallet \(AtlasAccessibility.walletIdentity(wallet))")
-          .accessibilityHint("Edit the local display name. Leave empty to use the default.")
+          .onSubmit {
+            guard !nameIsTooLong else { return }
+            Task { _ = await state.commitWalletLabelDraft(id: wallet.id) }
+          }
+          .overlay {
+            if nameIsTooLong {
+              RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
+                .stroke(AtlasTheme.loss.opacity(0.7), lineWidth: 1.5)
+                .allowsHitTesting(false)
+            }
+          }
+          .accessibilityLabel("Wallet name")
+          .accessibilityHint("Edit the name shown in the app. Leave empty to use the default.")
           .disabled(state.vaultEditsDisabled)
+        if nameIsTooLong {
+          Label(
+            "Names can be up to \(Self.nameLimit) characters.",
+            systemImage: "exclamationmark.circle.fill"
+          )
+          .font(.footnote)
+          .foregroundStyle(AtlasTheme.loss)
+        }
         IOSInlineError()
       }
 
@@ -772,7 +862,7 @@ private struct WalletDetailSheet: View {
       }
       .buttonStyle(AtlasSecondaryButtonStyle())
       .disabled(state.vaultEditsDisabled)
-      .accessibilityLabel("Remove wallet \(AtlasAccessibility.walletIdentity(wallet))")
+      .accessibilityLabel("Remove \(name)")
       .accessibilityHint("Asks for confirmation before removing this saved wallet.")
       .confirmationDialog(
         "Remove \(name)?",
@@ -787,12 +877,14 @@ private struct WalletDetailSheet: View {
         }
         Button("Cancel", role: .cancel) {}
       } message: {
-        Text("The address is removed from this vault. Existing snapshots are unchanged.")
+        Text(
+          "\(WalletPresentation.shortAddress(wallet.address)) is removed from this device. Existing snapshots are unchanged."
+        )
       }
     }
   }
 
-  /// The field shows an empty value while the wallet still has its default
+  /// The field shows an empty value while the wallet still has its legacy
   /// (truncated-address) label, and clearing it restores that default, so a
   /// blank name never reaches the shared draft as an invalid label.
   private func nameBinding(for wallet: WalletRecord) -> Binding<String> {
@@ -805,7 +897,11 @@ private struct WalletDetailSheet: View {
       set: { newValue in
         if !state.error.isEmpty { state.error = "" }
         let isBlank = newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        _ = state.setWalletLabelDraft(id: wallet.id, label: isBlank ? defaultLabel : newValue)
+        let label = isBlank ? defaultLabel : newValue
+        if AppState.normalizedWalletLabel(label) != nil {
+          lastValidDraft = label
+        }
+        _ = state.setWalletLabelDraft(id: wallet.id, label: label)
       }
     )
   }
@@ -819,19 +915,34 @@ private struct WalletDetailSheet: View {
     }
   }
 
-  /// Swipe-to-dismiss commits a valid name; an invalid one (too long) is
-  /// reverted rather than left as a draft that would block later syncs.
+  /// Swipe-to-dismiss saves the name. A draft the vault would refuse (over
+  /// 80 characters) is replaced by the last valid name typed in this sheet,
+  /// or the saved name, so it never lingers as a draft that blocks syncs.
   private func finalizeName() {
     guard let persisted = state.document.wallets.first(where: { $0.id == walletID })?.label,
       let wallet
     else { return }
     let draft = state.walletLabelDraft(for: wallet)
     if AppState.normalizedWalletLabel(draft) == nil {
-      _ = state.setWalletLabelDraft(id: walletID, label: persisted)
+      _ = state.setWalletLabelDraft(id: walletID, label: lastValidDraft ?? persisted)
       state.error = ""
-      return
     }
     Task { _ = await state.commitWalletLabelDraft(id: walletID) }
+  }
+}
+
+/// Toolbar confirm action that looks disabled when it is. The root view's ink
+/// foreground style otherwise keeps a disabled bar button looking active.
+struct FormToolbarConfirmButton: View {
+  var title: String
+  var isEnabled: Bool
+  var action: () -> Void
+
+  var body: some View {
+    Button(title, action: action)
+      .fontWeight(.semibold)
+      .foregroundStyle(isEnabled ? AtlasTheme.accent : AtlasTheme.ink3.opacity(0.55))
+      .disabled(!isEnabled)
   }
 }
 
