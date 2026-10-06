@@ -44,3 +44,37 @@ This pass complements `docs/NATIVE-UI-REVIEW-2026-10-06.md` (F01–F11, U01–U0
 `IOSPersistentStatus`, `IOSStatusToast`, `IOSPrivacyCover`. `RootView` gates the
 walkthrough (`OnboardingScreen`) on "not completed and no sources", overlays the
 toast and the privacy cover; `TabShell`/`SplitShell` follow the navigation model.
+
+## Outcome (same day)
+
+Five parallel worktree agents redesigned the screens on top of the foundation,
+each verified in its own simulator (light, dark, accessibility sizes), then an
+integrated fresh-install walkthrough was run: walkthrough → add-wallet sheet →
+first scan → Portfolio → Assets detail → every More screen in dark mode.
+
+- **Onboarding (G1):** three pages, ending in "Add a wallet address" /
+  "Connect an exchange" / "Explore first"; empty Portfolio has both buttons.
+- **Portfolio:** hero with change since previous snapshot and relative update
+  time, one-line source summary, scan in the toolbar + pull to refresh,
+  collapsible warnings, allocation merged per symbol with colored monograms.
+- **Wallets / Exchanges (G3, U02):** list first, add sheets with `PasteButton`,
+  honest detection line, wallet detail (rename, copy, networks, remove),
+  provider cards and per-provider read-only key steps, secrets re-hidden on
+  background (F01).
+- **Assets / Snapshots (F02, F03, U05):** native search, filter menu, group by
+  asset, row detail sheet, AX5 vertical rows; snapshot change, detail, swipe
+  delete with confirmation.
+- **Tokens / Export (F04, F05, U01, U04, F07):** segmented manual/custom, inline
+  sheet errors, labelled decimal fields, built-in token detection blocks
+  ineffective custom copies; export simplified, preview sheet, render task
+  cancelled on disappear so the export lock is released.
+- **iCloud / Settings (G2, F08):** status card from the real CloudKit account
+  state, one "How iCloud copies work" disclosure; grouped settings rows,
+  recovery code without text selection and hidden on background.
+- **F06 fixed** — see `memory/bugfixes/2026-10-06-ios-icloud-entitlement-probe.md`.
+
+Not covered: physical device, real exchange keys, signed-in iCloud
+save/restore, iPad beyond the onboarding/Portfolio check, VoiceOver audio pass.
+Manual holdings/custom tokens cannot be edited in place (no `AppState` API).
+Wallet default labels are still truncated addresses in storage; Wallets shows
+a friendly fallback while Assets/Portfolio show the stored label.

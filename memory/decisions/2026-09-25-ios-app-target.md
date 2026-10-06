@@ -32,10 +32,12 @@ AppKit leaves.
   whose macOS branch is byte-identical to the previous code: UIColor dynamic
   providers and UIAccessibility announcements in the design system, a UIWindow
   passkey presentation anchor, `PlatformCopy` nouns ("Mac" on macOS, "device"
-  on iOS) in shared strings, and an iOS entitlement probe that reads the
-  executable's `__TEXT,__entitlements` section (located via `dladdr`, never by
-  comparing dyld paths) or `embedded.mobileprovision` because the iOS SDK has
-  no SecTask API.
+  on iOS) in shared strings, and an iOS entitlement probe (the iOS SDK has
+  no SecTask API) that reads the `__TEXT,__entitlements` section (simulator),
+  then the code-signature entitlements blob (device, TestFlight, App Store),
+  then `embedded.mobileprovision`. See
+  `memory/bugfixes/2026-10-06-ios-icloud-entitlement-probe.md`; the original
+  section/profile-only probe never worked for distributed builds.
 - `KeychainVaultKeyStore` forces the macOS legacy-file-keychain migration off
   on iOS: with one keychain, its delete query would match the item just saved.
   The iOS Info.plist must never carry `AddressAtlasUseDataProtectionKeychain`.
