@@ -39,17 +39,20 @@ struct OnboardingScreen: View {
   private var topBar: some View {
     HStack {
       Spacer()
-      Button("Skip") { onFinish(nil) }
-        .font(.body.weight(.medium))
-        .foregroundStyle(AtlasTheme.ink2)
-        .frame(minWidth: 44, minHeight: 44)
-        .padding(.horizontal, 8)
-        .opacity(isLastPage ? 0 : 1)
-        .disabled(isLastPage)
-        .accessibilityHidden(isLastPage)
-        .accessibilityHint("Closes the introduction. You can add a wallet or exchange later.")
-        .accessibilityIdentifier("onboarding-skip")
+      // Removed (not just hidden) on the last page, where "Explore first"
+      // does the same, so VoiceOver never reaches an invisible button.
+      if !isLastPage {
+        Button("Skip") { onFinish(nil) }
+          .font(.body.weight(.medium))
+          .foregroundStyle(AtlasTheme.ink2)
+          .frame(minWidth: 44, minHeight: 44)
+          .padding(.horizontal, 8)
+          .accessibilityHint("Closes the introduction. You can add a wallet or exchange later.")
+          .accessibilityIdentifier("onboarding-skip")
+          .transition(.opacity)
+      }
     }
+    .animation(AtlasMotion.animation(AtlasMotion.quick, reduceMotion: reduceMotion), value: isLastPage)
     .padding(.horizontal, 8)
     .frame(height: 52)
   }

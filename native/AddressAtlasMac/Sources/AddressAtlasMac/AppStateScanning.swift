@@ -196,4 +196,125 @@ extension AppState {
     }
   }
 
+  // MARK: - Source drift since a snapshot
+
+  /// Stable identity of the source a holding was read from: the wallet's
+  /// network family plus canonical address, the exchange connection ID, or
+  /// the manual holding ID. Nil for records that cannot be attributed.
+  nonisolated static func scanSourceKey(for asset: TrackedAsset) -> String? {
+    if asset.id.hasPrefix("manual-") {
+      return "manual:" + asset.id.dropFirst("manual-".count).lowercased()
+    }
+    if let exchangeId = asset.exchangeId {
+      return "exchange:" + exchangeId.uuidString.lowercased()
+    }
+    guard asset.family != .exchange,
+      let canonical = AddressDetection.canonicalAddress(asset.address, family: asset.family)
+    else { return nil }
+    return "wallet:\(asset.family.rawValue):\(canonical)"
+  }
+
+  nonisolated static func scanSourceKey(for wallet: WalletRecord) -> String? {
+    AddressDetection.canonicalAddress(wallet.address, family: wallet.chainKind).map {
+      "wallet:\(wallet.chainKind.rawValue):\($0)"
+    }
+  }
+
+  /// Keys of every source the next scan would read: saved wallets, exchange
+  /// connections, and enabled manual holdings.
+  var savedScanSourceKeys: Set<String> {
+    var keys = Set(document.wallets.compactMap { Self.scanSourceKey(for: $0) })
+    for connection in document.exchangeConnections {
+      keys.insert("exchange:" + connection.id.uuidString.lowercased())
+    }
+    for holding in document.manualHoldings where holding.enabled {
+      keys.insert("manual:" + holding.id.uuidString.lowercased())
+    }
+    return keys
+  }
+
+  /// True when the holding's wallet, exchange connection, or manual holding
+  /// is still saved (and enabled). Unattributable holdings count as saved.
+  nonisolated static func holdingSourceIsSaved(
+    _ asset: TrackedAsset, savedKeys: Set<String>
+  ) -> Bool {
+    guard let key = scanSourceKey(for: asset) else { return true }
+    return savedKeys.contains(key)
+  }
+
+  /// How the saved sources differ from the ones the latest snapshot read.
+  /// Presentation-only: the stored snapshot is never rewritten.
+  var latestScanSourceDrift: ScanSourceDrift {
+    guard let latest = latestScan else { return ScanSourceDrift() }
+    let since = latest.generatedAt
+    let saved = savedScanSourceKeys
+    let scannedKeys = Set(latest.holdings.compactMap { Self.scanSourceKey(for: $0) })
+    var drift = ScanSourceDrift()
+
+    let addedWallets = document.wallets.filter { $0.createdAt > since }.count
+    let removedWalletKeys =
+      scannedKeys.filter { $0.hasPrefix("wallet:") && !saved.contains($0) }.count
+    // A wallet without any balance leaves no holding behind; the scanned
+    // address count still shows that one was removed.
+    let walletsAtScan = document.wallets.count - addedWallets
+    drift.added += addedWallets
+    drift.removed += max(removedWalletKeys, latest.inputCount - walletsAtScan, 0)
+
+    drift.added += document.exchangeConnections.filter { $0.createdAt > since }.count
+    drift.removed +=
+      scannedKeys.filter { $0.hasPrefix("exchange:") && !saved.contains($0) }.count
+
+    for holding in document.manualHoldings where holding.enabled {
+      let key = "manual:" + holding.id.uuidString.lowercased()
+      if !scannedKeys.contains(key) {
+        drift.added += 1
+      } else if holding.updatedAt > since {
+        drift.edited += 1
+      }
+    }
+    drift.removed +=
+      scannedKeys.filter { $0.hasPrefix("manual:") && !saved.contains($0) }.count
+    return drift
+  }
+
+  /// Whether two snapshots read the same sources, so the difference between
+  /// their totals is a market move rather than an added or removed wallet,
+  /// exchange, or manual holding. `older` must precede `newer`.
+  func scanRunsShareSources(_ older: ScanRunRecord, _ newer: ScanRunRecord) -> Bool {
+    guard older.inputCount == newer.inputCount else { return false }
+    let olderKeys = Set(older.holdings.compactMap { Self.scanSourceKey(for: $0) })
+    let newerKeys = Set(newer.holdings.compactMap { Self.scanSourceKey(for: $0) })
+    guard olderKeys.filter({ $0.hasPrefix("manual:") })
+      == newerKeys.filter({ $0.hasPrefix("manual:") })
+    else { return false }
+
+    let saved = savedScanSourceKeys
+    var createdAt: [String: Date] = [:]
+    for wallet in document.wallets {
+      if let key = Self.scanSourceKey(for: wallet) { createdAt[key] = wallet.createdAt }
+    }
+    for connection in document.exchangeConnections {
+      createdAt["exchange:" + connection.id.uuidString.lowercased()] = connection.createdAt
+    }
+    // A source only the newer snapshot has was either funded since (same
+    // sources) or added between the two scans.
+    for key in newerKeys.subtracting(olderKeys) {
+      if let created = createdAt[key], created > older.generatedAt { return false }
+    }
+    // A source only the older snapshot has was either emptied (same sources)
+    // or removed; a removed one is no longer saved.
+    for key in olderKeys.subtracting(newerKeys) where !saved.contains(key) {
+      return false
+    }
+    return true
+  }
+}
+
+/// How the saved sources differ from the ones a snapshot read.
+struct ScanSourceDrift: Equatable, Sendable {
+  var added = 0
+  var removed = 0
+  var edited = 0
+
+  var hasChanges: Bool { added > 0 || removed > 0 || edited > 0 }
 }
