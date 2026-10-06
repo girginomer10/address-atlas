@@ -87,7 +87,7 @@ struct TabShell: View {
   }
 }
 
-/// The iPhone "More" tab: the remaining sections plus the privacy card.
+/// The iPhone "More" tab: the remaining sections plus a one-row privacy note.
 struct MoreList: View {
   @EnvironmentObject private var state: AppState
   @Binding var path: NavigationPath
@@ -103,27 +103,23 @@ struct MoreList: View {
             state.clearTransientMessagesForNavigation()
             path.append(section)
           } label: {
-            HStack(spacing: 12) {
-              Image(systemName: section.systemImage)
-                .font(.title3)
-                .foregroundStyle(AtlasTheme.accent)
-                .frame(width: 28)
-                .accessibilityHidden(true)
-              VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 14) {
+              SectionIconTile(section: section)
+              VStack(alignment: .leading, spacing: 1) {
                 Text(section.title)
-                  .font(.body.weight(.medium))
+                  .font(.body)
                   .foregroundStyle(AtlasTheme.ink)
                 Text(section.summary)
-                  .font(.caption)
+                  .font(.footnote)
                   .foregroundStyle(AtlasTheme.ink3)
               }
               Spacer(minLength: 8)
               Image(systemName: "chevron.right")
                 .font(.footnote.weight(.semibold))
-                .foregroundStyle(AtlasTheme.ink3)
+                .foregroundStyle(AtlasTheme.ink3.opacity(0.7))
                 .accessibilityHidden(true)
             }
-            .padding(.vertical, 6)
+            .padding(.vertical, 4)
             .frame(minHeight: 44)
             .contentShape(Rectangle())
           }
@@ -136,11 +132,9 @@ struct MoreList: View {
       .listRowBackground(AtlasTheme.surface)
 
       Section {
-        PrivacyCard()
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .listRowInsets(EdgeInsets())
-          .listRowBackground(Color.clear)
+        CompactPrivacyRow()
       }
+      .listRowBackground(AtlasTheme.surface)
     }
     .scrollContentBackground(.hidden)
     .background(AtlasTheme.canvas)
@@ -148,7 +142,56 @@ struct MoreList: View {
   }
 }
 
-/// iPad: every section in a sidebar with the brand lockup and privacy card.
+/// Settings-style colored tile behind a section's symbol.
+private struct SectionIconTile: View {
+  @ScaledMetric(relativeTo: .body) private var size: CGFloat = 30
+  var section: AtlasSection
+
+  var body: some View {
+    Image(systemName: section.systemImage)
+      .font(.system(size: size * 0.5, weight: .semibold))
+      .foregroundStyle(.white)
+      .frame(width: size, height: size)
+      .background(
+        RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
+          .fill(section.iconTint.gradient)
+      )
+      .accessibilityHidden(true)
+  }
+}
+
+/// The privacy promise in one full-width row; the details live on the
+/// screens where they matter.
+private struct CompactPrivacyRow: View {
+  var body: some View {
+    HStack(spacing: 14) {
+      Image(systemName: "lock.shield.fill")
+        .font(.body.weight(.semibold))
+        .foregroundStyle(AtlasTheme.gain)
+        .frame(width: 30, height: 30)
+        .background(
+          RoundedRectangle(cornerRadius: 7, style: .continuous)
+            .fill(AtlasTheme.gain.opacity(0.12))
+        )
+        .accessibilityHidden(true)
+      VStack(alignment: .leading, spacing: 1) {
+        Text("Private by design")
+          .font(.subheadline.weight(.semibold))
+          .foregroundStyle(AtlasTheme.ink)
+        Text("Read-only and encrypted on this \(PlatformCopy.deviceNoun)")
+          .font(.footnote)
+          .foregroundStyle(AtlasTheme.ink3)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      Spacer(minLength: 0)
+    }
+    .padding(.vertical, 4)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .accessibilityElement(children: .combine)
+  }
+}
+
+/// iPad: every section in a sidebar with the brand lockup and privacy note.
 struct SplitShell: View {
   @EnvironmentObject private var state: AppState
   @EnvironmentObject private var navigation: IOSNavigationModel
@@ -175,13 +218,16 @@ struct SplitShell: View {
         }
         Section {
           ForEach(AtlasSection.allCases) { section in
-            Label(section.title, systemImage: section.systemImage)
-              .tag(section)
+            Label {
+              Text(section.title)
+            } icon: {
+              SectionIconTile(section: section)
+            }
+            .tag(section)
           }
         }
         Section {
-          PrivacyCard()
-            .listRowInsets(EdgeInsets())
+          CompactPrivacyRow()
             .listRowBackground(Color.clear)
         }
       }

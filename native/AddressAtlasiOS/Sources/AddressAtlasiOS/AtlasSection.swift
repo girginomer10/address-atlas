@@ -43,18 +43,33 @@ enum AtlasSection: String, CaseIterable, Identifiable, Hashable, Sendable {
     }
   }
 
-  /// One-line description shown in the iPhone "More" list and iPad sidebar.
+  /// Short description shown under the title in the iPhone "More" list.
   var summary: String {
     switch self {
-    case .portfolio: "Total value, allocation, and the latest scan"
-    case .wallets: "Public addresses tracked read-only"
-    case .assets: "Every holding from the latest scan"
-    case .tokens: "Custom token allowlist and manual holdings"
-    case .snapshots: "Encrypted scan history kept on this device"
-    case .exchanges: "Read-only exchange balance connections"
-    case .iCloud: "Optional encrypted copy in your private iCloud"
-    case .export: "Share-safer or full reports, generated locally"
-    case .settings: "Preferences, recovery kit, updates, and privacy"
+    case .portfolio: "Total value and allocation"
+    case .wallets: "Watch-only addresses"
+    case .assets: "Every holding from the last scan"
+    case .tokens: "Custom tokens and manual balances"
+    case .snapshots: "Scan history on this device"
+    case .exchanges: "Read-only connections"
+    case .iCloud: "Optional encrypted copy"
+    case .export: "CSV and JSON reports"
+    case .settings: "Preferences and recovery kit"
+    }
+  }
+
+  /// Settings-style icon tile color for the "More" list and iPad sidebar.
+  var iconTint: Color {
+    switch self {
+    case .portfolio: AtlasTheme.accent
+    case .wallets: .indigo
+    case .assets: .teal
+    case .tokens: .orange
+    case .snapshots: .purple
+    case .exchanges: .green
+    case .iCloud: .cyan
+    case .export: .pink
+    case .settings: .gray
     }
   }
 
