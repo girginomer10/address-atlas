@@ -59,7 +59,7 @@ final class ICloudWorkflowTests: XCTestCase {
     state.iCloudService = TestCloud(failure: true)
     await state.saveToICloud()
     XCTAssertEqual(state.document, before)
-    XCTAssertTrue(state.error.contains("changed on another Mac"))
+    XCTAssertTrue(state.error.contains("changed on another device"))
     await state.restoreFromICloud()
     XCTAssertEqual(state.document, before)
     XCTAssertTrue(state.error.contains("Keychain"))

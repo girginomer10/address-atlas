@@ -388,14 +388,15 @@ extension NativeScanner {
     var conflictingIdentities = Set<String>()
     for (identity, candidates) in candidatesByIdentity {
       let amounts = candidates.compactMap { candidate -> Double? in
-        guard let amount = Double(candidate.line.balance), amount.isFinite, amount > 0 else {
+        guard let amount = Double(candidate.line.balance), amount.isFinite, amount >= 0 else {
           return nil
         }
         return amount
       }
       // Resolve every row for an identity before accepting any version. A
-      // malformed, zero, or negative duplicate taints the whole identity in
-      // either ordering instead of allowing the valid-looking row to win.
+      // malformed or negative duplicate taints the whole identity in either
+      // ordering instead of allowing the valid-looking row to win, and a zero
+      // row next to a positive one is a conflict, not a silent skip.
       guard amounts.count == candidates.count else {
         invalidBalanceIdentities.insert(identity)
         continue
@@ -405,6 +406,10 @@ extension NativeScanner {
         conflictingIdentities.insert(identity)
         continue
       }
+      // A consistent zero is a normal empty trust line (new lines start at
+      // zero on the XRPL). There is nothing to hold or double-count, so skip
+      // it without a scan warning.
+      guard amount > 0 else { continue }
       identicalDuplicateCount += candidates.count - 1
       linesByIdentity[identity] = ValidatedLine(
         issuer: first.issuer,
@@ -449,8 +454,8 @@ extension NativeScanner {
     if !invalidBalanceIdentities.isEmpty {
       warnings.append(
         invalidBalanceIdentities.count == 1
-          ? "XRP discarded one issued asset because its trust-line data included an invalid or non-positive balance."
-          : "XRP discarded \(invalidBalanceIdentities.count) issued assets because their trust-line data included invalid or non-positive balances."
+          ? "XRP discarded one issued asset because its trust-line data included an invalid or negative balance."
+          : "XRP discarded \(invalidBalanceIdentities.count) issued assets because their trust-line data included invalid or negative balances."
       )
     }
     if identicalDuplicateCount > 0 {

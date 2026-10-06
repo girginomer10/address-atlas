@@ -145,7 +145,7 @@ struct UnlockView: View {
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
               Text(
-                "Your vault key stays in macOS Keychain. Portfolio data, exchange credentials, scan history, and sync snapshots are encrypted before storage."
+                "Your vault key stays in macOS Keychain. Portfolio data, exchange credentials, and scan history are encrypted before storage, including the optional iCloud copy."
               )
               .font(.body)
               .foregroundStyle(AtlasTheme.ink2)
@@ -298,8 +298,8 @@ struct UnlockView: View {
           systemImage: "hand.raised.fill"
         )
         UnlockFeature(
-          title: "Private sync",
-          copy: "The server stores opaque encrypted snapshots",
+          title: "Optional iCloud copy",
+          copy: "Encrypted before it reaches iCloud",
           systemImage: "icloud.and.arrow.up.fill"
         )
       }

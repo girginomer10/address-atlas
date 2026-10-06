@@ -6,6 +6,7 @@ describe("sync-only route allowlist", () => {
     expect(isSyncOnlyPathAllowed("/account")).toBe(true);
     expect(isSyncOnlyPathAllowed("/account/session")).toBe(true);
     expect(isSyncOnlyPathAllowed("/auth/native")).toBe(true);
+    expect(isSyncOnlyPathAllowed("/auth/native/exchange")).toBe(true);
     expect(isSyncOnlyPathAllowed("/auth/passkey/options")).toBe(true);
     expect(isSyncOnlyPathAllowed("/auth/passkey/verify")).toBe(true);
     expect(isSyncOnlyPathAllowed("/config/native")).toBe(true);
@@ -18,5 +19,6 @@ describe("sync-only route allowlist", () => {
     expect(isSyncOnlyPathAllowed("/api/wallets")).toBe(false);
     expect(isSyncOnlyPathAllowed("/settings")).toBe(false);
     expect(isSyncOnlyPathAllowed("/api/scan")).toBe(false);
+    expect(isSyncOnlyPathAllowed("/auth/native/exchange/extra")).toBe(false);
   });
 });
