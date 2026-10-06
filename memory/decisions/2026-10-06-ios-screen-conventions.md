@@ -40,3 +40,24 @@ items, no first run, status lines at the top of pages far from the action.
   requires `./generate-project.sh` and committing the project.
 - Manual holdings and custom tokens have no update API in `AppState`; detail
   sheets offer include/pause and remove only.
+
+## Update 2026-10-07 (second QA pass)
+
+- The privacy cover lives in its own `UIWindow` above `.alert` (`IOSPrivacyShield`),
+  because a SwiftUI overlay in `RootView` sits under presented sheets.
+- Never present a sheet from inside a sheet for a form: SwiftUI hit-testing of
+  fields in the stacked sheet was unreliable. Edit forms are pushed inside the
+  detail sheet's `NavigationStack` (`TokensFormContainer(embedded:)`).
+- On iOS `AtlasTextFieldStyle` focuses the field when its padded area is
+  tapped; the padding sits outside the UIKit text view.
+- Toast tones: success, warning (text mentions a warning), neutral
+  (cancelled/already running), error. Silent preference toggles show no toast;
+  routine saves no longer produce "Saved locally.".
+- Portfolio/Assets hide holdings whose source was removed or paused since the
+  latest run and show a "Sources changed" banner; change-since-previous is only
+  shown when both runs read the same sources (`AppStateScanning` helpers).
+- Wallet names come from `AppState.walletDisplayNames` / `walletDisplayName(for:)`
+  on every screen, search, warning, and export.
+- Exchange credentials are format-checked before saving and can be replaced in
+  place (`replaceExchangeCredentials`); manual holdings and custom tokens are
+  edited with `updateManualHolding` / `updateCustomToken`.
