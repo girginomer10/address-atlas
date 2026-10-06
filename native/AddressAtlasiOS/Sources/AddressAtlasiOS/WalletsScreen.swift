@@ -1,18 +1,347 @@
 import AddressAtlasCore
 import SwiftUI
+import UIKit
 
-/// Saved public addresses. Ported from the macOS `WalletsView`/`WalletRow`:
-/// the same add rules, label-draft API, removal confirmation, and copy, laid
-/// out as a paste-friendly add card and two-line touch rows.
+/// Saved public addresses, list first. Adding happens in a sheet opened from
+/// the toolbar "+", the empty state, or another screen through
+/// `IOSNavigationModel` (`.addWallet`). Tapping a row opens its detail sheet
+/// (rename through the shared label-draft API, copy, networks, delete).
 struct WalletsScreen: View {
   @EnvironmentObject private var state: AppState
+  @EnvironmentObject private var navigation: IOSNavigationModel
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var addressInput = ""
+  @State private var showsAddSheet = false
+  @State private var detailRequest: WalletDetailRequest?
+  @State private var pendingRemoval: WalletRecord?
+
+  private var wallets: [WalletRecord] {
+    state.document.wallets
+  }
+
+  var body: some View {
+    List {
+      SourcesPersistentStatusSection()
+
+      if wallets.isEmpty {
+        Section {
+          SourcesEmptyState(
+            systemImage: "wallet.pass",
+            title: "No wallets yet",
+            copy: "Add a public address to see its balances.",
+            actionTitle: "Add a wallet",
+            action: openAddSheet
+          )
+        }
+        .listRowBackground(Color.clear)
+        .listRowInsets(EdgeInsets())
+      } else {
+        Section {
+          ForEach(wallets) { wallet in
+            walletRow(wallet)
+          }
+        } footer: {
+          Text("Watch-only · encrypted on this device")
+            .font(.footnote)
+            .foregroundStyle(AtlasTheme.ink3)
+        }
+      }
+    }
+    .listStyle(.insetGrouped)
+    .scrollContentBackground(.hidden)
+    .background(AtlasTheme.canvas)
+    .animation(
+      AtlasMotion.animation(AtlasMotion.standard, reduceMotion: reduceMotion),
+      value: wallets.map(\.id)
+    )
+    .navigationTitle("Wallets")
+    .navigationBarTitleDisplayMode(.large)
+    .toolbarBackground(AtlasTheme.canvas, for: .navigationBar)
+    .toolbar {
+      ToolbarItem(placement: .primaryAction) {
+        Button(action: openAddSheet) {
+          Image(systemName: "plus")
+        }
+        .accessibilityLabel("Add wallet")
+        .accessibilityHint("Opens a form to paste one or more public addresses.")
+      }
+    }
+    .sheet(isPresented: $showsAddSheet) {
+      AddWalletSheet()
+    }
+    .sheet(item: $detailRequest) { request in
+      WalletDetailSheet(walletID: request.walletID, focusesName: request.focusesName)
+    }
+    .confirmationDialog(
+      removalTitle,
+      isPresented: removalBinding,
+      titleVisibility: .visible,
+      presenting: pendingRemoval
+    ) { wallet in
+      Button("Remove wallet", role: .destructive) {
+        Task { await state.removeWallet(id: wallet.id) }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: { _ in
+      Text("The address is removed from this vault. Existing snapshots are unchanged.")
+    }
+    .onAppear(perform: consumePendingAction)
+    .onChange(of: navigation.pendingAction) { _, _ in
+      consumePendingAction()
+    }
+  }
+
+  private func walletRow(_ wallet: WalletRecord) -> some View {
+    let name = WalletPresentation.displayName(
+      for: wallet, label: state.walletLabelDraft(for: wallet))
+    return Button {
+      detailRequest = WalletDetailRequest(walletID: wallet.id, focusesName: false)
+    } label: {
+      WalletRowLabel(wallet: wallet, name: name)
+    }
+    .listRowBackground(AtlasTheme.surface)
+    .accessibilityLabel(
+      "\(name), \(WalletNetworkInfo(wallet: wallet).badge), address \(WalletPresentation.shortAddress(wallet.address))"
+    )
+    .accessibilityHint("Opens the wallet details.")
+    .accessibilityAction(named: "Copy address") { copyAddress(wallet) }
+    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+      Button {
+        pendingRemoval = wallet
+      } label: {
+        Label("Delete", systemImage: "trash")
+      }
+      .tint(AtlasTheme.loss)
+      .disabled(state.vaultEditsDisabled)
+      .accessibilityLabel("Remove wallet \(AtlasAccessibility.walletIdentity(wallet))")
+    }
+    .contextMenu {
+      Button {
+        copyAddress(wallet)
+      } label: {
+        Label("Copy address", systemImage: "doc.on.doc")
+      }
+      Button {
+        detailRequest = WalletDetailRequest(walletID: wallet.id, focusesName: true)
+      } label: {
+        Label("Rename", systemImage: "pencil")
+      }
+      .disabled(state.vaultEditsDisabled)
+      Button(role: .destructive) {
+        pendingRemoval = wallet
+      } label: {
+        Label("Delete", systemImage: "trash")
+      }
+      .disabled(state.vaultEditsDisabled)
+    }
+  }
+
+  private var removalTitle: String {
+    guard let wallet = pendingRemoval else { return "Remove wallet?" }
+    let name = WalletPresentation.displayName(
+      for: wallet, label: state.walletLabelDraft(for: wallet))
+    return "Remove \(name)?"
+  }
+
+  private var removalBinding: Binding<Bool> {
+    Binding(
+      get: { pendingRemoval != nil },
+      set: { if !$0 { pendingRemoval = nil } }
+    )
+  }
+
+  private func openAddSheet() {
+    showsAddSheet = true
+  }
+
+  private func consumePendingAction() {
+    if navigation.consume(.addWallet) {
+      showsAddSheet = true
+    }
+  }
+
+  private func copyAddress(_ wallet: WalletRecord) {
+    UIPasteboard.general.string = wallet.address
+    state.error = ""
+    state.notice = "Address copied."
+  }
+}
+
+// MARK: - Presentation helpers
+
+private struct WalletDetailRequest: Identifiable {
+  var walletID: UUID
+  var focusesName: Bool
+  var id: UUID { walletID }
+}
+
+/// Network facts for one saved wallet, derived from the address itself so a
+/// Cosmos address names its own chain instead of the "cosmos" family.
+private struct WalletNetworkInfo {
+  var symbol: String
+  var badge: String
+  var friendlyName: String
+  var scannedNetworks: [String]
+  var isRetired: Bool
+
+  /// Single-character avatar glyph for the network.
+  var glyph: String {
+    switch symbol {
+    case "ETH": "Ξ"
+    case "BTC": "₿"
+    default: String(badge.prefix(1))
+    }
+  }
+
+  init(wallet: WalletRecord) {
+    self.init(family: wallet.chainKind, address: wallet.address)
+  }
+
+  init(family: ChainFamily, address: String) {
+    if family == .evm {
+      symbol = "ETH"
+      badge = "EVM"
+      friendlyName = "Ethereum wallet"
+      scannedNetworks = ChainRegistry.evmChains.map(\.name)
+      isRetired = false
+      return
+    }
+    if let chain = AddressDetection.detectChains(for: address).first {
+      symbol = chain.symbol
+      badge = family == .xrp ? "XRP" : chain.name
+      friendlyName = "\(family == .xrp ? "XRP" : chain.name) wallet"
+      scannedNetworks = [chain.name]
+      isRetired = false
+      return
+    }
+    if let retired = AddressDetection.retiredCosmosNetworkName(for: address) {
+      symbol = retired
+      badge = retired
+      friendlyName = "\(retired) wallet"
+      scannedNetworks = []
+      isRetired = true
+      return
+    }
+    let name = family.rawValue.capitalized
+    symbol = name
+    badge = name
+    friendlyName = "\(name) wallet"
+    scannedNetworks = []
+    isRetired = false
+  }
+}
+
+private enum WalletPresentation {
+  /// The stored label is the truncated address until the person renames the
+  /// wallet; that default reads as noise, so the list shows a network name.
+  static func displayName(for wallet: WalletRecord, label: String) -> String {
+    let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.isEmpty || trimmed == AddressDetection.defaultWalletLabel(wallet.address) {
+      return WalletNetworkInfo(wallet: wallet).friendlyName
+    }
+    return trimmed
+  }
+
+  static func shortAddress(_ address: String) -> String {
+    guard address.count > 14 else { return address }
+    return "\(address.prefix(6))…\(address.suffix(4))"
+  }
+
+  /// One entry per network family in input order ("EVM", "Bitcoin", …).
+  static func networkChips(for addresses: [String]) -> [String] {
+    var chips: [String] = []
+    for address in addresses {
+      guard let chain = AddressDetection.detectChains(for: address).first else { continue }
+      let chip = WalletNetworkInfo(family: chain.family, address: address).badge
+      if !chips.contains(chip) { chips.append(chip) }
+    }
+    return chips
+  }
+}
+
+/// Network avatar in the same circle and hue as `TokenMonogram`, so a wallet
+/// shares its color with its native asset elsewhere, with a single glyph.
+private struct WalletNetworkMonogram: View {
+  @Environment(\.colorScheme) private var colorScheme
+  var info: WalletNetworkInfo
+  var size: CGFloat
+
+  var body: some View {
+    let hue = TokenMonogram.hue(for: info.symbol)
+    let foreground =
+      info.isRetired
+      ? AtlasTheme.ink3
+      : Color(hue: hue, saturation: 0.72, brightness: colorScheme == .dark ? 0.92 : 0.62)
+    let background =
+      info.isRetired
+      ? AtlasTheme.ink3.opacity(0.12)
+      : Color(hue: hue, saturation: 0.6, brightness: 0.85)
+        .opacity(colorScheme == .dark ? 0.24 : 0.16)
+    Text(info.glyph)
+      .font(.system(size: size * 0.46, weight: .bold, design: .rounded))
+      .foregroundStyle(foreground)
+      .frame(width: size, height: size)
+      .background(Circle().fill(background))
+      .accessibilityHidden(true)
+  }
+}
+
+private struct WalletRowLabel: View {
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+  var wallet: WalletRecord
+  var name: String
+
+  var body: some View {
+    let info = WalletNetworkInfo(wallet: wallet)
+    HStack(spacing: 12) {
+      // The avatar is decorative; at accessibility sizes its width goes to
+      // the name instead.
+      if !dynamicTypeSize.isAccessibilitySize {
+        WalletNetworkMonogram(info: info, size: 40)
+      }
+      VStack(alignment: .leading, spacing: 3) {
+        Text(name)
+          .font(.body.weight(.semibold))
+          .foregroundStyle(AtlasTheme.ink)
+          .lineLimit(dynamicTypeSize.isAccessibilitySize ? 4 : 1)
+        Text(WalletPresentation.shortAddress(wallet.address))
+          .font(.subheadline)
+          .foregroundStyle(AtlasTheme.ink3)
+          .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+        if dynamicTypeSize.isAccessibilitySize {
+          Badge(info.badge, color: AtlasTheme.accent)
+        }
+      }
+      Spacer(minLength: 8)
+      if !dynamicTypeSize.isAccessibilitySize {
+        Badge(info.badge, color: AtlasTheme.accent)
+          .fixedSize()
+      }
+      Image(systemName: "chevron.right")
+        .font(.footnote.weight(.semibold))
+        .foregroundStyle(AtlasTheme.ink3)
+        .accessibilityHidden(true)
+    }
+    .padding(.vertical, 4)
+    .frame(minHeight: 52)
+    .contentShape(Rectangle())
+  }
+}
+
+// MARK: - Add wallet sheet
+
+private struct AddWalletSheet: View {
+  @EnvironmentObject private var state: AppState
+  @Environment(\.dismiss) private var dismiss
+  @State private var input = ""
   @State private var isAdding = false
-  @FocusState private var addressFieldFocused: Bool
+  /// Set when the sheet itself rewrites the field after a partial add, so the
+  /// error that explains the leftover entry is not cleared by that rewrite.
+  @State private var programmaticInput: String?
+  @FocusState private var fieldFocused: Bool
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
   private var trimmedInput: String {
-    addressInput.trimmingCharacters(in: .whitespacesAndNewlines)
+    input.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
   /// The whole paste is checked before it is split, so a seed phrase is
@@ -21,328 +350,594 @@ struct WalletsScreen: View {
     AddressDetection.isSafePublicAddress(trimmedInput)
   }
 
-  /// One address per line, or several separated by commas, semicolons, or
-  /// whitespace. `addWallet(address:)` still validates each one individually.
-  private var parsedInput: AddressParseResult {
+  private var parsed: AddressParseResult {
     guard !trimmedInput.isEmpty, inputLooksSafe else {
       return AddressParseResult(addresses: [], wasTruncated: false)
     }
     return AddressDetection.parseWithMetadata(trimmedInput, maxCount: AppState.maximumWallets)
   }
 
-  private var canAdd: Bool {
-    !isAdding && !parsedInput.addresses.isEmpty
+  /// Only entries a supported network recognizes are counted or offered for
+  /// saving; anything else stays in the field and is named as unrecognized.
+  private var recognized: [String] {
+    parsed.addresses.filter { !AddressDetection.detectChains(for: $0).isEmpty }
   }
 
-  private var addButtonTitle: String {
-    let count = parsedInput.addresses.count
+  private var unrecognized: [String] {
+    parsed.addresses.filter { AddressDetection.detectChains(for: $0).isEmpty }
+  }
+
+  /// Recognized entries that are already in the vault are named up front and
+  /// skipped, instead of failing the add with "already saved".
+  private var alreadySaved: [String] {
+    recognized.filter(isSaved)
+  }
+
+  private var newAddresses: [String] {
+    recognized.filter { !isSaved($0) }
+  }
+
+  private func isSaved(_ address: String) -> Bool {
+    guard let chain = AddressDetection.detectChains(for: address).first,
+      let identity = AddressDetection.canonicalAddress(address, family: chain.family)
+    else { return false }
+    return state.document.wallets.contains {
+      $0.chainKind == chain.family
+        && AddressDetection.canonicalAddress($0.address, family: $0.chainKind) == identity
+    }
+  }
+
+  private var isBusyElsewhere: Bool {
+    state.scanning || state.syncing
+  }
+
+  private var canAdd: Bool {
+    !isAdding && !newAddresses.isEmpty && !state.vaultEditsDisabled
+  }
+
+  private var addTitle: String {
+    let count = newAddresses.count
     return count > 1 ? "Add \(count) wallets" : "Add wallet"
   }
 
   var body: some View {
-    IOSPage(
-      title: "Wallets",
-      subtitle:
-        "Track public addresses across supported networks. Private keys never enter the app."
-    ) {
-      addCard
+    IOSFormSheet(title: "Add wallet") {
+      VStack(alignment: .leading, spacing: 10) {
+        let headerLayout =
+          dynamicTypeSize.isAccessibilitySize
+          ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+          : AnyLayout(HStackLayout(alignment: .center, spacing: 8))
+        headerLayout {
+          FieldLabel("Public address")
+            .accessibilityHidden(true)
+          if !dynamicTypeSize.isAccessibilitySize {
+            Spacer(minLength: 8)
+          }
+          PasteButton(payloadType: String.self) { strings in
+            Task { @MainActor in paste(strings) }
+          }
+          .labelStyle(.titleAndIcon)
+          .buttonBorderShape(.capsule)
+          .controlSize(.small)
+          .tint(AtlasTheme.accent)
+        }
+        TextField(
+          "0x…, bc1…, or another public address",
+          text: $input,
+          axis: .vertical
+        )
+        .lineLimit(3...6)
+        .textFieldStyle(AtlasTextFieldStyle())
+        .atlasIdentifierInput()
+        .focused($fieldFocused)
+        .accessibilityLabel("Public wallet address")
+        .accessibilityHint("Paste one address, or several separated by new lines or commas.")
 
-      SectionHeader(
-        title: "Saved wallets",
-        meta: "\(state.document.wallets.count) encrypted on this device")
-      if state.document.wallets.isEmpty {
-        EmptyState(
-          title: "No wallets yet", systemImage: "wallet.pass",
-          copy: "Add a public address to start scanning.")
-      } else {
-        Surface(padding: 0) {
-          VStack(spacing: 0) {
-            ForEach(state.document.wallets) { wallet in
-              WalletsRow(wallet: wallet)
-              if wallet.id != state.document.wallets.last?.id {
-                Divider().overlay(AtlasTheme.ruleSoft)
-              }
+        detectionLine
+          .font(.footnote)
+          .fixedSize(horizontal: false, vertical: true)
+
+        let chips = WalletPresentation.networkChips(for: newAddresses)
+        if !chips.isEmpty {
+          SourcesFlowLayout(spacing: 6) {
+            ForEach(chips, id: \.self) { chip in
+              Badge(chip, color: AtlasTheme.accent)
             }
           }
+          .accessibilityElement(children: .ignore)
+          .accessibilityLabel("Networks: \(chips.joined(separator: ", "))")
         }
-        .animation(
-          AtlasMotion.animation(AtlasMotion.standard, reduceMotion: reduceMotion),
-          value: state.document.wallets.map(\.id)
-        )
       }
-    }
-  }
-
-  private var addCard: some View {
-    Surface {
-      VStack(alignment: .leading, spacing: 18) {
-        PanelHeader(
-          title: "Add a wallet",
-          subtitle: "Paste a public address—never a seed phrase or private key",
-          systemImage: "wallet.pass.fill"
-        )
-        VStack(alignment: .leading, spacing: 8) {
-          FieldLabel("Public wallet address", detail: "one or more")
-          TextField(
-            "0x…, bc1…, solana, cosmos, or another supported address",
-            text: $addressInput,
-            axis: .vertical
-          )
-          .lineLimit(1...4)
-          .textFieldStyle(AtlasTextFieldStyle())
-          .atlasIdentifierInput()
-          .submitLabel(.done)
-          .focused($addressFieldFocused)
-          .onSubmit(addWallets)
-          .accessibilityLabel("Public wallet address")
-          .accessibilityHint("Paste one address, or several separated by new lines or commas.")
-          detectionHint
-            .font(.caption)
-            .fixedSize(horizontal: false, vertical: true)
+      .toolbar {
+        ToolbarItem(placement: .confirmationAction) {
+          Button("Add", action: addWallets)
+            .disabled(!canAdd)
         }
+      }
+
+      IOSInlineError()
+
+      VStack(alignment: .leading, spacing: 10) {
         Button(action: addWallets) {
           HStack(spacing: 8) {
             if isAdding {
               ProgressView()
                 .controlSize(.small)
                 .tint(AtlasTheme.paper)
-            } else {
-              Image(systemName: "plus")
             }
-            Text(addButtonTitle)
+            Text(addTitle)
           }
-          .frame(maxWidth: .infinity)
+          .frame(maxWidth: .infinity, minHeight: 44)
         }
         .buttonStyle(AtlasPrimaryButtonStyle())
         .disabled(!canAdd)
-        .accessibilityLabel(addButtonTitle)
+        .accessibilityLabel(addTitle)
         .accessibilityHint(
           isAdding
             ? "Saving the detected addresses."
             : "Saves the detected public addresses to this vault.")
-        InfoCallout(
-          title: "Watch-only access",
+
+        if isBusyElsewhere {
+          Text("Available when the current scan or sync finishes.")
+            .font(.footnote)
+            .foregroundStyle(AtlasTheme.ink3)
+        }
+      }
+
+      Label(
+        "Watch-only. Address Atlas can't sign or move funds.",
+        systemImage: "eye"
+      )
+      .font(.footnote)
+      .foregroundStyle(AtlasTheme.ink3)
+
+      LearnMoreDisclosure("Supported networks", systemImage: "network") {
+        IOSFactRow(
+          systemImage: "square.stack.3d.up",
+          title: "EVM",
+          copy: "One 0x address covers \(ChainRegistry.evmChains.map(\.name).joined(separator: ", "))."
+        )
+        IOSFactRow(
+          systemImage: "circle.hexagongrid",
+          title: "Other networks",
           copy:
-            "Address Atlas reads public blockchain data. It cannot sign transactions or move funds.",
-          tone: .success
+            "Bitcoin, Solana, TRON, XRP Ledger, and \(ChainRegistry.cosmosChains.map(\.name).joined(separator: ", "))."
+        )
+        IOSFactRow(
+          systemImage: "eye",
+          title: "What's read",
+          copy:
+            "Public balances from network APIs. Seed phrases and private keys are refused, never stored."
         )
       }
     }
-    .disabled(state.vaultEditsDisabled)
+    .interactiveDismissDisabled(isAdding)
+    .onAppear {
+      state.error = ""
+      fieldFocused = true
+    }
+    .onChange(of: input) { _, newValue in
+      if programmaticInput == newValue {
+        programmaticInput = nil
+        return
+      }
+      programmaticInput = nil
+      if !state.error.isEmpty { state.error = "" }
+    }
+    .onDisappear {
+      // A rejected entry's error belongs to this sheet; it must not reappear
+      // as a toast on the page underneath.
+      if !isAdding { state.error = "" }
+    }
   }
 
   @ViewBuilder
-  private var detectionHint: some View {
+  private var detectionLine: some View {
     if trimmedInput.isEmpty {
-      Text("One address per line, or separate several with commas.")
+      Text("One per line, or separated by commas.")
         .foregroundStyle(AtlasTheme.ink3)
     } else if !inputLooksSafe {
       Label(
-        "That looks like a seed phrase or private key. Only public addresses are accepted; nothing was saved.",
-        systemImage: "exclamationmark.shield"
+        "That looks like a seed phrase or private key. Only public addresses are accepted.",
+        systemImage: "exclamationmark.shield.fill"
       )
       .foregroundStyle(AtlasTheme.loss)
+    } else if recognized.isEmpty {
+      Label(
+        unrecognized.count > 1 ? "No recognized addresses" : "Not a recognized address",
+        systemImage: "questionmark.circle"
+      )
+      .foregroundStyle(AtlasTheme.warning)
+    } else if newAddresses.isEmpty {
+      Label(
+        alreadySaved.count > 1 ? "These wallets are already saved" : "This wallet is already saved",
+        systemImage: "checkmark.circle"
+      )
+      .foregroundStyle(AtlasTheme.ink3)
     } else {
-      Text(detectionSummary)
-        .foregroundStyle(AtlasTheme.ink3)
+      VStack(alignment: .leading, spacing: 4) {
+        Label(
+          newAddresses.count == 1
+            ? "1 address detected" : "\(newAddresses.count) addresses detected",
+          systemImage: "checkmark.circle.fill"
+        )
+        .foregroundStyle(AtlasTheme.gain)
+        if !alreadySaved.isEmpty {
+          Text(
+            alreadySaved.count == 1
+              ? "1 already saved and will be skipped"
+              : "\(alreadySaved.count) already saved and will be skipped"
+          )
+          .foregroundStyle(AtlasTheme.ink3)
+        }
+        if !unrecognized.isEmpty {
+          Label(
+            unrecognized.count == 1
+              ? "1 entry isn't recognized and will stay here"
+              : "\(unrecognized.count) entries aren't recognized and will stay here",
+            systemImage: "exclamationmark.triangle"
+          )
+          .foregroundStyle(AtlasTheme.warning)
+        }
+        if parsed.wasTruncated {
+          Text("Only the first \(AppState.maximumWallets) are used.")
+            .foregroundStyle(AtlasTheme.ink3)
+        }
+      }
     }
   }
 
-  private var detectionSummary: String {
-    let parsed = parsedInput
-    let count = parsed.addresses.count
-    guard count > 0 else { return "No address detected yet." }
-    var networks: [String] = []
-    for address in parsed.addresses {
-      let network = Self.networkSummary(for: address)
-      if !networks.contains(network) { networks.append(network) }
-    }
-    var summary =
-      "\(count) address\(count == 1 ? "" : "es") detected · \(networks.joined(separator: ", "))."
-    if parsed.wasTruncated {
-      summary += " Only the first \(AppState.maximumWallets) are used."
-    }
-    return summary
+  private func paste(_ strings: [String]) {
+    let pasted = strings.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !pasted.isEmpty else { return }
+    input = trimmedInput.isEmpty ? pasted : trimmedInput + "\n" + pasted
   }
 
-  private static func networkSummary(for address: String) -> String {
-    let chains = AddressDetection.detectChains(for: address)
-    guard let first = chains.first else { return "unrecognized network" }
-    if chains.count > 1, chains.allSatisfy({ $0.family == .evm }) {
-      return "EVM networks"
-    }
-    return first.name
-  }
-
-  /// Adds the detected addresses in order and stops at the first one the
-  /// shared state rejects (its message is already on the status line). The
-  /// unsaved remainder stays in the field so nothing is silently dropped.
+  /// Adds the new recognized addresses in order and stops at the first one the
+  /// shared state rejects (its message is shown inline). The rejected entry,
+  /// anything after it, and unrecognized entries stay in the field so
+  /// nothing is silently dropped; a complete add closes the sheet.
   private func addWallets() {
-    guard canAdd, !state.vaultEditsDisabled else { return }
-    let addresses = parsedInput.addresses
+    guard canAdd else { return }
+    let toAdd = newAddresses
+    let leftovers = unrecognized
+    let before = state.document.wallets.count
     isAdding = true
+    fieldFocused = false
+    state.error = ""
     Task {
-      var remaining = addresses[...]
-      for address in addresses {
+      var remaining = toAdd[...]
+      for address in toAdd {
         guard await state.addWallet(address: address) else { break }
         remaining = remaining.dropFirst()
       }
-      addressInput = remaining.joined(separator: "\n")
-      if remaining.isEmpty {
-        addressFieldFocused = false
-      }
+      let added = state.document.wallets.count - before
+      let rest = Array(remaining) + leftovers
       isAdding = false
+      if rest.isEmpty {
+        if added > 0 {
+          state.notice = added == 1 ? "Wallet added." : "\(added) wallets added."
+        }
+        dismiss()
+      } else {
+        let text = rest.joined(separator: "\n")
+        if text != input {
+          programmaticInput = text
+          input = text
+        }
+        if added > 0, state.error.isEmpty {
+          state.notice = added == 1 ? "Wallet added." : "\(added) wallets added."
+        }
+      }
     }
   }
 }
 
-private struct WalletsRow: View {
+// MARK: - Wallet detail sheet
+
+private struct WalletDetailSheet: View {
   @EnvironmentObject private var state: AppState
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.dismiss) private var dismiss
+  var walletID: UUID
+  var focusesName: Bool
+  @FocusState private var nameFocused: Bool
   @State private var confirmingRemoval = false
-  @State private var isRemoving = false
-  @FocusState private var labelIsFocused: Bool
-  var wallet: WalletRecord
+  @State private var copied = false
+
+  private var wallet: WalletRecord? {
+    state.document.wallets.first { $0.id == walletID }
+  }
 
   var body: some View {
-    HStack(alignment: .center, spacing: 12) {
-      Image(systemName: "wallet.pass.fill")
-        .font(.body.weight(.semibold))
-        .foregroundStyle(AtlasTheme.accent)
-        .frame(width: 40, height: 40)
-        .background(AtlasTheme.accent.opacity(0.10))
-        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-        .accessibilityHidden(true)
+    NavigationStack {
+      ScrollView {
+        if let wallet {
+          content(for: wallet)
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 32)
+            .frame(maxWidth: 640, alignment: .leading)
+            .frame(maxWidth: .infinity)
+        }
+      }
+      .scrollDismissesKeyboard(.interactively)
+      .background(AtlasTheme.canvas)
+      .navigationTitle("Wallet")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbarBackground(AtlasTheme.canvas, for: .navigationBar)
+      .toolbar {
+        ToolbarItem(placement: .confirmationAction) {
+          Button("Done", action: commitAndDismiss)
+            .fontWeight(.semibold)
+        }
+      }
+      .atlasKeyboardDoneButton()
+    }
+    .presentationDragIndicator(.visible)
+    .onAppear {
+      state.error = ""
+      if focusesName { nameFocused = true }
+    }
+    .onDisappear(perform: finalizeName)
+  }
 
-      VStack(alignment: .leading, spacing: 6) {
-        labelField
-        HStack(spacing: 8) {
-          Text(wallet.address)
-            .font(.caption.monospaced())
-            .foregroundStyle(AtlasTheme.ink2)
-            .lineLimit(1)
-            .truncationMode(.middle)
-          Badge(Self.chainBadge(for: wallet.chainKind))
-            .fixedSize()
-            .layoutPriority(1)
+  @ViewBuilder
+  private func content(for wallet: WalletRecord) -> some View {
+    let info = WalletNetworkInfo(wallet: wallet)
+    let name = WalletPresentation.displayName(
+      for: wallet, label: state.walletLabelDraft(for: wallet))
+    VStack(alignment: .leading, spacing: 22) {
+      VStack(spacing: 10) {
+        WalletNetworkMonogram(info: info, size: 60)
+        Text(name)
+          .font(.title2.weight(.semibold))
+          .multilineTextAlignment(.center)
+        Badge(info.badge, color: AtlasTheme.accent)
+      }
+      .frame(maxWidth: .infinity)
+      .accessibilityElement(children: .combine)
+
+      VStack(alignment: .leading, spacing: 8) {
+        FieldLabel("Name")
+        TextField(info.friendlyName, text: nameBinding(for: wallet))
+          .textFieldStyle(AtlasTextFieldStyle())
+          .textInputAutocapitalization(.words)
+          .submitLabel(.done)
+          .focused($nameFocused)
+          .onSubmit { Task { _ = await state.commitWalletLabelDraft(id: wallet.id) } }
+          .accessibilityLabel("Label for wallet \(AtlasAccessibility.walletIdentity(wallet))")
+          .accessibilityHint("Edit the local display name. Leave empty to use the default.")
+          .disabled(state.vaultEditsDisabled)
+        IOSInlineError()
+      }
+
+      VStack(alignment: .leading, spacing: 8) {
+        FieldLabel("Address")
+        Text(wallet.address)
+          .font(.callout.monospaced())
+          .foregroundStyle(AtlasTheme.ink)
+          .textSelection(.enabled)
+          .fixedSize(horizontal: false, vertical: true)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .padding(12)
+          .background(AtlasTheme.surface)
+          .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
+          .overlay {
+            RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
+              .stroke(AtlasTheme.ruleSoft, lineWidth: 1)
+          }
+        Button {
+          UIPasteboard.general.string = wallet.address
+          copied = true
+          AtlasAccessibilityAnnouncer.shared.announceEvent("Address copied.", kind: .notice)
+        } label: {
+          Label(
+            copied ? "Copied" : "Copy address",
+            systemImage: copied ? "checkmark" : "doc.on.doc"
+          )
+          .frame(maxWidth: .infinity, minHeight: 44)
+        }
+        .buttonStyle(AtlasSecondaryButtonStyle())
+        .task(id: copied) {
+          guard copied else { return }
+          try? await Task.sleep(for: .seconds(1.6))
+          copied = false
+        }
+      }
+
+      VStack(alignment: .leading, spacing: 8) {
+        FieldLabel(info.isRetired ? "Network" : "Networks scanned")
+        if info.isRetired {
+          Text("\(info.badge) is no longer scanned. Remove this wallet if you no longer need it.")
+            .font(.callout)
+            .foregroundStyle(AtlasTheme.warning)
+            .fixedSize(horizontal: false, vertical: true)
+        } else {
+          SourcesFlowLayout(spacing: 6) {
+            ForEach(info.scannedNetworks, id: \.self) { network in
+              Badge(network)
+            }
+          }
+          .accessibilityElement(children: .ignore)
+          .accessibilityLabel("Networks scanned: \(info.scannedNetworks.joined(separator: ", "))")
         }
       }
 
       Button(role: .destructive) {
         confirmingRemoval = true
       } label: {
-        if isRemoving {
-          ProgressView()
-            .controlSize(.small)
-        } else {
-          Image(systemName: "trash")
-        }
+        Label("Remove wallet", systemImage: "trash")
+          .foregroundStyle(AtlasTheme.loss)
+          .frame(maxWidth: .infinity, minHeight: 44)
       }
-      .buttonStyle(WalletsIconButtonStyle())
-      .disabled(isRemoving)
+      .buttonStyle(AtlasSecondaryButtonStyle())
+      .disabled(state.vaultEditsDisabled)
       .accessibilityLabel("Remove wallet \(AtlasAccessibility.walletIdentity(wallet))")
       .accessibilityHint("Asks for confirmation before removing this saved wallet.")
-    }
-    .padding(.horizontal, 16)
-    .padding(.vertical, 10)
-    .frame(minHeight: 72)
-    .confirmationDialog(
-      "Remove \(AtlasAccessibility.walletIdentity(wallet))?",
-      isPresented: $confirmingRemoval,
-      titleVisibility: .visible
-    ) {
-      Button("Remove wallet", role: .destructive) {
-        isRemoving = true
-        Task {
-          await state.removeWallet(id: wallet.id)
-          isRemoving = false
+      .confirmationDialog(
+        "Remove \(name)?",
+        isPresented: $confirmingRemoval,
+        titleVisibility: .visible
+      ) {
+        Button("Remove wallet", role: .destructive) {
+          Task {
+            await state.removeWallet(id: wallet.id)
+            if self.wallet == nil { dismiss() }
+          }
         }
+        Button("Cancel", role: .cancel) {}
+      } message: {
+        Text("The address is removed from this vault. Existing snapshots are unchanged.")
       }
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text("The public address will be removed from this vault. Existing snapshots are unchanged.")
     }
-    .onDisappear(perform: commitLabel)
-    .disabled(state.vaultEditsDisabled)
   }
 
-  private var labelField: some View {
-    HStack(spacing: 7) {
-      TextField("Wallet name", text: labelDraftBinding)
-        .textFieldStyle(.plain)
-        .font(.body.weight(.semibold))
-        .submitLabel(.done)
-        .focused($labelIsFocused)
-        .accessibilityLabel("Label for wallet \(AtlasAccessibility.walletIdentity(wallet))")
-        .accessibilityHint("Edit the local display label for this saved wallet.")
-        .onSubmit(commitLabel)
-        .onChange(of: labelIsFocused) { _, isFocused in
-          if !isFocused { commitLabel() }
-        }
-      Image(systemName: "pencil")
-        .font(.caption)
-        .foregroundStyle(labelIsFocused ? AtlasTheme.accent : AtlasTheme.ink3)
-        .accessibilityHidden(true)
-    }
-    .padding(.horizontal, 9)
-    .frame(minHeight: 44)
-    .background(labelIsFocused ? AtlasTheme.accent.opacity(0.08) : Color.clear)
-    .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.small, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: AtlasRadius.small, style: .continuous)
-        .stroke(labelIsFocused ? AtlasTheme.accent : AtlasTheme.ruleSoft, lineWidth: 1)
-    }
-    .contentShape(RoundedRectangle(cornerRadius: AtlasRadius.small, style: .continuous))
-    .onTapGesture { labelIsFocused = true }
-    .animation(
-      AtlasMotion.animation(AtlasMotion.quick, reduceMotion: reduceMotion),
-      value: labelIsFocused
+  /// The field shows an empty value while the wallet still has its default
+  /// (truncated-address) label, and clearing it restores that default, so a
+  /// blank name never reaches the shared draft as an invalid label.
+  private func nameBinding(for wallet: WalletRecord) -> Binding<String> {
+    let defaultLabel = AddressDetection.defaultWalletLabel(wallet.address)
+    return Binding(
+      get: {
+        let draft = state.walletLabelDraft(for: wallet)
+        return draft == defaultLabel ? "" : draft
+      },
+      set: { newValue in
+        if !state.error.isEmpty { state.error = "" }
+        let isBlank = newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        _ = state.setWalletLabelDraft(id: wallet.id, label: isBlank ? defaultLabel : newValue)
+      }
     )
   }
 
-  private func commitLabel() {
-    Task { await state.commitWalletLabelDraft(id: wallet.id) }
+  private func commitAndDismiss() {
+    nameFocused = false
+    Task {
+      if await state.commitWalletLabelDraft(id: walletID) {
+        dismiss()
+      }
+    }
   }
 
-  private var labelDraftBinding: Binding<String> {
-    Binding(
-      get: { state.walletLabelDraft(for: wallet) },
-      set: { _ = state.setWalletLabelDraft(id: wallet.id, label: $0) }
-    )
+  /// Swipe-to-dismiss commits a valid name; an invalid one (too long) is
+  /// reverted rather than left as a draft that would block later syncs.
+  private func finalizeName() {
+    guard let persisted = state.document.wallets.first(where: { $0.id == walletID })?.label,
+      let wallet
+    else { return }
+    let draft = state.walletLabelDraft(for: wallet)
+    if AppState.normalizedWalletLabel(draft) == nil {
+      _ = state.setWalletLabelDraft(id: walletID, label: persisted)
+      state.error = ""
+      return
+    }
+    Task { _ = await state.commitWalletLabelDraft(id: walletID) }
   }
+}
 
-  private static func chainBadge(for family: ChainFamily) -> String {
-    switch family {
-    case .evm: "EVM"
-    case .xrp: "XRP"
-    default: family.rawValue.capitalized
+// MARK: - Shared source-screen pieces (also used by ExchangesScreen)
+
+/// Persistent page status (operator message, required action, update link)
+/// as a list section; transient notices and errors float in the toast.
+struct SourcesPersistentStatusSection: View {
+  @EnvironmentObject private var state: AppState
+
+  var body: some View {
+    if state.operatorMessage != nil || state.persistentOperationGuidance != nil
+      || !state.isAppVersionSupported
+    {
+      Section {
+        IOSPersistentStatus()
+      }
+      .listRowBackground(AtlasTheme.surface)
     }
   }
 }
 
-/// `IconButtonStyle` frames its glyph at 34pt for pointer input. iOS needs a
-/// 44pt touch target, so this twin keeps the same tokens, pressed tint, and
-/// disabled treatment inside a 44pt hit area.
-private struct WalletsIconButtonStyle: ButtonStyle {
-  @Environment(\.isEnabled) private var isEnabled
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+/// Empty list state with one primary action.
+struct SourcesEmptyState: View {
+  var systemImage: String
+  var title: String
+  var copy: String
+  var actionTitle: String
+  var action: () -> Void
 
-  func makeBody(configuration: Configuration) -> some View {
-    let pressedTint = configuration.role == .destructive ? AtlasTheme.loss : AtlasTheme.accent
-    configuration.label
-      .font(.callout)
-      .foregroundStyle(
-        isEnabled ? (configuration.isPressed ? pressedTint : AtlasTheme.ink3) : AtlasTheme.rule
-      )
-      .frame(width: 44, height: 44)
-      .background(configuration.isPressed ? pressedTint.opacity(0.09) : Color.clear)
-      .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.small, style: .continuous))
-      .contentShape(RoundedRectangle(cornerRadius: AtlasRadius.small, style: .continuous))
-      .opacity(isEnabled ? 1 : 0.55)
-      .scaleEffect(configuration.isPressed ? 0.96 : 1)
-      .animation(
-        AtlasMotion.animation(AtlasMotion.quick, reduceMotion: reduceMotion),
-        value: configuration.isPressed
-      )
+  var body: some View {
+    VStack(spacing: 14) {
+      Image(systemName: systemImage)
+        .font(.system(size: 30, weight: .semibold))
+        .foregroundStyle(AtlasTheme.accent)
+        .frame(width: 72, height: 72)
+        .background(AtlasTheme.accent.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .accessibilityHidden(true)
+      VStack(spacing: 6) {
+        Text(title)
+          .font(.title3.weight(.semibold))
+          .foregroundStyle(AtlasTheme.ink)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityAddTraits(.isHeader)
+        Text(copy)
+          .font(.callout)
+          .foregroundStyle(AtlasTheme.ink3)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      .multilineTextAlignment(.center)
+      Button(action: action) {
+        Label(actionTitle, systemImage: "plus")
+          .frame(minHeight: 44)
+          .padding(.horizontal, 8)
+      }
+      .buttonStyle(AtlasPrimaryButtonStyle())
+      .padding(.top, 4)
+    }
+    .frame(maxWidth: .infinity)
+    .padding(.horizontal, 24)
+    .padding(.vertical, 48)
+  }
+}
+
+/// Wrapping row of small chips (networks, badges).
+struct SourcesFlowLayout: Layout {
+  var spacing: CGFloat = 6
+
+  func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    let width = proposal.width ?? .infinity
+    var x: CGFloat = 0
+    var y: CGFloat = 0
+    var rowHeight: CGFloat = 0
+    var maxX: CGFloat = 0
+    for subview in subviews {
+      let size = subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
+      if x > 0, x + size.width > width {
+        x = 0
+        y += rowHeight + spacing
+        rowHeight = 0
+      }
+      x += size.width + spacing
+      maxX = max(maxX, x - spacing)
+      rowHeight = max(rowHeight, size.height)
+    }
+    return CGSize(width: min(maxX, width), height: y + rowHeight)
+  }
+
+  func placeSubviews(
+    in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()
+  ) {
+    var x = bounds.minX
+    var y = bounds.minY
+    var rowHeight: CGFloat = 0
+    for subview in subviews {
+      let size = subview.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
+      if x > bounds.minX, x + size.width > bounds.maxX {
+        x = bounds.minX
+        y += rowHeight + spacing
+        rowHeight = 0
+      }
+      subview.place(
+        at: CGPoint(x: x, y: y), proposal: ProposedViewSize(width: size.width, height: size.height))
+      x += size.width + spacing
+      rowHeight = max(rowHeight, size.height)
+    }
   }
 }
