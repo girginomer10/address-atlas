@@ -8,6 +8,8 @@ Static HTML mockups that define the redesign. Open them in a browser.
 
 Implementation (phase 1): the six themes are in `native/AddressAtlasMac/Sources/AddressAtlasMac/AtlasThemeCatalog.swift` and are chosen under Settings > Theme on Mac and iOS. Screenshots of the result, with synthetic or empty data, are in `screenshots/phase1/`.
 
+Implementation (phase 2, history views): `Flow`, `Over time`, `What changed`, `Atlas map`, `Slope`, `Concentration`, `Calendar` and the coin widgets (state strip, unlock timeline, amount history, change, custody) are in `native/AddressAtlasMac/Sources/AddressAtlasMac/Charts/`. A representative set of renders (every view, six themes, full and compact, synthetic data) is in `screenshots/phase2/`; the whole matrix is written by `ATLAS_WRITE_SCREENSHOTS=1 swift test --filter ChartRenderTests` from `native/AddressAtlasMac`.
+
 Copy rules: say what a thing is or does, once, in as few words as possible. No slogans, no eyebrow labels, no subtitle under every title, each privacy fact stated once where it matters. Errors say what happened, then what to do.
 
 Data in the mockups is synthetic.
