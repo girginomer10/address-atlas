@@ -144,6 +144,8 @@ final class AtlasThemeTests: XCTestCase {
     XCTAssertEqual(AtlasThemeCatalog.definition(for: .riso).typography.label.family, .spaceMono)
     XCTAssertEqual(AtlasThemeCatalog.definition(for: .heatmap).typography.display.family, .geist)
     XCTAssertEqual(AtlasThemeCatalog.definition(for: .pixel).typography.display.family, .pixelifySans)
+    // Pixelify Sans draws "5" like "S", so Pixel figures use VT323.
+    XCTAssertEqual(AtlasThemeCatalog.definition(for: .pixel).typography.number.family, .vt323)
     XCTAssertEqual(AtlasThemeCatalog.definition(for: .pixel).typography.label.family, .silkscreen)
     // Pixel type is for numbers and labels; long text uses a clean body face.
     XCTAssertEqual(AtlasThemeCatalog.definition(for: .pixel).typography.body.family, .geist)

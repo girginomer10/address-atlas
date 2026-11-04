@@ -22,6 +22,7 @@ upstream project ships one.
 | Geist Mono | 2024 The Geist Project Authors | https://github.com/vercel/geist-font |
 | Pixelify Sans | 2021 The Pixelify Sans Project Authors | https://github.com/eifetx/Pixelify-Sans |
 | Silkscreen | 2001 The Silkscreen Project Authors | https://github.com/googlefonts/silkscreen |
+| VT323 | 2011 The VT323 Project Authors | https://github.com/phoikoi/VT323 |
 
 The fonts are only embedded in the apps. They are not loaded from the network,
 so they add no entry to the privacy manifest.

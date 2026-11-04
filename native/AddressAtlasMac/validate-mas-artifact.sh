@@ -119,7 +119,7 @@ fi
 [[ -s "$APP_PATH/Contents/Resources/AppIcon.icns" ]]
 # Bundled SIL OFL fonts ship with their licences.
 FONT_BUNDLE="$APP_PATH/Contents/Resources/AddressAtlasMac_AddressAtlasMac.bundle/Fonts"
-for font_family in BricolageGrotesque Geist GeistMono PixelifySans PlusJakartaSans Silkscreen SpaceGrotesk SpaceMono; do
+for font_family in BricolageGrotesque Geist GeistMono PixelifySans PlusJakartaSans Silkscreen SpaceGrotesk SpaceMono VT323; do
   [[ -s "$FONT_BUNDLE/$font_family/OFL.txt" ]] && compgen -G "$FONT_BUNDLE/$font_family/*.ttf" >/dev/null || {
     echo "The bundled $font_family font or its OFL licence is missing." >&2
     exit 65

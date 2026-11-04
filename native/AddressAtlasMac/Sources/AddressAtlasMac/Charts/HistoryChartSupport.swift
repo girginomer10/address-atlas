@@ -156,8 +156,12 @@ struct HistoryChartStyle {
   func numberFont(_ size: CGFloat, relativeTo style: Font.TextStyle = .body) -> Font {
     tokens.font(.number, size: size, relativeTo: style, weight: nil)
   }
+  /// Pixelify Sans, the Pixel theme's display face, draws a five like an S ("$5,082"
+  /// reads "$S,082"), and display text in these charts is mostly figures, so there it
+  /// is drawn in the theme's number face.
   func displayFont(_ size: CGFloat, relativeTo style: Font.TextStyle = .title) -> Font {
-    tokens.font(.display, size: size, relativeTo: style, weight: nil)
+    let role: AtlasFontRole = tokens.typography.display.family == .pixelifySans ? .number : .display
+    return tokens.font(role, size: size, relativeTo: style, weight: nil)
   }
 
   // Ink.

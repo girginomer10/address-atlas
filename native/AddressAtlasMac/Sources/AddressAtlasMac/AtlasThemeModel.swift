@@ -723,7 +723,8 @@ enum AtlasThemeFonts {
     let resolvedWeight = weight ?? spec.weight
     var font: Font
     if AtlasFonts.isAvailable(spec.family) {
-      font = Font.custom(spec.family.familyName, size: size, relativeTo: textStyle)
+      font = Font.custom(
+        spec.family.familyName, size: size * spec.family.opticalScale, relativeTo: textStyle)
         .weight(resolvedWeight)
     } else {
       font = Font.system(textStyle, design: spec.family.fallbackDesign).weight(resolvedWeight)

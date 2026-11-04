@@ -17,6 +17,7 @@ enum AtlasFontFamily: String, CaseIterable, Sendable {
   case geistMono
   case pixelifySans
   case silkscreen
+  case vt323
 
   /// CoreText family name, as used by `Font.custom`.
   var familyName: String {
@@ -29,6 +30,7 @@ enum AtlasFontFamily: String, CaseIterable, Sendable {
     case .geistMono: "Geist Mono"
     case .pixelifySans: "Pixelify Sans"
     case .silkscreen: "Silkscreen"
+    case .vt323: "VT323"
     }
   }
 
@@ -43,6 +45,7 @@ enum AtlasFontFamily: String, CaseIterable, Sendable {
     case .geistMono: "GeistMono"
     case .pixelifySans: "PixelifySans"
     case .silkscreen: "Silkscreen"
+    case .vt323: "VT323"
     }
   }
 
@@ -57,13 +60,23 @@ enum AtlasFontFamily: String, CaseIterable, Sendable {
     case .geistMono: ["GeistMono-Variable.ttf"]
     case .pixelifySans: ["PixelifySans-Variable.ttf"]
     case .silkscreen: ["Silkscreen-Regular.ttf", "Silkscreen-Bold.ttf"]
+    case .vt323: ["VT323-Regular.ttf"]
+    }
+  }
+
+  /// Factor applied to a requested point size so faces look as big as their
+  /// neighbours. VT323 is drawn small on its em square.
+  var opticalScale: CGFloat {
+    switch self {
+    case .vt323: 1.15
+    default: 1
     }
   }
 
   /// System design used when the bundled files cannot be loaded.
   var fallbackDesign: Font.Design {
     switch self {
-    case .spaceMono, .geistMono, .silkscreen, .pixelifySans: .monospaced
+    case .spaceMono, .geistMono, .silkscreen, .pixelifySans, .vt323: .monospaced
     case .plusJakartaSans, .bricolageGrotesque: .rounded
     case .spaceGrotesk, .geist: .default
     }
