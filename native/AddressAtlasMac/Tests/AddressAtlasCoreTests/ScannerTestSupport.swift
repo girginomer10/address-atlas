@@ -19,17 +19,25 @@ func krakenStateFixture(
 
 struct ScannerHTTPStub: HTTPClient, @unchecked Sendable {
   let automaticallyServesNetworkIdentity: Bool
+  let automaticallyServesEmptySolanaStakeAccounts: Bool
   let handler: @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
 
   init(
     automaticallyServesNetworkIdentity: Bool = true,
+    automaticallyServesEmptySolanaStakeAccounts: Bool = true,
     handler: @escaping @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
   ) {
     self.automaticallyServesNetworkIdentity = automaticallyServesNetworkIdentity
+    self.automaticallyServesEmptySolanaStakeAccounts = automaticallyServesEmptySolanaStakeAccounts
     self.handler = handler
   }
 
   func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    if automaticallyServesEmptySolanaStakeAccounts,
+      let response = emptySolanaStakeAccountResponse(for: request)
+    {
+      return response
+    }
     if automaticallyServesNetworkIdentity, let response = automaticIdentityResponse(request) {
       return response
     }

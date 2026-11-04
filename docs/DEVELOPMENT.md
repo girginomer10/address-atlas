@@ -153,7 +153,9 @@ The Postgres integration suite additionally requires `TEST_SYNC_DATABASE_URL`. L
 
 ## Scanner Invariants
 
-- Successful balances survive optional token, price, staking, rewards, trustline, or pagination failures and carry visible warnings.
+- Successful balances survive optional token, price, staking, unbonding, stake-account, rewards, trustline, or pagination failures and carry visible warnings.
+- Cosmos unbonding delegations are read at the scan's pinned snapshot height like delegations. One `unbonding` holding is emitted per distinct completion time (bounded at 20) so each holding's `unlocksAt` is exact for its whole amount.
+- Solana stake accounts come from `getProgramAccounts` on the Stake program (memcmp at offset 12 for the staker and 44 for the withdrawer) and join the coherent snapshot. Many public RPC endpoints reject or rate-limit that call; the failure is one visible warning and never hides the native or token balances. Only accounts the address can withdraw are counted as its money.
 - Network workflows have bounded concurrency and deadlines, and cancellation propagates to outstanding requests.
 - Unpriced assets remain visible as unpriced; they are not silently dropped or reported as successfully valued at zero.
 - Non-USD fiat balances use CoinGecko's BTC-relative exchange rates to derive USD value. A missing or failed rate must leave the balance unpriced with a visible warning.

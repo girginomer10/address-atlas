@@ -442,6 +442,12 @@ final class ScannerWorkflowTests: XCTestCase {
           #"{"balances":[{"denom":"uatom","amount":"1200000"}],"pagination":{"next_key":null}}"#,
           headerFields: ["x-cosmos-block-height": "123"]
         )
+      case let path? where path.contains("/unbonding_delegations"):
+        return scannerResponse(
+          request,
+          #"{"unbonding_responses":[]}"#,
+          headerFields: ["x-cosmos-block-height": "123"]
+        )
       case let path? where path.contains("/cosmos/staking/"):
         if nextKey == nil {
           return scannerResponse(
@@ -475,11 +481,16 @@ final class ScannerWorkflowTests: XCTestCase {
 
     XCTAssertEqual(result.holdings.first(where: { $0.source == .native })?.amount, 1.2)
     XCTAssertEqual(result.holdings.first(where: { $0.source == .staked })?.amount, 2.5)
+    // Pagination applies to liquid balances and delegations; the unbonding
+    // request is a separate single page.
     let paginated = requests.snapshot().filter {
       $0.url?.path.contains("/cosmos/bank/") == true
-        || $0.url?.path.contains("/cosmos/staking/") == true
+        || $0.url?.path.contains("/cosmos/staking/v1beta1/delegations/") == true
     }
     XCTAssertEqual(paginated.count, 4)
+    XCTAssertEqual(
+      requests.snapshot().filter { $0.url?.path.hasSuffix("/unbonding_delegations") == true }.count,
+      1)
     XCTAssertTrue(
       paginated.allSatisfy { request in
         URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?
@@ -580,7 +591,12 @@ final class ScannerWorkflowTests: XCTestCase {
     XCTAssertEqual(result.holdings.first(where: { $0.source == .native })?.amount, 1)
     XCTAssertFalse(result.holdings.contains(where: { $0.source == .staked }))
     XCTAssertTrue(result.warnings.contains(where: { $0.contains("Delegations could not be read") }))
-    XCTAssertEqual(requests.snapshot().count, 4)
+    // The unbonding request shares the staking route above, so it too sees the
+    // answer from the wrong height and reports its own failure.
+    XCTAssertTrue(
+      result.warnings.contains(where: { $0.contains("Unbonding delegations could not be read") }))
+    // latest block, balances, delegations, rewards, unbonding delegations
+    XCTAssertEqual(requests.snapshot().count, 5)
   }
 
   func testCosmosRejectsProvidersThatDoNotEchoBoundHeight() async throws {
@@ -664,7 +680,8 @@ final class ScannerWorkflowTests: XCTestCase {
     let result = try await scanner.scan(addresses: address)
 
     XCTAssertEqual(result.holdings.first(where: { $0.source == .native })?.amount, 1)
-    XCTAssertEqual(requests.snapshot().count, 4)
+    // latest block, balances, delegations, rewards, unbonding delegations
+    XCTAssertEqual(requests.snapshot().count, 5)
     XCTAssertFalse(result.warnings.contains(where: { $0.contains("consistent snapshot from the network") }))
     XCTAssertFalse(result.warnings.contains(where: { $0.contains("could not be read") }))
   }

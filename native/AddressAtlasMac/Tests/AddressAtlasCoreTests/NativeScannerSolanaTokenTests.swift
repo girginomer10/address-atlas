@@ -171,6 +171,14 @@ extension NativeScannerTokenTests {
   func testSolanaNativeBalanceRejectsFractionalAndOutOfRangeLamports() async throws {
     for rawValue in ["1.5", "18446744073709551616"] {
       let http = StubHTTPClient { request in
+        // A failed native read falls back to a validated confirmed slot so the
+        // stake-account lookup can still run at one agreed slot.
+        if requestedSolanaMethod(in: request) == "getSlot" {
+          return (
+            Data(#"{"jsonrpc":"2.0","id":3,"result":123}"#.utf8),
+            httpResponse(for: request)
+          )
+        }
         XCTAssertEqual(requestedSolanaMethod(in: request), "getBalance")
         return (
           Data(

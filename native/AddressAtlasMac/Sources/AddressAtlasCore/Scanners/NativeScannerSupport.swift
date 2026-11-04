@@ -8,7 +8,9 @@ extension NativeScanner {
     chain: ChainConfig,
     prices: [String: PricePoint],
     name: String? = nil,
-    source: AssetSource = .native
+    source: AssetSource = .native,
+    idSuffix: String? = nil,
+    unlocksAt: Date? = nil
   ) -> [TrackedAsset] {
     guard amount.isFinite, amount > 0 else { return [] }
     let price = prices[chain.coinGeckoId]
@@ -17,7 +19,8 @@ extension NativeScanner {
     let valueUsd = FiniteValueMath.multiplyingNonnegative(amount, unitPrice)
     return [
       TrackedAsset(
-        id: "\(address)-\(chain.id)-\(chain.symbol)-\(source.rawValue)",
+        id: "\(address)-\(chain.id)-\(chain.symbol)-\(source.rawValue)"
+          + (idSuffix.map { "-\($0)" } ?? ""),
         address: address,
         chainId: chain.id,
         chainName: chain.name,
@@ -32,7 +35,8 @@ extension NativeScanner {
           : .unpriced,
         change24h: FiniteValueMath.finiteOptional(price?.usd24hChange),
         explorerUrl: chain.explorerURL(for: address).absoluteString,
-        source: source
+        source: source,
+        unlocksAt: unlocksAt
       )
     ]
   }
