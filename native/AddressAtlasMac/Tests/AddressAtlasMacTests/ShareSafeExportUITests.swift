@@ -16,11 +16,11 @@ final class ShareSafeExportUITests: XCTestCase {
     XCTAssertEqual(json.displayName, "Share-safer JSON summary")
     XCTAssertTrue(csv.isShareSafer)
     XCTAssertTrue(json.isShareSafer)
-    XCTAssertTrue(ShareSafePortfolioReport.privacyNotice.contains("re-identify"))
+    XCTAssertTrue(ShareSafePortfolioReport.privacyNotice.contains("may still identify you"))
     XCTAssertTrue(ShareSafePortfolioReport.privacyNotice.contains("not anonymous"))
-    XCTAssertTrue(ExportView.shareSaferExplanation.contains("omits addresses"))
+    XCTAssertTrue(ExportView.shareSaferExplanation.contains("leaves out addresses"))
     XCTAssertTrue(ExportView.shareSaferExplanation.contains("exact amounts"))
-    XCTAssertTrue(ExportView.shareSaferExplanation.contains("coarse ranges"))
+    XCTAssertTrue(ExportView.shareSaferExplanation.contains("rough ranges"))
   }
 
   func testFullPayloadNamesAndCopyMakeIdentificationExplicit() {
@@ -33,10 +33,10 @@ final class ShareSafeExportUITests: XCTestCase {
     XCTAssertEqual(json.displayName, "Full identifying JSON report")
     XCTAssertFalse(csv.isShareSafer)
     XCTAssertFalse(json.isShareSafer)
-    XCTAssertTrue(ExportView.fullIdentifyingExplanation.contains("identifying"))
+    XCTAssertTrue(ExportView.fullIdentifyingExplanation.contains("identify you"))
     XCTAssertTrue(ExportView.fullIdentifyingExplanation.contains("addresses"))
     XCTAssertTrue(ExportView.fullIdentifyingExplanation.contains("exact balances"))
-    XCTAssertTrue(ExportView.fullIdentifyingExplanation.contains("not backups"))
+    XCTAssertTrue(ExportView.fullIdentifyingExplanation.contains("neither is a backup"))
   }
 
   func testShareSaferPayloadsUseTheSameSourceOfTruthDTO() throws {

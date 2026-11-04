@@ -125,21 +125,27 @@ struct ConcentrationChartView: View {
     context.fill(knobShape, with: .color(style.ink))
     context.stroke(knobShape, with: .color(style.surface), lineWidth: 2)
 
-    // The share of the largest group, in the middle of the dial.
-    let numberSize: CGFloat = isCompact ? 24 : 40
+    // The share of the largest group, in the middle of the dial. A narrow dial
+    // (a phone in portrait) has no room for the caption under it or for the
+    // labels at its ends, and a smaller figure; the sentence beside the dial and
+    // the level title below it say the same.
+    let roomy = size.width >= 210
+    let numberSize: CGFloat = min(isCompact ? 24 : 40, max(14, radius * (roomy ? 0.62 : 0.5)))
     context.historyDraw(
       model.topShareText, font: style.displayFont(numberSize, relativeTo: .largeTitle),
       color: style.ink, at: CGPoint(x: center.x, y: center.y - radius * 0.28), anchor: .center)
-    let caption = "in one \(model.singular)"
-    context.historyDraw(
-      caption, font: style.captionFont, color: style.ink3,
-      at: CGPoint(x: center.x, y: center.y - radius * 0.28 + numberSize * 0.62 + 4), anchor: .top)
+    if roomy {
+      let caption = "in one \(model.singular)"
+      context.historyDraw(
+        caption, font: style.captionFont, color: style.ink3,
+        at: CGPoint(x: center.x, y: center.y - radius * 0.28 + numberSize * 0.62 + 4), anchor: .top)
+    }
 
     // Ends of the dial.
     // Each label starts at its end of the dial and runs inward, so neither is
     // cut by the edge of the card. The compact dial has no room for them; its
     // level title says the same.
-    guard !isCompact else { return }
+    guard !isCompact, roomy else { return }
     let labelY = center.y + lineWidth / 2 + 4
     let half = size.width / 2 - 2
     if let spread = context.historyFit(

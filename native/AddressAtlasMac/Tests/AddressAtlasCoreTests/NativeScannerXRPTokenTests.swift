@@ -65,7 +65,7 @@ extension NativeScannerTokenTests {
 
     XCTAssertTrue(result.holdings.isEmpty)
     XCTAssertTrue(
-      result.warnings.contains { $0.contains("did not match the requested account") },
+      result.warnings.contains { $0.contains("reply was for a different XRP account") },
       result.warnings.joined(separator: "\n")
     )
   }
@@ -98,7 +98,7 @@ extension NativeScannerTokenTests {
 
       XCTAssertTrue(result.holdings.isEmpty, validationField)
       XCTAssertTrue(
-        result.warnings.contains { $0.contains("did not come from a validated ledger") },
+        result.warnings.contains { $0.contains("wasn't from a validated XRP ledger") },
         result.warnings.joined(separator: "\n")
       )
     }
@@ -128,7 +128,7 @@ extension NativeScannerTokenTests {
 
     XCTAssertTrue(result.holdings.isEmpty)
     XCTAssertTrue(
-      result.warnings.contains { $0.contains("did not identify one validated ledger") },
+      result.warnings.contains { $0.contains("didn't identify a single validated XRP ledger") },
       result.warnings.joined(separator: "\n")
     )
   }
@@ -182,7 +182,7 @@ extension NativeScannerTokenTests {
       XCTAssertEqual(params?["ledger_hash"] as? String, firstLedgerHash)
     }
     XCTAssertTrue(
-      result.warnings.contains { $0.contains("changed ledger") && $0.contains("incomplete") },
+      result.warnings.contains { $0.contains("XRP ledger changed") && $0.contains("issued-currency balances are missing") },
       result.warnings.joined(separator: "\n")
     )
   }
@@ -218,7 +218,7 @@ extension NativeScannerTokenTests {
     XCTAssertEqual(result.holdings.first(where: { $0.symbol == "XRP" })?.amount, 1)
     XCTAssertFalse(result.holdings.contains(where: { $0.source == .issued }))
     XCTAssertTrue(
-      result.warnings.contains { $0.contains("another account") && $0.contains("incomplete") },
+      result.warnings.contains { $0.contains("different account") && $0.contains("issued-currency balances are missing") },
       result.warnings.joined(separator: "\n")
     )
   }
@@ -256,7 +256,7 @@ extension NativeScannerTokenTests {
       XCTAssertEqual(result.holdings.first(where: { $0.symbol == "XRP" })?.amount, 1)
       XCTAssertFalse(result.holdings.contains(where: { $0.source == .issued }))
       XCTAssertTrue(
-        result.warnings.contains { $0.contains("unvalidated page") && $0.contains("incomplete") },
+        result.warnings.contains { $0.contains("unvalidated ledger") && $0.contains("issued-currency balances are missing") },
         result.warnings.joined(separator: "\n")
       )
     }
@@ -390,10 +390,10 @@ extension NativeScannerTokenTests {
     XCTAssertEqual(
       result.warnings,
       [
-        "XRP skipped one trust line with an invalid issuer or currency code.",
-        "XRP discarded one issued asset because its trust-line data included an invalid or negative balance.",
-        "XRP repeated one identical trust line; the duplicate was skipped to avoid double-counting.",
-        "XRP returned conflicting balances for one issued asset; every version was skipped.",
+        "One XRP trust line has an invalid issuer or currency code, so it's left out of this scan.",
+        "One issued asset on XRP has an invalid or negative balance, so it's left out of this scan.",
+        "The server listed the same XRP trust line twice. It was counted once.",
+        "The server sent conflicting balances for one issued XRP asset, so it's left out of this scan. Scan again later.",
       ]
     )
     XCTAssertEqual(NativeScanner.decodeXrplCurrency("XRP"), "")
@@ -421,7 +421,7 @@ extension NativeScannerTokenTests {
         XCTAssertEqual(
           result.warnings,
           [
-            "XRP discarded one issued asset because its trust-line data included an invalid or negative balance."
+            "One issued asset on XRP has an invalid or negative balance, so it's left out of this scan."
           ]
         )
       }
@@ -443,7 +443,7 @@ extension NativeScannerTokenTests {
       XCTAssertTrue(result.assets.isEmpty)
       XCTAssertEqual(
         result.warnings,
-        ["XRP returned conflicting balances for one issued asset; every version was skipped."]
+        ["The server sent conflicting balances for one issued XRP asset, so it's left out of this scan. Scan again later."]
       )
     }
   }
@@ -485,7 +485,7 @@ extension NativeScannerTokenTests {
       XCTAssertTrue(result.assets.isEmpty)
       XCTAssertEqual(
         result.warnings,
-        ["XRP returned conflicting balances for one issued asset; every version was skipped."]
+        ["The server sent conflicting balances for one issued XRP asset, so it's left out of this scan. Scan again later."]
       )
     }
   }
@@ -516,10 +516,10 @@ extension NativeScannerTokenTests {
     XCTAssertEqual(
       result.warnings,
       [
-        "XRP skipped 2 trust lines with invalid issuers or currency codes.",
-        "XRP discarded 2 issued assets because their trust-line data included invalid or negative balances.",
-        "XRP repeated 2 identical trust lines; the duplicates were skipped to avoid double-counting.",
-        "XRP returned conflicting balances for 2 issued assets; every version was skipped.",
+        "2 XRP trust lines have invalid issuers or currency codes, so they're left out of this scan.",
+        "2 issued assets on XRP have invalid or negative balances, so they're left out of this scan.",
+        "The server listed 2 XRP trust lines more than once. Each was counted once.",
+        "The server sent conflicting balances for 2 issued XRP assets, so they're left out of this scan. Scan again later.",
       ]
     )
   }

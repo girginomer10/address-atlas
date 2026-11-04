@@ -17,7 +17,7 @@ extension AppState {
   func revokeCurrentSyncSession(expectedServerURL: URL) async {
     guard canMutateVault() else { return }
     guard persistence != nil, isUnlocked else {
-      error = "Unlock the vault before revoking the sync session."
+      error = "Unlock Address Atlas before revoking the sync session."
       return
     }
     guard let serverURL = AppState.validatedSyncURL(document.syncState.serverURL),
@@ -32,7 +32,7 @@ extension AppState {
       return
     }
     guard beginSyncActivity(.revokingSession) else {
-      notice = "A sync operation is already running."
+      notice = "A sync is already running."
       return
     }
     defer { finishSyncActivity(.revokingSession) }
@@ -47,7 +47,7 @@ extension AppState {
         let persistenceError = error
         requirePendingSyncPersistence(disconnected, projectedSyncVersion: nil)
         error =
-          "The server session was revoked, but removing its local token is pending persistence. Use Retry local save after fixing storage: \(persistenceError)"
+          "The server session was revoked, but this \(PlatformCopy.deviceNoun) couldn't save that change. Fix local storage, then use Retry local save: \(persistenceError)"
         return
       }
       notice = "This \(PlatformCopy.deviceNounPossessive) sync session was revoked."
@@ -64,7 +64,7 @@ extension AppState {
   func deleteSyncAccount(expectedServerURL: URL) async {
     guard canMutateVault(allowPendingAccountDeletion: true) else { return }
     guard persistence != nil, isUnlocked else {
-      error = "Unlock the vault before deleting the sync account."
+      error = "Unlock Address Atlas before deleting the sync account."
       return
     }
     guard let serverURL = AppState.validatedSyncURL(document.syncState.serverURL),
@@ -81,7 +81,7 @@ extension AppState {
       return
     }
     guard beginSyncActivity(.deletingAccount) else {
-      notice = "A sync operation is already running."
+      notice = "A sync is already running."
       return
     }
     defer { finishSyncActivity(.deletingAccount) }
@@ -122,7 +122,7 @@ extension AppState {
         guard AccountDeletionIdempotencyKey.normalized(operationKey) != nil else {
           throw UserFacingAppError(
             message:
-              "A secure account deletion operation could not be created. Nothing was deleted."
+              "Address Atlas couldn't prepare the account deletion. Nothing was deleted."
           )
         }
 
@@ -156,11 +156,11 @@ extension AppState {
       guard await saveAndDiscardRollbackCheckpoint(disconnected) else {
         let persistenceError = error
         error =
-          "The sync account was deleted, but its local metadata and rollback point could not be cleared atomically. Fix local storage, then retry Delete sync account to replay the saved deletion receipt: \(persistenceError)"
+          "The sync account was deleted, but this \(PlatformCopy.deviceNoun) couldn't clear its local account data and backup copy. Fix local storage, then retry Delete sync account to finish: \(persistenceError)"
         return
       }
       notice =
-        "Sync account deleted. Your encrypted local vault was kept; the deleted account's automatic rollback point was removed."
+        "Sync account deleted. Your local portfolio was kept. The deleted account's automatic backup copy was removed."
       error = ""
     } catch let failure {
       if !(failure is CancellationError),
@@ -177,10 +177,10 @@ extension AppState {
       ) != nil {
         if error.isEmpty {
           notice =
-            "Account deletion remains safely pending. Retry Delete sync account to resume the same operation."
+            "Account deletion isn't finished. Retry Delete sync account to continue."
         } else {
           error +=
-            " The deletion operation remains safely pending; retry Delete sync account to resume it."
+            " Account deletion isn't finished. Retry Delete sync account to continue."
         }
       }
     }
@@ -203,7 +203,7 @@ extension AppState {
       SyncSessionToken.isUsable(session.sessionToken, forAccountId: connectedAccountId)
     else {
       throw UserFacingAppError(
-        message: "Passkey sign-in did not match the connected sync account. Nothing was deleted."
+        message: "That passkey doesn't match the connected sync account. Nothing was deleted."
       )
     }
     return session
@@ -212,11 +212,11 @@ extension AppState {
   func authenticateWithPasskey(serverURL: String, mode: PasskeyWebMode) async {
     guard acceptsNewOperations else { return }
     guard !scanning else {
-      error = "Cancel or finish the active scan before changing sync accounts."
+      error = "Wait for the scan to finish, or cancel it, before changing sync accounts."
       return
     }
     guard let url = AppState.validatedSyncURL(serverURL) else {
-      error = "Sync server URL must use https (http is allowed only for localhost)."
+      error = "The sync server address must start with https. Only localhost can use http."
       return
     }
     let connectedAccountId = document.syncState.accountId.flatMap(
@@ -225,17 +225,17 @@ extension AppState {
     let connectedServerURL = AppState.validatedSyncURL(document.syncState.serverURL)
     if connectedAccountId != nil, mode == .register {
       error =
-        "Disconnect the current sync account explicitly before creating or switching to another account."
+        "Disconnect the current sync account before creating or switching to another one."
       return
     }
     if connectedAccountId != nil, connectedServerURL != url {
       error =
-        "This vault is connected to a different sync server. Disconnect it explicitly before switching servers or accounts."
+        "Your portfolio is connected to a different sync server. Disconnect it before switching servers or accounts."
       return
     }
     if syncPersistencePending {
       guard let pendingUpload = pendingVaultUpload else {
-        error = "Save the pending sync state locally before changing sync accounts."
+        error = "Save the last sync result before changing sync accounts."
         return
       }
       await authenticateForPendingVaultUploadRecovery(
@@ -246,24 +246,24 @@ extension AppState {
       return
     }
     guard !hasPendingAccountDeletion else {
-      error = "Finish or retry the pending account deletion before changing sync accounts."
+      error = "Finish the account deletion before changing sync accounts."
       return
     }
     guard !isPersisting else {
-      error = "Wait for the current local save before changing sync accounts."
+      error = "Wait for the current save to finish before changing sync accounts."
       return
     }
     guard !isValidatingExchangeCredentials else {
-      error = "Wait for the exchange credential check before changing sync accounts."
+      error = "Wait for the exchange key check to finish before changing sync accounts."
       return
     }
     guard !syncing else {
-      notice = "A sync operation is already running."
+      notice = "A sync is already running."
       return
     }
     let activity: SyncActivity = mode == .register ? .creatingPasskeyAccount : .signingIn
     guard beginSyncActivity(activity) else {
-      notice = "A sync operation is already running."
+      notice = "A sync is already running."
       return
     }
     defer { finishSyncActivity(activity) }
@@ -284,14 +284,14 @@ extension AppState {
       }
       guard AppState.validatedSyncURL(session.serverURL) == url else {
         throw UserFacingAppError(
-          message: "Passkey sign-in returned a different sync server. Nothing was changed."
+          message: "The passkey sign-in came from a different sync server. Nothing was changed."
         )
       }
       if let connectedAccountId {
         guard SyncAccountIdentifier.normalized(session.userId) == connectedAccountId else {
           throw UserFacingAppError(
             message:
-              "That passkey belongs to a different sync account. The current account was kept; disconnect it explicitly before switching."
+              "That passkey belongs to a different sync account. The current account was kept. Disconnect it before switching."
           )
         }
       }
@@ -315,7 +315,7 @@ extension AppState {
       guard trustOutcome.isDurable else {
         throw UserFacingAppError(
           message:
-            "The endpoint policy became visible, but its crash-durability check failed. Passkey sign-in was not saved; refresh endpoints and try again after local storage recovers."
+            "The server settings were updated, but this \(PlatformCopy.deviceNoun) couldn't confirm they were saved. Passkey sign-in wasn't saved. Fix local storage, refresh the server settings, and try again."
         )
       }
       guard await save(connected, projectedSyncVersion: nil) else {
@@ -336,7 +336,7 @@ extension AppState {
       acceptedEndpointConfigServerURL = url
       setEndpointConfigTrustDurabilityDegraded(false)
       endpointConfigStatus = acceptedEndpointStatus(
-        "Remote v\(stagedEndpointConfig.configVersion)"
+        "Server settings v\(stagedEndpointConfig.configVersion)"
       )
       let removedScanRunCount = lastSaveRemovedScanRunCount
       notice =
@@ -373,9 +373,9 @@ extension AppState {
   static func postPasskeyAuthenticationGuidance(for mode: PasskeyWebMode) -> String {
     switch mode {
     case .register:
-      "The account and passkey may already exist on the server. The previous local binding was kept. Repair local storage, then choose Sign in before trying Create passkey account again."
+      "The account and passkey may already exist on the server. Your previous sync connection was kept. Fix local storage, then choose Sign in before trying Create passkey account again."
     case .authenticate:
-      "The previous local binding was kept. Repair local storage, then choose Sign in again."
+      "Your previous sync connection was kept. Fix local storage, then choose Sign in again."
     }
   }
 
@@ -385,7 +385,7 @@ extension AppState {
   func disconnectSyncAccountForSwitch(expectedServerURL: URL) async {
     guard canMutateVault() else { return }
     guard persistence != nil, isUnlocked else {
-      error = "Unlock the vault before disconnecting the sync account."
+      error = "Unlock Address Atlas before disconnecting the sync account."
       return
     }
     guard let serverURL = AppState.validatedSyncURL(document.syncState.serverURL),
@@ -399,7 +399,7 @@ extension AppState {
       return
     }
     guard beginSyncActivity(.disconnectingAccount) else {
-      notice = "A sync operation is already running."
+      notice = "A sync is already running."
       return
     }
     defer { finishSyncActivity(.disconnectingAccount) }
@@ -415,17 +415,17 @@ extension AppState {
       guard await saveAndDiscardRollbackCheckpoint(disconnected) else {
         let persistenceError = error
         error =
-          "This \(PlatformCopy.deviceNounPossessive) server session was revoked, but its local account binding and rollback point could not be cleared atomically. Fix local storage, then use Disconnect locally without contacting server: \(persistenceError)"
+          "This \(PlatformCopy.deviceNounPossessive) server session was revoked, but its sync connection and backup copy couldn't be cleared. Fix local storage, then use Disconnect locally without contacting server: \(persistenceError)"
         return
       }
       notice =
-        "This \(PlatformCopy.deviceNoun) disconnected from the sync account. The remote account and encrypted remote vault were kept; the previous account's automatic rollback point was removed."
+        "This \(PlatformCopy.deviceNoun) was disconnected from the sync account. The account and its encrypted copy on the server were kept. The account's automatic backup copy was removed."
       error = ""
     } catch {
       recordDiagnosticFailure(.syncAccountLifecycleFailed)
       await handleSyncError(error)
       let recovery =
-        " The local account binding and encrypted rollback point were kept. If the server remains unavailable, use Disconnect locally without contacting server."
+        " The sync connection and backup copy were kept. If the server stays unavailable, use Disconnect locally without contacting server."
       if self.error.isEmpty {
         notice += recovery
       } else {
@@ -440,7 +440,7 @@ extension AppState {
   func disconnectSyncAccountLocallyForSwitch(expectedServerURL: URL) async {
     guard canMutateVault() else { return }
     guard persistence != nil, isUnlocked else {
-      error = "Unlock the vault before disconnecting the sync account."
+      error = "Unlock Address Atlas before disconnecting the sync account."
       return
     }
     guard let serverURL = AppState.validatedSyncURL(document.syncState.serverURL),
@@ -454,7 +454,7 @@ extension AppState {
       return
     }
     guard beginSyncActivity(.disconnectingAccount) else {
-      notice = "A sync operation is already running."
+      notice = "A sync is already running."
       return
     }
     defer { finishSyncActivity(.disconnectingAccount) }
@@ -465,11 +465,11 @@ extension AppState {
     guard await saveAndDiscardRollbackCheckpoint(disconnected) else {
       let persistenceError = error
       error =
-        "The local account binding and rollback point were kept because they could not be cleared atomically: \(persistenceError)"
+        "The sync connection and backup copy were kept because they couldn't be cleared: \(persistenceError)"
       return
     }
     notice =
-      "This \(PlatformCopy.deviceNoun) disconnected locally from the sync account. No server request was made; the remote account and vault were kept, and the old server session may remain valid until it expires."
+      "This \(PlatformCopy.deviceNoun) was disconnected from the sync account without contacting the server. The account and its encrypted copy were kept, and the old server session may stay valid until it expires."
     error = ""
   }
 
@@ -490,23 +490,23 @@ extension AppState {
         == pendingUpload.accountId
     else {
       error =
-        "The interrupted upload is bound to a different sync server or account. Sign in to that exact account to recover it."
+        "The interrupted upload belongs to a different sync server or account. Sign in to that account to finish it."
       return
     }
     guard !hasPendingAccountDeletion else {
-      error = "Finish or retry the pending account deletion before recovering the upload."
+      error = "Finish the account deletion before recovering the upload."
       return
     }
     guard !isPersisting else {
-      error = "Wait for the current local save before recovering the upload."
+      error = "Wait for the current save to finish before recovering the upload."
       return
     }
     guard !isValidatingExchangeCredentials else {
-      error = "Wait for the exchange credential check before recovering the upload."
+      error = "Wait for the exchange key check to finish before recovering the upload."
       return
     }
     guard !syncing else {
-      notice = "A sync operation is already running."
+      notice = "A sync is already running."
       return
     }
 
@@ -516,7 +516,7 @@ extension AppState {
     let priorEndpointConfigTrustDurabilityDegraded =
       endpointConfigTrustDurabilityDegraded
     guard beginSyncActivity(.signingIn) else {
-      notice = "A sync operation is already running."
+      notice = "A sync is already running."
       return
     }
     defer { finishSyncActivity(.signingIn) }
@@ -533,7 +533,7 @@ extension AppState {
       else {
         throw UserFacingAppError(
           message:
-            "Passkey sign-in did not match the account bound to the interrupted upload. Recovery was not started."
+            "That passkey doesn't match the account of the interrupted upload. Recovery didn't start."
         )
       }
       let trustOutcome = try await endpointConfigTrustStore.validateAndRecord(
@@ -543,7 +543,7 @@ extension AppState {
       guard trustOutcome.isDurable else {
         throw UserFacingAppError(
           message:
-            "The endpoint policy became visible, but its crash-durability check failed. Passkey sign-in was not saved; refresh endpoints and try again after local storage recovers."
+            "The server settings were updated, but this \(PlatformCopy.deviceNoun) couldn't confirm they were saved. Passkey sign-in wasn't saved. Fix local storage, refresh the server settings, and try again."
         )
       }
 
@@ -556,7 +556,7 @@ extension AppState {
       acceptedEndpointConfigServerURL = serverURL
       setEndpointConfigTrustDurabilityDegraded(false)
       endpointConfigStatus = acceptedEndpointStatus(
-        "Remote v\(stagedEndpointConfig.configVersion)"
+        "Server settings v\(stagedEndpointConfig.configVersion)"
       )
       error = ""
       // Hand the single operation lane from authentication to replay so the
@@ -592,7 +592,7 @@ extension AppState {
     } catch {
       throw UserFacingAppError(
         message:
-          "The sync server's compatibility policy could not be verified. Passkey sign-in was not started."
+          "Address Atlas couldn't verify that this version works with the sync server. Passkey sign-in didn't start."
       )
     }
     guard AppState.supportsAppVersion(appVersion, minimum: config.minSupportedAppVersion) else {

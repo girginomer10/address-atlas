@@ -78,7 +78,7 @@ public enum ExchangeBalanceNormalizer {
     var warnings = ScanWarningPolicy.bounded(balance.warnings)
     if !aggregation.overflowedSymbols.isEmpty {
       warnings.append(
-        "Balances exceeded the supported numeric range for \(formattedSymbols(aggregation.overflowedSymbols)); those assets were skipped."
+        "The balances of \(formattedSymbols(aggregation.overflowedSymbols)) are larger than Address Atlas can add up, so they're left out of this scan."
       )
     }
     var prices: [String: PricePoint] = [:]
@@ -133,12 +133,12 @@ public enum ExchangeBalanceNormalizer {
 
     if priceRequestFailed {
       warnings.append(
-        "USD crypto prices are temporarily unavailable; affected balances are shown unpriced (USD stablecoins are valued at $1.00)."
+        "Crypto prices are unavailable right now, so these balances are left out of the total. USD stablecoins are valued at $1.00. Scan again later."
       )
     }
     if fiatRateRequestFailed {
       warnings.append(
-        "Fiat-to-USD rates are temporarily unavailable for \(formattedSymbols(requestedFiatSymbols)); those balances are shown unpriced."
+        "Exchange rates to USD are unavailable right now for \(formattedSymbols(requestedFiatSymbols)), so those balances are left out of the total. Scan again later."
       )
     }
 
@@ -156,12 +156,12 @@ public enum ExchangeBalanceNormalizer {
       let unpriced = missing.filter { !usdStableSymbols.contains($0) }
       if !unpriced.isEmpty {
         warnings.append(
-          "No USD price was available for \(formattedSymbols(unpriced)); those balances are shown unpriced."
+          "No USD price is available for \(formattedSymbols(unpriced)), so those balances are left out of the total."
         )
       }
       if !stablecoinFallbacks.isEmpty {
         warnings.append(
-          "No live USD price was available for \(formattedSymbols(stablecoinFallbacks)); those stablecoin balances were valued at $1.00."
+          "No live USD price is available for \(formattedSymbols(stablecoinFallbacks)), so those stablecoins are valued at $1.00."
         )
       }
     }
@@ -172,7 +172,7 @@ public enum ExchangeBalanceNormalizer {
       }
       if !missingFiat.isEmpty {
         warnings.append(
-          "No USD conversion rate was available for \(formattedSymbols(missingFiat)); those fiat balances are shown unpriced."
+          "No USD exchange rate is available for \(formattedSymbols(missingFiat)), so those balances are left out of the total."
         )
       }
     }
@@ -186,7 +186,7 @@ public enum ExchangeBalanceNormalizer {
     )
     if !normalized.valuationOverflowSymbols.isEmpty {
       warnings.append(
-        "USD valuation exceeded the supported numeric range for \(formattedSymbols(normalized.valuationOverflowSymbols)); those balances are shown without a USD value."
+        "The USD value of \(formattedSymbols(normalized.valuationOverflowSymbols)) is too large to calculate, so those balances are left out of the total."
       )
     }
     return ExchangeNormalizationResult(

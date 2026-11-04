@@ -30,10 +30,10 @@ extension AppState {
     guard inFlightPersistenceSucceeded else {
       let detail =
         error.isEmpty
-        ? "The encrypted local vault did not confirm the save."
+        ? "The save wasn't confirmed."
         : error
       return cancelTermination(
-        with: "Address Atlas could not finish the active local save before quitting. \(detail)"
+        with: "Address Atlas couldn't finish saving before quitting. \(detail)"
       )
     }
 
@@ -44,7 +44,7 @@ extension AppState {
     if pendingVaultUpload != nil, pendingSyncPersistence != nil {
       return cancelTermination(
         with:
-          "Address Atlas found conflicting pending sync operations. Reopen the app before quitting."
+          "Address Atlas found two unfinished sync steps that conflict. Reopen the app before quitting."
       )
     }
 
@@ -60,11 +60,11 @@ extension AppState {
       else {
         let detail =
           error.isEmpty
-          ? "The encrypted local vault did not confirm the save."
+          ? "The save wasn't confirmed."
           : error
         return cancelTermination(
           with:
-            "Address Atlas could not save the pending sync state before quitting. \(detail)"
+            "Address Atlas couldn't save the last sync result before quitting. \(detail)"
         )
       }
 
@@ -76,7 +76,7 @@ extension AppState {
     {
       return cancelTermination(
         with:
-          "The pending sync state cannot be saved safely. Reopen Address Atlas before quitting."
+          "Address Atlas can't save the unfinished sync step safely. Reopen it before quitting."
       )
     }
 
@@ -89,11 +89,11 @@ extension AppState {
     } catch WalletLabelDraftError.invalidLabel {
       return cancelTermination(
         with:
-          "Wallet labels must be between 1 and 80 characters. Fix the draft before quitting."
+          "Wallet names must be 1 to 80 characters. Fix the name before quitting."
       )
     } catch {
       return cancelTermination(
-        with: "Address Atlas could not validate wallet-label changes before quitting."
+        with: "Address Atlas couldn't check the wallet name changes before quitting."
       )
     }
 
@@ -105,14 +105,14 @@ extension AppState {
     guard pendingVaultUpload == nil else {
       return cancelTermination(
         with:
-          "Finish the pending encrypted upload recovery before saving the wallet-label draft and quitting."
+          "Finish the interrupted upload before saving the wallet name and quitting."
       )
     }
 
     guard !syncPersistencePending, pendingSyncPersistence == nil else {
       return cancelTermination(
         with:
-          "The pending sync state was not fully resolved. Reopen Address Atlas before quitting."
+          "The unfinished sync step wasn't resolved. Reopen Address Atlas before quitting."
       )
     }
 
@@ -125,10 +125,10 @@ extension AppState {
     else {
       let detail =
         error.isEmpty
-        ? "The encrypted local vault did not confirm the save."
+        ? "The save wasn't confirmed."
         : error
       return cancelTermination(
-        with: "Address Atlas could not save the wallet label before quitting. \(detail)"
+        with: "Address Atlas couldn't save the wallet name before quitting. \(detail)"
       )
     }
 
@@ -153,16 +153,16 @@ extension AppState {
 
   private var terminationBlockingOperationMessage: String? {
     if isUnlocking {
-      return "Wait for vault recovery to finish before quitting."
+      return "Wait for recovery to finish before quitting."
     }
     if scanning {
-      return "Cancel or finish the active scan before quitting."
+      return "Wait for the scan to finish, or cancel it, before quitting."
     }
     if syncing {
-      return "Wait for the active sync operation before quitting."
+      return "Wait for the sync to finish before quitting."
     }
     if isValidatingExchangeCredentials {
-      return "Wait for the exchange credential check before quitting."
+      return "Wait for the exchange key check to finish before quitting."
     }
     if isExportOperationInProgress {
       return "Wait for the active export to finish before quitting."

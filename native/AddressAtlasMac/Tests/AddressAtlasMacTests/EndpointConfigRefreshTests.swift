@@ -25,14 +25,14 @@ final class EndpointConfigRefreshTests: XCTestCase {
     XCTAssertTrue(firstAccepted)
     XCTAssertEqual(state.endpointConfig.configVersion, 31)
     XCTAssertTrue(state.endpointConfigTrustDurabilityDegraded)
-    XCTAssertTrue(state.endpointConfigStatus.contains("trust durability retry required"))
-    XCTAssertTrue(state.notice.contains("Sync and sign-in remain blocked"))
+    XCTAssertTrue(state.endpointConfigStatus.contains("save not confirmed"))
+    XCTAssertTrue(state.notice.contains("Sync and sign-in stay blocked"))
 
     let retryAccepted = await state.refreshEndpointConfig(silent: true)
 
     XCTAssertTrue(retryAccepted)
     XCTAssertFalse(state.endpointConfigTrustDurabilityDegraded)
-    XCTAssertEqual(state.endpointConfigStatus, "Remote v31")
+    XCTAssertEqual(state.endpointConfigStatus, "Server settings v31")
     let recordCount = await trustStore.recordCount
     XCTAssertEqual(recordCount, 2)
   }
@@ -248,7 +248,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
     XCTAssertFalse(accepted)
     XCTAssertTrue(cancellationObserved)
     XCTAssertEqual(state.endpointConfig, .bundled)
-    XCTAssertEqual(state.endpointConfigStatus, "Bundled endpoints")
+    XCTAssertEqual(state.endpointConfigStatus, "Built-in server settings")
     XCTAssertNil(state.endpointConfigRefreshRequest)
     XCTAssertEqual(state.error, "")
   }
@@ -448,7 +448,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
     let rollbackResult = await rollback.value
     XCTAssertFalse(rollbackResult)
     XCTAssertEqual(state.endpointConfig, accepted)
-    XCTAssertTrue(state.endpointConfigStatus.contains("stale v6 rejected"))
+    XCTAssertTrue(state.endpointConfigStatus.contains("older v6 ignored"))
 
     let unavailable = Task { await state.refreshEndpointConfig(silent: true) }
     await client.waitUntilRequested("https://sync.example")
@@ -456,7 +456,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
     let unavailableResult = await unavailable.value
     XCTAssertFalse(unavailableResult)
     XCTAssertEqual(state.endpointConfig, accepted)
-    XCTAssertEqual(state.endpointConfigStatus, "Remote v7 (refresh unavailable)")
+    XCTAssertEqual(state.endpointConfigStatus, "Server settings v7 (couldn't refresh)")
   }
 
   func testUnsupportedAcceptedConfigKeepsUpdateRequiredAcrossRollbackEquivocationAndFailure() async
@@ -477,7 +477,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
     let initialResult = await initial.value
     XCTAssertTrue(initialResult)
     XCTAssertFalse(state.isAppVersionSupported)
-    XCTAssertEqual(state.endpointConfigStatus, "Update required (Remote v7)")
+    XCTAssertEqual(state.endpointConfigStatus, "Update required (Server settings v7)")
 
     let rollback = Task { await state.refreshEndpointConfig(silent: true) }
     await client.waitUntilRequested("https://sync.example")
@@ -489,7 +489,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
     XCTAssertFalse(rollbackResult)
     XCTAssertEqual(state.endpointConfig, unsupported)
     XCTAssertTrue(state.endpointConfigStatus.contains("Update required"))
-    XCTAssertTrue(state.endpointConfigStatus.contains("stale v6 rejected"))
+    XCTAssertTrue(state.endpointConfigStatus.contains("older v6 ignored"))
 
     let equivocation = Task { await state.refreshEndpointConfig(silent: true) }
     await client.waitUntilRequested("https://sync.example")
@@ -506,7 +506,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
     XCTAssertFalse(equivocationResult)
     XCTAssertEqual(state.endpointConfig, unsupported)
     XCTAssertTrue(state.endpointConfigStatus.contains("Update required"))
-    XCTAssertTrue(state.endpointConfigStatus.contains("conflicting refresh rejected"))
+    XCTAssertTrue(state.endpointConfigStatus.contains("conflicting update ignored"))
 
     let unavailable = Task { await state.refreshEndpointConfig(silent: true) }
     await client.waitUntilRequested("https://sync.example")
@@ -515,7 +515,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
     XCTAssertFalse(unavailableResult)
     XCTAssertEqual(state.endpointConfig, unsupported)
     XCTAssertTrue(state.endpointConfigStatus.contains("Update required"))
-    XCTAssertTrue(state.endpointConfigStatus.contains("refresh unavailable"))
+    XCTAssertTrue(state.endpointConfigStatus.contains("couldn't refresh"))
   }
 
   func testServerSwitchResetsVersionMonotonicityButRejectsSameVersionEquivocation() async {
@@ -554,7 +554,7 @@ final class EndpointConfigRefreshTests: XCTestCase {
     let equivocationResult = await equivocation.value
     XCTAssertFalse(equivocationResult)
     XCTAssertEqual(state.endpointConfig, secondAccepted)
-    XCTAssertTrue(state.endpointConfigStatus.contains("conflicting refresh rejected"))
+    XCTAssertTrue(state.endpointConfigStatus.contains("conflicting update ignored"))
   }
 
   private func waitUntilRefreshWaiterCount(_ expected: Int, in state: AppState) async {

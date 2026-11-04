@@ -17,15 +17,15 @@ public enum KrakenNonceError: Error, Equatable, LocalizedError, Sendable {
     switch self {
     case .invalidClock:
       return
-        "The system clock cannot produce a safe Kraken nonce. Correct the \(PlatformCopy.deviceNounPossessive) date and time before retrying."
+        "Address Atlas can't send a Kraken request because the clock looks wrong. Correct the \(PlatformCopy.deviceNounPossessive) date and time, then try again."
     case .exhausted:
       return
-        "The Kraken nonce range is exhausted for this API key. Create a new read-only Kraken API key."
+        "This Kraken API key can't be used for more requests. Create a new read-only Kraken API key."
     case .localStateUnavailable:
-      return "Kraken's protected local nonce state is unavailable. No Kraken request was sent."
+      return "The Kraken data saved on this \(PlatformCopy.deviceNoun) couldn't be read. No request was sent to Kraken."
     case .localStateChanged:
       return
-        "Kraken's local device state changed. Remove this connection and add a new read-only Kraken API key created only for this \(PlatformCopy.deviceNoun)."
+        "The Kraken data saved on this \(PlatformCopy.deviceNoun) has changed. Remove this connection, then add a new read-only Kraken API key made only for this \(PlatformCopy.deviceNoun)."
     }
   }
 }

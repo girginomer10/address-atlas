@@ -61,7 +61,7 @@ final class ScannerFiatRateTests: XCTestCase {
     )
 
     XCTAssertTrue(aliasOverflow.holdings.isEmpty)
-    XCTAssertTrue(aliasOverflow.warnings.contains { $0.contains("supported numeric range") })
+    XCTAssertTrue(aliasOverflow.warnings.contains { $0.contains("larger than Address Atlas can add up") })
     XCTAssertNil(FiniteValueMath.addingNonnegative(1e308, 1e308))
     XCTAssertNil(FiniteValueMath.sumNonnegative([1e308, 1e308]))
 
@@ -82,7 +82,7 @@ final class ScannerFiatRateTests: XCTestCase {
     XCTAssertEqual(holding.pricingStatus, .valuationUnavailable)
     XCTAssertNil(holding.change24h)
     XCTAssertTrue(holding.valueUsd.isFinite)
-    XCTAssertTrue(valuationOverflow.warnings.contains { $0.contains("USD valuation exceeded") })
+    XCTAssertTrue(valuationOverflow.warnings.contains { $0.contains("too large to calculate") })
     XCTAssertNoThrow(
       try JSONEncoder.addressAtlas.encode(
         ScanRunRecord(
@@ -165,6 +165,6 @@ final class ScannerFiatRateTests: XCTestCase {
       .unpriced
     )
     XCTAssertTrue(
-      result.warnings.contains(where: { $0.contains("Fiat-to-USD rates") && $0.contains("EUR") }))
+      result.warnings.contains(where: { $0.contains("Exchange rates to USD") && $0.contains("EUR") }))
   }
 }

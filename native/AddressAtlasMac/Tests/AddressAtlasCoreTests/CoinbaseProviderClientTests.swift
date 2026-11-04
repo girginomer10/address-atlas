@@ -78,7 +78,7 @@ final class CoinbaseProviderClientTests: XCTestCase {
     XCTAssertNil(balance.exactTotal["BTC"])
     XCTAssertNil(balance.total["BTC"])
     XCTAssertEqual(balance.exactTotal["ETH"]?.canonicalString, "2")
-    XCTAssertTrue(balance.warnings.contains { $0.contains("invalid numeric amounts") })
+    XCTAssertTrue(balance.warnings.contains { $0.contains("invalid amount") })
   }
 
   func testCoinbaseDeduplicatesRepeatedAccountUUIDAcrossPages() async throws {
@@ -118,7 +118,7 @@ final class CoinbaseProviderClientTests: XCTestCase {
     XCTAssertEqual(requests.snapshot().count, 2)
     XCTAssertTrue(
       balance.warnings.contains {
-        $0.contains("repeated 1 identical account record") && $0.contains("double-counting")
+        $0.contains("listed one account twice") && $0.contains("counted once")
       })
   }
 
@@ -159,9 +159,8 @@ final class CoinbaseProviderClientTests: XCTestCase {
     XCTAssertEqual(requests.snapshot().count, 2)
     XCTAssertTrue(
       balance.warnings.contains {
-        $0.contains("conflicting data for 1 repeated account UUID")
-          && $0.contains("every version")
-          && $0.contains("deterministic")
+        $0.contains("conflicting data for one account")
+          && $0.contains("left out of this scan")
       })
   }
 
@@ -191,7 +190,7 @@ final class CoinbaseProviderClientTests: XCTestCase {
     XCTAssertEqual(balance.free, ["BTC": 1, "USDC": 5])
     XCTAssertTrue(
       balance.warnings.contains {
-        $0.contains("3 account record") && $0.contains("missing or malformed UUID")
+        $0.contains("3 Coinbase accounts") && $0.contains("missing or invalid ID")
       })
   }
 
@@ -224,7 +223,7 @@ final class CoinbaseProviderClientTests: XCTestCase {
     )
 
     XCTAssertEqual(balance.total["BTC"], 0.5)
-    XCTAssertTrue(balance.warnings.contains(where: { $0.contains("completed pages") }))
+    XCTAssertTrue(balance.warnings.contains(where: { $0.contains("later pages") }))
   }
 
   func testCoinbaseRejectsOversizedAndControlCharacterCurrenciesBeforeAggregation() async throws {
@@ -278,7 +277,7 @@ final class CoinbaseProviderClientTests: XCTestCase {
     XCTAssertEqual(balance.free, ["USDC": 3])
     XCTAssertTrue(
       balance.warnings.contains {
-        $0.contains("2 account record") && $0.contains("invalid asset code")
+        $0.contains("2 Coinbase accounts") && $0.contains("invalid asset code")
       })
     XCTAssertFalse(balance.warnings.joined().contains(oversizedSymbol))
     XCTAssertFalse(balance.warnings.joined().contains("\r"))

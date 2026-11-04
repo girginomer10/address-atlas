@@ -66,7 +66,7 @@ public struct VaultDocumentSemanticError: Error, Equatable, LocalizedError, Send
   }
 
   public var errorDescription: String? {
-    "The decrypted vault violates the supported data contract at \(field). No data was changed."
+    "Your saved portfolio has data Address Atlas can't read (\(field)). Nothing was changed."
   }
 }
 

@@ -1,7 +1,7 @@
 ---
 title: Public repository claims must match the shipped product boundary
 date: 2026-07-21
-status: active
+status: needs-review
 tags: [decision, github, documentation, positioning, privacy]
 related_files: [README.md, PRIVACY.md, .github/SECURITY.md, docs/assets/github-social-preview.svg, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/ChainRegistry.swift, server/sync/README.md]
 ---
@@ -15,6 +15,8 @@ GitHub metadata and the social preview were empty, so the public repository did
 not communicate the product or its actual trust boundaries.
 
 ## Decision
+
+> Superseded in part on 2026-11-04: the README no longer leads with "sees what others miss". It opens with "A read-only crypto portfolio for Mac and iPhone. Your data stays on your devices." (see `2026-11-04-copy-rules-and-glossary.md`). The network count, sync wording, export wording, source-first preview and attribution rules below still hold.
 
 - Lead public copy with the private, local-first macOS portfolio product and the
   "sees what others miss" value: wallets, exchanges, tokens, staking, and rewards.

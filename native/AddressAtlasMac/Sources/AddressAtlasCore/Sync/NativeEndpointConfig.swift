@@ -261,15 +261,15 @@ public enum NativeEndpointConfigError: Error, Equatable, LocalizedError {
   public var errorDescription: String? {
     switch self {
     case .invalidSchema:
-      return "Endpoint config is not supported by this app version."
+      return "These server settings use a format this version of Address Atlas doesn't support."
     case .invalidConfigVersion:
-      return "Endpoint config is older than this app's bundled configuration or has an invalid version."
+      return "These server settings are older than the ones built into this app, or their version isn't valid."
     case .invalidRefreshInterval:
-      return "Endpoint config contains an invalid refresh interval."
+      return "These server settings have an invalid refresh interval."
     case .invalidMinimumAppVersion:
-      return "Endpoint config contains an invalid minimum app version."
+      return "These server settings have an invalid minimum app version."
     case .invalidEndpoint(let field):
-      return "Endpoint config contains an invalid URL or path: \(field)."
+      return "These server settings have an invalid address: \(field)."
     case .requestFailed(_, let message):
       return message
     }

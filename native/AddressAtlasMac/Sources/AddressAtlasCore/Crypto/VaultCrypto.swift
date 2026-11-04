@@ -22,7 +22,7 @@ public struct VaultCryptoPlaintextTooLargeError: Error, Equatable, LocalizedErro
   }
 
   public var errorDescription: String? {
-    "The encrypted vault is too large to store safely (\(actualByteCount) bytes; maximum \(maximumByteCount)). Remove older scan history or reduce vault data and try again."
+    "Your portfolio is too large to save (\(actualByteCount) bytes, limit \(maximumByteCount)). Remove older snapshots or other data, then try again."
   }
 }
 

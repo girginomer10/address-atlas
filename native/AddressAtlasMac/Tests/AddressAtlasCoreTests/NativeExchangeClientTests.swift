@@ -99,7 +99,7 @@ final class NativeExchangeClientTests: XCTestCase {
         return XCTFail("Expected explicit manual verification result")
       }
       XCTAssertEqual(actualProvider, provider)
-      XCTAssertTrue(guidance.contains("could not be verified automatically"))
+      XCTAssertTrue(guidance.contains("can't check"))
     }
   }
 
@@ -340,7 +340,7 @@ final class NativeExchangeClientTests: XCTestCase {
       }))
     XCTAssertTrue(
       result.warnings.contains(where: {
-        $0.contains("BTC") && $0.contains("shown unpriced") && !$0.contains("USDC")
+        $0.contains("BTC") && $0.contains("left out of the total") && !$0.contains("USDC")
       }))
   }
 

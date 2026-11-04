@@ -70,10 +70,10 @@ enum CosmosScanPart: Sendable {
   var failureWarning: String {
     switch self {
     case .liquid:
-      "Liquid balance could not be read; staked, unbonding, and reward balances may still be available."
-    case .delegations: "Delegations could not be read; staked balance may be missing."
-    case .rewards: "Rewards could not be read; claimable rewards may be missing."
-    case .unbonding: "Unbonding delegations could not be read; unbonding balance may be missing."
+      "Couldn't read the available balance, so it's missing from this scan. Staked, unbonding and reward balances may still be included. Scan again later."
+    case .delegations: "Couldn't read delegations, so staked balance may be missing from this scan. Scan again later."
+    case .rewards: "Couldn't read rewards, so claimable rewards may be missing from this scan. Scan again later."
+    case .unbonding: "Couldn't read unbonding delegations, so unbonding balance may be missing from this scan. Scan again later."
     }
   }
 }

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title description">
   <title id="title">Address Atlas</title>
-  <desc id="description">Private crypto portfolio tracking for wallets, exchanges, tokens, staking, and rewards across 20 networks.</desc>
+  <desc id="description">A read-only crypto portfolio for Mac and iPhone. Your data stays on your devices.</desc>
 
   <defs>
     <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
@@ -30,46 +30,35 @@
     <path d="M824 136c117 102 255 102 372 0M824 484c117-102 255-102 372 0" stroke-width="1"/>
   </g>
 
-  <g transform="translate(72 66)">
-    <rect x="0" y="0" width="176" height="34" rx="17" fill="#f3eddf" fill-opacity="0.08" stroke="#f3eddf" stroke-opacity="0.25"/>
-    <circle cx="19" cy="17" r="4" fill="#668fb5"/>
-    <text x="34" y="22" fill="#f3eddf" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" font-weight="600" letter-spacing="1.4">NATIVE macOS</text>
+  <g transform="translate(72 50)">
+    <text x="0" y="136" fill="#f3eddf" font-family="Georgia, Times New Roman, serif" font-size="83" font-style="italic" font-weight="500" letter-spacing="-3">Address Atlas</text>
 
-    <text x="0" y="116" fill="#f3eddf" font-family="Georgia, Times New Roman, serif" font-size="83" font-style="italic" font-weight="500" letter-spacing="-3">Address Atlas</text>
-    <text x="2" y="161" fill="#8ea9ba" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" font-weight="600" letter-spacing="3">PRIVATE PORTFOLIO MAP</text>
-
-    <text x="0" y="232" fill="#e8e2d5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="27" font-weight="450">
-      <tspan x="0" dy="0">Wallets, exchanges, tokens, staking</tspan>
-      <tspan x="0" dy="38">and rewards—mapped privately.</tspan>
+    <text x="0" y="214" fill="#e8e2d5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="30" font-weight="450">
+      <tspan x="0" dy="0">A read-only crypto portfolio</tspan>
+      <tspan x="0" dy="42">for Mac and iPhone.</tspan>
     </text>
 
-    <text x="0" y="335" fill="#aaa99f" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="18">
-      Local-first. Read-only. Encrypted before sync.
+    <text x="0" y="318" fill="#aaa99f" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="20">
+      Your data stays on your devices.
     </text>
 
-    <line x1="0" y1="382" x2="642" y2="382" stroke="#f3eddf" stroke-opacity="0.18"/>
+    <line x1="0" y1="372" x2="560" y2="372" stroke="#f3eddf" stroke-opacity="0.18"/>
 
-    <g transform="translate(0 417)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
+    <g transform="translate(0 412)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
       <text x="0" y="0" fill="#f3eddf" font-size="22" font-weight="700">20</text>
       <text x="0" y="24" fill="#8f9189" font-size="10" letter-spacing="1.6">NETWORKS</text>
 
-      <text x="151" y="0" fill="#f3eddf" font-size="22" font-weight="700">ZERO</text>
-      <text x="151" y="24" fill="#8f9189" font-size="10" letter-spacing="1.6">CUSTODY</text>
+      <text x="150" y="0" fill="#f3eddf" font-size="22" font-weight="700">3</text>
+      <text x="150" y="24" fill="#8f9189" font-size="10" letter-spacing="1.6">EXCHANGES</text>
 
-      <text x="328" y="0" fill="#f3eddf" font-size="22" font-weight="700">NO</text>
-      <text x="328" y="24" fill="#8f9189" font-size="10" letter-spacing="1.6">SEED PHRASES</text>
+      <text x="300" y="0" fill="#f3eddf" font-size="22" font-weight="700">6</text>
+      <text x="300" y="24" fill="#8f9189" font-size="10" letter-spacing="1.6">THEMES</text>
 
-      <text x="514" y="0" fill="#f3eddf" font-size="22" font-weight="700">3</text>
-      <text x="514" y="24" fill="#8f9189" font-size="10" letter-spacing="1.6">EXCHANGES</text>
+      <text x="450" y="0" fill="#f3eddf" font-size="22" font-weight="700">14</text>
+      <text x="450" y="24" fill="#8f9189" font-size="10" letter-spacing="1.6">VIEWS</text>
     </g>
   </g>
 
   <rect x="806" y="104" width="400" height="400" rx="102" fill="#f2ecdd" fill-opacity="0.06" stroke="#f2ecdd" stroke-opacity="0.16" filter="url(#shadow)"/>
   <image href="../../native/AddressAtlasMac/Resources/AppIcon.png" x="830" y="128" width="352" height="352" preserveAspectRatio="xMidYMid meet" clip-path="url(#iconClip)"/>
-
-  <g transform="translate(825 536)">
-    <circle cx="8" cy="8" r="8" fill="#668fb5" fill-opacity="0.25"/>
-    <circle cx="8" cy="8" r="3" fill="#8fb2cf"/>
-    <text x="27" y="13" fill="#b9b8ae" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" letter-spacing="1.5">ENCRYPTED LOCAL VAULT</text>
-  </g>
 </svg>

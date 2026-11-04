@@ -942,6 +942,8 @@ jobs:
           test -s "$fonts/Geist/OFL.txt"
           test -s "$fonts/PlusJakartaSans/PlusJakartaSans-Variable.ttf"
           test -s "$fonts/Silkscreen/OFL.txt"
+          test -s "$fonts/VT323/VT323-Regular.ttf"
+          test -s "$fonts/VT323/OFL.txt"
           architectures="$(lipo -archs "dist/Address Atlas.app/Contents/MacOS/Address Atlas")"
           [[ " $architectures " == *" arm64 "* ]]
           [[ " $architectures " == *" x86_64 "* ]]
@@ -1027,6 +1029,8 @@ jobs:
           test -s "$app/Fonts/Geist/OFL.txt"
           test -s "$app/Fonts/PlusJakartaSans/PlusJakartaSans-Variable.ttf"
           test -s "$app/Fonts/Silkscreen/OFL.txt"
+          test -s "$app/Fonts/VT323/VT323-Regular.ttf"
+          test -s "$app/Fonts/VT323/OFL.txt"
           # The Mac-only Data Protection Keychain switch must never reach iOS.
           if plutil -extract AddressAtlasUseDataProtectionKeychain raw "$app/Info.plist" >/dev/null 2>&1; then
             echo "AddressAtlasUseDataProtectionKeychain must not be set in the iOS Info.plist." >&2

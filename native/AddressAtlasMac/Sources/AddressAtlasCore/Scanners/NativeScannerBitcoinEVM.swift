@@ -70,7 +70,7 @@ extension NativeScanner {
     }
     guard let rest = chain.restUrl else { return [] }
     guard case .bitcoinGenesisHash(let expectedGenesisHash) = chain.networkIdentity else {
-      throw Self.messageError(domain: "Bitcoin", message: "Bitcoin network identity is missing.")
+      throw Self.messageError(domain: "Bitcoin", message: "Couldn't confirm the Bitcoin network, so the balance is missing from this scan. Check the server settings in Settings.")
     }
     let proofCache = networkIdentityProofs ?? ChainNetworkValueCache<Void>()
     try await proofCache.prove(
@@ -85,7 +85,7 @@ extension NativeScanner {
         returnedGenesisHash == expectedGenesisHash
       else {
         throw Self.messageError(
-          domain: "Bitcoin", message: "Bitcoin endpoint returned the wrong network identity.")
+          domain: "Bitcoin", message: "The server isn't on the Bitcoin network, so the balance is missing from this scan. Check the server settings in Settings.")
       }
     }
     let url = rest.appending(path: "address/\(address)")
@@ -95,7 +95,7 @@ extension NativeScanner {
       AddressDetection.canonicalAddress(response.address, family: .bitcoin) == expectedAddress
     else {
       throw Self.messageError(
-        domain: "Bitcoin", message: "Bitcoin balance lookup returned a different address.")
+        domain: "Bitcoin", message: "The server answered for a different address, so the balance is missing from this scan. Scan again later.")
     }
     let reportedValues: [Double] = [
       response.chainStats.fundedTxoSum,
@@ -105,14 +105,14 @@ extension NativeScanner {
     ]
     guard reportedValues.allSatisfy({ $0.isFinite && $0 >= 0 }) else {
       throw Self.messageError(
-        domain: "Bitcoin", message: "Bitcoin balance lookup returned invalid statistics.")
+        domain: "Bitcoin", message: "The server sent balance details Address Atlas couldn't read, so the balance is missing from this scan. Scan again later.")
     }
     let sats =
       (response.chainStats.fundedTxoSum - response.chainStats.spentTxoSum)
       + ((response.mempoolStats?.fundedTxoSum ?? 0) - (response.mempoolStats?.spentTxoSum ?? 0))
     guard sats.isFinite, sats >= 0 else {
       throw Self.messageError(
-        domain: "Bitcoin", message: "Bitcoin balance lookup returned an invalid total.")
+        domain: "Bitcoin", message: "The server sent a balance total that isn't valid, so the balance is missing from this scan. Scan again later.")
     }
     return assetIfPositive(
       amount: sats / pow(10, Double(chain.decimals)), address: address, chain: chain, prices: prices
@@ -128,7 +128,7 @@ extension NativeScanner {
   ) async throws -> NativeScanResult {
     guard let rpc = chain.rpcUrl else { return NativeScanResult() }
     guard case .evmChainID(let expectedChainID) = chain.networkIdentity else {
-      throw Self.messageError(domain: "EVM", message: "EVM network identity is missing.")
+      throw Self.messageError(domain: "EVM", message: "Couldn't confirm this network, so its balances are missing from this scan. Check the server settings in Settings.")
     }
     let proofCache = networkIdentityProofs ?? ChainNetworkValueCache<Void>()
     try await proofCache.prove(
@@ -150,16 +150,16 @@ extension NativeScanner {
         as: EvmSingleResponse.self
       )
       let rawResult = try Self.validatedEvmResult(
-        response, expectedID: 2, operation: "Native balance lookup")
+        response, expectedID: 2, operation: "native balance request")
       guard let amount = Self.hexQuantityToDouble(rawResult, decimals: chain.decimals) else {
         throw Self.messageError(
-          domain: "EVM", message: "Native balance lookup returned an invalid hex quantity.")
+          domain: "EVM", message: "The server sent a balance Address Atlas couldn't read.")
       }
       assets.append(
         contentsOf: assetIfPositive(amount: amount, address: address, chain: chain, prices: prices))
     } catch {
       try throwIfCancellation(error)
-      warnings.append("\(chain.symbol) balance couldn't be read: \(error.localizedDescription)")
+      warnings.append("\(chain.symbol) balance is missing from this scan: \(ProviderErrorSanitizer.description(of: error))")
     }
     let tokenScan = try await scanErc20Balances(
       address: address, chain: chain, tokens: tokens, prices: prices, blockTag: blockTag)
@@ -208,20 +208,20 @@ extension NativeScanner {
     } catch let error as JSONHTTPClientError where error.statusCode == 429 {
       return NativeScanResult(
         warnings: [
-          "Token balances were skipped because the network provider is rate-limiting requests. Scan again in a few minutes."
+          "Token balances are missing from this scan because the server is limiting requests right now. Scan again in a few minutes."
         ]
       )
     } catch let error where JSONHTTPClient.isTransientFailure(error) {
       return NativeScanResult(
         warnings: [
-          "Token balances were skipped because the network provider is temporarily unavailable. Scan again later."
+          "Token balances are missing from this scan because the server is temporarily unavailable. Scan again later."
         ]
       )
     } catch {
       try throwIfCancellation(error)
       return NativeScanResult(
         warnings: [
-          "Token balances were skipped because the network provider sent an unexpected response. Scan again later."
+          "Token balances are missing from this scan because the server sent a response Address Atlas couldn't read. Scan again later."
         ]
       )
     }
@@ -254,7 +254,7 @@ extension NativeScanner {
       failedTokens.isEmpty
       ? []
       : [
-        "Couldn't check the balance of \(Self.formattedSymbols(failedTokens)); some tokens may be missing."
+        "Couldn't check the balance of \(Self.formattedSymbols(failedTokens)), so those tokens may be missing from this scan. Scan again later."
       ]
     return NativeScanResult(assets: assets, warnings: warnings)
   }
@@ -317,8 +317,8 @@ extension NativeScanner {
     if identicalDuplicateCount > 0 {
       warnings.append(
         identicalDuplicateCount == 1
-          ? "The EVM RPC repeated one identical token response; the duplicate was skipped."
-          : "The EVM RPC repeated \(identicalDuplicateCount) identical token responses; the duplicates were skipped."
+          ? "The server sent the same token balance twice. It was counted once."
+          : "The server sent \(identicalDuplicateCount) token balances more than once. Each was counted once."
       )
     }
     let conflictingTokenCount = conflictingResponseIds.filter {
@@ -327,13 +327,13 @@ extension NativeScanner {
     if conflictingTokenCount > 0 {
       warnings.append(
         conflictingTokenCount == 1
-          ? "The EVM RPC returned conflicting responses for one token request; every conflicting version was skipped."
-          : "The EVM RPC returned conflicting responses for \(conflictingTokenCount) token requests; every conflicting version was skipped."
+          ? "The server sent conflicting balances for one token, so that balance is left out of this scan. Scan again later."
+          : "The server sent conflicting balances for \(conflictingTokenCount) tokens, so those balances are left out of this scan. Scan again later."
       )
     }
     if !failedTokens.isEmpty {
       warnings.append(
-        "Couldn't check the balance of \(Self.formattedSymbols(failedTokens)); some tokens may be missing."
+        "Couldn't check the balance of \(Self.formattedSymbols(failedTokens)), so those tokens may be missing from this scan. Scan again later."
       )
     }
     return NativeScanResult(assets: assets, warnings: warnings)
@@ -375,10 +375,10 @@ extension NativeScanner {
       as: EvmSingleResponse.self
     )
     let rawResult = try Self.validatedEvmResult(
-      response, expectedID: 1, operation: "Token balance lookup")
+      response, expectedID: 1, operation: "token balance request")
     guard let amount = Self.hexQuantityToDouble(rawResult, decimals: token.decimals) else {
       throw Self.messageError(
-        domain: "EVMToken", message: "Token balance lookup returned an invalid hex quantity.")
+        domain: "EVMToken", message: "The server sent a token balance Address Atlas couldn't read.")
     }
     guard amount > 0 else { return nil }
     return tokenAsset(
@@ -397,13 +397,13 @@ extension NativeScanner {
       as: EvmSingleResponse.self
     )
     let rawChainID = try Self.validatedEvmResult(
-      identityResponse, expectedID: 0, operation: "Network identity lookup")
+      identityResponse, expectedID: 0, operation: "network check")
     guard let canonicalChainID = Self.canonicalEvmBlockTag(rawChainID),
       let observedChainID = UInt64(canonicalChainID.dropFirst(2), radix: 16),
       observedChainID == expectedChainID
     else {
       throw Self.messageError(
-        domain: "EVM", message: "RPC endpoint returned the wrong network identity.")
+        domain: "EVM", message: "The server isn't on the expected network, so its balances are missing from this scan. Check the server settings in Settings.")
     }
   }
 
@@ -414,10 +414,10 @@ extension NativeScanner {
       as: EvmSingleResponse.self
     )
     let rawResult = try Self.validatedEvmResult(
-      response, expectedID: 1, operation: "Snapshot block lookup")
+      response, expectedID: 1, operation: "block lookup")
     guard let blockTag = Self.canonicalEvmBlockTag(rawResult) else {
       throw Self.messageError(
-        domain: "EVM", message: "Snapshot block lookup returned an invalid hex quantity.")
+        domain: "EVM", message: "The server sent a block number Address Atlas couldn't read, so this network's balances are missing from this scan. Scan again later.")
     }
     return blockTag
   }
@@ -429,13 +429,13 @@ extension NativeScanner {
   ) throws -> String {
     guard response.jsonrpc == "2.0", response.id == expectedID else {
       throw messageError(
-        domain: "EVM", message: "\(operation) returned a mismatched JSON-RPC response.")
+        domain: "EVM", message: "The server's reply to the \(operation) didn't match the request.")
     }
     if let error = response.error {
-      throw rpcError(domain: "EVM", error: error, fallback: "\(operation) failed.")
+      throw rpcError(domain: "EVM", error: error, fallback: "The \(operation) failed.")
     }
     guard let result = response.result else {
-      throw messageError(domain: "EVM", message: "\(operation) returned an empty result.")
+      throw messageError(domain: "EVM", message: "The server's reply to the \(operation) was empty.")
     }
     return result
   }

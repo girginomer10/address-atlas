@@ -44,7 +44,7 @@ extension AppStateNetworkBoundaryTests {
 
     XCTAssertTrue(http.requests.isEmpty)
     XCTAssertTrue(state.endpointConfigTrustDurabilityDegraded)
-    XCTAssertTrue(state.error.contains("not crash-durable"))
+    XCTAssertTrue(state.error.contains("couldn't confirm they were saved"))
     XCTAssertNil(state.pendingVaultUpload)
   }
 
@@ -740,7 +740,7 @@ extension AppStateNetworkBoundaryTests {
 
     XCTAssertTrue(state.document.preferences.hideDust)
     XCTAssertTrue(state.document.wallets.isEmpty)
-    XCTAssertTrue(state.error.contains("local vault changed"))
+    XCTAssertTrue(state.error.contains("Your portfolio changed while an upload was unfinished"))
     XCTAssertNil(state.pendingVaultUpload)
     XCTAssertFalse(state.syncPersistencePending)
     XCTAssertEqual(http.requests.map(\.httpMethod), ["GET"])

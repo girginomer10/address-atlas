@@ -255,7 +255,7 @@ cp "$ROOT/Resources/container-migration.plist" \
 # The themes' fonts (SIL OFL, each family with its OFL.txt). AtlasFonts looks
 # for them in this bundle at launch and registers them with CoreText.
 ditto "$RESOURCE_BUNDLE_SOURCE" "$APP_DIR/Contents/Resources/$RESOURCE_BUNDLE_NAME"
-for font_family in BricolageGrotesque Geist GeistMono PixelifySans PlusJakartaSans Silkscreen SpaceGrotesk SpaceMono; do
+for font_family in BricolageGrotesque Geist GeistMono PixelifySans PlusJakartaSans Silkscreen SpaceGrotesk SpaceMono VT323; do
   font_directory="$APP_DIR/Contents/Resources/$RESOURCE_BUNDLE_NAME/Fonts/$font_family"
   [[ -s "$font_directory/OFL.txt" ]] && compgen -G "$font_directory/*.ttf" >/dev/null || {
     echo "The bundled $font_family font or its OFL licence is missing from the app." >&2

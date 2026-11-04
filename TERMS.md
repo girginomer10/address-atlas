@@ -18,7 +18,16 @@ Blockchain, exchange, and reference-price data can be delayed, incomplete, unava
 
 ## 3. Acceptable use
 
-You may not use Address Atlas to break applicable law; interfere with the app or a provider; exceed or evade provider limits; probe, scrape, or access a provider beyond its documented interfaces; misrepresent provider data; or cause Address Atlas or another user to violate a third-party agreement. You may not use provider data obtained through the app to sell, rent, sublicense, redistribute, or syndicate access to a provider API or its raw data unless that provider separately authorizes it.
+You may not use Address Atlas to:
+
+- break applicable law;
+- interfere with the app or a provider;
+- exceed or evade provider limits;
+- probe, scrape, or access a provider beyond its documented interfaces;
+- misrepresent provider data; or
+- cause Address Atlas or another user to violate a third-party agreement.
+
+You may not use provider data obtained through the app to sell, rent, sublicense, redistribute, or syndicate access to a provider API or its raw data unless that provider separately authorizes it.
 
 ## 4. Third-party services and CoinGecko
 
@@ -28,7 +37,7 @@ The CoinGecko API and CoinGecko data are the property of Gecko Labs Pte. Ltd. **
 
 ## 5. Your data and credentials
 
-You control the public addresses, read-only credentials, labels, exports, and optional iCloud copies you create. Protect your device login (Mac login or iPhone/iPad passcode), Apple Account, recovery material, exports, and exchange credentials. Revoke an exchange credential at the exchange if you suspect exposure. iCloud transfers use your storage quota and require iCloud Keychain to decrypt on another device (Mac, iPhone, or iPad). The [Privacy Model](PRIVACY.md) explains local storage, provider requests, optional encrypted iCloud transfers, retention, deletion, and data disclosures.
+You control the public addresses, read-only credentials, labels, exports, and optional iCloud copies you create. Protect your device login (Mac login or iPhone or iPad passcode), Apple Account, recovery material, exports, and exchange credentials. If you suspect an exchange credential is exposed, revoke it at the exchange. iCloud transfers use your storage quota and require iCloud Keychain to decrypt on another device (Mac, iPhone, or iPad). The [Privacy Model](PRIVACY.md) explains local storage, provider requests, optional encrypted iCloud transfers, retention, deletion, and data disclosures.
 
 ## 6. Open-source code and provider rights
 

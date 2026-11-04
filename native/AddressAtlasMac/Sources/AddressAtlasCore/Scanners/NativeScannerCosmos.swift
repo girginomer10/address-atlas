@@ -11,7 +11,7 @@ extension NativeScanner {
   {
     guard let rest = chain.restUrl, let denom = chain.nativeDenom else { return NativeScanResult() }
     guard case .cosmosChainID = chain.networkIdentity else {
-      throw Self.messageError(domain: "Cosmos", message: "Cosmos network identity is missing.")
+      throw Self.messageError(domain: "Cosmos", message: "Couldn't confirm the Cosmos network, so balances are missing from this scan. Check the server settings in Settings.")
     }
     let liquidScan: CosmosBalanceScan
     do {
@@ -32,13 +32,13 @@ extension NativeScanner {
       try throwIfCancellation(error)
       return NativeScanResult(
         warnings: [
-          "Couldn't get a consistent snapshot from the network; available, staked, unbonding, and reward balances were skipped."
+          "Couldn't get a consistent set of balances from the network, so available, staked, unbonding and reward balances are missing from this scan. Scan again later."
         ])
     }
     guard let snapshotHeight = liquidScan.height else {
       return NativeScanResult(
         warnings: [
-          "The network provider didn't report a block height; available, staked, unbonding, and reward balances were skipped."
+          "The server didn't report a block height, so available, staked, unbonding and reward balances are missing from this scan. Scan again later."
         ])
     }
 
@@ -189,13 +189,13 @@ extension NativeScanner {
         }
         guard seenKeys.insert(candidate).inserted else {
           warnings.append(
-            "Cosmos liquid-balance pagination returned a repeated key; later balances were skipped."
+            "The server repeated a page marker while listing balances, so later balances are missing from this scan. Scan again later."
           )
           break
         }
         guard page < maxCosmosPages else {
           warnings.append(
-            "Cosmos liquid-balance pagination reached the \(maxCosmosPages)-page safety limit; later balances were skipped."
+            "Address Atlas stopped after \(maxCosmosPages) pages of balances, so later balances are missing from this scan."
           )
           break
         }
@@ -204,7 +204,7 @@ extension NativeScanner {
         try throwIfCancellation(error)
         guard page > 1 else { throw error }
         warnings.append(
-          "Later Cosmos liquid-balance pages could not be read; balances from completed pages were kept."
+          "Couldn't read later pages of balances, so some balances may be missing from this scan. Scan again later."
         )
         break
       }
@@ -247,12 +247,12 @@ extension NativeScanner {
         }
         guard seenKeys.insert(candidate).inserted else {
           warnings.append(
-            "Cosmos delegation pagination returned a repeated key; later delegations were skipped.")
+            "The server repeated a page marker while listing delegations, so later delegations are missing from this scan. Scan again later.")
           break
         }
         guard page < maxCosmosPages else {
           warnings.append(
-            "Cosmos delegation pagination reached the \(maxCosmosPages)-page safety limit; later delegations were skipped."
+            "Address Atlas stopped after \(maxCosmosPages) pages of delegations, so later delegations are missing from this scan."
           )
           break
         }
@@ -261,7 +261,7 @@ extension NativeScanner {
         try throwIfCancellation(error)
         guard page > 1 else { throw error }
         warnings.append(
-          "Later Cosmos delegation pages could not be read; delegations from completed pages were kept."
+          "Couldn't read later pages of delegations, so some staked balance may be missing from this scan. Scan again later."
         )
         break
       }
@@ -308,13 +308,13 @@ extension NativeScanner {
         }
         guard seenKeys.insert(candidate).inserted else {
           warnings.append(
-            "Cosmos unbonding pagination returned a repeated key; later unbonding entries were skipped."
+            "The server repeated a page marker while listing unbonding entries, so later entries are missing from this scan. Scan again later."
           )
           break
         }
         guard page < maxCosmosPages else {
           warnings.append(
-            "Cosmos unbonding pagination reached the \(maxCosmosPages)-page safety limit; later unbonding entries were skipped."
+            "Address Atlas stopped after \(maxCosmosPages) pages of unbonding entries, so later entries are missing from this scan."
           )
           break
         }
@@ -323,7 +323,7 @@ extension NativeScanner {
         try throwIfCancellation(error)
         guard page > 1 else { throw error }
         warnings.append(
-          "Later Cosmos unbonding pages could not be read; entries from completed pages were kept."
+          "Couldn't read later pages of unbonding entries, so some unbonding balance may be missing from this scan. Scan again later."
         )
         break
       }
@@ -388,8 +388,8 @@ extension NativeScanner {
     if undatedEntryCount > 0 {
       warnings.append(
         undatedEntryCount == 1
-          ? "Cosmos reported one unbonding entry without a usable completion time; it is counted without an unlock date."
-          : "Cosmos reported \(undatedEntryCount) unbonding entries without a usable completion time; they are counted without an unlock date."
+          ? "One unbonding entry has no usable completion time. It's counted, but without an unlock date."
+          : "\(undatedEntryCount) unbonding entries have no usable completion time. They're counted, but without an unlock date."
       )
     }
 
@@ -426,7 +426,7 @@ extension NativeScanner {
         )
       ]
       warnings.append(
-        "Cosmos reported unbonding entries with more than \(maximumCosmosUnbondingHoldings) distinct completion times; the latest ones were combined and show the earliest of their times."
+        "Unbonding entries have more than \(maximumCosmosUnbondingHoldings) different completion times. The latest ones are combined and show the earliest of their times."
       )
     }
     return CosmosUnbondingParse(buckets: buckets, warnings: warnings)
@@ -635,13 +635,15 @@ extension NativeScanner {
     if identicalDuplicateCount > 0 {
       warnings.append(
         identicalDuplicateCount == 1
-          ? "Cosmos repeated one identical liquid-balance record; the duplicate was skipped."
-          : "Cosmos repeated \(identicalDuplicateCount) identical liquid-balance records; the duplicates were skipped."
+          ? "The server listed the same balance twice. It was counted once."
+          : "The server listed \(identicalDuplicateCount) balances more than once. Each was counted once."
       )
     }
     if !conflictingDenoms.isEmpty {
       warnings.append(
-        "Cosmos returned conflicting liquid-balance records for \(conflictingDenoms.count) denomination(s); every conflicting version was skipped."
+        conflictingDenoms.count == 1
+          ? "The server sent conflicting balances for one coin, so that balance is left out of this scan. Scan again later."
+          : "The server sent conflicting balances for \(conflictingDenoms.count) coins, so those balances are left out of this scan. Scan again later."
       )
     }
     return (balancesByDenom.values.sorted { $0.denom < $1.denom }, warnings)
@@ -671,13 +673,15 @@ extension NativeScanner {
     if identicalDuplicateCount > 0 {
       warnings.append(
         identicalDuplicateCount == 1
-          ? "Cosmos repeated one identical reward-balance record; the duplicate was skipped."
-          : "Cosmos repeated \(identicalDuplicateCount) identical reward-balance records; the duplicates were skipped."
+          ? "The server listed the same reward twice. It was counted once."
+          : "The server listed \(identicalDuplicateCount) rewards more than once. Each was counted once."
       )
     }
     if !conflictingDenoms.isEmpty {
       warnings.append(
-        "Cosmos returned conflicting reward-balance records for \(conflictingDenoms.count) denomination(s); every conflicting version was skipped."
+        conflictingDenoms.count == 1
+          ? "The server sent conflicting rewards for one coin, so that reward is left out of this scan. Scan again later."
+          : "The server sent conflicting rewards for \(conflictingDenoms.count) coins, so those rewards are left out of this scan. Scan again later."
       )
     }
     return (
@@ -726,19 +730,23 @@ extension NativeScanner {
     var warnings: [String] = []
     if invalidIdentityCount > 0 {
       warnings.append(
-        "Cosmos skipped \(invalidIdentityCount) delegation record(s) without the requested delegator and a valid validator identity."
+        invalidIdentityCount == 1
+          ? "One delegation doesn't belong to this wallet or has no valid validator, so it's left out of this scan."
+          : "\(invalidIdentityCount) delegations don't belong to this wallet or have no valid validator, so they're left out of this scan."
       )
     }
     if identicalDuplicateCount > 0 {
       warnings.append(
         identicalDuplicateCount == 1
-          ? "Cosmos repeated one identical delegation record; the duplicate was skipped."
-          : "Cosmos repeated \(identicalDuplicateCount) identical delegation records; the duplicates were skipped."
+          ? "The server listed the same delegation twice. It was counted once."
+          : "The server listed \(identicalDuplicateCount) delegations more than once. Each was counted once."
       )
     }
     if !conflictingValidators.isEmpty {
       warnings.append(
-        "Cosmos returned conflicting delegation records for \(conflictingValidators.count) validator(s); every conflicting version was skipped."
+        conflictingValidators.count == 1
+          ? "The server sent conflicting data for one validator, so that delegation is left out of this scan. Scan again later."
+          : "The server sent conflicting data for \(conflictingValidators.count) validators, so those delegations are left out of this scan. Scan again later."
       )
     }
     return (
@@ -786,19 +794,23 @@ extension NativeScanner {
     var warnings: [String] = []
     if invalidIdentityCount > 0 {
       warnings.append(
-        "Cosmos skipped \(invalidIdentityCount) unbonding record(s) without the requested delegator and a valid validator identity."
+        invalidIdentityCount == 1
+          ? "One unbonding entry doesn't belong to this wallet or has no valid validator, so it's left out of this scan."
+          : "\(invalidIdentityCount) unbonding entries don't belong to this wallet or have no valid validator, so they're left out of this scan."
       )
     }
     if identicalDuplicateCount > 0 {
       warnings.append(
         identicalDuplicateCount == 1
-          ? "Cosmos repeated one identical unbonding record; the duplicate was skipped."
-          : "Cosmos repeated \(identicalDuplicateCount) identical unbonding records; the duplicates were skipped."
+          ? "The server listed the same unbonding entry twice. It was counted once."
+          : "The server listed \(identicalDuplicateCount) unbonding entries more than once. Each was counted once."
       )
     }
     if !conflictingValidators.isEmpty {
       warnings.append(
-        "Cosmos returned conflicting unbonding records for \(conflictingValidators.count) validator(s); every conflicting version was skipped."
+        conflictingValidators.count == 1
+          ? "The server sent conflicting data for one validator, so that unbonding entry is left out of this scan. Scan again later."
+          : "The server sent conflicting data for \(conflictingValidators.count) validators, so those unbonding entries are left out of this scan. Scan again later."
       )
     }
     return (

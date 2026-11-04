@@ -40,13 +40,13 @@ public enum ExchangeSigningError: Error, Equatable, LocalizedError, Sendable {
   public var errorDescription: String? {
     switch self {
     case .invalidCoinbaseKeyName:
-      return "Coinbase requires a CDP key name such as organizations/.../apiKeys/...."
+      return "Coinbase needs a CDP key name, such as organizations/.../apiKeys/...."
     case .invalidCoinbasePrivateKey:
-      return "Coinbase requires an ES256 CDP EC private key in PEM format."
+      return "Coinbase needs an ES256 CDP private key in PEM format."
     case .invalidCoinbaseRequest:
-      return "Coinbase JWT request metadata is invalid."
+      return "Address Atlas couldn't build a valid Coinbase request."
     case .invalidKrakenSecret:
-      return "Kraken requires a standard Base64 API secret."
+      return "Kraken needs the API secret in standard Base64 format."
     }
   }
 }

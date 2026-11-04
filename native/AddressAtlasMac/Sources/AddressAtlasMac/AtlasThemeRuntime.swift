@@ -311,6 +311,21 @@ private struct AtlasThemeEnvironmentModifier: ViewModifier {
 
 // MARK: - Shape-aware chrome
 
+/// The outline of a card or control: a continuous rounded rectangle, or, when
+/// the radius reaches half the shorter side (the pill controls pass 999), a
+/// circular-corner capsule. AppKit draws a `.continuous` rounded rectangle whose
+/// radius is as large as it is tall with a straight bar past each end.
+struct AtlasOutline: Shape {
+  var radius: CGFloat
+
+  func path(in rect: CGRect) -> Path {
+    if radius >= min(rect.width, rect.height) / 2 {
+      return Capsule(style: .circular).path(in: rect)
+    }
+    return RoundedRectangle(cornerRadius: radius, style: .continuous).path(in: rect)
+  }
+}
+
 /// Fill, border and shadow of a card or control, drawn from the current
 /// theme's shape: soft shadow (Chain colours), hard offset shadow (Candy,
 /// Pixel), or flat. Increase Contrast thickens borders and drops soft shadows.
@@ -340,7 +355,7 @@ struct AtlasChrome: ViewModifier {
       borderWidth ?? (level == .card ? shape.cardBorderWidth : shape.controlBorderWidth)
     let width = contrast == .increased ? max(baseWidth, 2) : baseWidth
     let hardOffset = level == .card ? shape.cardShadowOffset : shape.controlShadowOffset
-    let outline = RoundedRectangle(cornerRadius: resolvedRadius, style: .continuous)
+    let outline = AtlasOutline(radius: resolvedRadius)
     let press = (isPressed && hardOffset != nil) ? hardOffset : nil
 
     content

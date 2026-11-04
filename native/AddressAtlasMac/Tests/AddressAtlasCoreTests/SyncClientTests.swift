@@ -117,7 +117,7 @@ final class SyncClientTests: XCTestCase {
       XCTFail("Expected a false server acknowledgement to fail closed.")
     } catch SyncClientError.requestFailed(let statusCode, let message) {
       XCTAssertEqual(statusCode, 502)
-      XCTAssertEqual(message, "Sync server returned an invalid response.")
+      XCTAssertEqual(message, "The sync server sent a response Address Atlas couldn't read. Try again later.")
     }
   }
 

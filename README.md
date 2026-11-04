@@ -1,12 +1,11 @@
 <p align="center">
-  <img src="docs/assets/github-social-preview.png" alt="Address Atlas — private portfolio map" width="100%">
+  <img src="docs/assets/github-social-preview.png" alt="Address Atlas: a read-only crypto portfolio for Mac and iPhone" width="100%">
 </p>
 
 <h1 align="center">Address Atlas</h1>
 
 <p align="center">
-  <strong>The private crypto portfolio tracker that sees what others miss.</strong><br>
-  Wallets, exchanges, tokens, staking, and rewards in one encrypted native app for Mac, iPhone, and iPad.
+  A read-only crypto portfolio for Mac and iPhone. Your data stays on your devices.
 </p>
 
 <p align="center">
@@ -17,17 +16,98 @@
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-668fb5"></a>
 </p>
 
-Address Atlas is a local-first, read-only portfolio tracker for public wallet addresses and supported exchanges. It maps assets across **20 active networks** without taking custody, asking for a seed phrase, or requesting signing, trading, or withdrawal permission.
+Add public wallet addresses and read-only exchange API keys. Address Atlas reads balances and tokens on 20 networks, plus staking and unbonding on Cosmos chains and Solana and rewards on Cosmos chains. It adds USD prices and shows the result in 14 views and six themes. It never asks for a seed phrase and never needs permission to sign, trade, or withdraw.
+
+Balances are read directly from public chain, price, and exchange providers, so those providers see the addresses you scan. See [Privacy](#privacy).
 
 > [!IMPORTANT]
-> Address Atlas is currently a **preview**. Source builds are available; see the [release checkpoint](app-store/README.md#release-checkpoint--october-6-2026) for the separate macOS and iOS TestFlight states. There is no signed and notarized public direct download yet. Treat every result as portfolio visibility—not accounting-grade proof or financial advice. Physical-device acceptance and Mac-to-iPhone iCloud restore remain unverified.
+> Address Atlas is a preview. You can build it from source. There is no signed and notarized public download yet; the [release checkpoint](app-store/README.md#release-checkpoint--october-6-2026) lists the macOS and iOS TestFlight builds. Treat results as a view of your holdings, not as accounting records or financial advice. Physical-device acceptance and Mac-to-iPhone iCloud restore are not verified.
+
+## Screenshots
+
+Rendered from a synthetic portfolio.
+
+| Portfolio, Chain colours | Coin detail, Candy brutal |
+| --- | --- |
+| <img src="docs/design/screenshots/phase3/mac/portfolio-map-chainColors.png" alt="Portfolio screen on Mac in the Chain colours theme: total value, a map of BTC, ETH, SOL and other coins as blocks sized by value, and the holdings list" width="100%"> | <img src="docs/design/screenshots/phase3/mac/coin-atom-candy.png" alt="ATOM detail on Mac in the Candy brutal theme: liquid, staked, unbonding and rewards, 24.79 ATOM unbonding until Nov 16, and where each part is held" width="100%"> |
+
+| Flow, Candy brutal | Ring, Heatmap (dark) |
+| --- | --- |
+| <img src="docs/design/screenshots/phase2/flow-candy-light-full.png" alt="Flow view in the Candy brutal theme: wallets and exchanges on the left, coins in the middle, liquid, on exchange, staked, unbonding, and rewards on the right" width="100%"> | <img src="docs/design/screenshots/phase2/ring-heatmap-dark-full.png" alt="Ring view in the Heatmap theme, dark: a donut of five assets with a legend" width="100%"> |
+
+<!-- TODO(phase3): add iPhone screenshots (docs/design/screenshots/phase3/ios/) once the iOS screens are rebuilt -->
+
+## What you get
+
+### Six themes
+
+Chain colours, Candy brutal, Riso zine, Heatmap, Pixel, and Acid. Choose one in **Settings → Theme**; the app restyles without a relaunch. Riso zine is light only and Acid is dark only. The other four follow light and dark mode. Previews are in [`docs/design/themes.html`](docs/design/themes.html).
+
+### 14 views
+
+Every view works with every theme. Most take a **group by** choice: Asset, Network, Wallet or exchange, State, or Type. State is liquid, staked, unbonding, rewards, or on an exchange.
+
+| View | Shows |
+| --- | --- |
+| Map | Treemap. Each block's area is its share of the portfolio. |
+| Ring | Donut with the total in the middle and a legend. |
+| Strip | One bar split by share. |
+| Grid | 100 squares, one per percent. |
+| Bubbles | Circles sized by value. |
+| Rings in rings | Two rings. The outer ring splits each inner slice by a second grouping. |
+| List | One row per slice, largest first, with share and value. Coins without a price come last. |
+| Flow | Wallets and exchanges on the left, coins in the middle, states on the right. |
+| Atlas map | Voronoi map. Each cell's area is its value. |
+| Over time | Value across your saved scans, stacked by group. |
+| What changed | The change between the latest two scans, split into price moves and coins arriving or leaving. |
+| Slope | Each coin's rank in an earlier scan and now. |
+| Concentration | How much sits in the largest group, and how many equal-sized holdings the portfolio behaves like. |
+| Calendar | One square per day, green or red by that day's change. Days without a scan stay empty. |
+
+The history views (Over time, What changed, Slope, Calendar) need saved scans. When two scans read different wallets or exchanges, these views cut the chart, mark the break, or say the comparison is not like for like.
+
+### Coin widgets
+
+Open a coin to see:
+
+- **State strip**: how much is liquid, staked, unbonding, rewards, or on an exchange.
+- **Unlock timeline**: when unbonding amounts become spendable.
+- **Amount history**: the coin amount, not the dollar value, across saved scans.
+- **Change**: why the coin's value moved since the last comparable scan, price or coins.
+- **Custody**: how much you hold yourself and how much sits on exchanges.
+
+### Also included
+
+USD pricing, BTC-relative fiat conversion, snapshots, dust filtering, CSV and JSON export, and a recovery kit for restoring on a new device. If a provider fails, the scan keeps what it read and shows a warning. It does not report a partial result as complete.
+
+## Coverage
+
+20 networks, from the native [chain registry](native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/ChainRegistry.swift).
+
+| Source | What is read |
+| --- | --- |
+| **EVM:** Ethereum, Base, Arbitrum One, Optimism, Polygon PoS, BNB Chain, Avalanche C-Chain, Gnosis Chain, Linea, Mantle, Scroll, ZKsync Era | Native balance and registered ERC-20 tokens |
+| **Bitcoin** | Native balance |
+| **Solana** | SOL, registered SPL tokens, and stake accounts |
+| **TRON** | TRX and registered TRC20 tokens |
+| **XRP Ledger** | XRP and positive issued-currency trustlines |
+| **Cosmos:** Cosmos Hub, Osmosis, Celestia, Stride | Liquid, delegated (staked), unbonding, and claimable reward balances in the chain's own coin |
+| **Exchanges:** Binance, Coinbase Advanced Trade, Kraken | Account balances only, through read-only API keys |
+
+You can add custom ERC-20, SPL, and TRC20 tokens. Up to 100 enabled custom tokens are scanned.
+
+**Unbonding and stake accounts**
+
+- **Cosmos:** unbonding delegations are read with their completion time. Each distinct completion time becomes its own holding, so a holding's unlock date is exact for its whole amount. Past 20 distinct times, the later ones are combined under the earliest of their dates, with a warning. An entry without a usable completion time is counted without a date, with a warning.
+- **Solana:** stake accounts are read with `getProgramAccounts` and classified by the current epoch. Active and activating stake counts as staked. Stake that is cooling down counts as unbonding, with no unlock date because Solana does not publish one. Stake that has finished cooling down but is not withdrawn yet counts as staked, with a warning. Only accounts your address can withdraw are counted.
+- Many free Solana RPC endpoints reject `getProgramAccounts`. The scan then warns that staked and unbonding SOL may be missing and still returns your SOL balance and tokens.
 
 ## Try it with a public wallet
 
-The quickest way to try the app today is a local Mac build. You need **macOS 14 or newer, full Xcode installed and opened once, and an internet connection**. This walkthrough uses a public Bitcoin address; no account, exchange API key, Node.js, Docker, or iCloud setup is needed.
+You need macOS 14 or newer, full Xcode installed and opened once, and an internet connection. No account, exchange API key, Node.js, Docker, or iCloud setup is needed.
 
-1. Check that Xcode is selected: `xcodebuild -version` should print the Xcode version. If it reports Command Line Tools instead, select Xcode in **Xcode → Settings → Locations → Command Line Tools**, then retry.
-2. In Terminal, build and open the app:
+1. Run `xcodebuild -version`. If it reports Command Line Tools, select Xcode in **Xcode → Settings → Locations → Command Line Tools** and try again.
+2. Build and open the app:
 
    ```bash
    git clone https://github.com/girginomer10/address-atlas.git
@@ -37,120 +117,113 @@ The quickest way to try the app today is a local Mac build. You need **macOS 14 
    open "dist/Address Atlas.app"
    ```
 
-3. Open **Wallets**, paste the example address below, and choose **Add wallet**:
+3. Open **Wallets**, paste this public Bitcoin address, and choose **Add wallet**:
 
    ```text
    1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa
    ```
 
-4. Open **Portfolio** and choose **Scan all sources** in **Refresh portfolio**. When it finishes, open **Assets** and search for **BTC**. You should see a Bitcoin holding; balances and USD prices change with live provider data. If a provider is unavailable, the app shows a warning—retry the scan later.
-5. Close and reopen the app to check that the saved wallet and snapshot remain. You can remove the example wallet from **Wallets** afterward; saved snapshots can be removed separately in **Snapshots**.
+4. Open **Portfolio** and choose **Scan all sources**. When it finishes, open **Assets** and search for **BTC**. You should see a Bitcoin holding. Balances and prices change with live provider data. If a provider is unavailable, the app shows a warning; scan again later.
+5. Close and reopen the app. The wallet and snapshot should still be there. You can remove the wallet in **Wallets** and the snapshot in **Snapshots**.
 
-The app queries public blockchain and price providers directly. This is a local preview build with ad-hoc signing; public signed downloads and a browser demo are not available yet. For an iPhone simulator walkthrough, see [Run the iOS app](#run-the-ios-app).
+This is a local build with an ad-hoc signature. For iPhone, see [Build and run](#build-and-run).
 
-## Why Address Atlas
+## Privacy
 
-- **One map, more signal.** See native assets, registered tokens, exchange balances, Cosmos delegations, and rewards together.
-- **Read-only by design.** Add public addresses or balance-only exchange credentials. Address Atlas never asks for private keys or seed phrases.
-- **Private where it matters.** The portfolio vault is encrypted locally with a Keychain-backed key; only request data required by the providers you use leaves the app.
-- **Honest about partial data.** Provider, token, staking, reward, trustline, price, and pagination failures remain visible instead of silently producing a false all-clear.
-- **Optional iCloud copies.** Save and restore an encrypted portfolio in your own iCloud account. No Address Atlas account or backup server is required. Transfers are user initiated, not automatic merging.
+Address Atlas is not anonymous. Reading a public blockchain means asking a provider about an address.
 
-## Current coverage
-
-| Surface | Support |
+| Who | What they get |
 | --- | --- |
-| EVM | Ethereum, Base, Arbitrum One, Optimism, Polygon PoS, BNB Chain, Avalanche C-Chain, Gnosis Chain, Linea, Mantle, Scroll, ZKsync Era |
-| Other networks | Bitcoin, Solana, TRON, XRP Ledger |
-| Cosmos | Cosmos Hub, Osmosis, Celestia, Stride—including liquid, delegated, and reward balances |
-| Tokens | Registered ERC-20, SPL, and TRC20 assets; positive XRPL issued-currency trustlines |
-| Exchanges | Binance, Coinbase Advanced Trade, and Kraken through native read-only clients |
-| Portfolio tools | USD pricing, BTC-relative fiat conversion, snapshots, dust filtering, partial-scan warnings, and CSV/JSON export |
+| Your device (Mac, iPhone, or iPad) | Your portfolio, saved as one AES-256-GCM encrypted document in a local SQLite database |
+| Device Keychain | The random encryption key, stored so that it stays on this device |
+| Chain RPC and REST providers | The public addresses and requests needed to scan |
+| Exchanges | Signed, read-only balance requests, sent directly from the app |
+| CoinGecko | Asset and fiat-rate lookups. No exchange API keys and no portfolio data. |
+| iCloud (CloudKit) | If you save a copy: an encrypted copy of the portfolio in your private database. A second key travels through iCloud Keychain. |
 
-The active network list comes from the native [chain registry](native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/ChainRegistry.swift). A provider failure can make coverage temporarily incomplete; Address Atlas surfaces that state in the scan result.
+There is no Address Atlas account and no Address Atlas backup server. iCloud transfers are manual: you save and restore, and nothing merges in the background.
 
-## Privacy model
+Share-safer CSV and JSON exports leave out addresses, labels, exact balances, and history, and group the rest into ranges. They show less but are not anonymous. Full exports include all of it, behind a warning. Neither kind is a portfolio backup.
 
-Address Atlas does not pretend that querying a public blockchain is invisible. Its trust boundaries are explicit:
+Full details are in [PRIVACY.md](PRIVACY.md). Report vulnerabilities privately; see [.github/SECURITY.md](.github/SECURITY.md).
 
-| Boundary | What it receives |
-| --- | --- |
-| Your device (Mac, iPhone, or iPad) | Plaintext portfolio data while the app is unlocked; the local SQLite vault stores one AES-256-GCM encrypted document |
-| Device Keychain (macOS or iOS) | A random, this-device-only vault key |
-| Chain RPC and REST providers | The public addresses and network requests needed to scan supported chains |
-| Supported exchanges | Signed, read-only balance requests made directly by the native app |
-| CoinGecko | Asset and fiat-rate lookup requests; no exchange credentials or vault snapshot |
-| iCloud / CloudKit | Encrypted portfolio copies in your private database; a separate encryption key travels through iCloud Keychain |
+## Project layout
 
-The recommended **share-safer** CSV and JSON summaries omit addresses, labels, exact balances, and history in favor of coarse groups and ranges. They reduce disclosure but are not anonymous. Full identifying reports remain available behind an explicit warning and are not vault backups.
+- [`native/AddressAtlasMac`](native/AddressAtlasMac) is the macOS app. It also holds `AddressAtlasCore` (portfolio model, scanners, encryption, recovery, export, iCloud client) and the shared state layer, design system, themes, and charts.
+- [`native/AddressAtlasiOS`](native/AddressAtlasiOS) is the iPhone and iPad app. It compiles `AddressAtlasCore` and the shared sources from the Mac package and adds its own screens. See the [iOS app guide](native/AddressAtlasiOS/README.md).
+- [`docs/design`](docs/design) holds the theme and view references and the screenshots above.
+- The root Next.js service and [`server/sync`](server/sync) are older sync code. The apps no longer use them. See [Legacy sync service](#legacy-sync-service).
+- [`docs/ICLOUD.md`](docs/ICLOUD.md): iCloud setup, the private record schema, and the two-device release test. Real iCloud transfer needs an Apple-signed build with iCloud enabled.
+- [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md): architecture rules and the full verification gate.
+- [`docs/OPERATIONS.md`](docs/OPERATIONS.md) and [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md): operations and signed releases.
 
-See [PRIVACY.md](PRIVACY.md) for the complete user-facing boundary and [.github/SECURITY.md](.github/SECURITY.md) for private vulnerability reporting.
+## Build and run
 
-## Architecture
+### Mac
 
-```mermaid
-flowchart LR
-    U["User"] --> M["Native SwiftUI apps (macOS, iOS)"]
-    M --> K["Device Keychain"]
-    M --> L["Encrypted local SQLite vault"]
-    M --> P["Chain, price, and exchange providers"]
-    M -->|"Encrypted portfolio copies"| S["Private iCloud database"]
-    M -->|"Separate cloud key"| C["iCloud Keychain"]
-```
-
-- [`native/AddressAtlasMac`](native/AddressAtlasMac) is the macOS product and the home of the shared code: the `AddressAtlasCore` library (portfolio model, scanners, encryption, recovery, export, and iCloud client) plus the shared state layer and design system.
-- [`native/AddressAtlasiOS`](native/AddressAtlasiOS) is the iOS app for iPhone and iPad. It compiles `AddressAtlasCore` and the shared state layer straight from the Mac package sources and adds only its own SwiftUI screens; see the [iOS app guide](native/AddressAtlasiOS/README.md).
-- The root Next.js service and [`server/sync`](server/sync) are retained as legacy migration/reference code. The current Mac app does not use or require them.
-- [`docs/ICLOUD.md`](docs/ICLOUD.md) describes provisioning, the private record schema, the two-device release test, and the iOS gates. Real iCloud transfer requires an Apple-signed, iCloud-enabled build.
-- [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) records architectural invariants and the full verification gate.
-- [`docs/OPERATIONS.md`](docs/OPERATIONS.md) and [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) cover production operations and signed distribution.
-
-## Run the macOS app
-
-Requirements: macOS 14 or newer and a Swift 5.10-compatible toolchain. Full Xcode is required for XCTest.
+You need macOS 14 or newer and a Swift 5.10 toolchain. XCTest needs full Xcode.
 
 ```bash
-git clone https://github.com/girginomer10/address-atlas.git
-cd address-atlas/native/AddressAtlasMac
+cd native/AddressAtlasMac
 ./check-toolchain.sh
 swift run AddressAtlasMac
 ```
 
-To build a local universal app bundle:
+To build a universal app bundle:
 
 ```bash
 ./build-mac-app.sh
 open "dist/Address Atlas.app"
 ```
 
-Local builds use hardened runtime and ad-hoc signing by default. They are not public distribution artifacts. See the [native app guide](native/AddressAtlasMac/README.md) for signing, toolchain, storage, and packaging details.
+Local builds use the hardened runtime and an ad-hoc signature. They are not for distribution. The [Mac app guide](native/AddressAtlasMac/README.md) covers signing, storage, and packaging.
 
-## Run the iOS app
+### iPhone and iPad
 
-Requirements: full Xcode selected with `xcode-select` (Command Line Tools alone cannot build iOS apps; CI uses Xcode 26.5) and an iOS 17 or newer simulator. The generated Xcode project is committed, so `xcodegen` is only needed after editing `native/AddressAtlasiOS/project.yml`.
+You need full Xcode selected with `xcode-select` and an iOS 17 or newer simulator. Command Line Tools cannot build iOS apps. CI uses Xcode 26.5. The Xcode project is committed, so `xcodegen` is only needed after editing `native/AddressAtlasiOS/project.yml`.
 
-From an existing clone, open the committed project:
+Open the project, select the **AddressAtlasiOS** scheme and an iPhone simulator, and run:
 
 ```bash
-cd "$(git rev-parse --show-toplevel)"
 open native/AddressAtlasiOS/AddressAtlasiOS.xcodeproj
 ```
 
-In Xcode, select the **AddressAtlasiOS** scheme, choose an **iPhone simulator** as the run destination, and press **Run**. Install an iOS simulator runtime in Xcode Settings if no simulator is available. After onboarding, add the public Bitcoin address from the walkthrough above, open **Portfolio**, and tap **Scan now**. The app's local wallet and scan flows work without signing in to iCloud.
+After onboarding, add the example address above, open **Portfolio**, and tap **Scan now**. Wallets and scans work without iCloud.
 
-If you prefer Terminal, open Simulator and boot one iPhone before running:
+From Terminal, boot a simulator first, then:
 
 ```bash
 ./native/AddressAtlasiOS/build-ios-app.sh --simulator --install-booted
 ```
 
-This builds, installs, and launches on the booted simulator with the ad-hoc signature needed for local Keychain access. Use `--unsigned` only for a compile check; unsigned builds cannot unlock the local vault. Node.js is not required for either native walkthrough. The equivalent `npm run native:ios:*` shortcuts remain available for contributors.
+This builds, installs, and launches on the booted simulator with the ad-hoc signature that local Keychain access needs. `--unsigned` only checks that the code compiles; an unsigned build cannot unlock the local portfolio. The `npm run native:ios:*` scripts do the same for contributors. Node.js is not needed for either app.
 
-The separate iOS App Store Connect record now exists; current build and distribution evidence is in the [release checkpoint](app-store/README.md#release-checkpoint--october-6-2026). Physical-device acceptance remains unverified. See the [iOS app guide](native/AddressAtlasiOS/README.md) for versioning, signing, entitlements, and the shared-source layout.
+The iOS App Store Connect record exists; build and TestFlight evidence is in the [release checkpoint](app-store/README.md#release-checkpoint--october-6-2026). Physical-device acceptance is not verified. The [iOS app guide](native/AddressAtlasiOS/README.md) covers versioning, signing, and entitlements.
 
-## Run optional encrypted sync
+### Test
 
-The macOS app works locally without a sync server. To run the self-hostable development service, install Node.js `>=22.17 <23`, npm `>=10.9.2 <11`, and Docker with Compose:
+The full local gate is in [Development Notes](docs/DEVELOPMENT.md). Run the part that matches your change:
+
+```bash
+# Native Mac app (needs full Xcode)
+cd native/AddressAtlasMac
+swift test
+
+# Native iOS app (needs full Xcode; compile only, no signing identity)
+cd "$(git rev-parse --show-toplevel)"
+npm run native:ios:build:unsigned
+
+# Web and sync service
+npm test
+npm run typecheck
+npm run build
+```
+
+GitHub Actions also checks repository hygiene, dependency security, server behavior, native tests, the iOS simulator build and bundle, production operations, and release rules.
+
+## Legacy sync service
+
+The apps no longer connect to the root Next.js service or [`server/sync`](server/sync). It is a self-hostable service for passkey sync accounts and encrypted portfolio snapshots, kept for reference and for older data. To run it you need Node.js `>=22.17 <23`, npm `>=10.9.2 <11`, and Docker with Compose:
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
@@ -168,46 +241,25 @@ npm run sync:db:up
 npm run dev
 ```
 
-The setup creates `.env` with owner-only permissions and replaces the deliberately rejected session-secret placeholder before startup. Never reuse published placeholders or commit `.env`. Deployment, backup, restore, and monitoring procedures live in the [sync service guide](server/sync/README.md).
-
-## Verify changes
-
-Run the checks relevant to the area you changed. The complete local gate is documented in [Development Notes](docs/DEVELOPMENT.md).
-
-```bash
-# Web and sync service
-npm test
-npm run typecheck
-npm run build
-
-# Native app (requires full Xcode)
-cd native/AddressAtlasMac
-swift test
-
-# Native iOS app (requires full Xcode; compile-only, no signing identity needed)
-cd "$(git rev-parse --show-toplevel)"
-npm run native:ios:build:unsigned
-```
-
-GitHub Actions also verifies repository hygiene, dependency security, server behavior, native tests, the iOS simulator build and bundle checks, production operations, and release governance.
+This creates `.env` with owner-only permissions and replaces the session-secret placeholder, which the service rejects. Do not reuse published placeholders or commit `.env`. Deploy, backup, restore, and monitoring steps are in the [sync service guide](server/sync/README.md).
 
 ## Built with OpenAI Codex and GPT-5.6
 
-OpenAI Codex with GPT-5.6 was used as an engineering collaborator throughout Build Week—not as a runtime product feature.
+OpenAI Codex with GPT-5.6 was an engineering collaborator during Build Week. It is not part of the app.
 
-- **Architecture and threat modeling:** challenged the local-first, read-only trust boundaries, exchange-permission policy, encrypted sync design, and failure modes before implementation.
-- **Cross-stack implementation:** supported focused work across the native Swift/SwiftUI app and the optional Next.js, TypeScript, PostgreSQL, and passkey sync service.
-- **Adversarial review:** searched for edge cases in multi-chain scanning, partial-result disclosure, encrypted-state recovery, exports, provider integrity, and accessibility.
-- **Verification and hardening:** expanded regression tests, reviewed CI and release gates, and repeated security and repository-quality sweeps until confirmed findings were resolved.
+- **Architecture and threat modeling:** challenged the read-only boundaries, the exchange-permission policy, the encrypted sync design, and failure modes before implementation.
+- **Implementation:** helped with the native Swift and SwiftUI apps and the Next.js, TypeScript, PostgreSQL, and passkey sync service.
+- **Adversarial review:** looked for edge cases in multi-chain scanning, partial results, encrypted-state recovery, exports, provider integrity, and accessibility.
+- **Verification:** expanded regression tests, reviewed CI and release gates, and repeated security and repository sweeps until confirmed findings were fixed.
 
-Every suggested change remained subject to human review and repository tests. **Address Atlas has no OpenAI runtime dependency and does not send portfolio data to OpenAI.**
+A human reviewed every suggested change, and the repository tests run on all of it. Address Atlas has no OpenAI runtime dependency and does not send portfolio data to OpenAI.
 
 ## Contributing
 
-Start with [CONTRIBUTING.md](CONTRIBUTING.md), then open a focused issue or pull request. The core boundary is non-negotiable: no custody, no seed phrases, no signing, no trading, and no withdrawal permissions.
+Start with [CONTRIBUTING.md](CONTRIBUTING.md), then open a focused issue or pull request. The boundary does not change: no custody, no seed phrases, no signing, no trading, no withdrawal permissions.
 
-Security issues do not belong in public issues. Use [GitHub private vulnerability reporting](https://github.com/girginomer10/address-atlas/security/advisories/new).
+Do not report security issues in public issues. Use [GitHub private vulnerability reporting](https://github.com/girginomer10/address-atlas/security/advisories/new). For help, see [SUPPORT.md](SUPPORT.md).
 
 ## License
 
-Address Atlas is available under the [MIT License](LICENSE). The native apps bundle fonts under the SIL Open Font License; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+[MIT](LICENSE). The native apps bundle fonts under the SIL Open Font License; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

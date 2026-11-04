@@ -30,9 +30,9 @@ enum SyncActivity: String, CaseIterable, Equatable, Sendable {
     case .signingIn: "Signing in with passkey"
     case .uploadingVault: "Uploading encrypted copy"
     case .downloadingVault: "Downloading encrypted copy"
-    case .recoveringUpload: "Recovering interrupted upload"
-    case .retryingLocalSave: "Retrying local save"
-    case .stoppingUploadRecovery: "Stopping upload recovery"
+    case .recoveringUpload: "Finishing interrupted upload"
+    case .retryingLocalSave: "Retrying save"
+    case .stoppingUploadRecovery: "Stopping upload"
     case .revokingSession: "Revoking this \(PlatformCopy.deviceNounPossessive) session"
     case .deletingAccount: "Deleting sync account"
     case .disconnectingAccount: "Disconnecting sync account"
@@ -67,7 +67,7 @@ final class AppState: ObservableObject {
         endpointConfigRefreshRequest?.task.cancel()
         endpointConfigRefreshRequest = nil
         endpointConfig = .bundled
-        endpointConfigStatus = "Bundled endpoints"
+        endpointConfigStatus = "Built-in server settings"
         acceptedEndpointConfigServerURL = nil
         endpointConfigTrustDurabilityDegraded = false
       }
@@ -112,7 +112,7 @@ final class AppState: ObservableObject {
       operatorMessage = AppState.normalizedOperatorMessage(endpointConfig.message)
     }
   }
-  @Published var endpointConfigStatus = "Bundled endpoints"
+  @Published var endpointConfigStatus = "Built-in server settings"
   /// True only when an accepted policy's rename is visible but its containing
   /// directory durability barrier failed. Read-only scans may continue with the
   /// applied policy, while every sync/auth path remains fail-closed until a
@@ -421,7 +421,7 @@ final class AppState: ObservableObject {
 
   func syncSessionStatus(at date: Date? = nil) -> String {
     guard !document.syncState.sessionToken.isEmpty else { return "sign in required" }
-    return hasUsableSyncSession(at: date) ? "active" : "expired—sign in required"
+    return hasUsableSyncSession(at: date) ? "active" : "expired, sign in required"
   }
 
   /// Recovery obligations are global vault state, not page-level feedback.
@@ -434,7 +434,7 @@ final class AppState: ObservableObject {
     }
     if pendingVaultUploadHasRemoteConflict {
       return
-        "An interrupted upload conflicts with the server copy. Open Sync to review it before making changes."
+        "An interrupted upload conflicts with the copy on the server. Open Sync to review it before making changes."
     }
     if pendingVaultUpload != nil {
       return
@@ -442,7 +442,7 @@ final class AppState: ObservableObject {
     }
     if syncPersistencePending {
       return
-        "A finished sync still needs to be saved on this \(PlatformCopy.deviceNoun). Open Sync and retry the save before making changes."
+        "The last sync finished but wasn't saved on this \(PlatformCopy.deviceNoun). Open Sync and retry the save before making changes."
     }
     if hasPendingAccountDeletion {
       return
@@ -450,11 +450,11 @@ final class AppState: ObservableObject {
     }
     if document.syncState.remoteOutcomeUncertain {
       return
-        "It's unclear whether the last upload reached the server. Open Sync to check before relying on the server copy or replacing this one."
+        "The last upload may not have reached the server. Open Sync to check before you rely on the server copy or replace it."
     }
     if document.syncState.pendingExchangeCredentialCleanup {
       return
-        "Exchange keys were removed here, but the last server copy may still contain them. Open Sync and upload to finish removing them."
+        "Exchange API keys were removed here, but the server copy may still contain them. Open Sync and upload to remove them there too."
     }
     return nil
   }
@@ -487,7 +487,7 @@ final class AppState: ObservableObject {
 
   func presentUserFacingError(
     _ failure: Error,
-    cancellationNotice: String = "Operation cancelled."
+    cancellationNotice: String = "Cancelled."
   ) {
     if let message = UserFacingErrorMapper.message(for: failure) {
       error = message
@@ -536,13 +536,13 @@ final class AppState: ObservableObject {
   var updateActionTitle: String {
     usesMacAppStoreUpdates
       ? "Open Address Atlas in the \(PlatformCopy.appStoreName)"
-      : "Download the latest signed Address Atlas release"
+      : "Download the latest Address Atlas release"
   }
 
   var updateActionHint: String {
     usesMacAppStoreUpdates
-      ? "Opens the hard-pinned Address Atlas product page in the \(PlatformCopy.appStoreName)"
-      : "Opens the hard-pinned Address Atlas releases page in your browser"
+      ? "Opens the Address Atlas page in the \(PlatformCopy.appStoreName)"
+      : "Opens the Address Atlas releases page in your browser"
   }
 
   /// False when the server's `minSupportedAppVersion` is newer than this build.
@@ -553,7 +553,7 @@ final class AppState: ObservableObject {
   func acceptedEndpointStatus(_ detail: String) -> String {
     let durableDetail =
       endpointConfigTrustDurabilityDegraded
-      ? "\(detail); trust durability retry required"
+      ? "\(detail), save not confirmed"
       : detail
     return isAppVersionSupported ? durableDetail : "Update required (\(durableDetail))"
   }
@@ -643,8 +643,8 @@ final class AppState: ObservableObject {
         notice = ""
         self.error =
           hasValidatedRollback
-          ? "Your saved portfolio on this \(PlatformCopy.deviceNoun) is damaged, but an earlier copy was checked and is intact. Restore the earlier copy, or set the damaged data aside and start fresh. Nothing has been deleted."
-          : "Your saved portfolio on this \(PlatformCopy.deviceNoun) is damaged and no earlier copy is available. You can set the damaged data aside, start fresh, and then restore a copy you saved elsewhere. Nothing has been deleted."
+          ? "Your saved portfolio on this \(PlatformCopy.deviceNoun) is damaged, but an earlier copy is intact. Restore it, or set the damaged data aside and start fresh. Nothing has been deleted."
+          : "Your saved portfolio on this \(PlatformCopy.deviceNoun) is damaged and there's no earlier copy. Set the damaged data aside and start fresh, then restore a copy you saved elsewhere. Nothing has been deleted."
         isUnlocked = false
         return
       }
@@ -699,7 +699,7 @@ final class AppState: ObservableObject {
     lastSaveRemovedScanRunCount = 0
     guard !isTerminationInProgress || allowDuringTermination else {
       notice = ""
-      error = "Address Atlas is finishing a local save before quitting."
+      error = "Address Atlas is saving before it quits."
       return false
     }
     guard let persistence else {
@@ -708,7 +708,7 @@ final class AppState: ObservableObject {
       return false
     }
     guard !isPersisting else {
-      error = "Wait for the current local save to finish."
+      error = "Wait for the current save to finish."
       return false
     }
     let startingRevision = documentRevision
@@ -733,7 +733,7 @@ final class AppState: ObservableObject {
         recordDiagnosticFailure(.storageSaveFailed)
         syncPersistencePending = true
         error =
-          "Your portfolio changed while it was being saved. Reopen Address Atlas before making more changes."
+          "Your portfolio changed during the save. Reopen Address Atlas before making more changes."
         return false
       }
       document = result.document
@@ -771,7 +771,7 @@ final class AppState: ObservableObject {
     lastSaveRemovedScanRunCount = 0
     guard !isTerminationInProgress else {
       notice = ""
-      error = "Address Atlas is finishing a local save before quitting."
+      error = "Address Atlas is saving before it quits."
       return false
     }
     guard let persistence else {
@@ -780,7 +780,7 @@ final class AppState: ObservableObject {
       return false
     }
     guard !isPersisting else {
-      error = "Wait for the current local save to finish."
+      error = "Wait for the current save to finish."
       return false
     }
     let startingRevision = documentRevision
@@ -798,7 +798,7 @@ final class AppState: ObservableObject {
         recordDiagnosticFailure(.storageProtectedTransitionFailed)
         syncPersistencePending = true
         error =
-          "Your portfolio changed while it was being saved. Reopen Address Atlas before making more changes."
+          "Your portfolio changed during the save. Reopen Address Atlas before making more changes."
         return false
       }
       document = result.document
@@ -835,11 +835,11 @@ final class AppState: ObservableObject {
     }
     guard let pendingSyncPersistence else {
       error =
-        "The pending local sync state cannot be retried safely. Reopen Address Atlas before making more changes."
+        "Address Atlas can't retry this save safely. Reopen it before making more changes."
       return
     }
     guard beginSyncActivity(.retryingLocalSave) else {
-      notice = "A sync operation is already running."
+      notice = "A sync is already running."
       return
     }
     defer { finishSyncActivity(.retryingLocalSave) }
@@ -849,7 +849,7 @@ final class AppState: ObservableObject {
       saveExactly: pendingSyncPersistence.saveExactly,
       resolvesPendingSyncPersistence: true
     ) {
-      notice = "Sync state saved locally." + pruningNoticeSuffix(lastSaveRemovedScanRunCount)
+      notice = "Sync result saved." + pruningNoticeSuffix(lastSaveRemovedScanRunCount)
     }
   }
 

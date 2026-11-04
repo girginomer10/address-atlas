@@ -339,7 +339,7 @@ enum AtlasThemeCatalog {
     ),
     typography: AtlasTypography(
       display: AtlasFontSpec(family: .pixelifySans, weight: .semibold),
-      number: AtlasFontSpec(family: .pixelifySans, weight: .semibold),
+      number: AtlasFontSpec(family: .vt323, weight: .regular),
       body: AtlasFontSpec(family: .geist, weight: .regular),
       label: AtlasFontSpec(family: .silkscreen, weight: .regular),
       mono: AtlasFontSpec(family: .geistMono, weight: .regular)

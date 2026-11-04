@@ -18,7 +18,7 @@ public struct WorkflowTimeoutError: Error, Equatable, LocalizedError, Sendable {
   }
 
   public var errorDescription: String? {
-    "This took longer than \(displaySeconds) seconds and was stopped."
+    "Took longer than \(displaySeconds) seconds and was stopped, so its balances are missing from this scan. Scan again later."
   }
 }
 
@@ -36,14 +36,14 @@ public enum JSONHTTPClientError: Error, Equatable, LocalizedError, Sendable {
     case .httpStatus(let statusCode):
       switch statusCode {
       case 429:
-        return "The network provider is rate-limiting requests. (Error 429)"
+        return "The server is limiting requests right now. Wait a few minutes, then scan again. (Error 429)"
       case 500...599:
-        return "The network provider is temporarily unavailable. (Error \(statusCode))"
+        return "The server is temporarily unavailable. Scan again later. (Error \(statusCode))"
       default:
-        return "The network provider returned an error. (Error \(statusCode))"
+        return "The server couldn't complete the request. (Error \(statusCode))"
       }
     case .responseTooLarge:
-      return "The network provider sent a response that was too large to read."
+      return "The server sent more data than Address Atlas can read."
     }
   }
 }
@@ -51,7 +51,24 @@ public enum JSONHTTPClientError: Error, Equatable, LocalizedError, Sendable {
 enum ProviderErrorSanitizer {
   static let maximumScalarCount = 320
 
-  static func sanitize(_ raw: String, fallback: String = "Provider request failed.") -> String {
+  /// Text for a failure that ends up in a scan warning. Transport failures get
+  /// advice instead of Foundation's raw description; everything else keeps its
+  /// own reviewed description.
+  static func description(of error: Error) -> String {
+    guard let urlError = error as? URLError else { return error.localizedDescription }
+    switch urlError.code {
+    case .timedOut:
+      return "The server took too long to respond. Scan again later."
+    case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed, .internationalRoamingOff:
+      return "There's no internet connection. Check your connection, then scan again."
+    case .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed:
+      return "Couldn't reach the server. Check your internet connection, then scan again."
+    default:
+      return "Couldn't complete the request to the server. Scan again later."
+    }
+  }
+
+  static func sanitize(_ raw: String, fallback: String = "The request to the server failed.") -> String {
     let withoutControls = String(
       raw.unicodeScalars.map { scalar -> Character in
         CharacterSet.controlCharacters.contains(scalar) ? " " : Character(String(scalar))
@@ -114,7 +131,7 @@ public enum ScanWarningPolicy {
 
     for warning in warnings {
       let sanitized = ProviderErrorSanitizer.sanitize(
-        warning, fallback: "Provider warning unavailable.")
+        warning, fallback: "A warning couldn't be shown.")
       guard seen.insert(sanitized).inserted else { continue }
       if result.count < maximumCount - 1 {
         result.append(sanitized)
@@ -125,7 +142,7 @@ public enum ScanWarningPolicy {
 
     if omitted > 0 {
       result.append(
-        "\(omitted) additional unique scan warning\(omitted == 1 ? " was" : "s were") omitted.")
+        "\(omitted) more warning\(omitted == 1 ? " isn't" : "s aren't") shown.")
     }
     return result
   }

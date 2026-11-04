@@ -174,7 +174,7 @@ extension AppStateNetworkBoundaryTests {
 
     XCTAssertEqual(state.error, "")
     XCTAssertTrue(state.notice.hasPrefix("Sync account deleted."))
-    XCTAssertTrue(state.notice.contains("rollback point was removed"))
+    XCTAssertTrue(state.notice.contains("backup copy was removed"))
     XCTAssertFalse(state.hasVaultRollbackCheckpoint)
     XCTAssertEqual(http.requests.count, 1)
     let request = try XCTUnwrap(http.requests.first)
@@ -375,7 +375,7 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertTrue(state.vaultEditsDisabled)
     XCTAssertTrue(
       state.error.hasPrefix(
-        "The server session was revoked, but removing its local token is pending persistence."
+        "The server session was revoked, but this Mac couldn't save that change."
       )
     )
     let reloaded = try winningStore.load()
@@ -534,7 +534,7 @@ extension AppStateNetworkBoundaryTests {
     await state.disconnectSyncAccountLocallyForSwitch(expectedServerURL: expectedServerURL)
 
     XCTAssertEqual(state.error, "")
-    XCTAssertTrue(state.notice.contains("No server request was made"))
+    XCTAssertTrue(state.notice.contains("without contacting the server"))
     XCTAssertNil(state.document.syncState.accountId)
     XCTAssertTrue(state.document.syncState.sessionToken.isEmpty)
     XCTAssertEqual(state.document.syncState.latestRemoteVersion, 0)
@@ -586,7 +586,7 @@ extension AppStateNetworkBoundaryTests {
 
     XCTAssertEqual(state.document.syncState.accountId, document.syncState.accountId)
     XCTAssertTrue(state.hasVaultRollbackCheckpoint)
-    XCTAssertTrue(state.error.contains("could not be cleared atomically"))
+    XCTAssertTrue(state.error.contains("couldn't be cleared"))
     let verifier = try EncryptedSQLiteVaultStore(
       path: fixture.database,
       vaultKey: fixture.vaultKey

@@ -307,7 +307,7 @@ final class NativeScannerSolanaStakeTests: XCTestCase {
     XCTAssertEqual(merged.accounts.map(\.publicKey), [stakeA, stakeC])
     XCTAssertEqual(
       merged.warnings,
-      ["Solana returned conflicting data for one stake account; every version was skipped."])
+      ["Solana sent conflicting data for one stake account, so it's left out of this scan. Scan again later."])
     XCTAssertTrue(NativeScanner.mergeSolanaStakeAccounts([shared, shared]).warnings.isEmpty)
   }
 
@@ -338,8 +338,8 @@ final class NativeScannerSolanaStakeTests: XCTestCase {
     XCTAssertEqual(
       summary.warnings,
       [
-        "One Solana stake account is managed by this address but can only be withdrawn by another; it wasn't counted.",
-        "One Solana stake account has finished deactivating but hasn't been withdrawn; its SOL is counted as staked until it is.",
+        "One Solana stake account is managed by this address, but only another address can withdraw it. It isn't counted.",
+        "One Solana stake account has finished its cooldown and is ready to withdraw. Its SOL is counted as staked until you withdraw it.",
       ])
   }
 
@@ -355,7 +355,7 @@ final class NativeScannerSolanaStakeTests: XCTestCase {
     XCTAssertEqual(
       summary.warnings,
       [
-        "Solana's current epoch couldn't be read, so every stake account is counted as staked; some may be unbonding or inactive."
+        "Solana's current epoch couldn't be read, so every stake account is counted as staked. Some may be in cooldown or ready to withdraw."
       ])
   }
 
@@ -371,7 +371,7 @@ final class NativeScannerSolanaStakeTests: XCTestCase {
     XCTAssertEqual(summary.stakedLamports, UInt64.max)
     XCTAssertEqual(
       summary.warnings,
-      ["Solana stake balances exceeded the supported numeric range; the remainder was skipped."])
+      ["Solana stake balances are larger than Address Atlas can add up, so the rest are left out of this scan."])
   }
 
   // MARK: Scanning
@@ -414,8 +414,8 @@ final class NativeScannerSolanaStakeTests: XCTestCase {
     XCTAssertEqual(
       Set(result.warnings),
       [
-        "Solana · \(String(walletAddress.prefix(6)))...\(String(walletAddress.suffix(4))): One Solana stake account is managed by this address but can only be withdrawn by another; it wasn't counted.",
-        "Solana · \(String(walletAddress.prefix(6)))...\(String(walletAddress.suffix(4))): One Solana stake account has finished deactivating but hasn't been withdrawn; its SOL is counted as staked until it is.",
+        "Solana · \(String(walletAddress.prefix(6)))...\(String(walletAddress.suffix(4))): One Solana stake account is managed by this address, but only another address can withdraw it. It isn't counted.",
+        "Solana · \(String(walletAddress.prefix(6)))...\(String(walletAddress.suffix(4))): One Solana stake account has finished its cooldown and is ready to withdraw. Its SOL is counted as staked until you withdraw it.",
       ])
 
     // Both lookups hit the Stake program with a size filter and a memcmp on
@@ -464,7 +464,7 @@ final class NativeScannerSolanaStakeTests: XCTestCase {
     ).scan(addresses: walletAddress)
 
     XCTAssertEqual(result.holdings.map(\.source), [.native])
-    XCTAssertTrue(result.warnings.contains { $0.contains("can only be withdrawn by another") })
+    XCTAssertTrue(result.warnings.contains { $0.contains("only another address can withdraw") })
     // Nothing the wallet owns, so no epoch is needed.
     XCTAssertFalse(requests.snapshot().contains { solanaMethod($0) == "getEpochInfo" })
   }
@@ -493,11 +493,11 @@ final class NativeScannerSolanaStakeTests: XCTestCase {
 
       XCTAssertEqual(result.holdings.map(\.source), [.native], name)
       XCTAssertEqual(result.holdings.first?.amount, 2, name)
-      let stakeWarnings = result.warnings.filter { $0.contains("stake accounts couldn't be read") }
+      let stakeWarnings = result.warnings.filter { $0.contains("Couldn't read this wallet's Solana stake accounts") }
       XCTAssertEqual(stakeWarnings.count, 1, "\(name): \(result.warnings)")
       XCTAssertTrue(
         stakeWarnings[0].hasSuffix(NativeScanner.solanaStakeUnavailableWarning), name)
-      XCTAssertTrue(stakeWarnings[0].contains("reject or rate-limit"), name)
+      XCTAssertTrue(stakeWarnings[0].contains("reject or limit"), name)
       XCTAssertEqual(result.warnings.count, 1, "\(name): \(result.warnings)")
     }
   }
@@ -572,7 +572,7 @@ final class NativeScannerSolanaStakeTests: XCTestCase {
 
     XCTAssertEqual(result.holdings.first { $0.source == .native }?.amount, 2)
     XCTAssertEqual(result.holdings.first { $0.source == .staked }?.amount, 1)
-    XCTAssertFalse(result.warnings.contains { $0.contains("consistent snapshot") })
+    XCTAssertFalse(result.warnings.contains { $0.contains("consistent data") })
     // The native balance was re-read at the slot the stake lookup reached.
     let balanceSlots = requests.snapshot()
       .filter { solanaMethod($0) == "getBalance" }.map { solanaMinimumSlot($0) }
@@ -614,7 +614,7 @@ final class NativeScannerSolanaStakeTests: XCTestCase {
     XCTAssertTrue(
       result.warnings.contains {
         $0.contains(
-          "SOL, stake-account, and Solana token balances were skipped because the network didn't return a consistent snapshot after 3 tries."
+          "SOL, stake account and token balances are missing from this scan because the server didn't return consistent data after 3 tries."
         )
       }, "\(result.warnings)")
   }
@@ -642,7 +642,7 @@ final class NativeScannerSolanaStakeTests: XCTestCase {
 
     XCTAssertEqual(result.holdings.first { $0.source == .staked }?.amount, 1)
     XCTAssertTrue(
-      result.warnings.contains { $0.contains("stake accounts returned invalid data") })
+      result.warnings.contains { $0.contains("stake accounts had data Address Atlas couldn't read") })
   }
 
   func testStakeLookupsThatDisagreeAboutOneAccountDropItWithAWarning() async throws {

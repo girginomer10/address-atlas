@@ -9,24 +9,24 @@ private enum XrpResponseBindingError: Error {
   var accountInfoMessage: String {
     switch self {
     case .accountMismatch:
-      "XRP account lookup did not match the requested account."
+      "The server's reply was for a different XRP account, so balances are missing from this scan. Scan again later."
     case .unvalidated:
-      "XRP account lookup did not come from a validated ledger."
+      "The server's reply wasn't from a validated XRP ledger, so balances are missing from this scan. Scan again later."
     case .invalidLedgerIdentity, .ledgerChanged:
-      "XRP account lookup did not identify one validated ledger."
+      "The server didn't identify a single validated XRP ledger, so balances are missing from this scan. Scan again later."
     }
   }
 
   var trustLineWarning: String {
     switch self {
     case .accountMismatch:
-      "XRP trust-line pagination returned another account; issued-currency balances were omitted because the result was incomplete."
+      "The server's reply for trust lines was for a different account, so issued-currency balances are missing from this scan. Scan again later."
     case .unvalidated:
-      "XRP trust-line pagination returned an unvalidated page; issued-currency balances were omitted because the result was incomplete."
+      "The server sent trust lines from an unvalidated ledger, so issued-currency balances are missing from this scan. Scan again later."
     case .invalidLedgerIdentity:
-      "XRP trust-line pagination did not identify one validated ledger; issued-currency balances were omitted because the result was incomplete."
+      "The server didn't identify a single validated ledger for trust lines, so issued-currency balances are missing from this scan. Scan again later."
     case .ledgerChanged:
-      "XRP trust-line pagination changed ledger; issued-currency balances were omitted because the result was incomplete."
+      "The XRP ledger changed while trust lines were being read, so issued-currency balances are missing from this scan. Scan again later."
     }
   }
 }
@@ -111,7 +111,7 @@ extension NativeScanner {
     }
     guard let rpc = chain.rpcUrl else { return NativeScanResult() }
     guard case .xrpNetworkID(let expectedNetworkID) = chain.networkIdentity else {
-      throw Self.messageError(domain: "XRP", message: "XRP network identity is missing.")
+      throw Self.messageError(domain: "XRP", message: "Couldn't confirm the XRP network, so balances are missing from this scan. Check the server settings in Settings.")
     }
     let proofCache = networkIdentityProofs ?? ChainNetworkValueCache<Void>()
     try await proofCache.prove(
@@ -126,7 +126,7 @@ extension NativeScanner {
       )
       guard serverInfo.result?.info?.networkID == expectedNetworkID else {
         throw Self.messageError(
-          domain: "XRP", message: "XRP endpoint returned the wrong network identity.")
+          domain: "XRP", message: "The server isn't on the XRP network, so balances are missing from this scan. Check the server settings in Settings.")
       }
     }
     let response = try await http.post(
@@ -144,17 +144,17 @@ extension NativeScanner {
     )
     guard let result = response.result else {
       throw Self.messageError(
-        domain: "XRP", message: "XRP account lookup returned an empty result.")
+        domain: "XRP", message: "The server's reply was empty, so this wallet's XRP balance is missing from this scan. Scan again later.")
     }
     if result.error == "actNotFound" { return NativeScanResult() }
     if result.status == "error" || result.error != nil {
       throw Self.messageError(
         domain: "XRP",
-        message: result.errorMessage ?? result.error ?? "XRP account lookup failed."
+        message: result.errorMessage ?? result.error ?? "The XRP account lookup failed."
       )
     }
     guard let accountData = result.accountData, let rawBalance = accountData.balance else {
-      throw Self.messageError(domain: "XRP", message: "XRP account lookup returned no balance.")
+      throw Self.messageError(domain: "XRP", message: "The server sent no XRP balance, so it's missing from this scan. Scan again later.")
     }
     let ledgerIdentity: XrpLedgerIdentity
     do {
@@ -179,7 +179,7 @@ extension NativeScanner {
       )
     } else {
       warnings.append(
-        "Native XRP balance was invalid; issued-currency balances may still be available.")
+        "The server sent an XRP balance Address Atlas couldn't read, so it's missing from this scan. Issued-currency balances may still be included.")
     }
 
     let trustLines = try await fetchXrpTrustLines(
@@ -264,12 +264,12 @@ extension NativeScanner {
         let markerKey = try nextMarker.stableKey()
         guard seenMarkers.insert(markerKey).inserted else {
           warnings.append(
-            "XRP pagination returned a repeated marker; later trustlines were skipped.")
+            "The server repeated a page marker while listing trust lines, so later ones are missing from this scan. Scan again later.")
           break
         }
         guard page < maxXrpPages else {
           warnings.append(
-            "XRP trustline pagination reached the \(maxXrpPages)-page safety limit; later trustlines were skipped."
+            "Address Atlas stopped after \(maxXrpPages) pages of trust lines, so later ones are missing from this scan."
           )
           break
         }
@@ -281,11 +281,11 @@ extension NativeScanner {
           warnings.append(bindingError.trustLineWarning)
           break
         }
-        let prefix =
+        warnings.append(
           lines.isEmpty
-          ? "Issued-currency trustlines could not be read"
-          : "Later issued-currency trustline pages could not be read"
-        warnings.append("\(prefix); available XRP balances are still shown.")
+            ? "Couldn't read issued-currency trust lines, so those balances are missing from this scan. The XRP balance is still included. Scan again later."
+            : "Couldn't read later pages of trust lines, so some issued-currency balances may be missing from this scan. The XRP balance is still included. Scan again later."
+        )
         break
       }
     }
@@ -447,29 +447,29 @@ extension NativeScanner {
     if invalidIdentityCount > 0 {
       warnings.append(
         invalidIdentityCount == 1
-          ? "XRP skipped one trust line with an invalid issuer or currency code."
-          : "XRP skipped \(invalidIdentityCount) trust lines with invalid issuers or currency codes."
+          ? "One XRP trust line has an invalid issuer or currency code, so it's left out of this scan."
+          : "\(invalidIdentityCount) XRP trust lines have invalid issuers or currency codes, so they're left out of this scan."
       )
     }
     if !invalidBalanceIdentities.isEmpty {
       warnings.append(
         invalidBalanceIdentities.count == 1
-          ? "XRP discarded one issued asset because its trust-line data included an invalid or negative balance."
-          : "XRP discarded \(invalidBalanceIdentities.count) issued assets because their trust-line data included invalid or negative balances."
+          ? "One issued asset on XRP has an invalid or negative balance, so it's left out of this scan."
+          : "\(invalidBalanceIdentities.count) issued assets on XRP have invalid or negative balances, so they're left out of this scan."
       )
     }
     if identicalDuplicateCount > 0 {
       warnings.append(
         identicalDuplicateCount == 1
-          ? "XRP repeated one identical trust line; the duplicate was skipped to avoid double-counting."
-          : "XRP repeated \(identicalDuplicateCount) identical trust lines; the duplicates were skipped to avoid double-counting."
+          ? "The server listed the same XRP trust line twice. It was counted once."
+          : "The server listed \(identicalDuplicateCount) XRP trust lines more than once. Each was counted once."
       )
     }
     if !conflictingIdentities.isEmpty {
       warnings.append(
         conflictingIdentities.count == 1
-          ? "XRP returned conflicting balances for one issued asset; every version was skipped."
-          : "XRP returned conflicting balances for \(conflictingIdentities.count) issued assets; every version was skipped."
+          ? "The server sent conflicting balances for one issued XRP asset, so it's left out of this scan. Scan again later."
+          : "The server sent conflicting balances for \(conflictingIdentities.count) issued XRP assets, so they're left out of this scan. Scan again later."
       )
     }
     return NativeScanResult(assets: assets, warnings: warnings)

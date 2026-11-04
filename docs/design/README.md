@@ -12,6 +12,8 @@ Implementation (phase 2, part C1): `MapChartView`, `RingChartView`, `StripChartV
 
 Implementation (phase 2, history views): `Flow`, `Over time`, `What changed`, `Atlas map`, `Slope`, `Concentration`, `Calendar` and the coin widgets (state strip, unlock timeline, amount history, change, custody) are in `native/AddressAtlasMac/Sources/AddressAtlasMac/Charts/`. A representative set of renders (every view, six themes, full and compact, synthetic data) is in `screenshots/phase2/`; the whole matrix is written by `ATLAS_WRITE_SCREENSHOTS=1 swift test --filter ChartRenderTests` from `native/AddressAtlasMac`.
 
+Implementation (phase 3, Mac screens): the seven Mac sections and the coin detail screen are in `native/AddressAtlasMac/Sources/AddressAtlasMac/MacScreens/`. `screenshots/phase3/mac/` holds renders from the synthetic portfolio; `ATLAS_WRITE_SCREENSHOTS=1 swift test --filter MacScreenRenderTests` rewrites them (`=all` writes every screen in every theme). `screenshots/phase3/pixel-number-font.png` compares Pixelify Sans (draws "5" like "S") with VT323 and Jersey 10, the faces considered for Pixel figures; VT323 was chosen.
+
 Copy rules: say what a thing is or does, once, in as few words as possible. No slogans, no eyebrow labels, no subtitle under every title, each privacy fact stated once where it matters. Errors say what happened, then what to do.
 
 Data in the mockups is synthetic.

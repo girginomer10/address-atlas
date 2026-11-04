@@ -12,7 +12,7 @@ extension AppState {
     guard canMutateVault() else { return false }
     guard document.wallets.count < Self.maximumWallets else {
       error =
-        "A vault can scan at most \(Self.maximumWallets) saved wallets. Remove one before adding another."
+        "You can save at most \(Self.maximumWallets) wallets. Remove one before adding another."
       return false
     }
     let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -117,10 +117,10 @@ extension AppState {
     do {
       candidate = try Self.documentByApplyingWalletLabelDrafts(drafts, to: document)
     } catch WalletLabelDraftError.invalidLabel {
-      self.error = "Wallet labels must be between 1 and 80 characters."
+      self.error = "Wallet names must be 1 to 80 characters."
       return false
     } catch {
-      self.error = "Wallet-label changes could not be validated before syncing."
+      self.error = "Address Atlas couldn't check the wallet name changes before syncing."
       return false
     }
 
@@ -131,7 +131,7 @@ extension AppState {
       storeWalletLabelDraft(nil, for: id)
     }
     guard walletLabelDrafts.isEmpty else {
-      error = "A wallet label changed while the vault was being saved. Review it and try again."
+      error = "That name changed while saving. Try again."
       return false
     }
     return true
@@ -166,7 +166,7 @@ extension AppState {
       return false
     }
     guard let normalized = AppState.normalizedWalletLabel(draft) else {
-      error = "Wallet labels must be between 1 and 80 characters."
+      error = "Wallet names must be 1 to 80 characters."
       return false
     }
     if normalized == persisted {
@@ -185,7 +185,7 @@ extension AppState {
     guard canMutateVault() else { return false }
     guard let index = document.wallets.firstIndex(where: { $0.id == id }) else { return false }
     guard let normalized = AppState.normalizedWalletLabel(label) else {
-      error = "Wallet labels must be between 1 and 80 characters."
+      error = "Wallet names must be 1 to 80 characters."
       return false
     }
     guard document.wallets[index].label != normalized else { return true }
@@ -277,11 +277,11 @@ extension AppState {
       parsedDecimals >= 0,
       parsedDecimals <= 36
     else {
-      error = "Token needs address, symbol, name, and decimals between 0 and 36."
+      error = "Enter the token's address, symbol and name, and decimals from 0 to 36."
       return nil
     }
     guard trimmedCoinGeckoId.isEmpty || normalizedCoinGeckoId != nil else {
-      error = "CoinGecko ID may contain lowercase letters, numbers, and hyphens only."
+      error = "The CoinGecko ID can only use lowercase letters, numbers and hyphens."
       return nil
     }
     // Preserve mixed-case EVM input until after EIP-55 validation; lowercasing
@@ -304,7 +304,7 @@ extension AppState {
       chainKind: chainKind, chainId: chainId, address: normalizedAddress)
     {
       error =
-        "\(builtIn.symbol) is already built in and scanned automatically; a custom copy would be ignored."
+        "\(builtIn.symbol) is already built in and scanned automatically. A custom copy would be ignored."
       return nil
     }
     if document.customTokens.contains(where: {
@@ -315,7 +315,7 @@ extension AppState {
           ? $0.address.lowercased() == normalizedAddress.lowercased()
           : $0.address == normalizedAddress)
     }) {
-      error = "That token is already in the allowlist."
+      error = "That token is already saved."
       return nil
     }
     return CustomTokenInput(
@@ -343,7 +343,7 @@ extension AppState {
   ) async -> Bool {
     guard canMutateVault() else { return false }
     guard document.customTokens.count < Self.maximumCustomTokens else {
-      error = "A vault can contain at most \(Self.maximumCustomTokens) custom tokens."
+      error = "You can save at most \(Self.maximumCustomTokens) custom tokens."
       return false
     }
     guard
@@ -383,7 +383,7 @@ extension AppState {
   ) async -> Bool {
     guard canMutateVault() else { return false }
     guard let index = document.customTokens.firstIndex(where: { $0.id == id }) else {
-      error = "That token is no longer in the allowlist."
+      error = "That token is no longer saved."
       return false
     }
     guard
@@ -448,8 +448,8 @@ extension AppState {
     else {
       error =
         parsedAmount > 0
-        ? "Manual holding amount and value produce an unsupported price."
-        : "Manual holding amount must be greater than zero."
+        ? "That amount and value give a price Address Atlas can't use. Check both numbers."
+        : "The amount must be greater than zero."
       return nil
     }
     let normalized = symbol.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
@@ -457,7 +457,7 @@ extension AppState {
       normalized.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" || $0 == "_" })
     else {
       error =
-        "Manual holding symbols may use up to 32 letters, numbers, dots, dashes, or underscores."
+        "Symbols can have up to 32 letters, numbers, dots, dashes or underscores."
       return nil
     }
     return (normalized, parsedAmount, derivedPrice, parsedValue)
@@ -467,7 +467,7 @@ extension AppState {
   func addManualHolding(symbol: String, amount: String, valueUsd: String) async -> Bool {
     guard canMutateVault() else { return false }
     guard document.manualHoldings.count < Self.maximumManualHoldings else {
-      error = "A vault can contain at most \(Self.maximumManualHoldings) manual holdings."
+      error = "You can save at most \(Self.maximumManualHoldings) manual holdings."
       return false
     }
     guard let input = validatedManualHolding(symbol: symbol, amount: amount, valueUsd: valueUsd)

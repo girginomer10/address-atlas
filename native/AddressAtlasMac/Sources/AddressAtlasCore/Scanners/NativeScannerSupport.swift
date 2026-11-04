@@ -92,7 +92,7 @@ extension NativeScanner {
     }
     if hasAdditionalEnabledTokens {
       warnings.append(
-        "Only the first \(maxEnabledCustomTokens) enabled custom tokens were scanned; additional tokens were skipped."
+        "Only the first \(maxEnabledCustomTokens) enabled custom tokens were scanned. The rest are missing from this scan. Turn off tokens you don't need."
       )
     }
 
@@ -101,25 +101,25 @@ extension NativeScanner {
       let chainId = token.chainId.trimmingCharacters(in: .whitespacesAndNewlines)
       if let network = ChainRegistry.retiredChainNames[chainId] {
         warnings.append(
-          "Custom token \(label) references retired \(network); the saved record was kept but not scanned."
+          "Custom token \(label) is on \(network), which has shut down. It's still saved but isn't scanned."
         )
         continue
       }
       guard [.evm, .solana, .tron].contains(token.chainKind) else {
-        warnings.append("Custom token \(label) uses an unsupported chain family and was skipped.")
+        warnings.append("Custom token \(label) is on a type of network Address Atlas doesn't support, so it's left out of this scan.")
         continue
       }
       guard let chain = ChainRegistry.allChains.first(where: { $0.id == chainId }),
         chain.family == token.chainKind
       else {
         warnings.append(
-          "Custom token \(label) references an unknown or mismatched chain and was skipped.")
+          "Custom token \(label) has an unknown or mismatched network, so it's left out of this scan. Edit the token to fix it.")
         continue
       }
       guard let address = AddressDetection.canonicalAddress(token.address, family: token.chainKind)
       else {
         warnings.append(
-          "Custom token \(label) has an invalid contract or mint address and was skipped.")
+          "Custom token \(label) has an invalid contract or mint address, so it's left out of this scan. Check the address.")
         continue
       }
       let symbol = token.symbol.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -137,15 +137,15 @@ extension NativeScanner {
           maximumUTF8Bytes: VaultTextLimits.tokenNameUTF8Bytes
         )
       else {
-        warnings.append("Custom token \(label) has an invalid symbol or name and was skipped.")
+        warnings.append("Custom token \(label) has an invalid symbol or name, so it's left out of this scan. Edit the token to fix it.")
         continue
       }
       guard (0...36).contains(token.decimals) else {
-        warnings.append("Custom token \(label) has unsupported decimals and was skipped.")
+        warnings.append("Custom token \(label) has unsupported decimals, so it's left out of this scan. Check the decimals.")
         continue
       }
       guard token.priceUsd.map({ $0.isFinite && $0 >= 0 }) ?? true else {
-        warnings.append("Custom token \(label) has an invalid USD price and was skipped.")
+        warnings.append("Custom token \(label) has an invalid USD price, so it's left out of this scan. Check the price.")
         continue
       }
       let coinGeckoId: String?
@@ -159,7 +159,7 @@ extension NativeScanner {
           // Preserve the valid on-chain token and only discard unsafe pricing
           // metadata so its balance remains visible as unpriced.
           warnings.append(
-            "Custom token \(label) has an invalid CoinGecko ID; CoinGecko pricing was disabled.")
+            "Custom token \(label) has an invalid CoinGecko ID, so CoinGecko pricing is turned off for it. Check the ID.")
           coinGeckoId = nil
         }
       } else {

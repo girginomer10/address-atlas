@@ -80,21 +80,9 @@ extension AtlasThemeTokens {
     font(.label, size: size, relativeTo: .caption, weight: weight)
   }
 
-  /// Pixelify Sans draws its five like an S, which turns "$5,082" into "$S,082".
-  /// Figures in a chart (shares, values, totals) must read the same everywhere,
-  /// so where the theme's number or display face is that font, figures use the
-  /// theme's body face instead and the pixel face stays on names.
-  private var figureFaceMisleads: Bool {
-    typography.number.family == .pixelifySans || typography.display.family == .pixelifySans
-  }
-
   /// Figures: shares and values, tabular.
   func chartKitNumberFont(_ size: CGFloat = 12, weight: Font.Weight? = nil) -> Font {
-    if figureFaceMisleads {
-      return font(.body, size: size, relativeTo: .body, weight: weight ?? .semibold)
-        .monospacedDigit()
-    }
-    return font(.number, size: size, relativeTo: .body, weight: weight)
+    font(.number, size: size, relativeTo: .body, weight: weight)
   }
 
   /// A figure that stands alone, such as the value in a block: the display face
@@ -110,9 +98,16 @@ extension AtlasThemeTokens {
     font(.body, size: size, relativeTo: .callout)
   }
 
+  /// Pixelify Sans, the Pixel theme's display face, draws its five like an S, so
+  /// "$5,082" reads "$S,082". Where the display face is that font, large figures use
+  /// the theme's number face (VT323 in the Pixel theme) and Pixelify Sans stays on names.
+  private var displayFaceMisleadsFigures: Bool {
+    typography.display.family == .pixelifySans
+  }
+
   /// Large figures: the total in the middle of a ring.
   func chartKitDisplayFont(_ size: CGFloat, relativeTo style: Font.TextStyle = .title2) -> Font {
-    if figureFaceMisleads { return font(.body, size: size, relativeTo: style, weight: .bold) }
+    if displayFaceMisleadsFigures { return font(.number, size: size, relativeTo: style) }
     return font(.display, size: size, relativeTo: style)
   }
 }

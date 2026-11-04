@@ -39,7 +39,7 @@ extension NativeScanner {
   /// or rate-limit `getProgramAccounts`, so say so instead of implying the
   /// address has no stake.
   static let solanaStakeUnavailableWarning =
-    "Solana stake accounts couldn't be read, so staked and unbonding SOL may be missing. Some public RPC endpoints reject or rate-limit this lookup."
+    "Couldn't read this wallet's Solana stake accounts, so staked SOL and SOL in cooldown may be missing from this scan. Some public servers reject or limit this request."
 
   /// How a stake account is counted. Everything is a function of the account's
   /// delegation epochs and the current epoch; see `solanaStakeState`.
@@ -180,7 +180,7 @@ extension NativeScanner {
     guard let rpc = chain.rpcUrl else { return NativeScanResult() }
     guard case .solanaGenesisHash(let expectedGenesisHash) = chain.networkIdentity else {
       throw Self.messageError(
-        domain: "Solana", message: "Solana network identity is missing.")
+        domain: "Solana", message: "Couldn't confirm the Solana network, so balances are missing from this scan. Check the server settings in Settings.")
     }
     let proofCache = networkIdentityProofs ?? ChainNetworkValueCache<Void>()
     try await proofCache.prove(
@@ -202,7 +202,7 @@ extension NativeScanner {
       snapshotFloor = native.contextSlot
     } catch {
       try throwIfCancellation(error)
-      warnings.append("Native SOL balance could not be read: \(error.localizedDescription)")
+      warnings.append("SOL balance is missing from this scan: \(ProviderErrorSanitizer.description(of: error))")
       // Token and stake-account reads still need one agreed slot to be
       // trustworthy, so fall back to a validated confirmed slot.
       do {
@@ -211,8 +211,8 @@ extension NativeScanner {
         try throwIfCancellation(error)
         warnings.append(
           tokens.isEmpty
-            ? "Solana stake-account balances were skipped because the network didn't return a consistent snapshot: \(error.localizedDescription)"
-            : "Solana token and stake-account balances were skipped because the network didn't return a consistent snapshot: \(error.localizedDescription)"
+            ? "Stake account balances are missing from this scan because the server didn't return consistent data: \(ProviderErrorSanitizer.description(of: error))"
+            : "Token and stake account balances are missing from this scan because the server didn't return consistent data: \(ProviderErrorSanitizer.description(of: error))"
         )
       }
     }
@@ -274,15 +274,15 @@ extension NativeScanner {
     )
     guard response.jsonrpc == "2.0", response.id == 0 else {
       throw Self.messageError(
-        domain: "Solana", message: "Genesis-hash lookup returned a mismatched response.")
+        domain: "Solana", message: "The server's reply to the network check didn't match the request, so balances are missing from this scan. Scan again later.")
     }
     if let error = response.error {
       throw Self.rpcError(
-        domain: "Solana", error: error, fallback: "Genesis-hash lookup failed.")
+        domain: "Solana", error: error, fallback: "The network check failed, so balances are missing from this scan. Scan again later.")
     }
     guard response.result == expectedGenesisHash else {
       throw Self.messageError(
-        domain: "Solana", message: "RPC endpoint returned the wrong network identity.")
+        domain: "Solana", message: "The server isn't on the Solana network, so balances are missing from this scan. Check the server settings in Settings.")
     }
   }
 
@@ -334,28 +334,28 @@ extension NativeScanner {
       // reach the guards below; translate that implementation detail into the
       // same stable provider-data warning as every other malformed balance.
       throw Self.messageError(
-        domain: "Solana", message: "Native SOL balance lookup returned invalid data."
+        domain: "Solana", message: "The server sent a balance Address Atlas couldn't read."
       )
     }
     guard response.jsonrpc == "2.0", response.id == 1 else {
       throw Self.messageError(
-        domain: "Solana", message: "Native SOL balance lookup returned a mismatched response."
+        domain: "Solana", message: "The server's reply didn't match the request."
       )
     }
     if let error = response.error {
       throw Self.rpcError(
-        domain: "Solana", error: error, fallback: "Native SOL balance lookup failed.")
+        domain: "Solana", error: error, fallback: "The balance request failed.")
     }
     guard let nativeBalance = response.result,
       let contextSlot = nativeBalance.context?.slot
     else {
       throw Self.messageError(
-        domain: "Solana", message: "Native SOL balance lookup returned an empty result.")
+        domain: "Solana", message: "The server's reply was empty.")
     }
     if let minimumSlot, contextSlot < minimumSlot {
       throw Self.messageError(
         domain: "Solana",
-        message: "Native SOL balance lookup returned data older than the bound snapshot slot."
+        message: "The server's reply was older than the rest of this scan's data."
       )
     }
     return SolanaNativeSnapshot(
@@ -376,15 +376,15 @@ extension NativeScanner {
     )
     guard response.jsonrpc == "2.0", response.id == 3 else {
       throw Self.messageError(
-        domain: "Solana", message: "Snapshot-slot lookup returned a mismatched response.")
+        domain: "Solana", message: "The server's reply didn't match the request.")
     }
     if let error = response.error {
       throw Self.rpcError(
-        domain: "Solana", error: error, fallback: "Snapshot-slot lookup failed.")
+        domain: "Solana", error: error, fallback: "Couldn't read the latest block from the server.")
     }
     guard let slot = response.result else {
       throw Self.messageError(
-        domain: "Solana", message: "Snapshot-slot lookup returned an empty result.")
+        domain: "Solana", message: "The server's reply was empty.")
     }
     return slot
   }
@@ -566,7 +566,7 @@ extension NativeScanner {
     let invalidCount = snapshot.stakeOutcomes.reduce(0) { $0 + $1.invalidAccountCount }
     if invalidCount > 0 {
       warnings.append(
-        "Some Solana stake accounts returned invalid data; staked balances may be incomplete.")
+        "Some Solana stake accounts had data Address Atlas couldn't read, so staked balances may be incomplete.")
     }
     let merged = Self.mergeSolanaStakeAccounts(snapshot.stakeOutcomes.flatMap(\.accounts))
     warnings.append(contentsOf: merged.warnings)
@@ -685,10 +685,10 @@ extension NativeScanner {
           switch component {
           case .native:
             warning =
-              "Native SOL balance could not be aligned to the coherent snapshot and was skipped: \(error.localizedDescription)"
+              "SOL balance is missing from this scan because it didn't line up with the rest of the data: \(ProviderErrorSanitizer.description(of: error))"
           case .tokenProgram(let program):
             warning =
-              "\(Self.solanaProgramLabel(program)) balances couldn't be read; some Solana tokens may be missing."
+              "Couldn't read \(Self.solanaProgramLabel(program)) balances, so some tokens may be missing from this scan. Scan again later."
           case .stakeAccounts(.withdrawer):
             // The withdrawer lookup is the one that finds the address's own
             // stake. Losing the staker lookup only loses an informational
@@ -742,18 +742,18 @@ extension NativeScanner {
 
     var scopeParts: [String] = []
     if initialNative != nil { scopeParts.append("SOL") }
-    if !stakeAuthorities.isEmpty { scopeParts.append("stake-account") }
-    scopeParts.append("Solana token")
+    if !stakeAuthorities.isEmpty { scopeParts.append("stake account") }
+    scopeParts.append("token")
     let scope: String
     if scopeParts.count == 1 {
-      scope = "Solana token balances"
+      scope = "Token balances"
     } else if scopeParts.count == 2 {
       scope = "\(scopeParts[0]) and \(scopeParts[1]) balances"
     } else {
-      scope = "\(scopeParts.dropLast().joined(separator: ", ")), and \(scopeParts[scopeParts.count - 1]) balances"
+      scope = "\(scopeParts.dropLast().joined(separator: ", ")) and \(scopeParts[scopeParts.count - 1]) balances"
     }
     warnings.append(
-      "\(scope) were skipped because the network didn't return a consistent snapshot after \(Self.maxSolanaSnapshotAttempts) tries."
+      "\(scope) are missing from this scan because the server didn't return consistent data after \(Self.maxSolanaSnapshotAttempts) tries. Scan again later."
     )
     return SolanaCoherentSnapshot(
       native: nil,
@@ -832,12 +832,12 @@ extension NativeScanner {
       .compactMap { registryByMint[$0]?.symbol }
     if !malformedSymbols.isEmpty {
       warnings.append(
-        "SPL token balance data was invalid for \(Self.formattedSymbols(malformedSymbols)); balances may be incomplete."
+        "Address Atlas couldn't read the Solana balance data for \(Self.formattedSymbols(malformedSymbols)), so those balances may be missing from this scan."
       )
     }
     if outcomes.reduce(0, { $0 + $1.invalidAccountCount }) > 0 {
       warnings.append(
-        "Some SPL token accounts returned invalid parsed data; balances may be incomplete.")
+        "Some Solana token accounts had data Address Atlas couldn't read, so token balances may be incomplete.")
     }
     let accountsByMint = Dictionary(
       grouping: parsedAccounts.filter { registryByMint[$0.mint] != nil },
@@ -875,7 +875,7 @@ extension NativeScanner {
       // than silently dropping a real balance when the bundled registry differs.
       if token.decimals != decimals {
         warnings.append(
-          "\(token.symbol) on-chain decimals (\(decimals)) differ from the registry (\(token.decimals)); using on-chain decimals."
+          "\(token.symbol) has \(decimals) decimals on Solana, not the \(token.decimals) Address Atlas expected. The balance uses \(decimals)."
         )
       }
       let scaledAmount = Double(rawTotal) / pow(10, Double(decimals))
@@ -887,12 +887,12 @@ extension NativeScanner {
     }
     if !inconsistentDecimalsSymbols.isEmpty {
       warnings.append(
-        "SPL balances used inconsistent on-chain decimals for \(Self.formattedSymbols(inconsistentDecimalsSymbols)); those tokens were skipped."
+        "Solana reported different decimals for \(Self.formattedSymbols(inconsistentDecimalsSymbols)), so those tokens are left out of this scan."
       )
     }
     if !overflowedSymbols.isEmpty {
       warnings.append(
-        "SPL balances exceeded the supported numeric range for \(Self.formattedSymbols(overflowedSymbols)); those tokens were skipped."
+        "The balances of \(Self.formattedSymbols(overflowedSymbols)) are larger than Address Atlas can add up, so those tokens are left out of this scan."
       )
     }
     return SolanaTokenBalanceScan(balances: balances, warnings: warnings)
@@ -941,22 +941,22 @@ extension NativeScanner {
     if !malformedDuplicatePublicKeys.isEmpty {
       warnings.append(
         malformedDuplicatePublicKeys.count == 1
-          ? "Solana discarded one token account because a malformed duplicate used the same public key."
-          : "Solana discarded \(malformedDuplicatePublicKeys.count) token accounts because malformed duplicates used the same public keys."
+          ? "One Solana token account was left out because another record used the same address with invalid data."
+          : "\(malformedDuplicatePublicKeys.count) Solana token accounts were left out because other records used the same addresses with invalid data."
       )
     }
     if identicalDuplicateAccountCount > 0 {
       warnings.append(
         identicalDuplicateAccountCount == 1
-          ? "Solana repeated one identical token account record; the duplicate was skipped to avoid double-counting."
-          : "Solana repeated \(identicalDuplicateAccountCount) identical token account records; the duplicates were skipped to avoid double-counting."
+          ? "Solana listed the same token account twice. It was counted once."
+          : "Solana listed \(identicalDuplicateAccountCount) token accounts more than once. Each was counted once."
       )
     }
     if !conflictingAccountPublicKeys.isEmpty {
       warnings.append(
         conflictingAccountPublicKeys.count == 1
-          ? "Solana returned conflicting data for one repeated token account; every version was skipped."
-          : "Solana returned conflicting data for \(conflictingAccountPublicKeys.count) repeated token accounts; every version was skipped."
+          ? "Solana sent conflicting data for one token account, so it's left out of this scan. Scan again later."
+          : "Solana sent conflicting data for \(conflictingAccountPublicKeys.count) token accounts, so they're left out of this scan. Scan again later."
       )
     }
     let parsedAccounts = accountsByPublicKey.keys.sorted().compactMap {
@@ -1136,8 +1136,8 @@ extension NativeScanner {
     if !conflicting.isEmpty {
       warnings.append(
         conflicting.count == 1
-          ? "Solana returned conflicting data for one stake account; every version was skipped."
-          : "Solana returned conflicting data for \(conflicting.count) stake accounts; every version was skipped."
+          ? "Solana sent conflicting data for one stake account, so it's left out of this scan. Scan again later."
+          : "Solana sent conflicting data for \(conflicting.count) stake accounts, so they're left out of this scan. Scan again later."
       )
     }
     return (byPublicKey.keys.sorted().compactMap { byPublicKey[$0] }, warnings)
@@ -1212,25 +1212,25 @@ extension NativeScanner {
     if notOwnedCount > 0 {
       summary.warnings.append(
         notOwnedCount == 1
-          ? "One Solana stake account is managed by this address but can only be withdrawn by another; it wasn't counted."
-          : "\(notOwnedCount) Solana stake accounts are managed by this address but can only be withdrawn by another; they weren't counted."
+          ? "One Solana stake account is managed by this address, but only another address can withdraw it. It isn't counted."
+          : "\(notOwnedCount) Solana stake accounts are managed by this address, but only another address can withdraw them. They aren't counted."
       )
     }
     if inactiveCount > 0 {
       summary.warnings.append(
         inactiveCount == 1
-          ? "One Solana stake account has finished deactivating but hasn't been withdrawn; its SOL is counted as staked until it is."
-          : "\(inactiveCount) Solana stake accounts have finished deactivating but haven't been withdrawn; their SOL is counted as staked until it is."
+          ? "One Solana stake account has finished its cooldown and is ready to withdraw. Its SOL is counted as staked until you withdraw it."
+          : "\(inactiveCount) Solana stake accounts have finished their cooldown and are ready to withdraw. Their SOL is counted as staked until you withdraw it."
       )
     }
     if currentEpoch == nil, ownedCount > 0 {
       summary.warnings.append(
-        "Solana's current epoch couldn't be read, so every stake account is counted as staked; some may be unbonding or inactive."
+        "Solana's current epoch couldn't be read, so every stake account is counted as staked. Some may be in cooldown or ready to withdraw."
       )
     }
     if overflowed {
       summary.warnings.append(
-        "Solana stake balances exceeded the supported numeric range; the remainder was skipped.")
+        "Solana stake balances are larger than Address Atlas can add up, so the rest are left out of this scan.")
     }
     return summary
   }

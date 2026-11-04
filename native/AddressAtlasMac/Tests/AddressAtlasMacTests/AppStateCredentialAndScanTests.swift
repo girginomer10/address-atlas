@@ -102,7 +102,7 @@ extension AppStateNetworkBoundaryTests {
       state.document.exchangeConnections.first?.credentialScopeAssurance,
       .manualVerificationRequired
     )
-    XCTAssertTrue(state.notice.contains("could not be verified automatically"))
+    XCTAssertTrue(state.notice.contains("can't check this Kraken key's permissions"))
   }
 
   func testRemovingExchangeCredentialAtomicallyConsumesRollbackAndMarksRemoteCleanup()
@@ -257,7 +257,7 @@ extension AppStateNetworkBoundaryTests {
 
     XCTAssertTrue(state.error.contains("so the scan didn't run"))
     XCTAssertTrue(state.document.scanRuns.isEmpty)
-    XCTAssertEqual(state.endpointConfigStatus, "Bundled endpoints (remote unavailable)")
+    XCTAssertEqual(state.endpointConfigStatus, "Built-in server settings (couldn't refresh)")
     XCTAssertTrue(http.requests.isEmpty)
   }
 
@@ -309,8 +309,8 @@ extension AppStateNetworkBoundaryTests {
 
     XCTAssertEqual(state.error, "")
     let run = try XCTUnwrap(state.document.scanRuns.first)
-    XCTAssertTrue(run.warnings.contains { $0.contains("confirmed earlier in this session") })
-    XCTAssertTrue(state.endpointConfigStatus.contains("refresh unavailable"))
+    XCTAssertTrue(run.warnings.contains { $0.contains("settings confirmed earlier") })
+    XCTAssertTrue(state.endpointConfigStatus.contains("couldn't refresh"))
     XCTAssertTrue(http.requests.contains { $0.url?.host == "blockstream.info" })
   }
 
@@ -373,7 +373,7 @@ extension AppStateNetworkBoundaryTests {
     await state.scanSavedWallets()
 
     XCTAssertEqual(state.error, "")
-    XCTAssertTrue(state.notice.hasPrefix("Snapshot saved"))
+    XCTAssertTrue(state.notice.hasPrefix("Scan finished"))
     let run = try XCTUnwrap(state.document.scanRuns.first)
     let holdingSummary = run.holdings.map { "\($0.chainId):\($0.symbol)" }
     let bitcoin = try XCTUnwrap(

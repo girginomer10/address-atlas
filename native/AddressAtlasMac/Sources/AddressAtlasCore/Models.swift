@@ -452,7 +452,7 @@ public enum PortfolioValueError: Error, Equatable, LocalizedError, Sendable {
   public var errorDescription: String? {
     switch self {
     case .totalExceedsSupportedRange:
-      return "The portfolio total exceeds the supported numeric range. No snapshot was saved."
+      return "The portfolio total is too large to calculate, so no snapshot was saved."
     }
   }
 }

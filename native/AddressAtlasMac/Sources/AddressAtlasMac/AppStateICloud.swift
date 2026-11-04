@@ -29,7 +29,7 @@ extension AppState {
         return
       }
       iCloudStatus = "Saved"
-      notice = "Encrypted copy saved to your iCloud account."
+      notice = "Encrypted copy saved to iCloud."
     } catch { presentICloudError(error) }
   }
 
@@ -48,7 +48,7 @@ extension AppState {
       guard revision == documentRevision else { throw ICloudVaultError.conflict }
       guard await save(normalizedLoadedDocument(incoming), projectedSyncVersion: nil) else { return }
       iCloudStatus = "Restored"
-      notice = "Restored from iCloud. Your previous local copy is available on this screen."
+      notice = "Restored from iCloud. You can bring back your previous copy from this screen."
     } catch { presentICloudError(error) }
   }
 
@@ -62,7 +62,7 @@ extension AppState {
       candidate.iCloudState = nil
       guard await save(candidate, projectedSyncVersion: nil) else { return }
       iCloudStatus = "Deleted"
-      notice = "The iCloud copy was deleted. Your local portfolio was kept."
+      notice = "iCloud copy deleted. Your portfolio on this \(PlatformCopy.deviceNoun) was kept."
     } catch { presentICloudError(error) }
   }
 
@@ -72,7 +72,7 @@ extension AppState {
     candidate.iCloudState = nil
     guard await save(candidate, projectedSyncVersion: nil) else { return }
     iCloudStatus = "Not connected"
-    notice = "Local iCloud connection reset. Existing cloud copies were kept. The next transfer uses the current Apple Account."
+    notice = "iCloud connection reset. Copies already in iCloud were kept. The next save or restore uses the current Apple Account."
   }
 
   func finishLegacySyncMigration() async {

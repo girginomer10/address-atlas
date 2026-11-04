@@ -6,7 +6,7 @@ extension AppState {
   func uploadEncryptedVault(expectedServerURL: URL) async {
     guard acceptsNewOperations else { return }
     guard !scanning else {
-      error = "Cancel or finish the active scan before syncing."
+      error = "Wait for the scan to finish, or cancel it, before syncing."
       return
     }
     guard let vaultKey, let persistence else {
@@ -29,27 +29,27 @@ extension AppState {
       return
     }
     guard !syncPersistencePending else {
-      error = "Save the pending sync state locally before starting another sync operation."
+      error = "Save the last sync result before starting another sync."
       return
     }
     guard !hasPendingAccountDeletion else {
-      error = "Finish or retry the pending account deletion before syncing."
+      error = "Finish the account deletion before syncing."
       return
     }
     guard !isPersisting else {
-      error = "Wait for the current local save before syncing."
+      error = "Wait for the current save to finish before syncing."
       return
     }
     guard !isValidatingExchangeCredentials else {
-      error = "Wait for the exchange credential check before syncing."
+      error = "Wait for the exchange key check to finish before syncing."
       return
     }
     guard !syncing else {
-      notice = "A sync operation is already running."
+      notice = "A sync is already running."
       return
     }
     guard beginSyncActivity(.uploadingVault) else {
-      notice = "A sync operation is already running."
+      notice = "A sync is already running."
       return
     }
     defer { finishSyncActivity(.uploadingVault) }
@@ -61,13 +61,13 @@ extension AppState {
       guard await refreshEndpointConfig(silent: true) else {
         throw SyncClientError.requestFailed(
           503,
-          "The sync server's compatibility policy could not be verified. Try again when endpoint config is available."
+          "Address Atlas couldn't verify that this version works with the sync server. Try again when the server settings are available."
         )
       }
       guard !endpointConfigTrustDurabilityDegraded else {
         throw SyncClientError.requestFailed(
           503,
-          "The endpoint policy is applied, but its local trust record is not crash-durable. Refresh endpoints before syncing."
+          "The server settings were updated, but this \(PlatformCopy.deviceNoun) couldn't confirm they were saved. Refresh the server settings before syncing."
         )
       }
       guard isAppVersionSupported else {
@@ -196,7 +196,7 @@ extension AppState {
       return
     }
     guard !syncing else {
-      notice = "A sync operation is already running."
+      notice = "A sync is already running."
       return
     }
     guard
@@ -211,12 +211,12 @@ extension AppState {
     else {
       syncPersistencePending = true
       error =
-        "The interrupted upload is bound to a different or expired sync session. Sign in to the same account before retrying recovery."
+        "The interrupted upload belongs to a different or expired sync session. Sign in to the same account, then try again."
       return
     }
 
     guard beginSyncActivity(.recoveringUpload) else {
-      notice = "A sync operation is already running."
+      notice = "A sync is already running."
       return
     }
     defer { finishSyncActivity(.recoveringUpload) }
@@ -228,13 +228,13 @@ extension AppState {
       guard await refreshEndpointConfig(silent: true) else {
         throw SyncClientError.requestFailed(
           503,
-          "The sync server's compatibility policy could not be verified. Try again when endpoint config is available."
+          "Address Atlas couldn't verify that this version works with the sync server. Try again when the server settings are available."
         )
       }
       guard !endpointConfigTrustDurabilityDegraded else {
         throw SyncClientError.requestFailed(
           503,
-          "The endpoint policy is applied, but its local trust record is not crash-durable. Refresh endpoints before syncing."
+          "The server settings were updated, but this \(PlatformCopy.deviceNoun) couldn't confirm they were saved. Refresh the server settings before syncing."
         )
       }
       guard isAppVersionSupported else {
@@ -278,7 +278,7 @@ extension AppState {
       )
       notice =
         (hasUnsyncedLocalChanges
-          ? "Interrupted upload recovered. Newer local changes were preserved and still need upload."
+          ? "Interrupted upload finished. Newer changes on this \(PlatformCopy.deviceNoun) were kept and still need to be uploaded."
           : "The interrupted upload finished.")
         + pruningNoticeSuffix(
           hasUnsyncedLocalChanges ? 0 : pendingUpload.removedScanRunCount
@@ -417,15 +417,15 @@ extension AppState {
       serverURL == expectedServerURL,
       serverURL.absoluteString == pendingUpload.serverOrigin
     else {
-      error = "The saved sync server changed. Upload recovery was not modified."
+      error = "The saved sync server changed. The interrupted upload wasn't changed."
       return
     }
     guard !syncing, !isPersisting, !scanning else {
-      error = "Wait for the current operation to finish before stopping the upload."
+      error = "Wait for the current task to finish before stopping the upload."
       return
     }
     guard beginSyncActivity(.stoppingUploadRecovery) else {
-      error = "Wait for the current operation to finish before stopping the upload."
+      error = "Wait for the current task to finish before stopping the upload."
       return
     }
     defer { finishSyncActivity(.stoppingUploadRecovery) }
@@ -442,7 +442,7 @@ extension AppState {
       pendingVaultUploadHasRemoteConflict = false
       syncPersistencePending = pendingSyncPersistence != nil
       notice =
-        "Upload stopped. Your portfolio on this \(PlatformCopy.deviceNoun) was kept. Downloading the server copy later saves an earlier copy of this one first."
+        "Upload stopped. Your portfolio on this \(PlatformCopy.deviceNoun) was kept. If you download the server copy later, a backup copy of this one is saved first."
       error = ""
     } catch {
       recordDiagnosticFailure(.syncUploadRecoveryFailed)
@@ -460,11 +460,11 @@ extension AppState {
       return
     }
     guard !syncing, !isPersisting, !scanning, !isValidatingExchangeCredentials else {
-      error = "Wait for the current operation to finish before discarding the upload record."
+      error = "Wait for the current task to finish before discarding the upload record."
       return
     }
     guard beginSyncActivity(.stoppingUploadRecovery) else {
-      error = "Wait for the current operation to finish before discarding the upload record."
+      error = "Wait for the current task to finish before discarding the upload record."
       return
     }
     defer { finishSyncActivity(.stoppingUploadRecovery) }
@@ -484,7 +484,7 @@ extension AppState {
       syncPersistencePending = true
       let detail =
         UserFacingErrorMapper.message(for: error)
-        ?? "The encrypted recovery row changed or could not be removed safely."
+        ?? "The damaged upload record changed or couldn't be removed."
       self.error = "The damaged upload record wasn't changed: \(detail)"
     }
   }
@@ -495,7 +495,7 @@ extension AppState {
   ) async {
     guard acceptsNewOperations else { return }
     guard !scanning else {
-      error = "Cancel or finish the active scan before syncing."
+      error = "Wait for the scan to finish, or cancel it, before syncing."
       return
     }
     guard let vaultKey, let persistence else {
@@ -518,29 +518,29 @@ extension AppState {
       return
     }
     guard !syncPersistencePending else {
-      error = "Save the pending sync state locally before starting another sync operation."
+      error = "Save the last sync result before starting another sync."
       return
     }
     guard !hasPendingAccountDeletion else {
-      error = "Finish or retry the pending account deletion before syncing."
+      error = "Finish the account deletion before syncing."
       return
     }
     guard !isPersisting else {
-      error = "Wait for the current local save before syncing."
+      error = "Wait for the current save to finish before syncing."
       return
     }
     guard !isValidatingExchangeCredentials else {
-      error = "Wait for the exchange credential check before syncing."
+      error = "Wait for the exchange key check to finish before syncing."
       return
     }
     guard !syncing else {
-      notice = "A sync operation is already running."
+      notice = "A sync is already running."
       return
     }
     let discardedWalletLabelDrafts = discardingLocalChanges ? walletLabelDrafts : [:]
     var discardAcceptedByRemoteStateMachine = false
     guard beginSyncActivity(.downloadingVault) else {
-      notice = "A sync operation is already running."
+      notice = "A sync is already running."
       return
     }
     defer {
@@ -568,13 +568,13 @@ extension AppState {
       guard await refreshEndpointConfig(silent: true) else {
         throw SyncClientError.requestFailed(
           503,
-          "The sync server's compatibility policy could not be verified. Try again when endpoint config is available."
+          "Address Atlas couldn't verify that this version works with the sync server. Try again when the server settings are available."
         )
       }
       guard !endpointConfigTrustDurabilityDegraded else {
         throw SyncClientError.requestFailed(
           503,
-          "The endpoint policy is applied, but its local trust record is not crash-durable. Refresh endpoints before syncing."
+          "The server settings were updated, but this \(PlatformCopy.deviceNoun) couldn't confirm they were saved. Refresh the server settings before syncing."
         )
       }
       guard isAppVersionSupported else {
@@ -587,12 +587,12 @@ extension AppState {
       let baseContentChecksum = try await persistence.contentChecksum(for: baseDocument)
       if baseDocument.syncState.remoteOutcomeUncertain, !discardingLocalChanges {
         error =
-          "The last upload outcome is unknown. Confirm the dedicated reconcile download in Sync before replacing local content."
+          "It's unclear whether the last upload reached the server. Download the server copy in Sync to check it before replacing local data."
         return
       }
       if baseHasUnsyncedLocalChanges, !discardingLocalChanges {
         error =
-          "Local changes are not confirmed on the server. Upload them first, or explicitly discard them before downloading."
+          "Changes on this \(PlatformCopy.deviceNoun) haven't reached the server. Upload them first, or discard them before downloading."
         return
       }
       let client = ZeroKnowledgeSyncClient(baseURL: serverURL, http: httpClient)
@@ -616,7 +616,7 @@ extension AppState {
         return
       }
       guard documentRevision == startingRevision else {
-        error = "Your portfolio changed during the download. Nothing was replaced; try again."
+        error = "Your portfolio changed during the download. Nothing was replaced. Try again."
         return
       }
       let result = try await persistence.openSyncSnapshot(
@@ -720,8 +720,8 @@ extension AppState {
           )
           notice =
             (hasUnsyncedLocalChanges
-              ? "Encrypted copy downloaded and upgraded. Newer changes on this \(PlatformCopy.deviceNoun) still need to be uploaded."
-              : "Encrypted copy downloaded and upgraded.")
+              ? "Encrypted copy downloaded and updated. Newer changes on this \(PlatformCopy.deviceNoun) still need to be uploaded."
+              : "Encrypted copy downloaded and updated.")
             + pruningNoticeSuffix(hasUnsyncedLocalChanges ? 0 : removedScanRunCount)
           error = ""
           return
@@ -745,7 +745,7 @@ extension AppState {
             discardAcceptedByRemoteStateMachine = true
             throw SyncClientError.requestFailed(
               500,
-              "The older copy downloaded, but it still needs to be saved on this \(PlatformCopy.deviceNoun) before the upgrade can be retried."
+              "The older copy downloaded, but it still needs to be saved on this \(PlatformCopy.deviceNoun) before the update can be retried."
             )
           }
           discardAcceptedByRemoteStateMachine = true
@@ -796,11 +796,11 @@ extension AppState {
       return
     }
     guard !syncing, !scanning, !isPersisting, !isValidatingExchangeCredentials else {
-      error = "Wait for the current operation to finish before restoring the earlier copy."
+      error = "Wait for the current task to finish before restoring the earlier copy."
       return
     }
     guard beginSyncActivity(.restoringRollbackCheckpoint) else {
-      error = "Wait for the current operation to finish before restoring the earlier copy."
+      error = "Wait for the current task to finish before restoring the earlier copy."
       return
     }
     defer { finishSyncActivity(.restoringRollbackCheckpoint) }
@@ -840,7 +840,7 @@ extension AppState {
       guard try keyStore.loadVaultKey() == key else {
         throw UserFacingAppError(
           message:
-            "The encryption key in Keychain changed during recovery. Nothing was replaced; restart Address Atlas and try again."
+            "The encryption key in Keychain changed during recovery. Nothing was replaced. Restart Address Atlas and try again."
         )
       }
       let sqlite = try EncryptedSQLiteVaultStore(
@@ -899,7 +899,7 @@ extension AppState {
       guard try keyStore.loadVaultKey() == key else {
         throw UserFacingAppError(
           message:
-            "The encryption key in Keychain changed during recovery. The damaged data wasn't replaced; restart Address Atlas and try again."
+            "The encryption key in Keychain changed during recovery. The damaged data wasn't replaced. Restart Address Atlas and try again."
         )
       }
       let vaultURL = appSupportDirectory.appending(path: "vault.sqlite")
@@ -939,7 +939,7 @@ extension AppState {
       damagedVaultRecoveryKey = nil
       isUnlocked = true
       notice =
-        "The damaged data was set aside in the private \(recovered.quarantineDirectory.lastPathComponent) folder and Address Atlas started fresh with the same encryption key. Restore a saved copy to bring your portfolio back."
+        "The damaged data was set aside in a private folder, \(recovered.quarantineDirectory.lastPathComponent). Address Atlas started fresh with the same encryption key. Restore a saved copy to bring your portfolio back."
       error = ""
     } catch {
       recordDiagnosticFailure(.recoveryQuarantineFailed)
@@ -969,7 +969,7 @@ extension AppState {
     if isUnlocked, quarantinedPendingVaultUpload != nil,
       syncing || scanning || isPersisting || isValidatingExchangeCredentials
     {
-      error = "Wait for the current operation to finish before restoring the recovery kit."
+      error = "Wait for the current task to finish before restoring the recovery kit."
       return
     }
     guard !isUnlocking else {
@@ -1044,7 +1044,7 @@ extension AppState {
           ? "Encryption key restored. Finishing an interrupted upload."
           : durable.document.wallets.isEmpty && durable.document.exchangeConnections.isEmpty
             && durable.document.manualHoldings.isEmpty
-            ? "Encryption key restored. This \(PlatformCopy.deviceNoun) has no saved portfolio yet; restore your iCloud copy to bring it back."
+            ? "Encryption key restored. This \(PlatformCopy.deviceNoun) has no saved portfolio yet. Restore your iCloud copy to bring it back."
             : "Encryption key restored. Your portfolio on this \(PlatformCopy.deviceNoun) is unlocked."
         error = ""
       }
@@ -1090,7 +1090,7 @@ extension AppState {
           UserFacingErrorMapper.message(for: error)
           ?? "The local save was cancelled."
         self.error =
-          "Sync session expired, but the cleared session is pending local persistence. Use Retry local save after fixing storage: \(detail)"
+          "Your sync session expired, but this \(PlatformCopy.deviceNoun) couldn't save that change. Fix local storage, then use Retry local save: \(detail)"
           + pruningNoticeSuffix(removedScanRunCount)
         return
       }
@@ -1100,7 +1100,7 @@ extension AppState {
       return
     }
     self.error =
-      (UserFacingErrorMapper.message(for: error) ?? "Operation cancelled.")
+      (UserFacingErrorMapper.message(for: error) ?? "Cancelled.")
       + pruningNoticeSuffix(removedScanRunCount)
   }
 
