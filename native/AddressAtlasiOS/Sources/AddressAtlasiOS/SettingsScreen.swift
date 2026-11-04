@@ -46,11 +46,6 @@ struct SettingsScreen: View {
 
   private static let dustThresholdErrorMessage = "That is not a dollar amount. Enter 0 or more."
 
-  /// `AppState.iCloudStatus` value that means the last iCloud transfer failed.
-  /// Compared by equality: it is a constant owned by AppState (see
-  /// `presentICloudError`), the same one `ICloudScreen` relies on.
-  private static let iCloudNeedsAttentionStatus = "Needs attention"
-
   /// What the privacy group says, once. Each line is backed by PRIVACY.md and
   /// the code: read-only scanning, the encrypted vault, exchange credentials,
   /// the two outside services that see anything, and optional iCloud copies.
@@ -255,12 +250,9 @@ struct SettingsScreen: View {
 
   // MARK: - iCloud and Export
 
-  /// The iCloud row's second line, in plain words. The "Needs attention"
-  /// constant comes from AppState and is compared by equality; everything
-  /// else is read from the saved link, not from status wording.
-  private var iCloudNeedsAttention: Bool {
-    state.iCloudStatus == Self.iCloudNeedsAttentionStatus
-  }
+  /// The iCloud row's second line, in plain words: a failed transfer
+  /// (`AppState.iCloudStatusKind`), otherwise the saved link.
+  private var iCloudNeedsAttention: Bool { state.iCloudStatusKind == .needsAttention }
 
   private var iCloudRowStatus: String {
     if iCloudNeedsAttention { return "Needs attention" }
@@ -800,7 +792,8 @@ struct SettingsScreen: View {
       state.presentUserFacingError(error)
     case nil:
       revealedRecoveryCode = ""
-      state.notice = "Export cancelled. The temporary file was deleted and no code was shown."
+      state.postNotice(
+        "Export cancelled. The temporary file was deleted and no code was shown.", tone: .neutral)
       state.error = ""
     }
   }
@@ -821,11 +814,6 @@ struct SettingsScreen: View {
       "Code copied to this device only. It expires in one minute.", kind: .notice)
   }
 
-  /// Words in a restore notice that mean AppState is doing something besides
-  /// confirming the restore (an interrupted upload being finished); such a
-  /// notice stays in the toast.
-  private static let followUpNoticeWords = ["upload", "finishing", "sync"]
-
   private func restoreRecoveryKit(from url: URL) {
     guard !isRecoveryRestoreRunning else { return }
     let code = restoreCode
@@ -841,18 +829,23 @@ struct SettingsScreen: View {
         }
         isRecoveryRestoreRunning = false
       }
-      await state.restoreRecoveryKit(from: url, recoveryCode: code)
-      // Success is judged without AppState's exact wording: no error, and a
-      // notice that says the key was restored.
-      let notice = state.notice.lowercased()
-      guard state.error.isEmpty, notice.contains("restored") else { return }
+      let outcome = await state.restoreRecoveryKit(from: url, recoveryCode: code)
+      guard outcome != .notRestored else { return }
       // The code has done its job; it doesn't stay on screen.
       restoreCode = ""
       revealsRestoreCode = false
-      restoreSucceeded = true
-      // A plain confirmation is explained inline; a notice that mentions
-      // another action stays in the toast.
-      if !Self.followUpNoticeWords.contains(where: { notice.contains($0) }) { state.notice = "" }
+      switch outcome {
+      case .restored:
+        // A plain confirmation is explained inline, not in the toast.
+        restoreSucceeded = true
+        state.notice = ""
+      case .restoredWithFollowUp:
+        // What comes next (a finishing upload, a read-only portfolio) stays in
+        // the toast; the inline panel only says the key is back.
+        restoreSucceeded = state.error.isEmpty
+      case .notRestored:
+        break
+      }
       AtlasAccessibilityAnnouncer.shared.announceEvent(
         "Encryption key restored on this device.", kind: .notice)
     }

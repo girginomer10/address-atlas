@@ -1,3 +1,10 @@
+> **Historical.** This note records the 2026-10-06 iOS pass, which used the old
+> nine-section layout (Portfolio, Wallets, Assets, Tokens, Snapshots, Exchanges,
+> iCloud, Export, Settings) and a "More" list. The November 2026 redesign
+> replaced that structure with five tabs. For the current screens, see
+> [`native/AddressAtlasiOS/README.md`](../native/AddressAtlasiOS/README.md) and
+> [`memory/decisions/2026-10-06-ios-screen-conventions.md`](../memory/decisions/2026-10-06-ios-screen-conventions.md).
+
 # iOS polish pass — simulator walkthrough findings
 
 Date: 6 October 2026. Reviewer: Claude, driving a fresh iPhone 17 Pro simulator

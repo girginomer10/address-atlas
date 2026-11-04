@@ -574,8 +574,9 @@ private struct ExportScreenPreviewSheet: View {
               .font(AtlasTheme.font(.body, .callout))
               .foregroundStyle(AtlasTheme.ink2)
               .fixedSize(horizontal: false, vertical: true)
-            Text(model.sourceLineCount == 1 ? "1 line" : "\(model.sourceLineCount) lines")
-              .font(AtlasTheme.font(.label, .caption))
+            let lineCount = model.sourceLineCount == 1 ? "1 line" : "\(model.sourceLineCount) lines"
+            Text(lineCount)
+              .font(AtlasTheme.font(.label, .caption, figuresIn: lineCount))
               .foregroundStyle(AtlasTheme.ink3)
               .accessibilityLabel(model.accessibilitySummaryLabel)
           }

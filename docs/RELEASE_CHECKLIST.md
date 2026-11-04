@@ -205,8 +205,8 @@ The direct-download and Mac App Store channels use different certificates, packa
   - Export a recovery kit to Files, verify the displayed code is stored
     separately, then restore it from the Unlock screen through Files and
     confirm the vault unlocks.
-  - On an unsigned or simulator build, open **iCloud** and confirm the clear
-    unavailable message; no CloudKit request may be attempted.
+  - On an unsigned or simulator build, open **Settings**, then **iCloud**, and
+    confirm the clear unavailable message; no CloudKit request may be attempted.
 
 ## Data-Safety Checks
 

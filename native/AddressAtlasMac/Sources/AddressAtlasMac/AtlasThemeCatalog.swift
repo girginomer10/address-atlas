@@ -421,9 +421,12 @@ enum AtlasThemeCatalog {
     categorical: [
       0xC8FF4D, 0xE8EBE6, 0x8FB83A, 0x8F968C, 0x5C7A24, 0xB8BEB3, 0x6C7269, 0xA8E02A,
     ],
+    // Lime for the liquid state, then four hues far from it and from each other, so
+    // the states tell apart in the strip and the amount history (the earlier
+    // near-white and olive steps did not). Grey stays for "sources changed".
     states: [
-      .liquid: 0xC8FF4D, .staked: 0xE8EBE6, .unbonding: 0x8F968C, .rewards: 0x8FB83A,
-      .onExchange: 0x5C7A24,
+      .liquid: 0xC8FF4D, .staked: 0x4DD8FF, .unbonding: 0xFF9F43, .rewards: 0xFF6FB5,
+      .onExchange: 0xA98BFF,
     ],
     kinds: [
       .native: 0xC8FF4D, .stablecoin: 0xE8EBE6, .token: 0x8FB83A, .exchange: 0x8F968C,

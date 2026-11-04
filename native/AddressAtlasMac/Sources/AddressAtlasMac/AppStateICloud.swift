@@ -24,11 +24,11 @@ extension AppState {
       candidate.iCloudState = receipt
       candidate.syncState = SyncState()
       guard await save(candidate, projectedSyncVersion: nil) else {
-        iCloudStatus = "Saved to iCloud; not recorded on this \(PlatformCopy.deviceNoun)"
+        iCloudStatusKind = .savedNotRecorded
         // A retry is conflict-protected even after a crash before saving this receipt.
         return
       }
-      iCloudStatus = "Saved"
+      iCloudStatusKind = .saved
       notice = "Encrypted copy saved to iCloud."
     } catch { presentICloudError(error) }
   }
@@ -47,7 +47,7 @@ extension AppState {
       hasVaultRollbackCheckpoint = true
       guard revision == documentRevision else { throw ICloudVaultError.conflict }
       guard await save(normalizedLoadedDocument(incoming), projectedSyncVersion: nil) else { return }
-      iCloudStatus = "Restored"
+      iCloudStatusKind = .restored
       notice = "Restored from iCloud. You can bring back your previous copy from this screen."
     } catch { presentICloudError(error) }
   }
@@ -61,7 +61,7 @@ extension AppState {
       var candidate = document
       candidate.iCloudState = nil
       guard await save(candidate, projectedSyncVersion: nil) else { return }
-      iCloudStatus = "Deleted"
+      iCloudStatusKind = .deleted
       notice = "iCloud copy deleted. Your portfolio on this \(PlatformCopy.deviceNoun) was kept."
     } catch { presentICloudError(error) }
   }
@@ -71,7 +71,7 @@ extension AppState {
     var candidate = document
     candidate.iCloudState = nil
     guard await save(candidate, projectedSyncVersion: nil) else { return }
-    iCloudStatus = "Not connected"
+    iCloudStatusKind = .notConnected
     notice = "iCloud connection reset. Copies already in iCloud were kept. The next save or restore uses the current Apple Account."
   }
 
@@ -88,7 +88,7 @@ extension AppState {
   }
 
   private func presentICloudError(_ failure: Error) {
-    iCloudStatus = "Needs attention"
+    iCloudStatusKind = .needsAttention
     notice = ""
     // CloudKit diagnostics can contain record/account details; do not echo them.
     error = (failure as? ICloudVaultError)?.errorDescription

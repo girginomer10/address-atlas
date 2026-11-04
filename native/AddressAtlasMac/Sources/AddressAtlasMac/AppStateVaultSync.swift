@@ -45,11 +45,11 @@ extension AppState {
       return
     }
     guard !syncing else {
-      notice = "A sync is already running."
+      postNotice("A sync is already running.", tone: .neutral)
       return
     }
     guard beginSyncActivity(.uploadingVault) else {
-      notice = "A sync is already running."
+      postNotice("A sync is already running.", tone: .neutral)
       return
     }
     defer { finishSyncActivity(.uploadingVault) }
@@ -196,7 +196,7 @@ extension AppState {
       return
     }
     guard !syncing else {
-      notice = "A sync is already running."
+      postNotice("A sync is already running.", tone: .neutral)
       return
     }
     guard
@@ -216,7 +216,7 @@ extension AppState {
     }
 
     guard beginSyncActivity(.recoveringUpload) else {
-      notice = "A sync is already running."
+      postNotice("A sync is already running.", tone: .neutral)
       return
     }
     defer { finishSyncActivity(.recoveringUpload) }
@@ -534,13 +534,13 @@ extension AppState {
       return
     }
     guard !syncing else {
-      notice = "A sync is already running."
+      postNotice("A sync is already running.", tone: .neutral)
       return
     }
     let discardedWalletLabelDrafts = discardingLocalChanges ? walletLabelDrafts : [:]
     var discardAcceptedByRemoteStateMachine = false
     guard beginSyncActivity(.downloadingVault) else {
-      notice = "A sync is already running."
+      postNotice("A sync is already running.", tone: .neutral)
       return
     }
     defer {
@@ -963,18 +963,21 @@ extension AppState {
     }
   }
 
-  func restoreRecoveryKit(from url: URL, recoveryCode: String) async {
-    guard acceptsNewOperations else { return }
-    if isUnlocked, quarantinedPendingVaultUpload == nil, !canMutateVault() { return }
+  @discardableResult
+  func restoreRecoveryKit(from url: URL, recoveryCode: String) async
+    -> RecoveryKitRestoreOutcome
+  {
+    guard acceptsNewOperations else { return .notRestored }
+    if isUnlocked, quarantinedPendingVaultUpload == nil, !canMutateVault() { return .notRestored }
     if isUnlocked, quarantinedPendingVaultUpload != nil,
       syncing || scanning || isPersisting || isValidatingExchangeCredentials
     {
       error = "Wait for the current task to finish before restoring the recovery kit."
-      return
+      return .notRestored
     }
     guard !isUnlocking else {
-      notice = "Unlocking or recovery is already in progress."
-      return
+      postNotice("Unlocking or recovery is already in progress.", tone: .neutral)
+      return .notRestored
     }
     isUnlocking = true
     defer { isUnlocking = false }
@@ -1051,9 +1054,11 @@ extension AppState {
       if pendingUpload != nil {
         await recoverPendingVaultUpload()
       }
+      return quarantinedUpload != nil || pendingUpload != nil ? .restoredWithFollowUp : .restored
     } catch {
       recordDiagnosticFailure(.recoveryKitRestoreFailed)
       presentUserFacingError(error)
+      return .notRestored
     }
   }
 

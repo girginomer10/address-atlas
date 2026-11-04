@@ -195,17 +195,17 @@ struct SlopeChartView: View {
     }
     let headerY = plot.rect.minY - 5
     context.historyDraw(
-      HistoryChartFormat.day(model.olderDate, timeZone: timeZone), font: style.captionFont,
+      HistoryChartFormat.day(model.olderDate, timeZone: timeZone), font: style.captionFigureFont,
       color: style.ink2, at: CGPoint(x: plot.leftX, y: headerY), anchor: .bottom)
     context.historyDraw(
-      HistoryChartFormat.day(model.newerDate, timeZone: timeZone), font: style.captionFont,
+      HistoryChartFormat.day(model.newerDate, timeZone: timeZone), font: style.captionFigureFont,
       color: style.ink2, at: CGPoint(x: plot.rightX, y: headerY), anchor: .bottom)
 
     // The divider above the coins that sit outside the ranked rows.
     if model.slotCount > model.rankedSlots {
       let y = plot.y(slot: model.rankedSlots)
       let caption = context.historyDraw(
-        "Outside the top \(model.rankedSlots)", font: style.smallFont, color: style.ink3,
+        "Outside the top \(model.rankedSlots)", font: style.smallFigureFont, color: style.ink3,
         at: CGPoint(x: plot.rect.minX + 2, y: y), anchor: .leading)
       var divider = Path()
       divider.move(to: CGPoint(x: caption.maxX + 8, y: y))
@@ -265,7 +265,7 @@ struct SlopeChartView: View {
     style: HistoryChartStyle, plot: Plot, dimmed: Bool
   ) {
     let strong = style.strongFont
-    let small = style.captionFont
+    let small = style.captionFigureFont
     let ink = dimmed ? style.ink3 : style.ink
     let faint = style.ink3
     let gutter = plot.leftX - plot.rect.minX

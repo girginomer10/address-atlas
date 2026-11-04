@@ -44,7 +44,7 @@ struct HistoryView: View {
         VStack(alignment: .leading, spacing: 12) {
           MacHeading("Snapshots") {
             Text(MacFormat.count(runs.count, "snapshot"))
-              .font(AtlasTheme.font(.label, .callout, weight: .medium))
+              .font(AtlasTheme.font(.label, .callout, weight: .medium, figuresIn: MacFormat.count(runs.count, "snapshot")))
               .foregroundStyle(AtlasTheme.ink3)
           }
           Surface(padding: 0) {
@@ -109,7 +109,7 @@ struct HistoryView: View {
               .foregroundStyle(AtlasTheme.ink)
               .lineLimit(1)
             Text(row.detailText)
-              .font(AtlasTheme.font(.label, .caption))
+              .font(AtlasTheme.font(.label, .caption, figuresIn: row.detailText))
               .foregroundStyle(AtlasTheme.ink3)
               .lineLimit(1)
           }

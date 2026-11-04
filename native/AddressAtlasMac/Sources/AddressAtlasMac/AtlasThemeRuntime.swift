@@ -152,6 +152,18 @@ enum AtlasTheme {
       role, size: AtlasThemeFonts.pointSize(for: textStyle), relativeTo: textStyle, weight: weight)
   }
 
+  /// Themed font for text that may carry figures. Pixelify Sans (Pixel display)
+  /// and Silkscreen (Pixel labels) draw a five like an S, so "15 of 100" reads
+  /// "1S of 100"; where `role` resolves to one of them and `text` has a digit,
+  /// the theme's number face is used instead. Elsewhere this is `font(_:_:weight:)`.
+  static func font(
+    _ role: AtlasFontRole, _ textStyle: Font.TextStyle, weight: Font.Weight? = nil,
+    figuresIn text: String
+  ) -> Font {
+    let readable = typography[role].family.drawsFiveLikeS && text.contains(where: \.isNumber)
+    return font(readable ? .number : role, textStyle, weight: weight)
+  }
+
   /// Letter spacing, in points, for `role` at `size`.
   static func tracking(_ role: AtlasFontRole, size: CGFloat) -> CGFloat {
     typography[role].tracking * size

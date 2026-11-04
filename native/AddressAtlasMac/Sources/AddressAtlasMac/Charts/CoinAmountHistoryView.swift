@@ -206,7 +206,7 @@ struct CoinAmountHistoryView: View {
   ) {
     let compact = input.density == .compact
     let plot = geo.plot
-    let axisFont = style.smallFont
+    let axisFont = style.smallFigureFont
 
     // Gridlines and amount labels.
     for tick in geo.ticks {
@@ -290,7 +290,7 @@ struct CoinAmountHistoryView: View {
       rule.addLine(to: CGPoint(x: x, y: plot.maxY))
       context.stroke(
         rule, with: .color(style.ink.opacity(0.75)), style: StrokeStyle(lineWidth: 1.25, dash: [3, 3]))
-      let font = style.captionFont
+      let font = style.captionFigureFont
       let size = context.historyMeasure(annotation.text, font: font)
       let row = order % 2
       let rightSide = x + 6 + size.width <= plot.maxX

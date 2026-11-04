@@ -48,11 +48,63 @@ enum DamagedVaultRecoveryAvailability: Equatable, Sendable {
   case quarantineOnly
 }
 
+/// How a notice reads. The state layer says it when it posts the notice
+/// (`AppState.postNotice(_:tone:)`), so a screen never has to infer it from
+/// the wording. A notice set directly is `.success`.
+enum NoticeTone: Equatable, Sendable {
+  /// Work that finished.
+  case success
+  /// Information, not an outcome: a cancellation, or "already running".
+  case neutral
+  /// Work that finished with something the person should look at.
+  case warning
+}
+
+/// Where the last iCloud transfer stands. `AppState.iCloudStatus` is the text
+/// shown for it; screens branch on this value instead of the text.
+enum ICloudStatusKind: Equatable, Sendable {
+  case notConnected
+  case saved
+  /// The copy reached iCloud, but this device couldn't record that it did.
+  case savedNotRecorded
+  case restored
+  case deleted
+  /// The last transfer failed.
+  case needsAttention
+
+  var text: String {
+    switch self {
+    case .notConnected: "Not connected"
+    case .saved: "Saved"
+    case .savedNotRecorded: "Saved to iCloud; not recorded on this \(PlatformCopy.deviceNoun)"
+    case .restored: "Restored"
+    case .deleted: "Deleted"
+    case .needsAttention: "Needs attention"
+    }
+  }
+}
+
+/// What `AppState.restoreRecoveryKit(from:recoveryCode:)` did. The notice or
+/// error it also sets carries the words; screens branch on this.
+enum RecoveryKitRestoreOutcome: Equatable, Sendable {
+  /// The kit was refused, or the call was ignored (another unlock or task was
+  /// in progress). `AppState.error` or `notice` says why.
+  case notRestored
+  /// The encryption key is back and the portfolio is open.
+  case restored
+  /// The encryption key is back, but something still needs the person: an
+  /// interrupted upload is being finished, or the portfolio is read-only until
+  /// a damaged upload record is discarded. `notice` or `error` says which.
+  case restoredWithFollowUp
+}
+
 @MainActor
 final class AppState: ObservableObject {
   // The retired server adapter remains solely for migration regression tests.
   var legacyServerSyncEnabled = false
-  @Published var iCloudStatus = "Not connected"
+  @Published var iCloudStatusKind = ICloudStatusKind.notConnected
+  /// The text shown for the last iCloud transfer.
+  var iCloudStatus: String { iCloudStatusKind.text }
   var iCloudService: (any ICloudVaultSyncing)?
   @Published var document = VaultDocument() {
     didSet {
@@ -96,9 +148,13 @@ final class AppState: ObservableObject {
   var lastSaveRemovedScanRunCount = 0
   @Published var notice = "" {
     didSet {
+      // A notice set directly reads as success; `postNotice` sets the tone after.
+      if noticeTone != .success { noticeTone = .success }
       if !notice.isEmpty, !error.isEmpty { error = "" }
     }
   }
+  /// How `notice` reads. Reset to `.success` whenever `notice` is assigned.
+  @Published private(set) var noticeTone = NoticeTone.success
   @Published var error = "" {
     didSet {
       if !error.isEmpty, !notice.isEmpty { notice = "" }
@@ -485,6 +541,14 @@ final class AppState: ObservableObject {
     error = ""
   }
 
+  /// Posts a notice with the tone it reads in. Prefer this over assigning
+  /// `notice` for a cancellation, an "already running" refusal, or a result that
+  /// needs a second look; screens style the message from `noticeTone`.
+  func postNotice(_ text: String, tone: NoticeTone = .success) {
+    notice = text
+    noticeTone = text.isEmpty ? .success : tone
+  }
+
   func presentUserFacingError(
     _ failure: Error,
     cancellationNotice: String = "Cancelled."
@@ -493,7 +557,7 @@ final class AppState: ObservableObject {
       error = message
     } else {
       error = ""
-      notice = cancellationNotice
+      postNotice(cancellationNotice, tone: .neutral)
     }
   }
 
@@ -839,7 +903,7 @@ final class AppState: ObservableObject {
       return
     }
     guard beginSyncActivity(.retryingLocalSave) else {
-      notice = "A sync is already running."
+      postNotice("A sync is already running.", tone: .neutral)
       return
     }
     defer { finishSyncActivity(.retryingLocalSave) }

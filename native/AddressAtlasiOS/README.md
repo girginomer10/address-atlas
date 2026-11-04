@@ -2,7 +2,21 @@
 
 Native SwiftUI iOS app for Address Atlas, for iPhone (iOS 17 or newer) and iPad. It is the same product as the Mac app with the same read-only boundary: public wallet addresses and balance-only exchange credentials, never seed phrases, private keys, signing, trading, or withdrawal permission.
 
-This target is a **preview** with its own App Store Connect record. See the [release checkpoint](../../app-store/README.md#release-checkpoint--october-6-2026) for signing, processing, and TestFlight distribution evidence. It has been built and exercised on the iPhone 17 Pro simulator (the vault key is created in the Keychain, the encrypted SQLite vault initializes with the strict durability pragmas, and the tab shell renders). Physical-device acceptance and Mac-to-iPhone iCloud restore remain unverified.
+This target is a **preview** with its own App Store Connect record. See the [release checkpoint](../../app-store/README.md#release-checkpoint--october-6-2026) for signing, processing, and TestFlight distribution evidence. It has been built and run on the iPhone 17 Pro and iPad Pro 11 simulators (iOS 26.5) with a synthetic portfolio (see [Demo fixture](#demo-fixture-debug-builds-only)). Sheets, add forms, and toasts were reviewed in code, not by tapping through them. Physical-device acceptance and Mac-to-iPhone iCloud restore remain unverified.
+
+## Screens
+
+The app has five sections (`AtlasSection`): **Portfolio**, **Assets**, **Sources**, **History**, and **Settings**. On iPhone they are tabs in a tab bar the app draws itself (`IOSTabBar`, so the theme's font and shape apply); on iPad they are a sidebar. Each section keeps its own navigation stack, and choosing the tab that is already showing returns to its first screen. A coin, a saved scan, iCloud, and Export are pushed screens (`IOSRoute`), not sections.
+
+- **Portfolio**: total value, change since the previous scan (only when both scans read the same sources), last scan time, and **Scan**. A switcher picks one of the 14 chart views, with **Group by** for the views that use it. Warnings sit next to the data they affect. Tapping a coin in a chart opens its page, a slice opens Assets limited to that slice, and a point in a history view opens that scan in History.
+- **Assets**: a list of coins, with search and a filter menu (hide coins without a price, hide small balances, set the threshold). A banner with **Clear** shows the slice a chart sent here. A coin's page shows its states (liquid, staked, unbonding, rewards, on an exchange), an unlock timeline when something is unbonding, amount history, custody, and its holdings with explorer links.
+- **Sources**: Wallets, Exchanges, Holdings (manual), and Tokens (custom) behind a chip switcher, with one **+** menu to add any of them. Wallets and exchanges are read-only: public addresses and read-only API keys only.
+- **History**: an over-time chart and the list of saved scans; a scan opens its own page.
+- **Settings**: **Theme**, preferences, **iCloud** and **Export** (each opens a pushed screen), privacy, recovery kit, support links, diagnostics, and about.
+
+A new install with no sources shows a one-page walkthrough (`OnboardingScreen`) before Portfolio. `UnlockScreen` handles the locked state and recovery kit restore.
+
+**Themes.** Settings > Theme chooses one of six themes: Chain colours, Candy brutal, Riso zine, Heatmap, Pixel, and Acid. The app restyles without a relaunch. Riso zine is light only, Acid is dark only, and the other four follow light and dark mode.
 
 ## Directory layout
 
@@ -23,7 +37,15 @@ native/AddressAtlasiOS/
 └── build/                          DerivedData from build-ios-app.sh; git-ignored
 ```
 
-`Sources/AddressAtlasiOS` holds `AddressAtlasiOSApp.swift` (entry point), `RootView.swift` (scene-phase handling and the background flush), `MainShell.swift` (tab shell on iPhone, `NavigationSplitView` on iPad), `UnlockScreen.swift` (unlock and recovery-kit restore), one screen per section (Portfolio, Wallets, Assets, Tokens, Snapshots, Exchanges, iCloud, Export, Settings), `AtlasSection.swift`, and `IOSSupport.swift` (iOS lifecycle helpers on the shared `AppState`). Everything else comes from the Mac package.
+`Sources/AddressAtlasiOS` holds:
+
+- `AddressAtlasiOSApp.swift` (entry point) and `RootView.swift` (scene-phase handling and the background flush);
+- `AtlasSection.swift` (the five sections) and `MainShell.swift` (`TabShell` on iPhone, `SplitShell` with a `NavigationSplitView` on iPad, and the destination for each pushed route);
+- `IOSTheme.swift` (themed title, card, chip, notice, empty state, and tab bar), `IOSComponents.swift` (navigation model, sheets, toast, privacy cover), `IOSCoinViews.swift` (coin rows, chart frame, chart taps), and `HoldingViews.swift` (holding row and detail sheet);
+- one file per screen: `PortfolioScreen`, `CoinDetailScreen`, `AssetsScreen`, `HistoryScreen` (with `SnapshotDetailScreen`), `SourcesScreen` (hosting `WalletsScreen`, `ExchangesScreen`, and `TokensScreen`), `SettingsScreen` (with the pushed `ICloudScreen` and `ExportScreen`), `OnboardingScreen`, and `UnlockScreen`;
+- `IOSSupport.swift` (iOS lifecycle helpers on the shared `AppState`) and `DemoFixture.swift` (Debug only, see below).
+
+Everything else comes from the Mac package.
 
 ## Commands
 
@@ -54,7 +76,7 @@ Both apps therefore report one product version and one build number. The CI job 
 
 ## Signing
 
-- **Simulator builds are ad-hoc signed by Xcode on purpose.** Without an application identifier the iOS Keychain refuses every request with `errSecMissingEntitlement`, and the vault cannot unlock. `npm run native:ios:build` and `npm run native:ios:run` keep signing enabled for that reason.
+- **Simulator builds are ad-hoc signed by Xcode on purpose.** Without an application identifier the iOS Keychain refuses every request with `errSecMissingEntitlement`, and the saved portfolio cannot unlock. `npm run native:ios:build` and `npm run native:ios:run` keep signing enabled for that reason.
 - `--unsigned` (`npm run native:ios:build:unsigned`) disables code signing for a compile-only check on machines without any signing identity. The resulting app carries no entitlements, so the Keychain and iCloud paths cannot be exercised with it.
 - Device builds use automatic signing with team `VWW3GZL279` (`DEVELOPMENT_TEAM` in `project.yml`, `CODE_SIGN_STYLE = Automatic`). The explicit App ID `com.addressatlas.ios` and an iOS distribution profile now exist with the shared iCloud container, Production environment, and keychain groups. Verify these grants on the actual signed bundle; profile creation alone does not prove runtime iCloud operation. The [release checkpoint](../../app-store/README.md#release-checkpoint--october-6-2026) records the identities and artifact outcome.
 - For a manually provisioned archive, scope `PROVISIONING_PROFILE_SPECIFIER` to the iOS app target. Passing it globally to `xcodebuild` also applies it to the SwiftPM library and causes signing to fail. The first distribution archive used a temporary copy of the Xcode project with app-target signing settings so the repository and embedded source provenance stayed unchanged.
@@ -75,20 +97,31 @@ At runtime the shared `ICloudVaultService` checks whether the running build actu
 
 ## Storage and lifecycle
 
-The encrypted vault lives at `<app container>/Library/Application Support/AddressAtlas/vault.sqlite`, the same relative layout as the Mac. The vault key is a Keychain item with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, so it never leaves the device or enters a backup; restoring to a new device needs the recovery kit or the iCloud copy. `KeychainVaultKeyStore` forces the macOS legacy-keychain migration off on iOS because that migration's delete query would match the freshly saved item.
+The encrypted portfolio lives at `<app container>/Library/Application Support/AddressAtlas/vault.sqlite`, the same relative layout as the Mac. Its encryption key is a Keychain item with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, so it never leaves the device or enters a backup; restoring to a new device needs the recovery kit or the iCloud copy. `KeychainVaultKeyStore` forces the macOS legacy-keychain migration off on iOS because that migration's delete query would match the freshly saved item.
 
-Scans and iCloud transfers are foreground-only; the target declares no `UIBackgroundModes`. When the app moves to the background, `RootView` takes a background-time assertion and `AppState.flushBeforeSuspension()` writes wallet-label drafts and pending persistence through the shared termination lane. If iOS runs out of background time while a scan is still running, the scan is cancelled. There is no termination hook: iOS may suspend and later kill the process without notice, so durable state must already be flushed on backgrounding.
+Scans and iCloud transfers are foreground-only; the target declares no `UIBackgroundModes`. When the app moves to the background, `RootView` takes a background-time assertion and `AppState.flushBeforeSuspension()` writes wallet-label drafts and pending persistence through the shared termination lane. If iOS runs out of background time while a scan is still running, the scan is cancelled. There is no termination hook: iOS may suspend and later kill the process without notice, so everything must already be saved when the app moves to the background.
 
 ## What is shared with the Mac app
 
 The target links the `AddressAtlasCore` library product from `../AddressAtlasMac` (the package declares `.iOS(.v17)` alongside `.macOS(.v14)`) and compiles these files straight from `../AddressAtlasMac/Sources/AddressAtlasMac`:
 
-- every `AppState*.swift` file (state transitions, validation, scanning, exchange connections, iCloud, vault mutations, persistence, diagnostics, termination lane);
-- `UserFacingErrors.swift`, `ICloudVaultService.swift`, `PasskeyWebAuthenticator.swift`, `AtlasDesignSystem.swift`, `AtlasFormatting.swift`, `ExportPipeline.swift`.
+- every `AppState*.swift` file (state transitions, validation, scanning, exchange connections, iCloud, saved-data changes, persistence, diagnostics, termination lane, chart data in `AppStateCharts.swift`);
+- `UserFacingErrors.swift`, `ICloudVaultService.swift`, `PasskeyWebAuthenticator.swift`, `AtlasDesignSystem.swift`, `AtlasFormatting.swift`, `ExportPipeline.swift`;
+- the theme engine (`AtlasThemeModel.swift`, `AtlasThemeCatalog.swift`, `AtlasThemeRuntime.swift`, `AtlasThemePicker.swift`, `AtlasDisplayPreferences.swift`, `AtlasFonts.swift`) and the `Charts/` folder with the 14 chart views and the coin widgets;
+- the bundled `Fonts/` folder, which `project.yml` excludes as sources and ships as a folder resource.
 
-Excluded as macOS-only (the `excludes` list in `project.yml`): `AddressAtlasApp.swift`, `AppShellViews.swift`, `PortfolioViews.swift`, `PortfolioComponents.swift`, `ExchangeSyncViews.swift`, `ICloudSyncView.swift`, `PrivacySafeDiagnosticsView.swift`.
+Excluded as macOS-only (the `excludes` list in `project.yml`): `AddressAtlasApp.swift`, `AppShellViews.swift`, `PortfolioViews.swift`, `PortfolioComponents.swift`, `ExchangeSyncViews.swift`, `ICloudSyncView.swift`, `PrivacySafeDiagnosticsView.swift`, and the `MacScreens/` folder (Mac navigation, Portfolio, Assets, History, and coin detail).
 
 Platform differences inside shared files sit behind `#if canImport(AppKit)` / `#if os(macOS)`: the theme uses `UIColor` dynamic providers on iOS, accessibility announcements use `UIAccessibility`, the entitlement probe is described above, and user-facing device nouns come from `PlatformCopy` in `AddressAtlasCore` ("Mac" on macOS, "device" on iOS). Any new file in the shared directory is picked up by the iOS target by default. If it needs AppKit, guard it rather than adding an exclusion, then regenerate and commit the project; CI fails when a shared source is missing from `AddressAtlasiOS.xcodeproj`. The build uses strict concurrency checking and treats warnings as errors.
+
+## Demo fixture (Debug builds only)
+
+`DemoFixture.swift` starts the app on a synthetic, offline portfolio (5 wallets, a Kraken connection, a manual holding, 30 scans over 42 days, an unbonding ATOM amount, one coin without a price) so every screen can be reviewed in the simulator. It uses a throw-away temporary directory, an in-memory key, and a network client that always fails, so it never touches a real portfolio, Keychain item, or provider. Launch arguments, all optional except the first: `-AtlasDemoFixture full|empty`, `-AtlasDemoTab portfolio|assets|sources|history|settings`, `-AtlasDemoRoute coin:ATOM|snapshot:latest|iCloud|export`, `-AtlasDemoSegment wallets|exchanges|holdings|tokens`, `-AtlasDemoAction addWallet|connectExchange|addManualHolding|addCustomToken`, `-AtlasDemoSliceFilter network:ethereum|state:staked`, `-AtlasDemoUnlock error|damaged|quarantine` (with `-AtlasDemoFixture empty`), and `-AtlasDemoScrollY 700`. Theme and appearance use the normal preference keys, for example `xcrun simctl launch booted com.addressatlas.ios -AtlasDemoFixture full -display.theme.v1 candy -display.appearanceMode.v1 dark`. The review pictures taken this way are in [`docs/design/screenshots/phase3/ios/`](../../docs/design/screenshots/phase3/ios/). All of the fixture and every call to it sit inside `#if DEBUG`; the proof is that `strings -a` on a Release binary shows none of `AtlasDemo|DemoFixture`:
+
+```bash
+./build-ios-app.sh --simulator --configuration Release
+strings -a "build/DerivedData/Build/Products/Release-iphonesimulator/Address Atlas.app/Address Atlas" | grep -E "AtlasDemo|DemoFixture"   # prints nothing
+```
 
 ## Open external gates
 

@@ -156,6 +156,23 @@ struct HistoryChartStyle {
   func numberFont(_ size: CGFloat, relativeTo style: Font.TextStyle = .body) -> Font {
     tokens.font(.number, size: size, relativeTo: style, weight: nil)
   }
+  /// The Pixel theme's label face (Silkscreen) draws a five like an S, so a caption
+  /// that carries a figure ("5.1094 ETH", "Nov 5") is drawn in the number face.
+  private var labelFaceMisleadsFigures: Bool { tokens.typography.label.family.drawsFiveLikeS }
+  /// Axis ticks and dates: always figures.
+  var captionFigureFont: Font {
+    labelFaceMisleadsFigures ? numberFont(isCompact ? 9.5 : 11, relativeTo: .caption) : captionFont
+  }
+  var smallFigureFont: Font {
+    labelFaceMisleadsFigures ? numberFont(isCompact ? 9 : 10, relativeTo: .caption2) : smallFont
+  }
+  /// A caption or small text that may carry a figure: the number face when it does.
+  func captionFont(figuresIn text: String) -> Font {
+    text.contains(where: \.isNumber) ? captionFigureFont : captionFont
+  }
+  func smallFont(figuresIn text: String) -> Font {
+    text.contains(where: \.isNumber) ? smallFigureFont : smallFont
+  }
   /// Pixelify Sans, the Pixel theme's display face, draws a five like an S ("$5,082"
   /// reads "$S,082"), and display text in these charts is mostly figures, so there it
   /// is drawn in the theme's number face.
@@ -305,7 +322,7 @@ struct HistoryTooltip: Equatable {
   ) {
     guard !lines.isEmpty else { return }
     let titleFont = style.strongFont
-    let bodyFont = style.captionFont
+    let bodyFont = style.captionFigureFont
     var sizes: [CGSize] = []
     for (index, line) in lines.enumerated() {
       sizes.append(context.historyMeasure(line, font: index == 0 ? titleFont : bodyFont))
@@ -427,7 +444,7 @@ struct HistoryChartMessage: View {
         .multilineTextAlignment(.center)
       if let detail {
         Text(verbatim: detail)
-          .font(style.captionFont)
+          .font(style.captionFont(figuresIn: detail))
           .foregroundStyle(style.ink2)
           .multilineTextAlignment(.center)
       }
@@ -465,7 +482,7 @@ struct HistoryLegend: View {
               }
             }
           Text(verbatim: item.label)
-            .font(style.captionFont)
+            .font(style.captionFont(figuresIn: item.label))
             .foregroundStyle(style.ink2)
             .lineLimit(1)
         }
@@ -679,7 +696,7 @@ struct HistoryEffectsBar: View {
       ForEach(effects) { effect in
         GridRow {
           Text(verbatim: effect.title)
-            .font(style.captionFont)
+            .font(style.captionFont(figuresIn: effect.title))
             .foregroundStyle(style.ink2)
             .lineLimit(2)
             .frame(maxWidth: compact ? 120 : 190, alignment: .leading)

@@ -50,12 +50,10 @@ old words):
 | unbonding ("Unbonding: 24.79 ATOM, free on 16 Nov") | |
 | stake account (staked, in cooldown, ready to withdraw) | |
 
-Exact strings other code depends on (do not reword without changing the
-reader): `iCloudStatus` values ("Not connected", "Saved", "Restored", "Deleted",
-"Needs attention", "Saved to iCloud; not recorded on this <device>"); notices
-that contain "warning", "cancelled" or "already running" (the iOS toast tone is
-chosen from these substrings, case-insensitive); the "Encryption key restored"
-notice prefix. Scan warnings still use the "<network> · <short address>: <text>"
+No code depends on the wording of notices or iCloud statuses any more: the iOS
+screens read `AppState.noticeTone`, `iCloudStatusKind` and the
+`RecoveryKitRestoreOutcome` returned by `restoreRecoveryKit` (see
+`2026-11-04-typed-state-signals.md`). Scan warnings still use the "<network> · <short address>: <text>"
 and "<exchange>: <text>" shapes that `ScanWarningCopy` rewrites.
 
 ## Consequences

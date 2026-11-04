@@ -20,7 +20,7 @@ struct AssetsView: View {
       trailing: {
         if snapshot.hasScan {
           Text(MacFormat.count(rows.count, "asset"))
-            .font(AtlasTheme.font(.label, .callout, weight: .medium))
+            .font(AtlasTheme.font(.label, .callout, weight: .medium, figuresIn: MacFormat.count(rows.count, "asset")))
             .foregroundStyle(AtlasTheme.ink3)
         }
       }

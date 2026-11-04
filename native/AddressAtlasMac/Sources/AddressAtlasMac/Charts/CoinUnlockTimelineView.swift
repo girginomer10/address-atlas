@@ -147,7 +147,7 @@ struct CoinUnlockTimelineView: View {
         context.stroke(tick, with: .color(style.ink), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
 
         // Labels: today above; dates below, skipping any that would collide.
-        let smallFont = style.captionFont
+        let smallFont = style.captionFigureFont
         var drawn: [CGRect] = []
         func place(_ text: String, at point: CGPoint, anchor: UnitPoint, color: Color) {
           let size = context.historyMeasure(text, font: smallFont)
@@ -235,7 +235,7 @@ struct CoinUnlockTimelineView: View {
       }
       if let seen = model.seenSinceText {
         Text(verbatim: seen)
-          .font(style.captionFont)
+          .font(style.captionFont(figuresIn: seen))
           .foregroundStyle(style.ink3)
           .padding(.leading, 20)
       }
@@ -264,7 +264,7 @@ struct CoinUnlockTimelineView: View {
           .fixedSize(horizontal: false, vertical: true)
         if let secondary {
           Text(verbatim: secondary)
-            .font(style.captionFont)
+            .font(style.captionFont(figuresIn: secondary))
             .foregroundStyle(style.ink3)
         }
       }
@@ -283,7 +283,7 @@ struct CoinUnlockTimelineView: View {
       ?? model.undated.map { model.sentence(for: $0) } ?? ""
     let extra = model.dated.count + (model.undated == nil ? 0 : 1) - 1
     return Text(verbatim: extra > 0 ? "\(first) and \(extra) more" : first)
-      .font(style.captionFont)
+      .font(style.captionFont(figuresIn: extra > 0 ? "\(first) and \(extra) more" : first))
       .foregroundStyle(style.ink2)
       .lineLimit(2)
       .fixedSize(horizontal: false, vertical: true)

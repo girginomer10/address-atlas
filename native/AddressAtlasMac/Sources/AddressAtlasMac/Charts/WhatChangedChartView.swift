@@ -61,7 +61,7 @@ struct WhatChangedChartView: View {
           .minimumScaleFactor(0.75)
         if !isCompact {
           Text(verbatim: WhatChangedModel.subline(waterfall))
-            .font(style.captionFont)
+            .font(style.captionFont(figuresIn: WhatChangedModel.subline(waterfall)))
             .foregroundStyle(style.ink3)
         }
       }
@@ -86,7 +86,7 @@ struct WhatChangedChartView: View {
     VStack(alignment: .leading, spacing: 2) {
       if !axis.isZeroBased {
         Text(verbatim: "The scale starts at \(HistoryChartFormat.usd(axis.low)).")
-          .font(style.smallFont)
+          .font(style.smallFigureFont)
           .foregroundStyle(style.ink3)
       }
       if waterfall.hasUnpricedHoldings {
@@ -248,7 +248,7 @@ struct WhatChangedChartView: View {
           slotWidth < 62 ? HistoryChartFormat.usdCompact(bar.value) : HistoryChartFormat.usd(bar.value)
       }
       if let fitted = context.historyFit(
-        valueText, font: style.smallFont, maxWidth: slotWidth + 8, minimumCharacters: 3)
+        valueText, font: style.smallFigureFont, maxWidth: slotWidth + 8, minimumCharacters: 3)
       {
         let tint: Color
         switch bar.kind {
@@ -256,7 +256,7 @@ struct WhatChangedChartView: View {
         default: tint = style.ink2
         }
         context.historyDraw(
-          fitted, font: style.smallFont, color: tint,
+          fitted, font: style.smallFigureFont, color: tint,
           at: CGPoint(x: column.midX, y: rect.minY - 3), anchor: .bottom)
       }
       let name: String

@@ -39,6 +39,12 @@ sources (the Mac-only `MacScreens/` and window views are excluded in
   cards need that room in their parents (no tight clipping, `iosListRow` insets).
 - Coin detail defaults to grouping by state when the coin is in more than one
   state, else by network; the choice is stored per device (`coin.grouping.v1`).
+- React to `AppState.noticeTone`, `iCloudStatusKind` and the `RecoveryKitRestoreOutcome`
+  that `restoreRecoveryKit` returns, never to notice or status wording; an ordinary
+  save posts no notice, so `IOSStatusToast` names it from the document
+  (`IOSSaveSummary`). See `memory/decisions/2026-11-04-typed-state-signals.md`.
+- Text with digits in the Pixel theme goes through `AtlasTheme.font(_:_:weight:figuresIn:)`
+  or the `.number` role (Pixelify Sans and Silkscreen draw a five like an S).
 - New files in this folder need `./native/AddressAtlasiOS/generate-project.sh`.
 - A Release build must contain no demo code: after touching debug paths, run
   `strings -a "Address Atlas" | grep -E "AtlasDemo|DemoFixture"` on the Release

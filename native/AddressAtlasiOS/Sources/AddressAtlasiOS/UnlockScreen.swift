@@ -12,8 +12,8 @@ import UniformTypeIdentifiers
 ///
 /// Keeps the macOS `UnlockView` confirmations and safety rules; the copy is
 /// shortened for a phone and diagnostics sit behind a disclosure. Nothing here
-/// depends on the exact wording of `state.notice` or `state.error`, only on
-/// whether an error is present and on a notice that says "restored".
+/// depends on the wording of `state.notice` or `state.error`; a recovery kit
+/// restore is judged by the `RecoveryKitRestoreOutcome` AppState returns.
 struct UnlockScreen: View {
   @EnvironmentObject private var state: AppState
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -285,20 +285,12 @@ struct UnlockScreen: View {
             url.stopAccessingSecurityScopedResource()
           }
         }
-        await state.restoreRecoveryKit(from: url, recoveryCode: recoveryCode)
-        // The restore worked when no error is left and the notice says the
-        // key was restored. The wording around that is the state layer's.
-        guard state.error.isEmpty, Self.isRestoreNotice(state.notice) else {
-          return
-        }
+        let outcome = await state.restoreRecoveryKit(from: url, recoveryCode: recoveryCode)
+        guard outcome != .notRestored else { return }
+        // The key is back; the code has done its job. The state layer's notice
+        // (or error, for a read-only portfolio) says what happens next.
         restoreCode = ""
         revealsRestoreCode = false
-        // Say what came back when the state layer only confirmed the restore;
-        // a notice that already says more (an interrupted upload, an empty
-        // vault) is kept as it is.
-        if Self.isBareRestoreConfirmation(state.notice) {
-          state.notice = "Encryption key restored. Your portfolio on this device is open."
-        }
       }
     case .failure(let error):
       // Closing the picker without a choice is not a failure.
@@ -307,19 +299,6 @@ struct UnlockScreen: View {
       state.error =
         "Couldn't open that file. Nothing in Keychain changed. Choose the recovery file again."
     }
-  }
-
-  private static func isRestoreNotice(_ notice: String) -> Bool {
-    notice.lowercased().contains("restored")
-  }
-
-  /// A restore notice of a single sentence: it confirms the restore and says
-  /// nothing else.
-  private static func isBareRestoreConfirmation(_ notice: String) -> Bool {
-    guard isRestoreNotice(notice) else { return false }
-    let sentences = notice.split(whereSeparator: { ".!?".contains($0) })
-      .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    return sentences.count == 1
   }
 
   // MARK: - Privacy-safe diagnostics

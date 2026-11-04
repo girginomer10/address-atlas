@@ -354,7 +354,7 @@ final class MacScreenFixture {
     // The latest scan also read a token that has no price yet.
     var latest = withManual(
       ChartFixture.run(day: ChartFixture.dayCount - 1, includeUnpriced: true))
-    latest.warnings = ["A price source was temporarily unavailable for one token."]
+    latest.warnings = ["MEME on Ethereum has no USD price, so it's left out of the total."]
     runs[runs.count - 1] = latest
 
     let wallets = [

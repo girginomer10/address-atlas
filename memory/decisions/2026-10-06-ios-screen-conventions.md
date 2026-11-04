@@ -50,9 +50,10 @@ items, no first run, status lines at the top of pages far from the action.
   detail sheet's `NavigationStack` (`TokensFormContainer(embedded:)`).
 - On iOS `AtlasTextFieldStyle` focuses the field when its padded area is
   tapped; the padding sits outside the UIKit text view.
-- Toast tones: success, warning (text mentions a warning), neutral
-  (cancelled/already running), error. Silent preference toggles show no toast;
-  routine saves no longer produce "Saved locally.".
+- Toast tones: success, warning, neutral (cancelled / already running), error,
+  from `AppState.noticeTone` (2026-11-04; earlier they were guessed from the
+  wording). Silent preference toggles show no toast; routine saves post no notice,
+  so the toast names them from the document.
 - Portfolio/Assets hide holdings whose source was removed or paused since the
   latest run and show a "Sources changed" banner; change-since-previous is only
   shown when both runs read the same sources (`AppStateScanning` helpers).
@@ -85,9 +86,10 @@ items, no first run, status lines at the top of pages far from the action.
   `.font(.callout)` (use `AtlasTheme.font(role, style)`).
 - Copy: no subtitles, eyebrows or slogans; privacy is explained once, in
   Settings; the walkthrough is one page; warnings sit next to the data they
-  affect. Code must not match AppState notice wording beyond the substrings
-  "warning", "cancelled", "already running", "restored" and the iCloud status
-  "Needs attention".
+  affect. Code must not match AppState notice or status wording at all: use
+  `noticeTone`, `iCloudStatusKind` and `RecoveryKitRestoreOutcome` (see
+  `2026-11-04-typed-state-signals.md`). The toast names an ordinary save from the
+  document (`IOSSaveSummary`) because AppState posts no notice for it.
 - Screenshots and review use the Debug-only `-AtlasDemoFixture` (see
   `DemoFixture.swift` and `docs/handoff/2026-11-04-redesign-phase3e-ios-screens.md`);
   after a change, grep a Release binary for `AtlasDemo`/`DemoFixture`.

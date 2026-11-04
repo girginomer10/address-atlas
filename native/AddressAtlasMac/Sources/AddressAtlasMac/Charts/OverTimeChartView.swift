@@ -207,13 +207,13 @@ struct OverTimeChartView: View {
         line, with: .color(value == 0 ? style.rule : style.ruleSoft),
         lineWidth: value == 0 ? 1 : 0.75)
       context.historyDraw(
-        HistoryChartFormat.usdCompact(value), font: style.smallFont, color: style.ink3,
+        HistoryChartFormat.usdCompact(value), font: style.smallFigureFont, color: style.ink3,
         at: CGPoint(x: plot.rect.minX - 6, y: y), anchor: .trailing)
     }
     // Date labels: as many as fit without touching.
     let dates = model.series.dates
     guard let first = dates.first, let last = dates.last else { return }
-    let sample = context.historyMeasure("28 Mmm", font: style.smallFont).width
+    let sample = context.historyMeasure("28 Mmm", font: style.smallFigureFont).width
     let count = max(2, min(6, Int(plot.rect.width / (sample + 22))))
     var lastEnd = -CGFloat.infinity
     for step in 0..<count {
@@ -222,11 +222,11 @@ struct OverTimeChartView: View {
       let x = plot.rect.minX + plot.rect.width * CGFloat(fraction)
       let anchor: UnitPoint = step == 0 ? .topLeading : (step == count - 1 ? .topTrailing : .top)
       let rect = context.historyMeasure(
-        HistoryChartFormat.day(date, timeZone: timeZone), font: style.smallFont)
+        HistoryChartFormat.day(date, timeZone: timeZone), font: style.smallFigureFont)
       let originX = x - rect.width * anchor.x
       guard originX >= lastEnd + 8 else { continue }
       context.historyDraw(
-        HistoryChartFormat.day(date, timeZone: timeZone), font: style.smallFont,
+        HistoryChartFormat.day(date, timeZone: timeZone), font: style.smallFigureFont,
         color: style.ink3, at: CGPoint(x: x, y: plot.rect.maxY + 6), anchor: anchor)
       lastEnd = originX + rect.width
     }
