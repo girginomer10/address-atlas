@@ -16,7 +16,7 @@ final class ShareSafeExportUITests: XCTestCase {
     XCTAssertEqual(json.displayName, "Share-safer JSON summary")
     XCTAssertTrue(csv.isShareSafer)
     XCTAssertTrue(json.isShareSafer)
-    XCTAssertTrue(ShareSafePortfolioReport.privacyNotice.contains("re-identify"))
+    XCTAssertTrue(ShareSafePortfolioReport.privacyNotice.contains("may still identify you"))
     XCTAssertTrue(ShareSafePortfolioReport.privacyNotice.contains("not anonymous"))
     XCTAssertTrue(ExportView.shareSaferExplanation.contains("omits addresses"))
     XCTAssertTrue(ExportView.shareSaferExplanation.contains("exact amounts"))

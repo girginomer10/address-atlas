@@ -102,7 +102,7 @@ extension AppStateNetworkBoundaryTests {
       state.document.exchangeConnections.first?.credentialScopeAssurance,
       .manualVerificationRequired
     )
-    XCTAssertTrue(state.notice.contains("could not be verified automatically"))
+    XCTAssertTrue(state.notice.contains("can't check this Kraken key's permissions"))
   }
 
   func testRemovingExchangeCredentialAtomicallyConsumesRollbackAndMarksRemoteCleanup()
