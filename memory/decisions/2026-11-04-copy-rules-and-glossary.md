@@ -3,7 +3,7 @@ title: User-facing copy rules and preferred terms
 date: 2026-11-04
 status: active
 tags: [decision, copy, documentation, errors, glossary]
-related_files: [docs/design/README.md, docs/design/round-one-rejected.html, native/AddressAtlasMac/Sources/AddressAtlasMac/UserFacingErrors.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/ExportPipeline.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/PlatformCopy.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/HTTPClient.swift, README.md, PRIVACY.md, app-store/metadata/en-US.md]
+related_files: [docs/design/README.md, docs/design/round-one-rejected.html, native/AddressAtlasMac/Sources/AddressAtlasMac/UserFacingErrors.swift, native/AddressAtlasMac/Sources/AddressAtlasMac/ExportPipeline.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/PlatformCopy.swift, native/AddressAtlasMac/Sources/AddressAtlasCore/Scanners/HTTPClient.swift, native/AddressAtlasiOS/Sources/AddressAtlasiOS/UnlockScreen.swift, native/AddressAtlasiOS/Sources/AddressAtlasiOS/ICloudScreen.swift, README.md, PRIVACY.md, app-store/metadata/en-US.md]
 ---
 
 ## Context
@@ -39,10 +39,16 @@ old words):
 | Say | Not |
 | --- | --- |
 | your portfolio, saved portfolio, saved data | vault |
-| backup copy (earlier copy when restoring) | rollback checkpoint, rollback point |
+| backup copy (saved before an iCloud restore; "earlier copy" when you restore it) | rollback checkpoint, rollback point, rollback copy |
 | server settings, built-in server settings | endpoint config, endpoint policy, bundled endpoints |
 | saved, couldn't confirm it was saved | durable, crash-durable, persistence |
-| set aside | quarantined |
+| set aside, "Set aside and start fresh" | quarantined, "start clean" |
+| earlier copy (the button and dialog that restore it), "Restore earlier copy" | previous copy, previous local copy, restore point |
+| damaged data, damaged files, "Your saved portfolio is damaged" | damaged vault, local vault needs attention |
+| stop the upload to the old sync server ("Stop the upload…") | finish migration, keep local vault and migrate |
+| keys (in lists of what diagnostics leave out), API keys | credentials |
+| wallet name (also in export warnings) | wallet label, labels |
+| "saved before keys were tied to one device" | predates device binding, legacy Kraken key |
 | API key (exchange keys) | credentials, secret material |
 | name (wallet name, exchange name) | label |
 | sync connection | account binding |
