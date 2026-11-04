@@ -1,312 +1,190 @@
 import AddressAtlasCore
-import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 
-struct AssetList: View {
-  var assets: [TrackedAsset]
+/// Individual holdings (not coins) in one card: a coin's rows on its detail
+/// screen, or one snapshot's rows in History.
+struct MacHoldingsTable: View {
+  var holdings: [TrackedAsset]
+  /// Rows from several coins name the coin; a coin's own rows do not.
+  var showsSymbol: Bool
 
   var body: some View {
-    if assets.isEmpty {
+    if holdings.isEmpty {
       EmptyState(
-        title: "No assets yet", systemImage: "wallet.pass", copy: "Add a wallet and run a scan.")
+        title: "Nothing to show", systemImage: "list.bullet",
+        copy: "No holdings match.")
     } else {
       Surface(padding: 0) {
-        ViewThatFits(in: .horizontal) {
-          wideTable
-            .frame(minWidth: 760)
-          compactList
-        }
-      }
-    }
-  }
-
-  private var wideTable: some View {
-    VStack(spacing: 0) {
-      HStack {
-        TableHeader("Asset", width: 210)
-        TableHeader("Chain / source")
-        TableHeader("Amount", alignment: .trailing, width: 150)
-        TableHeader("Value", alignment: .trailing, width: 150)
-      }
-      .padding(.horizontal, 18)
-      .padding(.vertical, 10)
-      .frame(minHeight: 40)
-      .background(AtlasTheme.surfaceMuted.opacity(0.44))
-      .accessibilityHidden(true)
-      Divider().overlay(AtlasTheme.rule)
-      ForEach(assets) { asset in
-        AssetRow(asset: asset)
-        if asset.id != assets.last?.id {
-          Divider().overlay(AtlasTheme.ruleSoft)
-        }
-      }
-    }
-    .frame(maxWidth: .infinity)
-  }
-
-  private var compactList: some View {
-    VStack(spacing: 0) {
-      ForEach(assets) { asset in
-        CompactAssetRow(asset: asset)
-        if asset.id != assets.last?.id {
-          Divider().overlay(AtlasTheme.ruleSoft)
-        }
-      }
-    }
-    .frame(maxWidth: .infinity)
-  }
-}
-
-struct ScanWarningsView: View {
-  var warnings: [String]
-
-  var body: some View {
-    Surface(style: .warning) {
-      VStack(alignment: .leading, spacing: 10) {
-        SectionHeader(
-          title: "Partial scan warnings",
-          meta: "\(warnings.count) issue\(warnings.count == 1 ? "" : "s")")
-        ForEach(Array(warnings.enumerated()), id: \.offset) { _, warning in
-          HStack(alignment: .top, spacing: 9) {
-            Image(systemName: "exclamationmark.triangle")
-              .foregroundStyle(AtlasTheme.warning)
-            Text(warning)
-              .font(.callout)
-              .foregroundStyle(AtlasTheme.ink2)
-              .textSelection(.enabled)
+        VStack(spacing: 0) {
+          ForEach(holdings) { asset in
+            AssetRow(asset: asset, showsSymbol: showsSymbol)
+            if asset.id != holdings.last?.id {
+              Divider().overlay(AtlasTheme.ruleSoft)
+            }
           }
         }
       }
     }
-    .accessibilityElement(children: .contain)
-    .accessibilityLabel("Partial scan warnings")
   }
 }
 
+/// One holding: where it is (network and wallet or exchange), its state, the
+/// amount, the value, and a link to the block explorer.
 struct AssetRow: View {
+  @Environment(\.atlasTheme) private var tokens
   var asset: TrackedAsset
+  var showsSymbol = false
 
   static func accessibilityIdentifier(for asset: TrackedAsset) -> String {
     "portfolio-asset-row-\(asset.id)"
   }
 
-  var body: some View {
-    HStack(spacing: 14) {
-      HStack(spacing: 11) {
-        Text(String(asset.symbol.prefix(1)).uppercased())
-          .font(.caption.weight(.bold))
-          .foregroundStyle(AtlasTheme.accent)
-          .frame(width: 34, height: 34)
-          .background(AtlasTheme.accent.opacity(0.10))
-          .clipShape(Circle())
-          .accessibilityHidden(true)
-        VStack(alignment: .leading, spacing: 4) {
-          HStack(spacing: 8) {
-            Text(asset.symbol)
-              .font(.body.weight(.semibold))
-              .lineLimit(1)
-              .truncationMode(.middle)
-              .help(asset.symbol)
-            if asset.pricingStatus != .priced {
-              Badge(
-                asset.pricingStatus == .unpriced ? "Unpriced" : "Value unavailable",
-                color: AtlasTheme.warning
-              )
-            }
-          }
-          Text(asset.name)
-            .font(.caption)
-            .foregroundStyle(AtlasTheme.ink3)
-            .lineLimit(1)
-        }
-      }
-      .frame(width: 210, alignment: .leading)
+  private var state: HoldingState { HoldingState(asset) }
 
-      VStack(alignment: .leading, spacing: 4) {
-        Text(asset.chainName)
-          .font(.body)
-        Text(asset.walletLabel ?? asset.address)
-          .font(.caption2.monospaced())
-          .foregroundStyle(AtlasTheme.ink3)
-          .lineLimit(1)
-          .truncationMode(.middle)
-      }
-      .frame(maxWidth: .infinity, alignment: .leading)
-
-      Text(asset.displayedAmount(locale: AtlasFormatting.locale))
-        .font(.callout.monospaced())
-        .lineLimit(1)
-        .minimumScaleFactor(0.65)
-        .help(asset.canonicalAmount)
-        .frame(width: 150, alignment: .trailing)
-      Text(asset.pricingStatus == .priced ? money(asset.valueUsd) : "—")
-        .font(.callout.monospaced().weight(.semibold))
-        .frame(width: 150, alignment: .trailing)
-    }
-    .padding(.horizontal, 18)
-    .padding(.vertical, 9)
-    .frame(minHeight: 62)
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel(AtlasAccessibility.assetRowIdentity(asset))
-    .accessibilityIdentifier(Self.accessibilityIdentifier(for: asset))
+  private var explorerURL: URL? {
+    guard let url = URL(string: asset.explorerUrl), url.scheme == "https", url.host() != nil
+    else { return nil }
+    return url
   }
-}
-
-private struct CompactAssetRow: View {
-  var asset: TrackedAsset
-
-  var body: some View {
-    HStack(spacing: 12) {
-      Text(String(asset.symbol.prefix(1)).uppercased())
-        .font(.caption.weight(.bold))
-        .foregroundStyle(AtlasTheme.accent)
-        .frame(width: 36, height: 36)
-        .background(AtlasTheme.accent.opacity(0.10))
-        .clipShape(Circle())
-        .accessibilityHidden(true)
-
-      VStack(alignment: .leading, spacing: 4) {
-        HStack(spacing: 7) {
-          Text(asset.symbol)
-            .font(.body.weight(.semibold))
-          if asset.pricingStatus != .priced {
-            Badge(
-              asset.pricingStatus == .unpriced ? "Unpriced" : "Value unavailable",
-              color: AtlasTheme.warning
-            )
-          }
-        }
-        Text("\(asset.chainName) · \(asset.walletLabel ?? asset.address)")
-          .font(.caption)
-          .foregroundStyle(AtlasTheme.ink3)
-          .lineLimit(1)
-          .truncationMode(.middle)
-      }
-
-      Spacer(minLength: 12)
-
-      VStack(alignment: .trailing, spacing: 4) {
-        Text(asset.pricingStatus == .priced ? money(asset.valueUsd) : "—")
-          .font(.callout.monospacedDigit().weight(.semibold))
-        Text(asset.displayedAmount(locale: AtlasFormatting.locale))
-          .font(.caption.monospaced())
-          .foregroundStyle(AtlasTheme.ink3)
-          .lineLimit(1)
-          .help(asset.canonicalAmount)
-      }
-    }
-    .padding(.horizontal, 16)
-    .padding(.vertical, 12)
-    .frame(minHeight: 66)
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel(AtlasAccessibility.assetRowIdentity(asset))
-    .accessibilityIdentifier(AssetRow.accessibilityIdentifier(for: asset))
-  }
-}
-
-struct QuickActionsPanel: View {
-  @EnvironmentObject private var state: AppState
-
-  var body: some View {
-    Surface(style: .accent) {
-      VStack(alignment: .leading, spacing: 16) {
-        PanelHeader(
-          title: "Refresh portfolio",
-          subtitle: "Scan every saved wallet and exchange",
-          systemImage: "arrow.clockwise"
-        )
-        Button {
-          if state.scanning {
-            state.cancelScan()
-          } else {
-            state.startScan()
-          }
-        } label: {
-          if state.scanning {
-            Label("Cancel scan", systemImage: "xmark.circle")
-          } else {
-            Label("Scan all sources", systemImage: "arrow.clockwise")
-          }
-        }
-        .buttonStyle(AtlasPrimaryButtonStyle())
-        .disabled(
-          !state.scanning
-            && (state.syncing || state.syncPersistencePending || !state.hasScanSources))
-        VStack(alignment: .leading, spacing: 12) {
-          SidebarTrustLine(title: "Encrypted storage", copy: "Protected on this device")
-          SidebarTrustLine(
-            title: "Optional iCloud copy", copy: "Encrypted before it leaves this Mac")
-          SidebarTrustLine(
-            title: "Direct connections", copy: "Addresses and balance requests go to providers")
-        }
-      }
-    }
-  }
-}
-
-struct TotalBlock: View {
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @ScaledMetric(relativeTo: .largeTitle) private var totalSize: CGFloat = 52
-  var total: Double
-  var generatedAt: Date?
-  var assetCount: Int
-  var unpricedCount: Int = 0
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      HStack(spacing: 8) {
-        Text(unpricedCount > 0 ? "Priced subtotal" : "Known portfolio value")
-          .font(.callout.weight(.medium))
-          .foregroundStyle(AtlasTheme.ink3)
-        if unpricedCount > 0 {
-          Badge("Partial", color: AtlasTheme.warning)
-        }
-      }
-      Text(money(total))
-        .font(.system(size: totalSize, weight: .bold, design: .rounded))
-        .tracking(-1.2)
-        .lineLimit(1)
-        .minimumScaleFactor(0.6)
-        .contentTransition(.numericText(value: total))
-        .animation(
-          AtlasMotion.animation(AtlasMotion.standard, reduceMotion: reduceMotion),
-          value: total
-        )
-      Text(
-        unpricedCount > 0
-          ? "\(assetCount) assets · \(unpricedCount) awaiting a USD value · \(generatedAt.map(AtlasFormatting.dateTime) ?? "No snapshot yet")"
-          : "\(assetCount) assets · \(generatedAt.map(AtlasFormatting.dateTime) ?? "No snapshot yet")"
-      )
-      .font(.caption)
-      .foregroundStyle(AtlasTheme.ink3)
-    }
-    .padding(.bottom, 6)
-  }
-}
-
-struct MetricStrip: View {
-  var items: [(String, String)]
 
   var body: some View {
     HStack(spacing: 10) {
-      ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-        VStack(alignment: .leading, spacing: 5) {
-          Text(item.0)
-            .font(.caption.weight(.medium))
-            .foregroundStyle(AtlasTheme.ink3)
-          Text(item.1)
-            .font(.title2.monospacedDigit().weight(.semibold))
+      ViewThatFits(in: .horizontal) {
+        wide.frame(minWidth: showsSymbol ? 560 : 430)
+        compact
+      }
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel(AtlasAccessibility.assetRowIdentity(asset))
+      .accessibilityIdentifier(Self.accessibilityIdentifier(for: asset))
+      if let explorerURL {
+        Link(destination: explorerURL) {
+          Image(systemName: "arrow.up.right.square")
+            .font(.callout)
+            .foregroundStyle(tokens.color(.accent))
+            .frame(width: 30, height: 30)
         }
+        .help("Open in block explorer")
+        .accessibilityLabel("Open \(asset.symbol) on \(asset.chainName) in the block explorer")
+      } else {
+        Color.clear.frame(width: 30, height: 30).accessibilityHidden(true)
+      }
+    }
+    .padding(.horizontal, 16)
+    .padding(.vertical, 10)
+    .frame(minHeight: 56)
+  }
+
+  private var wide: some View {
+    HStack(spacing: 14) {
+      if showsSymbol {
+        HStack(spacing: 10) {
+          CoinMark(symbol: asset.symbol, size: 30)
+          Text(asset.symbol)
+            .font(tokens.font(.body, .body, weight: .semibold))
+            .foregroundStyle(tokens.color(.ink))
+            .lineLimit(1)
+        }
+        .frame(width: 96, alignment: .leading)
+      }
+      whereBlock
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(AtlasTheme.surface)
-        .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
-        .overlay {
-          RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
-            .stroke(AtlasTheme.ruleSoft, lineWidth: 1)
+      stateTag
+        .frame(width: 104, alignment: .leading)
+      MacFigure(
+        text: asset.displayedAmount(locale: AtlasFormatting.locale), size: 13,
+        color: tokens.color(.ink2)
+      )
+      .minimumScaleFactor(0.7)
+      .help(asset.canonicalAmount)
+      .frame(width: 110, alignment: .trailing)
+      valueText
+        .frame(width: 104, alignment: .trailing)
+    }
+  }
+
+  private var compact: some View {
+    HStack(spacing: 12) {
+      if showsSymbol { CoinMark(symbol: asset.symbol, size: 30) }
+      VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: 8) {
+          if showsSymbol {
+            Text(asset.symbol)
+              .font(tokens.font(.body, .body, weight: .semibold))
+              .foregroundStyle(tokens.color(.ink))
+          }
+          Text(MacPortfolioSnapshot.location(of: asset))
+            .font(tokens.font(.body, .callout, weight: showsSymbol ? .regular : .semibold))
+            .foregroundStyle(tokens.color(showsSymbol ? .ink3 : .ink))
+            .lineLimit(1)
+        }
+        HStack(spacing: 8) {
+          stateTag
+          Text(sourceText)
+            .font(tokens.font(.label, .caption))
+            .foregroundStyle(tokens.color(.ink3))
+            .lineLimit(1)
+            .truncationMode(.middle)
         }
       }
+      Spacer(minLength: 8)
+      VStack(alignment: .trailing, spacing: 3) {
+        valueText
+        MacFigure(
+          text: asset.displayedAmount(locale: AtlasFormatting.locale), size: 11,
+          color: tokens.color(.ink3))
+      }
+    }
+  }
+
+  private var whereBlock: some View {
+    VStack(alignment: .leading, spacing: 3) {
+      Text(MacPortfolioSnapshot.location(of: asset))
+        .font(tokens.font(.body, .body, weight: showsSymbol ? .regular : .semibold))
+        .foregroundStyle(tokens.color(.ink))
+        .lineLimit(1)
+      Text(sourceText)
+        .font(tokens.font(.label, .caption))
+        .foregroundStyle(tokens.color(.ink3))
+        .lineLimit(1)
+        .truncationMode(.middle)
+    }
+  }
+
+  /// The wallet's name, the exchange connection's, or the address.
+  private var sourceText: String {
+    let label = asset.walletLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+    if let label, !label.isEmpty { return label }
+    return asset.address
+  }
+
+  private var stateTag: some View {
+    HStack(spacing: 6) {
+      Circle()
+        .fill(
+          CoinWidgetResolver.stateColor(state, tokens: tokens).color
+        )
+        .frame(width: 9, height: 9)
+        .overlay {
+          if tokens.shape.hasBoldBorders {
+            Circle().stroke(tokens.color(.outline), lineWidth: 1.5)
+          }
+        }
+        .accessibilityHidden(true)
+      Text(state.displayName)
+        .font(tokens.font(.body, .callout))
+        .foregroundStyle(tokens.color(.ink2))
+        .lineLimit(1)
+    }
+  }
+
+  @ViewBuilder
+  private var valueText: some View {
+    if asset.pricingStatus == .priced {
+      MacFigure(text: money(asset.valueUsd), size: 14, weight: .semibold)
+    } else {
+      MacBadge(
+        asset.pricingStatus == .unpriced ? "No price" : "No value",
+        color: tokens.color(.warning))
     }
   }
 }
