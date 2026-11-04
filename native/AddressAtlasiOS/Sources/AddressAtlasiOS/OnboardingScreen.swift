@@ -1,479 +1,288 @@
 import AddressAtlasCore
 import SwiftUI
 
-/// First-run walkthrough. Three short pages: what the app is, how it stays
-/// private, and the first task. Finishing calls `onFinish` with the task the
-/// person chose (or nil to explore the empty app first); `RootView` records
-/// completion and routes the task to the screen that owns its sheet.
+/// First-run screen, shown while the vault has no sources. One page: what the
+/// app does, the three facts that matter before adding anything (wallets are
+/// watch-only, exchange keys are read-only, the portfolio stays encrypted on
+/// this device), and the ways forward. Finishing calls `onFinish` with the
+/// task the person chose (or nil to explore the empty app first); `RootView`
+/// records completion and routes the task to the screen that owns its sheet.
+///
+/// The actions sit in a bar at the bottom, clear of the status toast that
+/// `RootView` pins to the top while this screen shows. At accessibility text
+/// sizes the bar would fill the screen, so the actions scroll with the page.
 struct OnboardingScreen: View {
   var onFinish: (IOSPendingAction?) -> Void
 
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var page = 0
-
-  private static let pageCount = 3
-  private var isLastPage: Bool { page == Self.pageCount - 1 }
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
   var body: some View {
-    VStack(spacing: 0) {
-      topBar
-
-      TabView(selection: $page) {
-        OnboardingWelcomePage()
-          .tag(0)
-        OnboardingHowItWorksPage()
-          .tag(1)
-        OnboardingGetStartedPage(onFinish: onFinish)
-          .tag(2)
-      }
-      .tabViewStyle(.page(indexDisplayMode: .never))
-      .animation(AtlasMotion.animation(AtlasMotion.standard, reduceMotion: reduceMotion), value: page)
-
-      bottomBar
+    // DEBUGHARNESS-BEGIN
+    if let mode = UserDefaults.standard.string(forKey: "AtlasDemoUnlock") {
+      OnboardingUnlockHarness(mode: mode)
+    } else {
+      realBody
     }
-    .background(OnboardingBackdrop().ignoresSafeArea())
   }
 
-  // MARK: - Chrome
-
-  private var topBar: some View {
-    HStack {
-      Spacer()
-      // Removed (not just hidden) on the last page, where "Explore first"
-      // does the same, so VoiceOver never reaches an invisible button.
-      if !isLastPage {
-        Button("Skip") { onFinish(nil) }
-          .font(AtlasTheme.font(.body, .body, weight: .medium))
-          .foregroundStyle(AtlasTheme.ink2)
-          .frame(minWidth: 44, minHeight: 44)
-          .padding(.horizontal, 8)
-          .accessibilityHint("Closes the introduction. You can add a wallet or exchange later.")
-          .accessibilityIdentifier("onboarding-skip")
-          .transition(.opacity)
-      }
-    }
-    .animation(AtlasMotion.animation(AtlasMotion.quick, reduceMotion: reduceMotion), value: isLastPage)
-    .padding(.horizontal, 8)
-    .frame(height: 52)
-  }
-
-  private var bottomBar: some View {
-    VStack(spacing: 18) {
-      OnboardingPageIndicator(page: page, count: Self.pageCount)
-
-      Group {
-        if isLastPage {
-          Button {
-            onFinish(nil)
-          } label: {
-            Text("Explore first")
-              .font(AtlasTheme.font(.body, .body, weight: .medium))
-              .foregroundStyle(AtlasTheme.ink2)
-              .frame(maxWidth: .infinity, minHeight: 50)
-              .contentShape(Rectangle())
-          }
-          .buttonStyle(.plain)
-          .accessibilityHint("Opens the app without adding anything yet.")
-          .accessibilityIdentifier("onboarding-explore")
-        } else {
-          Button {
-            withAnimation(AtlasMotion.animation(AtlasMotion.standard, reduceMotion: reduceMotion)) {
-              page = min(page + 1, Self.pageCount - 1)
-            }
-          } label: {
-            Text("Continue")
-              .font(AtlasTheme.font(.body, .body, weight: .semibold))
-              .frame(maxWidth: .infinity, minHeight: 50)
-          }
-          .buttonStyle(OnboardingPrimaryButtonStyle())
-          .accessibilityIdentifier("onboarding-continue")
-        }
-      }
-      .frame(maxWidth: OnboardingLayout.maxWidth)
-    }
-    .padding(.horizontal, 24)
-    .padding(.top, 8)
-    .padding(.bottom, 16)
-  }
-}
-
-private enum OnboardingLayout {
-  static let maxWidth: CGFloat = 480
-}
-
-// MARK: - Pages
-
-/// Shared scaffold: the hero sits above a large headline and a short line of
-/// body copy. Each page scrolls so accessibility text sizes never clip, and
-/// content is capped and centered for iPad.
-private struct OnboardingPageScaffold<Hero: View, Content: View>: View {
-  var headline: String
-  var message: String?
-  @ViewBuilder var hero: () -> Hero
-  @ViewBuilder var content: () -> Content
-
-  var body: some View {
+  @ViewBuilder private var realBody: some View {
+    // DEBUGHARNESS-END
     GeometryReader { proxy in
       ScrollView {
-        VStack(spacing: 28) {
-          hero()
-            .frame(maxWidth: .infinity)
-            .padding(.top, 8)
-
-          VStack(spacing: 12) {
-            Text(headline)
-              .font(.system(.largeTitle, design: .rounded).weight(.bold))
-              .tracking(-0.6)
-              .multilineTextAlignment(.center)
-              .foregroundStyle(AtlasTheme.ink)
-              .fixedSize(horizontal: false, vertical: true)
-              .accessibilityAddTraits(.isHeader)
-            if let message {
-              Text(message)
-                .font(AtlasTheme.font(.display, .title3))
-                .foregroundStyle(AtlasTheme.ink2)
-                .multilineTextAlignment(.center)
-                .lineSpacing(2)
-                .fixedSize(horizontal: false, vertical: true)
-            }
+        VStack(spacing: 20) {
+          OnboardingHero()
+          OnboardingFacts()
+          if dynamicTypeSize.isAccessibilitySize {
+            OnboardingActions(onFinish: onFinish)
+              .padding(.top, 4)
           }
-
-          content()
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 12)
+        .padding(.horizontal, OnboardingLayout.gutter)
+        .padding(.vertical, 24)
         .frame(maxWidth: OnboardingLayout.maxWidth)
         .frame(maxWidth: .infinity, minHeight: proxy.size.height)
       }
       .scrollBounceBehavior(.basedOnSize)
+      // DEBUGHARNESS-BEGIN
+      .defaultScrollAnchor(UserDefaults.standard.bool(forKey: "AtlasDemoScrollBottom") ? .bottom : nil)
+      // DEBUGHARNESS-END
+    }
+    .background(AtlasCanvasBackground().ignoresSafeArea())
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      if !dynamicTypeSize.isAccessibilitySize {
+        OnboardingActions(onFinish: onFinish)
+          .padding(.horizontal, OnboardingLayout.gutter)
+          .padding(.top, 14)
+          .padding(.bottom, 12)
+          .frame(maxWidth: OnboardingLayout.maxWidth)
+          .frame(maxWidth: .infinity)
+          .background(alignment: .top) { OnboardingBarBackground() }
+      }
     }
   }
 }
 
-private struct OnboardingWelcomePage: View {
-  var body: some View {
-    OnboardingPageScaffold(
-      headline: "Your whole crypto portfolio, in one private place",
-      message: "Wallets and exchanges together, without handing over a single key."
-    ) {
-      OnboardingHero(
-        centerSymbol: "map.fill",
-        satellites: ["bitcoinsign", "building.columns.fill", "wallet.pass.fill", "chart.pie.fill"]
-      )
-    } content: {
-      EmptyView()
-    }
-  }
+private enum OnboardingLayout {
+  static let maxWidth: CGFloat = 520
+  /// Wider than the hard card shadows of the Candy and Pixel themes, which
+  /// fall to the right and below.
+  static let gutter: CGFloat = 20
 }
 
-private struct OnboardingHowItWorksPage: View {
+// MARK: - Content
+
+/// The lead card: coin marks and what to do. In the themes with pastel cards
+/// it takes the pastel fill, as the portfolio total does.
+private struct OnboardingHero: View {
+  @Environment(\.atlasTheme) private var tokens
+
   var body: some View {
-    OnboardingPageScaffold(headline: "Read-only by design", message: nil) {
-      OnboardingHero(
-        centerSymbol: "lock.shield.fill",
-        satellites: ["eye.fill", "key.horizontal.fill", "icloud.fill"],
-        compact: true
-      )
-    } content: {
+    let hero = IOSHeroStyle.current(tokens)
+    IOSCard(padding: 20, fill: hero.fill, ink: hero.ink) {
       VStack(alignment: .leading, spacing: 20) {
-        IOSFactRow(
-          systemImage: "eye",
-          title: "Watch-only wallets",
-          copy: "Paste public addresses. No seed phrases, no signing."
-        )
-        IOSFactRow(
-          systemImage: "key.horizontal",
-          title: "Read-only exchanges",
-          copy: "Connect with keys that can't trade or withdraw."
-        )
-        IOSFactRow(
-          systemImage: "lock.shield",
-          title: "Encrypted on this \(PlatformCopy.deviceNoun)",
-          copy: "Plus an optional encrypted copy in your iCloud."
-        )
-      }
-      .padding(20)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .background(
-        RoundedRectangle(cornerRadius: AtlasRadius.large, style: .continuous)
-          .fill(AtlasTheme.surface)
-      )
-      .overlay {
-        RoundedRectangle(cornerRadius: AtlasRadius.large, style: .continuous)
-          .stroke(AtlasTheme.ruleSoft, lineWidth: 1)
+        OnboardingCoinRow()
+        Text("Add a wallet address or an exchange to see what you hold.")
+          .font(AtlasTheme.font(.display, size: 30, relativeTo: .title, weight: .bold))
+          .tracking(AtlasTheme.tracking(.display, size: 30))
+          .multilineTextAlignment(.leading)
+          .fixedSize(horizontal: false, vertical: true)
+          // Large display type at the largest accessibility sizes would fill
+          // the screen with one sentence; the rest of the page still scales.
+          .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+          .accessibilityAddTraits(.isHeader)
       }
     }
   }
 }
 
-private struct OnboardingGetStartedPage: View {
-  var onFinish: (IOSPendingAction?) -> Void
-
+/// A few asset marks in the selected theme's colours. Decorative.
+private struct OnboardingCoinRow: View {
   var body: some View {
-    OnboardingPageScaffold(
-      headline: "Start with one source",
-      message: "You can add more anytime."
-    ) {
-      OnboardingHero(centerSymbol: "plus", satellites: [], compact: true)
-    } content: {
-      VStack(spacing: 12) {
-        OnboardingChoiceCard(
-          systemImage: "wallet.pass.fill",
-          title: "Add a wallet address",
-          detail: "Paste any public address",
-          isPrimary: true
-        ) {
-          onFinish(.addWallet)
-        }
-        .accessibilityIdentifier("onboarding-add-wallet")
+    HStack(spacing: 8) {
+      TokenMonogram(symbol: "BTC", size: 40)
+      TokenMonogram(symbol: "ETH", size: 40)
+      TokenMonogram(symbol: "SOL", size: 40)
+      TokenMonogram(symbol: "ATOM", size: 40)
+    }
+    .accessibilityHidden(true)
+  }
+}
 
-        OnboardingChoiceCard(
-          systemImage: "building.columns.fill",
-          title: "Connect an exchange",
-          detail: "With a read-only API key",
-          isPrimary: false
-        ) {
-          onFinish(.connectExchange)
-        }
-        .accessibilityIdentifier("onboarding-connect-exchange")
+private struct OnboardingFacts: View {
+  var body: some View {
+    IOSCard(padding: 18) {
+      VStack(alignment: .leading, spacing: 18) {
+        OnboardingFactRow(
+          systemImage: "eye",
+          title: "Wallets are watch-only",
+          copy: "Public addresses only. No seed phrases."
+        )
+        OnboardingFactRow(
+          systemImage: "key.horizontal",
+          title: "Exchange keys must be read-only",
+          copy: "Trading and withdrawals stay off."
+        )
+        OnboardingFactRow(
+          systemImage: "lock",
+          title: "Encrypted on this \(PlatformCopy.deviceNoun)",
+          copy: "Nothing is ever sent for signing."
+        )
       }
     }
   }
 }
 
-// MARK: - Pieces
-
-private struct OnboardingChoiceCard: View {
+private struct OnboardingFactRow: View {
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   var systemImage: String
   var title: String
-  var detail: String
-  var isPrimary: Bool
-  var action: () -> Void
+  var copy: String
 
   var body: some View {
-    Button(action: action) {
-      HStack(spacing: 14) {
-        // At accessibility sizes the words need the whole width.
-        if !dynamicTypeSize.isAccessibilitySize {
-          Image(systemName: systemImage)
-            .font(AtlasTheme.font(.display, .title3))
-            .foregroundStyle(isPrimary ? AtlasTheme.paper : AtlasTheme.accent)
-            .frame(width: 46, height: 46)
-            .background(
-              RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .fill(isPrimary ? AtlasTheme.paper.opacity(0.18) : AtlasTheme.accent.opacity(0.1))
-            )
-            .accessibilityHidden(true)
-        }
-        VStack(alignment: .leading, spacing: 3) {
-          Text(title)
-            .font(AtlasTheme.font(.body, .body, weight: .semibold))
-            .foregroundStyle(isPrimary ? AtlasTheme.paper : AtlasTheme.ink)
-          Text(detail)
-            .font(AtlasTheme.font(.body, .subheadline))
-            .foregroundStyle(isPrimary ? AtlasTheme.paper.opacity(0.82) : AtlasTheme.ink3)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        .multilineTextAlignment(.leading)
-        Spacer(minLength: 8)
-        if !dynamicTypeSize.isAccessibilitySize {
-          Image(systemName: "chevron.right")
-            .font(AtlasTheme.font(.body, .footnote, weight: .bold))
-            .foregroundStyle(isPrimary ? AtlasTheme.paper.opacity(0.8) : AtlasTheme.ink3)
-            .accessibilityHidden(true)
-        }
+    // At accessibility sizes the tile moves above the words, which then get
+    // the whole card width instead of breaking mid-word.
+    let layout =
+      dynamicTypeSize.isAccessibilitySize
+      ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
+      : AnyLayout(HStackLayout(alignment: .top, spacing: 14))
+    layout {
+      OnboardingIconTile(systemImage: systemImage)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(title)
+          .font(AtlasTheme.font(.body, .callout, weight: .semibold))
+          .foregroundStyle(AtlasTheme.ink)
+        Text(copy)
+          .font(AtlasTheme.font(.body, .callout))
+          .foregroundStyle(AtlasTheme.ink2)
       }
-      .padding(16)
-      .frame(maxWidth: .infinity, minHeight: 78, alignment: .leading)
-      .background(
-        RoundedRectangle(cornerRadius: AtlasRadius.large, style: .continuous)
-          .fill(isPrimary ? AnyShapeStyle(OnboardingAccentFill()) : AnyShapeStyle(AtlasTheme.surface))
-      )
-      .overlay {
-        RoundedRectangle(cornerRadius: AtlasRadius.large, style: .continuous)
-          .stroke(isPrimary ? AtlasTheme.accent.opacity(0.3) : AtlasTheme.ruleSoft, lineWidth: 1)
-      }
-      .shadow(color: isPrimary ? AtlasTheme.accent.opacity(0.22) : .black.opacity(0.05), radius: 12, y: 5)
-      .contentShape(RoundedRectangle(cornerRadius: AtlasRadius.large, style: .continuous))
+      .fixedSize(horizontal: false, vertical: true)
+      if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 0) }
     }
-    .buttonStyle(OnboardingPressStyle())
+    .frame(maxWidth: .infinity, alignment: .leading)
     .accessibilityElement(children: .combine)
-    .accessibilityLabel(title)
-    .accessibilityHint(detail)
   }
 }
 
-private struct OnboardingAccentFill: ShapeStyle {
-  func resolve(in environment: EnvironmentValues) -> some ShapeStyle {
-    LinearGradient(
-      colors: [AtlasTheme.accent, AtlasTheme.accent.opacity(0.8)],
-      startPoint: .topLeading,
-      endPoint: .bottomTrailing
-    )
-  }
-}
-
-/// Brand-colored illustration built from SF Symbols: soft concentric rings,
-/// an app-icon-style tile, and small satellite badges. The entrance motion is
-/// skipped entirely with Reduce Motion.
-private struct OnboardingHero: View {
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-  var centerSymbol: String
-  var satellites: [String]
-  var compact = false
-
-  @State private var appeared = false
-
-  private var diameter: CGFloat {
-    if dynamicTypeSize.isAccessibilitySize { return compact ? 120 : 150 }
-    return compact ? 190 : 250
-  }
-
-  private var tileSize: CGFloat { diameter * 0.36 }
+/// An icon on the theme's soft accent fill, outlined in the themes that draw
+/// hard edges.
+private struct OnboardingIconTile: View {
+  var systemImage: String
 
   var body: some View {
-    ZStack {
-      ForEach(0..<3, id: \.self) { ring in
-        Circle()
-          .stroke(AtlasTheme.accent.opacity(0.14 - Double(ring) * 0.035), lineWidth: 1)
-          .frame(width: diameter * (0.62 + CGFloat(ring) * 0.19))
-      }
-      Circle()
-        .fill(
-          RadialGradient(
-            colors: [AtlasTheme.accent.opacity(0.16), AtlasTheme.accent.opacity(0)],
-            center: .center,
-            startRadius: 0,
-            endRadius: diameter * 0.5
-          )
-        )
-        .frame(width: diameter, height: diameter)
-
-      RoundedRectangle(cornerRadius: tileSize * 0.28, style: .continuous)
-        .fill(
-          LinearGradient(
-            colors: [AtlasTheme.accent, AtlasTheme.accent.opacity(0.72)],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-          )
-        )
-        .frame(width: tileSize, height: tileSize)
-        .overlay {
-          Image(systemName: centerSymbol)
-            .font(.system(size: tileSize * 0.42, weight: .semibold))
-            .foregroundStyle(AtlasTheme.paper)
+    let shape = AtlasTheme.shape
+    let outline = RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
+    Image(systemName: systemImage)
+      .font(AtlasTheme.font(.body, .body, weight: .semibold))
+      // The tile is a fixed size, so the glyph stops growing with it.
+      .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+      .foregroundStyle(AtlasTheme.accent)
+      .frame(width: 40, height: 40)
+      .background(AtlasTheme.accentSoft, in: outline)
+      .overlay {
+        if shape.hasBoldBorders {
+          outline.stroke(AtlasTheme.outline, lineWidth: 1.5)
         }
-        .shadow(color: AtlasTheme.accent.opacity(0.3), radius: 16, y: 8)
-        .scaleEffect(appeared || reduceMotion ? 1 : 0.86)
-
-      ForEach(Array(satellites.enumerated()), id: \.offset) { index, symbol in
-        satellite(symbol)
-          .offset(satelliteOffset(index: index))
-          .scaleEffect(appeared || reduceMotion ? 1 : 0.4)
-          .opacity(appeared || reduceMotion ? 1 : 0)
-          .animation(
-            reduceMotion ? nil : AtlasMotion.standard.delay(0.08 * Double(index + 1)),
-            value: appeared
-          )
       }
-    }
-    .frame(width: diameter, height: diameter)
-    .animation(reduceMotion ? nil : AtlasMotion.standard, value: appeared)
-    .onAppear { appeared = true }
-    .accessibilityHidden(true)
-  }
-
-  private func satellite(_ symbol: String) -> some View {
-    let size = diameter * 0.2
-    return Circle()
-      .fill(AtlasTheme.surface)
-      .frame(width: size, height: size)
-      .overlay {
-        Circle().stroke(AtlasTheme.ruleSoft, lineWidth: 1)
-      }
-      .overlay {
-        Image(systemName: symbol)
-          .font(.system(size: size * 0.4, weight: .semibold))
-          .foregroundStyle(AtlasTheme.accent)
-      }
-      .shadow(color: .black.opacity(0.08), radius: 8, y: 3)
-  }
-
-  /// Satellites sit on the middle ring, starting at the upper left and
-  /// spread evenly around it.
-  private func satelliteOffset(index: Int) -> CGSize {
-    guard !satellites.isEmpty else { return .zero }
-    let radius = diameter * (0.62 + 0.19) / 2
-    let start = satellites.count == 4 ? -Double.pi * 0.75 : -Double.pi / 2
-    let angle = start + Double(index) * (2 * Double.pi / Double(satellites.count))
-    return CGSize(width: cos(angle) * radius, height: sin(angle) * radius)
+      .accessibilityHidden(true)
   }
 }
 
-private struct OnboardingPageIndicator: View {
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  var page: Int
-  var count: Int
+// MARK: - Actions
+
+private struct OnboardingActions: View {
+  var onFinish: (IOSPendingAction?) -> Void
 
   var body: some View {
-    HStack(spacing: 8) {
-      ForEach(0..<count, id: \.self) { index in
-        Capsule()
-          .fill(index == page ? AtlasTheme.accent : AtlasTheme.ink3.opacity(0.3))
-          .frame(width: index == page ? 22 : 8, height: 8)
+    VStack(spacing: 12) {
+      Button {
+        onFinish(.addWallet)
+      } label: {
+        OnboardingActionLabel(title: "Add wallet", systemImage: "wallet.pass.fill")
+      }
+      .buttonStyle(AtlasPrimaryButtonStyle())
+      .accessibilityHint("Opens the wallet form. You paste a public address.")
+      .accessibilityIdentifier("onboarding-add-wallet")
+
+      Button {
+        onFinish(.connectExchange)
+      } label: {
+        OnboardingActionLabel(title: "Connect exchange", systemImage: "building.columns.fill")
+      }
+      .buttonStyle(AtlasSecondaryButtonStyle())
+      .accessibilityHint("Opens the exchange form. You enter a read-only API key.")
+      .accessibilityIdentifier("onboarding-connect-exchange")
+
+      Button {
+        onFinish(nil)
+      } label: {
+        Text("Skip")
+          .font(AtlasTheme.font(.body, .callout, weight: .medium))
+          .foregroundStyle(AtlasTheme.ink2)
+          .frame(maxWidth: .infinity, minHeight: 44)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityHint("Opens the app without adding anything. You can add a wallet or an exchange later.")
+      .accessibilityIdentifier("onboarding-skip")
+    }
+  }
+}
+
+/// A button label that fills the width, with a 44pt touch target. At
+/// accessibility sizes the icon goes, so the words get the room.
+private struct OnboardingActionLabel: View {
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+  var title: String
+  var systemImage: String
+
+  var body: some View {
+    Group {
+      if dynamicTypeSize.isAccessibilitySize {
+        Text(title).multilineTextAlignment(.center)
+      } else {
+        Label(title, systemImage: systemImage)
       }
     }
-    .animation(AtlasMotion.animation(AtlasMotion.standard, reduceMotion: reduceMotion), value: page)
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel("Page \(page + 1) of \(count)")
+    .frame(maxWidth: .infinity, minHeight: 44)
+    .contentShape(Rectangle())
   }
 }
 
-private struct OnboardingBackdrop: View {
+/// The bottom bar's surface: the canvas with the same top rule as the tab bar.
+private struct OnboardingBarBackground: View {
+  @Environment(\.colorSchemeContrast) private var contrast
+
   var body: some View {
-    ZStack {
-      AtlasTheme.canvas
-      LinearGradient(
-        colors: [AtlasTheme.accent.opacity(0.08), AtlasTheme.accent.opacity(0)],
-        startPoint: .top,
-        endPoint: .center
-      )
-    }
+    let shape = AtlasTheme.shape
+    AtlasTheme.canvas
+      .overlay(alignment: .top) {
+        Rectangle()
+          .fill(shape.hasBoldBorders ? AtlasTheme.outline : AtlasTheme.ruleSoft)
+          .frame(height: shape.hasBoldBorders || contrast == .increased ? 2 : 1)
+      }
+      .ignoresSafeArea(edges: .bottom)
   }
 }
 
-private struct OnboardingPrimaryButtonStyle: ButtonStyle {
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .foregroundStyle(AtlasTheme.paper)
-      .background(
-        RoundedRectangle(cornerRadius: AtlasRadius.card, style: .continuous)
-          .fill(AtlasTheme.accent.opacity(configuration.isPressed ? 0.84 : 1))
-      )
-      .shadow(color: AtlasTheme.accent.opacity(0.22), radius: 10, y: 4)
-      .contentShape(RoundedRectangle(cornerRadius: AtlasRadius.card, style: .continuous))
-      .scaleEffect(configuration.isPressed ? 0.985 : 1)
-      .animation(
-        AtlasMotion.animation(AtlasMotion.quick, reduceMotion: reduceMotion),
-        value: configuration.isPressed
-      )
+// DEBUGHARNESS-BEGIN
+private struct OnboardingUnlockHarness: View {
+  @EnvironmentObject private var state: AppState
+  var mode: String
+  var body: some View {
+    UnlockScreen()
+      .task {
+        switch mode {
+        case "error":
+          state.error = "The encryption key for this device isn't available in Keychain."
+        case "damaged":
+          state.damagedVaultRecoveryAvailability = .validatedRollbackCheckpoint
+          state.error = "Your saved portfolio on this device is damaged, but an earlier copy was checked and is intact. Restore the earlier copy, or set the damaged data aside and start fresh. Nothing has been deleted."
+        case "quarantine":
+          state.damagedVaultRecoveryAvailability = .quarantineOnly
+          state.error = "Your saved portfolio on this device is damaged and no earlier copy is available."
+        default: break
+        }
+      }
   }
 }
-
-private struct OnboardingPressStyle: ButtonStyle {
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .scaleEffect(configuration.isPressed ? 0.98 : 1)
-      .opacity(configuration.isPressed ? 0.92 : 1)
-      .animation(
-        AtlasMotion.animation(AtlasMotion.quick, reduceMotion: reduceMotion),
-        value: configuration.isPressed
-      )
-  }
-}
+// DEBUGHARNESS-END

@@ -62,6 +62,7 @@
 		8616AED142B2119315050101 /* CoinCustodyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4DE41F373F99E6B5FC4FCA5 /* CoinCustodyView.swift */; };
 		86729B4037637FAFAE252D93 /* ExportPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EF4CAB228D89D371EE0BB39 /* ExportPipeline.swift */; };
 		887E5A7B0C419A0C206C23D3 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 4F04D2CEE0AC93D87843CC0A /* PrivacyInfo.xcprivacy */; };
+		8B4981A8449CB957BACB19A7 /* HoldingViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B75706265B84BE0DE069574 /* HoldingViews.swift */; };
 		8DD64214416F94A91768D129 /* WhatChangedChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA4BBBEAE1E61B59D35A181E /* WhatChangedChartView.swift */; };
 		8F3F57827B880E649628238F /* AtlasFonts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6540E57F85D5432E54B497F4 /* AtlasFonts.swift */; };
 		9066115C1C45CEFD94A901C2 /* FlowChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37A7E54222165510D41211EE /* FlowChartView.swift */; };
@@ -95,6 +96,7 @@
 		F2315D8BFCDBA09AD747B969 /* AppStateValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 181AA1E44268FF2873AFFCB4 /* AppStateValidation.swift */; };
 		F27494771C4998451E8C6706 /* AppStateCharts.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6FB152490C1606077FD362E /* AppStateCharts.swift */; };
 		F2CD5036EB5EE660BDF5501F /* PowerDiagramTreemap.swift in Sources */ = {isa = PBXBuildFile; fileRef = F04C152CC22B660608D36F9D /* PowerDiagramTreemap.swift */; };
+		F4624404314BE24721D00F03 /* IOSCoinViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70F2536503B2842FD2954A46 /* IOSCoinViews.swift */; };
 		F471F2EDAC93E2628A950D9A /* CoinStateStripModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DB1EA28025B2F75FF1BFB78 /* CoinStateStripModel.swift */; };
 		F5F6156AFEB2709FB304F4F4 /* AppStateEndpointConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A4CE78ED4D7AF0170ED4CFD /* AppStateEndpointConfiguration.swift */; };
 		F829928CF5010681D60CC34C /* SankeyLayoutEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD9FB11E654FCC8900DE663E /* SankeyLayoutEngine.swift */; };
@@ -122,6 +124,7 @@
 		235FFDA379D16323FE28C741 /* RingsInRingsChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RingsInRingsChartView.swift; sourceTree = "<group>"; };
 		2730780329651EB5423D8EEC /* SourcesScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourcesScreen.swift; sourceTree = "<group>"; };
 		2ACE44D82238BC346DF95F78 /* CoinChangeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoinChangeView.swift; sourceTree = "<group>"; };
+		2B75706265B84BE0DE069574 /* HoldingViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoldingViews.swift; sourceTree = "<group>"; };
 		2C1F163CE971718FA827F295 /* BubblesChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BubblesChartView.swift; sourceTree = "<group>"; };
 		31C4C7345210D32D3C34E8A8 /* CoinAmountHistoryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoinAmountHistoryModel.swift; sourceTree = "<group>"; };
 		33F4ACC71902C4DB4BEC24B2 /* AtlasMapModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasMapModel.swift; sourceTree = "<group>"; };
@@ -152,6 +155,7 @@
 		696B657AF51571D531104B22 /* PasskeyWebAuthenticator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasskeyWebAuthenticator.swift; sourceTree = "<group>"; };
 		6C286DCB338A454BFD0514EC /* RingChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RingChartView.swift; sourceTree = "<group>"; };
 		6E33A941FCC20EC45E4E3471 /* AtlasThemeRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasThemeRuntime.swift; sourceTree = "<group>"; };
+		70F2536503B2842FD2954A46 /* IOSCoinViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSCoinViews.swift; sourceTree = "<group>"; };
 		78481646C632433BE600BF74 /* ListChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListChartView.swift; sourceTree = "<group>"; };
 		794806A4DD437BC916CAD7A7 /* IOSSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSSupport.swift; sourceTree = "<group>"; };
 		7A4CE78ED4D7AF0170ED4CFD /* AppStateEndpointConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateEndpointConfiguration.swift; sourceTree = "<group>"; };
@@ -277,7 +281,9 @@
 				35DD59B780459F2D86827A3F /* ExchangesScreen.swift */,
 				0D52FBF704ADD4D782C73EF6 /* ExportScreen.swift */,
 				F3972B1BA1C92A828574B362 /* HistoryScreen.swift */,
+				2B75706265B84BE0DE069574 /* HoldingViews.swift */,
 				E776BCC56C7A58C6ADC73F23 /* ICloudScreen.swift */,
+				70F2536503B2842FD2954A46 /* IOSCoinViews.swift */,
 				96E46AE1BF72888A837ACFAA /* IOSComponents.swift */,
 				794806A4DD437BC916CAD7A7 /* IOSSupport.swift */,
 				DF9AF1044F92A348B6D25470 /* IOSTheme.swift */,
@@ -547,8 +553,10 @@
 				962F637364AD0E7C9A186604 /* GridChartView.swift in Sources */,
 				392DC60003DFCBC0AF7C8BEB /* HistoryChartSupport.swift in Sources */,
 				ACED484E357ED05D2DCFEF02 /* HistoryScreen.swift in Sources */,
+				8B4981A8449CB957BACB19A7 /* HoldingViews.swift in Sources */,
 				001D86EF3E9452AD1BF9C46D /* ICloudScreen.swift in Sources */,
 				74F5AFCA1B2D58B553B863A7 /* ICloudVaultService.swift in Sources */,
+				F4624404314BE24721D00F03 /* IOSCoinViews.swift in Sources */,
 				362FFBE7F6BA38363B97A8DD /* IOSComponents.swift in Sources */,
 				5362D54DF67A225118265A96 /* IOSSupport.swift in Sources */,
 				7681AE9E6B8B681855DA8AC2 /* IOSTheme.swift in Sources */,

@@ -32,6 +32,7 @@ struct IOSPage<Content: View>: View {
       .frame(maxWidth: 760, alignment: .leading)
       .frame(maxWidth: .infinity)
     }
+    .demoScrollOffset()
     .scrollDismissesKeyboard(.interactively)
     .background(AtlasCanvasBackground().ignoresSafeArea())
     .atlasKeyboardDoneButton()

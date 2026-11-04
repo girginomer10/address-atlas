@@ -1,15 +1,13 @@
 import AddressAtlasCore
 import SwiftUI
 
-/// Encrypted scan history kept on this device, newest first. Each row shows
-/// when the scan ran, its total, the change against the previous (older)
-/// snapshot, and any partial-scan warnings; tapping opens the snapshot with
-/// its top holdings. Removal (swipe, context menu, or the detail sheet)
-/// always asks first and goes through `AppState.removeScanRun(id:)`.
+/// The scans saved on this device, newest first, under a small chart of the
+/// total over time. Each row shows when the scan ran, its total and the
+/// change against the scan before it; a row opens that scan. Removal always
+/// asks first and goes through `AppState.removeScanRun(id:)`.
 struct HistoryScreen: View {
   @EnvironmentObject private var state: AppState
   @EnvironmentObject private var navigation: IOSNavigationModel
-  @State private var selectedRunID: UUID?
   @State private var pendingRemoval: ScanRunRecord?
   @State private var removingID: UUID?
 
@@ -26,53 +24,55 @@ struct HistoryScreen: View {
     let runs = sortedRuns
     List {
       if hasPersistentStatus {
-        Section {
-          IOSPersistentStatus()
-            .listRowBackground(AtlasTheme.surface)
-        }
+        IOSPersistentStatus()
+          .iosListRow()
       }
 
       if runs.isEmpty {
-        Section {
-          emptyState
-            .listRowBackground(Color.clear)
-            .listRowInsets(EdgeInsets(top: 24, leading: 0, bottom: 0, trailing: 0))
-        }
+        emptyState
+          .iosListRow()
       } else {
-        Section {
-          ForEach(Array(runs.enumerated()), id: \.element.id) { index, run in
-            row(run, previous: index + 1 < runs.count ? runs[index + 1] : nil)
-          }
-        } footer: {
-          footer
+        if runs.count > 1 {
+          IOSChartCard(
+            visualization: .overTime,
+            input: state.iosChartInput(
+              grouping: .asset, density: .compact,
+              onSelect: { selection in
+                state.handleChartSelection(selection, navigation: navigation)
+              })
+          )
+          .iosListRow()
+          .accessibilityIdentifier("history-chart")
         }
-        .listRowBackground(AtlasTheme.surface)
-        .listRowSeparatorTint(AtlasTheme.ruleSoft)
+        ForEach(Array(runs.enumerated()), id: \.element.id) { index, run in
+          row(run, previous: index + 1 < runs.count ? runs[index + 1] : nil)
+            .iosListRow()
+        }
+        footer
+          .listRowBackground(Color.clear)
+          .listRowSeparator(.hidden)
+          .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 24, trailing: 20))
       }
     }
-    .listStyle(.insetGrouped)
+    .listStyle(.plain)
+    .demoScrollOffset()
     .scrollContentBackground(.hidden)
-    .background(AtlasTheme.canvas)
-    .navigationTitle("Snapshots")
-    .navigationBarTitleDisplayMode(.large)
-    .toolbarBackground(AtlasTheme.canvas, for: .navigationBar)
-    .sheet(item: selectedRunBinding(runs)) { selection in
-      SnapshotDetailSheet(
-        run: selection.run,
-        previous: selection.previous,
-        isLatest: isLatest(selection.run),
-        onDelete: { remove(selection.run) })
-    }
+    .background(AtlasCanvasBackground().ignoresSafeArea())
+    .iosTitle("History")
   }
 
   // MARK: Rows
 
   private func row(_ run: ScanRunRecord, previous: ScanRunRecord?) -> some View {
     let isRemoving = removingID == run.id
+    let change = SnapshotChange(run: run, previous: previous, state: state)
     return Button {
-      selectedRunID = run.id
+      navigation.push(.snapshot(run.id))
     } label: {
-      SnapshotRowView(run: run, change: SnapshotChange(run: run, previous: previous, state: state))
+      SnapshotRowView(run: run, change: change)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .iosCardSurface(radius: AtlasRadius.control)
         .opacity(isRemoving ? 0.4 : 1)
     }
     .buttonStyle(.plain)
@@ -90,43 +90,36 @@ struct HistoryScreen: View {
       Button(role: .destructive) {
         pendingRemoval = run
       } label: {
-        Label("Delete snapshot", systemImage: "trash")
+        Label("Delete scan", systemImage: "trash")
       }
       .disabled(state.vaultEditsDisabled)
     }
-    .accessibilityHint("Shows the snapshot's holdings.")
-    .accessibilityAction(named: "Remove snapshot") {
+    .accessibilityHint("Shows the scan's holdings.")
+    .accessibilityAction(named: "Delete scan") {
       guard !state.vaultEditsDisabled else { return }
       pendingRemoval = run
     }
     .accessibilityIdentifier("snapshot-row-\(run.id.uuidString.lowercased())")
     // Attached per row so the dialog (a popover on newer systems) points at
-    // the snapshot being removed.
+    // the scan being removed.
     .confirmationDialog(
-      "Delete this snapshot?",
+      "Delete this scan?",
       isPresented: Binding(
         get: { pendingRemoval?.id == run.id },
         set: { if !$0, pendingRemoval?.id == run.id { pendingRemoval = nil } }),
       titleVisibility: .visible
     ) {
-      Button("Delete snapshot", role: .destructive) { remove(run) }
+      Button("Delete scan", role: .destructive) { remove(run) }
       Button("Cancel", role: .cancel) {}
     } message: {
-      Text(Self.removalMessage(run, isLatest: isLatest(run)))
+      Text(Self.removalMessage(run, isLatest: state.latestScan?.id == run.id))
     }
-    .accessibilityLabel(
-      SnapshotRowView.accessibilityText(
-        run: run, change: SnapshotChange(run: run, previous: previous, state: state)))
-  }
-
-  private func isLatest(_ run: ScanRunRecord) -> Bool {
-    state.latestScan?.id == run.id
+    .accessibilityLabel(SnapshotRowView.accessibilityText(run: run, change: change))
   }
 
   private func remove(_ run: ScanRunRecord) {
     guard !state.vaultEditsDisabled else { return }
     pendingRemoval = nil
-    if selectedRunID == run.id { selectedRunID = nil }
     removingID = run.id
     Task {
       await state.removeScanRun(id: run.id)
@@ -137,26 +130,8 @@ struct HistoryScreen: View {
   static func removalMessage(_ run: ScanRunRecord, isLatest: Bool) -> String {
     let base = "\(AtlasFormatting.dateTime(run.generatedAt)) · \(money(run.totalUsd))."
     return isLatest
-      ? "\(base) Portfolio and Assets will show the previous snapshot."
+      ? "\(base) Portfolio and Assets will show the scan before it."
       : "\(base) This removes it from this device."
-  }
-
-  private struct Selection: Identifiable {
-    var run: ScanRunRecord
-    var previous: ScanRunRecord?
-    var id: UUID { run.id }
-  }
-
-  /// The sheet follows the stored record, so a removal (here or from another
-  /// device via sync) closes it instead of showing a stale snapshot.
-  private func selectedRunBinding(_ runs: [ScanRunRecord]) -> Binding<Selection?> {
-    Binding(
-      get: {
-        guard let id = selectedRunID, let index = runs.firstIndex(where: { $0.id == id })
-        else { return nil }
-        return Selection(run: runs[index], previous: index + 1 < runs.count ? runs[index + 1] : nil)
-      },
-      set: { selectedRunID = $0?.id })
   }
 
   // MARK: Footer and empty state
@@ -166,38 +141,37 @@ struct HistoryScreen: View {
       let removedCount = state.lastSaveRemovedScanRunCount
       if removedCount > 0 {
         Label(
-          "Removed \(removedCount) oldest snapshot\(removedCount == 1 ? "" : "s") to stay within the size limit.",
+          "Removed the \(removedCount == 1 ? "oldest scan" : "\(removedCount) oldest scans") to stay within the size limit.",
           systemImage: "info.circle")
       }
-      Text("Keeps the latest \(AppState.maximumStoredScanRuns) snapshots on this device.")
+      Text("Keeps the latest \(AppState.maximumStoredScanRuns) scans on this device.")
     }
     .font(AtlasTheme.font(.body, .footnote))
     .foregroundStyle(AtlasTheme.ink3)
-    .textCase(nil)
-    .padding(.top, 4)
+    .frame(maxWidth: .infinity, alignment: .leading)
   }
 
   @ViewBuilder
   private var emptyState: some View {
     if state.scanning {
-      SnapshotsEmptyView(
+      IOSEmptyState(
         systemImage: "clock.arrow.circlepath",
-        title: "Scanning…",
-        copy: "The first snapshot appears here when the scan finishes.",
+        title: "Scanning",
+        copy: "The first scan appears here when it finishes.",
         showsProgress: true)
     } else if state.hasScanSources {
-      SnapshotsEmptyView(
+      IOSEmptyState(
         systemImage: "clock.arrow.circlepath",
-        title: "No snapshots yet",
-        copy: "Every scan saves a snapshot here.",
+        title: "No scans yet",
+        copy: "Every scan is saved here.",
         actionTitle: "Go to Portfolio",
         action: { navigation.open(.portfolio) })
     } else {
-      SnapshotsEmptyView(
+      IOSEmptyState(
         systemImage: "clock.arrow.circlepath",
-        title: "No snapshots yet",
-        copy: "Add a wallet, then scan. Every scan saves a snapshot here.",
-        actionTitle: "Add a wallet",
+        title: "No scans yet",
+        copy: "Add a wallet address or an exchange, then scan. Every scan is saved here.",
+        actionTitle: "Add wallet",
         action: { navigation.open(.sources, then: .addWallet) })
     }
   }
@@ -205,8 +179,8 @@ struct HistoryScreen: View {
 
 // MARK: - Change
 
-/// Difference against the previous (older) snapshot's stored total. When the
-/// two scans read different wallets, exchanges, or manual holdings, the
+/// Difference against the previous (older) scan's stored total. When the two
+/// scans read different wallets, exchanges or manual holdings, the
 /// difference is not a market move and is not shown as one.
 private struct SnapshotChange {
   var delta: Double
@@ -241,32 +215,30 @@ private struct SnapshotChange {
     if sourcesChanged { return "Sources changed" }
     guard direction != 0 else { return "No change" }
     let amount = (direction > 0 ? "+" : "−") + money(abs(delta))
-    // Below 0.1% the percentage adds nothing the amount does not already
-    // say, matching the Portfolio hero.
+    // Below 0.1% the percentage adds nothing the amount does not already say.
     guard let fraction, abs(fraction) >= 0.001 else { return amount }
-    return "\(amount) (\(AtlasPercent.signedChange(fraction)))"
+    return "\(amount) · \(AtlasPercent.signedChange(fraction))"
   }
 
-  /// The header line in the detail sheet.
+  /// The header line on the scan's own page.
   var detailText: String {
-    if sourcesChanged { return "Sources changed since the previous snapshot" }
-    return "\(text) since previous"
+    if sourcesChanged { return "Sources changed since the scan before, so no change is shown." }
+    return direction == 0 ? "No change since the scan before" : "\(text) since the scan before"
   }
 
   var accessibilityText: String {
-    if sourcesChanged { return "sources changed since the previous snapshot" }
-    guard direction != 0 else { return "no change since the previous snapshot" }
+    if sourcesChanged { return "sources changed since the scan before" }
+    guard direction != 0 else { return "no change since the scan before" }
     var text = "\(direction > 0 ? "up" : "down") \(money(abs(delta)))"
     if let fraction, abs(fraction) >= 0.001 { text += ", \(AtlasPercent.text(abs(fraction)))" }
-    return text + " since the previous snapshot"
+    return text + " since the scan before"
   }
 }
 
 // MARK: - Row
 
 /// Date and relative time lead; the total and change sit trailing only when
-/// everything fits on one line, otherwise (narrow widths, large text) they
-/// move under the date so the date is never squeezed.
+/// everything fits on one line, otherwise they move under the date.
 private struct SnapshotRowView: View {
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   var run: ScanRunRecord
@@ -274,16 +246,12 @@ private struct SnapshotRowView: View {
 
   var body: some View {
     Group {
-      // Every row uses the same layout; the date side wraps before the
-      // total moves, so rows never switch shape with "Just now" vs
-      // "2 minutes ago".
       if dynamicTypeSize.isAccessibilitySize {
         stacked
       } else {
         inline
       }
     }
-    .padding(.vertical, 6)
     .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
     .contentShape(Rectangle())
   }
@@ -328,7 +296,7 @@ private struct SnapshotRowView: View {
   private var metaText: some View {
     TimelineView(.everyMinute) { context in
       Text(
-        "\(SnapshotFormatting.relative(run.generatedAt, now: context.date)) · \(SnapshotFormatting.assetCount(run))"
+        "\(IOSNumber.relative(run.generatedAt, now: context.date)) · \(SnapshotFormatting.assetCount(run))"
       )
     }
     .font(AtlasTheme.font(.body, .subheadline))
@@ -337,25 +305,12 @@ private struct SnapshotRowView: View {
 
   @ViewBuilder
   private var metaLine: some View {
-    if dynamicTypeSize.isAccessibilitySize {
-      VStack(alignment: .leading, spacing: 4) {
-        metaText
-        if !run.warnings.isEmpty {
-          SnapshotWarningBadge(count: run.warnings.count)
-        }
-      }
-    } else if run.warnings.isEmpty {
+    if run.warnings.isEmpty {
       metaText
     } else {
-      ViewThatFits(in: .horizontal) {
-        HStack(spacing: 8) {
-          metaText.fixedSize()
-          SnapshotWarningBadge(count: run.warnings.count)
-        }
-        VStack(alignment: .leading, spacing: 4) {
-          metaText
-          SnapshotWarningBadge(count: run.warnings.count)
-        }
+      VStack(alignment: .leading, spacing: 4) {
+        metaText
+        SnapshotWarningBadge(count: run.warnings.count)
       }
     }
   }
@@ -378,13 +333,13 @@ private struct SnapshotRowView: View {
   static func accessibilityText(run: ScanRunRecord, change: SnapshotChange?) -> String {
     var parts = [
       AtlasFormatting.dateTime(run.generatedAt),
-      SnapshotFormatting.relative(run.generatedAt),
+      IOSNumber.relative(run.generatedAt),
       money(run.totalUsd),
       SnapshotFormatting.assetCount(run),
     ]
     if let change { parts.append(change.accessibilityText) }
     if !run.warnings.isEmpty {
-      parts.append("\(run.warnings.count) warning\(run.warnings.count == 1 ? "" : "s")")
+      parts.append(IOSNumber.count(run.warnings.count, "warning"))
     }
     return parts.joined(separator: ", ")
   }
@@ -394,226 +349,198 @@ private struct SnapshotWarningBadge: View {
   var count: Int
 
   var body: some View {
-    Label("\(count)", systemImage: "exclamationmark.triangle.fill")
-      .labelStyle(.titleAndIcon)
-      .font(AtlasTheme.font(.label, .caption, weight: .semibold))
-      .foregroundStyle(AtlasTheme.warning)
-      .padding(.horizontal, 7)
-      .padding(.vertical, 2)
-      .background(AtlasTheme.warning.opacity(0.12))
-      .clipShape(Capsule())
-      .accessibilityLabel("\(count) warning\(count == 1 ? "" : "s")")
+    Badge(IOSNumber.count(count, "warning"), color: AtlasTheme.warning)
+      .fixedSize()
+      .accessibilityLabel(IOSNumber.count(count, "warning"))
   }
 }
 
 private enum SnapshotFormatting {
-  static func relative(_ date: Date, now: Date = Date()) -> String {
-    if abs(now.timeIntervalSince(date)) < 60 { return "Just now" }
-    return date.formatted(
-      .relative(presentation: .named, unitsStyle: .wide).locale(AtlasFormatting.locale))
-  }
-
   static func assetCount(_ run: ScanRunRecord) -> String {
-    "\(run.holdings.count) asset\(run.holdings.count == 1 ? "" : "s")"
+    IOSNumber.count(run.holdings.count, "holding")
   }
 }
 
-// MARK: - Empty state
+// MARK: - One scan
 
-private struct SnapshotsEmptyView: View {
-  var systemImage: String
-  var title: String
-  var copy: String
-  var showsProgress = false
-  var actionTitle: String?
-  var action: () -> Void = {}
-
-  var body: some View {
-    VStack(spacing: 14) {
-      ZStack {
-        if showsProgress {
-          ProgressView()
-        } else {
-          Image(systemName: systemImage)
-            .font(AtlasTheme.font(.display, .title2))
-            .foregroundStyle(AtlasTheme.accent)
-        }
-      }
-      .frame(width: 60, height: 60)
-      .background(AtlasTheme.accent.opacity(0.10))
-      .clipShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
-      .accessibilityHidden(true)
-      VStack(spacing: 6) {
-        Text(title)
-          .font(AtlasTheme.font(.display, .title3))
-          .foregroundStyle(AtlasTheme.ink)
-        Text(copy)
-          .font(AtlasTheme.font(.body, .callout))
-          .foregroundStyle(AtlasTheme.ink3)
-      }
-      .multilineTextAlignment(.center)
-      .fixedSize(horizontal: false, vertical: true)
-      if let actionTitle {
-        Button(actionTitle, action: action)
-          .buttonStyle(AtlasPrimaryButtonStyle())
-          .padding(.top, 4)
-      }
-    }
-    .frame(maxWidth: .infinity)
-    .padding(.vertical, 32)
-    .padding(.horizontal, 20)
-  }
-}
-
-// MARK: - Detail sheet
-
-/// One snapshot: total, date, change against the previous snapshot, its
-/// warnings, and its holdings (largest first, with share of the total).
-private struct SnapshotDetailSheet: View {
+/// One saved scan: total, date, change against the scan before it, its
+/// warnings, a chart of what it held, and its holdings largest first.
+struct SnapshotDetailScreen: View {
   @EnvironmentObject private var state: AppState
-  @Environment(\.dismiss) private var dismiss
-  var run: ScanRunRecord
-  var previous: ScanRunRecord?
-  var isLatest: Bool
-  var onDelete: () -> Void
+  @EnvironmentObject private var navigation: IOSNavigationModel
+  @Environment(\.atlasTheme) private var tokens
+  @ScaledMetric(relativeTo: .largeTitle) private var totalSize: CGFloat = 38
   @State private var showsAllHoldings = false
   @State private var confirmingRemoval = false
+  @AppStorage("snapshot.visualization.v1") private var storedVisualization = PortfolioVisualization.map.rawValue
+  var runID: UUID
 
   private static let topHoldingCount = 8
+  /// Views that read one scan's holdings, not the whole history.
+  private static let visualizations: [PortfolioVisualization] = [
+    .map, .ring, .strip, .grid, .bubbles, .list,
+  ]
 
-  private var sortedHoldings: [TrackedAsset] {
-    AppState.sortedHoldingsForDisplay(
-      AppState.applyingWalletLabels(to: run.holdings, wallets: state.document.wallets))
+  private var runs: [ScanRunRecord] {
+    state.document.scanRuns.sorted { $0.generatedAt > $1.generatedAt }
+  }
+
+  private var visualization: PortfolioVisualization {
+    let value = PortfolioVisualization(rawValue: storedVisualization) ?? .map
+    return Self.visualizations.contains(value) ? value : .map
   }
 
   var body: some View {
-    let holdings = sortedHoldings
+    let runs = runs
+    if let index = runs.firstIndex(where: { $0.id == runID }) {
+      let run = runs[index]
+      let previous = index + 1 < runs.count ? runs[index + 1] : nil
+      content(run: run, previous: previous, isLatest: index == 0)
+    } else {
+      // Removed here or from another device: nothing left to show.
+      IOSPage(title: "Scan") {
+        IOSEmptyState(
+          systemImage: "clock.arrow.circlepath",
+          title: "Scan removed",
+          copy: "This scan is no longer on this device.",
+          actionTitle: "Back to History",
+          action: { navigation.paths[.history] = [] })
+      }
+    }
+  }
+
+  private var sortedHoldings: (ScanRunRecord) -> [TrackedAsset] {
+    { run in
+      AppState.sortedHoldingsForDisplay(
+        AppState.applyingWalletLabels(to: run.holdings, wallets: state.document.wallets))
+    }
+  }
+
+  private func content(run: ScanRunRecord, previous: ScanRunRecord?, isLatest: Bool) -> some View {
+    let holdings = sortedHoldings(run)
     let visible = showsAllHoldings ? holdings : Array(holdings.prefix(Self.topHoldingCount))
-    NavigationStack {
-      List {
-        Section {
-          header
-            .listRowBackground(Color.clear)
-            .listRowInsets(EdgeInsets(top: 4, leading: 4, bottom: 8, trailing: 4))
-        }
-
-        if !run.warnings.isEmpty {
-          Section("Warnings") {
-            ForEach(Array(run.warnings.enumerated()), id: \.offset) { _, warning in
-              HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                  .font(AtlasTheme.font(.body, .subheadline))
-                  .foregroundStyle(AtlasTheme.warning)
-                  .padding(.top, 2)
-                  .accessibilityHidden(true)
-                Text(warning)
-                  .font(AtlasTheme.font(.body, .callout))
-                  .foregroundStyle(AtlasTheme.ink2)
-                  .textSelection(.enabled)
-                  .fixedSize(horizontal: false, vertical: true)
-              }
-              .padding(.vertical, 2)
-              .accessibilityElement(children: .combine)
-              .accessibilityLabel("Warning: \(warning)")
-            }
-          }
-          .listRowBackground(AtlasTheme.surface)
-        }
-
-        if !holdings.isEmpty {
-          Section {
-            ForEach(visible) { asset in
-              SnapshotHoldingRow(asset: asset, total: run.totalUsd)
-            }
-            if holdings.count > Self.topHoldingCount {
-              Button(showsAllHoldings ? "Show top \(Self.topHoldingCount)" : "Show all \(holdings.count)") {
-                showsAllHoldings.toggle()
-              }
-              .font(AtlasTheme.font(.body, .callout, weight: .semibold))
-              .foregroundStyle(AtlasTheme.accent)
-              .frame(minHeight: 44)
-            }
-          } header: {
-            Text(showsAllHoldings ? "Holdings" : "Top holdings")
-          }
-          .listRowBackground(AtlasTheme.surface)
-        }
-
-        Section {
-          Button(role: .destructive) {
-            confirmingRemoval = true
-          } label: {
-            Label("Delete snapshot", systemImage: "trash")
-              .frame(maxWidth: .infinity, minHeight: 44)
-          }
-          .foregroundStyle(AtlasTheme.loss)
-          .disabled(state.vaultEditsDisabled)
-          .confirmationDialog(
-            "Delete this snapshot?",
-            isPresented: $confirmingRemoval,
-            titleVisibility: .visible
-          ) {
-            Button("Delete snapshot", role: .destructive) {
-              dismiss()
-              onDelete()
-            }
-            Button("Cancel", role: .cancel) {}
-          } message: {
-            Text(HistoryScreen.removalMessage(run, isLatest: isLatest))
-          }
-        }
-        .listRowBackground(AtlasTheme.surface)
-      }
-      .listStyle(.insetGrouped)
-      .listSectionSpacing(.compact)
-      .scrollContentBackground(.hidden)
-      .background(AtlasTheme.canvas)
-      .navigationTitle("Snapshot")
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbarBackground(AtlasTheme.canvas, for: .navigationBar)
-      .toolbar {
-        ToolbarItem(placement: .confirmationAction) {
-          Button("Done") { dismiss() }
-        }
-      }
-    }
-    .atlasDetailSheetPresentation()
-  }
-
-  private var header: some View {
     let change = SnapshotChange(run: run, previous: previous, state: state)
-    return VStack(alignment: .leading, spacing: 6) {
-      Text(AtlasFormatting.dateTime(run.generatedAt))
-        .font(AtlasTheme.font(.body, .subheadline, weight: .medium))
-        .foregroundStyle(AtlasTheme.ink3)
-      Text(money(run.totalUsd))
-        .font(AtlasTheme.font(.number, .largeTitle, weight: .semibold))
-        .foregroundStyle(AtlasTheme.ink)
-        .lineLimit(2)
-        .minimumScaleFactor(0.5)
-      if let change {
-        Text(change.detailText)
-          .font(AtlasTheme.font(.number, .subheadline))
-          .foregroundStyle(change.color)
+    return IOSPage(title: "Scan") {
+      header(run: run, change: change)
+
+      ForEach(Array(run.warnings.enumerated()), id: \.offset) { _, warning in
+        IOSNotice(systemImage: "exclamationmark.triangle.fill", text: warning)
+          .accessibilityLabel("Warning: \(warning)")
       }
-      Text(summaryLine)
-        .font(AtlasTheme.font(.body, .subheadline))
-        .foregroundStyle(AtlasTheme.ink3)
+
+      if !holdings.isEmpty {
+        chartSection(run: run)
+
+        VStack(alignment: .leading, spacing: 10) {
+          IOSSectionTitle(showsAllHoldings ? "Holdings" : "Top holdings")
+          VStack(spacing: 0) {
+            ForEach(Array(visible.enumerated()), id: \.element.id) { index, asset in
+              SnapshotHoldingRow(asset: asset, total: run.totalUsd)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+              if index < visible.count - 1 {
+                Rectangle()
+                  .fill(AtlasTheme.shape.hasBoldBorders ? AtlasTheme.outline : AtlasTheme.ruleSoft)
+                  .frame(height: AtlasTheme.shape.hasBoldBorders ? 1.5 : 1)
+                  .padding(.horizontal, 14)
+                  .accessibilityHidden(true)
+              }
+            }
+          }
+          .iosCardSurface()
+          if holdings.count > Self.topHoldingCount {
+            Button(showsAllHoldings ? "Show top \(Self.topHoldingCount)" : "Show all \(holdings.count)") {
+              showsAllHoldings.toggle()
+            }
+            .buttonStyle(AtlasSecondaryButtonStyle())
+            .frame(minHeight: 44)
+          }
+        }
+      }
+
+      Button(role: .destructive) {
+        confirmingRemoval = true
+      } label: {
+        Label("Delete scan", systemImage: "trash")
+          .frame(maxWidth: .infinity, minHeight: 44)
+      }
+      .buttonStyle(AtlasSecondaryButtonStyle())
+      .foregroundStyle(AtlasTheme.loss)
+      .disabled(state.vaultEditsDisabled)
+      .confirmationDialog(
+        "Delete this scan?",
+        isPresented: $confirmingRemoval,
+        titleVisibility: .visible
+      ) {
+        Button("Delete scan", role: .destructive) {
+          navigation.paths[.history] = []
+          let id = run.id
+          Task { await state.removeScanRun(id: id) }
+        }
+        Button("Cancel", role: .cancel) {}
+      } message: {
+        Text(HistoryScreen.removalMessage(run, isLatest: isLatest))
+      }
     }
-    .fixedSize(horizontal: false, vertical: true)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .accessibilityElement(children: .combine)
   }
 
-  private var summaryLine: String {
-    var parts = [
-      SnapshotFormatting.relative(run.generatedAt), SnapshotFormatting.assetCount(run),
-    ]
+  private func header(run: ScanRunRecord, change: SnapshotChange?) -> some View {
+    let hero = IOSHeroStyle.current(tokens)
+    return IOSCard(padding: 18, fill: hero.fill, ink: hero.ink) {
+      VStack(alignment: .leading, spacing: 6) {
+        Text(AtlasFormatting.dateTime(run.generatedAt))
+          .font(AtlasTheme.font(.label, .subheadline, weight: .semibold))
+          .foregroundStyle(hero.secondaryInk)
+        Text(money(run.totalUsd))
+          .font(AtlasTheme.font(.number, size: totalSize, relativeTo: .largeTitle, weight: .heavy))
+          .tracking(AtlasTheme.tracking(.display, size: totalSize))
+          .foregroundStyle(hero.ink)
+          .lineLimit(1)
+          .minimumScaleFactor(0.5)
+        if let change {
+          Text(change.detailText)
+            .font(AtlasTheme.font(.number, .subheadline))
+            .foregroundStyle(hero.isTinted ? hero.ink : change.color)
+        }
+        Text(summaryLine(run))
+          .font(AtlasTheme.font(.body, .subheadline))
+          .foregroundStyle(hero.secondaryInk)
+      }
+      .fixedSize(horizontal: false, vertical: true)
+      .accessibilityElement(children: .combine)
+    }
+  }
+
+  private func summaryLine(_ run: ScanRunRecord) -> String {
+    var parts = [IOSNumber.relative(run.generatedAt), SnapshotFormatting.assetCount(run)]
     if run.inputCount > 0 {
       // `inputCount` is the number of wallet addresses the scan read.
-      parts.append("\(run.inputCount) wallet\(run.inputCount == 1 ? "" : "s") scanned")
+      parts.append("\(IOSNumber.count(run.inputCount, "wallet")) scanned")
     }
     return parts.joined(separator: " · ")
+  }
+
+  private func chartSection(run: ScanRunRecord) -> some View {
+    let input = PortfolioChartInput(
+      holdings: AppState.applyingWalletLabels(to: run.holdings, wallets: state.document.wallets),
+      runs: [run], grouping: .asset, sourceContext: nil, density: .full)
+    return VStack(alignment: .leading, spacing: 10) {
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 8) {
+          ForEach(Self.visualizations) { item in
+            IOSChip(item.title, isSelected: item == visualization) {
+              storedVisualization = item.rawValue
+            }
+          }
+        }
+        .padding(.horizontal, 16)
+      }
+      .padding(.horizontal, -16)
+      .accessibilityElement(children: .contain)
+      .accessibilityLabel("Chart view")
+      IOSChartCard(visualization: visualization, input: input)
+        .id(visualization)
+    }
   }
 }
 
@@ -627,7 +554,7 @@ private struct SnapshotHoldingRow: View {
   private var valueText: String {
     switch asset.pricingStatus {
     case .priced: money(asset.valueUsd)
-    case .unpriced: "Unpriced"
+    case .unpriced: "No price"
     case .valuationUnavailable: "Value unavailable"
     }
   }
@@ -676,7 +603,7 @@ private struct SnapshotHoldingRow: View {
       }
     }
     .foregroundStyle(AtlasTheme.ink)
-    .padding(.vertical, 2)
+    .frame(minHeight: 44)
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(
       [
@@ -691,7 +618,8 @@ private struct SnapshotHoldingRow: View {
       Text(valueText)
         .font(
           asset.pricingStatus == .priced
-            ? .body.weight(.semibold).monospacedDigit() : .subheadline.weight(.medium)
+            ? AtlasTheme.font(.number, .body, weight: .semibold)
+            : AtlasTheme.font(.body, .subheadline, weight: .medium)
         )
         .foregroundStyle(asset.pricingStatus == .priced ? AtlasTheme.ink : AtlasTheme.warning)
       if let shareText {
@@ -701,9 +629,4 @@ private struct SnapshotHoldingRow: View {
       }
     }
   }
-}
-
-struct SnapshotDetailScreen: View {
-  var runID: UUID
-  var body: some View { Text(runID.uuidString) }
 }

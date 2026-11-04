@@ -29,6 +29,18 @@ extension View {
   }
 }
 
+extension View {
+  /// Debug builds only: scrolls to the offset a demo launch argument asks
+  /// for. Release builds return the view unchanged.
+  func demoScrollOffset() -> some View {
+    #if DEBUG
+      modifier(DemoScrollModifier())
+    #else
+      self
+    #endif
+  }
+}
+
 // MARK: - Cards
 
 /// A padded card with the theme's border, corner radius and shadow. Pass

@@ -14,11 +14,13 @@
 //   -AtlasDemoSegment wallets|exchanges|holdings|tokens        Sources list
 //   -AtlasDemoAction addWallet|connectExchange|addManualHolding|addCustomToken
 //   -AtlasDemoSliceFilter network:ethereum|state:staked        Assets filter
+//   -AtlasDemoScrollY 700             scroll the page by that many points (iOS 18+ simulators)
 // Theme and appearance use the normal preference keys, for example
 // `-display.theme.v1 candy -display.appearanceMode.v1 dark`.
 #if DEBUG
   import AddressAtlasCore
   import Foundation
+  import SwiftUI
 
   enum DemoFixture {
     enum Mode: String {
@@ -128,6 +130,10 @@
         default: break
         }
       }
+    }
+
+    static var scrollY: CGFloat {
+      CGFloat(UserDefaults.standard.double(forKey: "AtlasDemoScrollY"))
     }
 
     static var sourcesSegment: SourcesSegment? {
@@ -372,6 +378,28 @@
         exchangeConnections: exchanges,
         scanRuns: runs,
         updatedAt: now)
+    }
+  }
+
+  /// Scrolls a page to the offset of `-AtlasDemoScrollY` so a screenshot can
+  /// show content below the first screen. Debug builds on iOS 18+ only.
+  struct DemoScrollModifier: ViewModifier {
+    func body(content: Content) -> some View {
+      if #available(iOS 18.0, *), DemoFixture.scrollY > 0 {
+        Scrolled(content: content)
+      } else {
+        content
+      }
+    }
+
+    @available(iOS 18.0, *)
+    private struct Scrolled<Content: View>: View {
+      @State private var position = ScrollPosition(y: DemoFixture.scrollY)
+      var content: Content
+
+      var body: some View {
+        content.scrollPosition($position)
+      }
     }
   }
 #endif

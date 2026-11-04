@@ -11,7 +11,9 @@ import UniformTypeIdentifiers
 /// retry path.
 ///
 /// Keeps the macOS `UnlockView` confirmations and safety rules; the copy is
-/// shortened for a phone and diagnostics sit behind a disclosure.
+/// shortened for a phone and diagnostics sit behind a disclosure. Nothing here
+/// depends on the exact wording of `state.notice` or `state.error`, only on
+/// whether an error is present and on a notice that says "restored".
 struct UnlockScreen: View {
   @EnvironmentObject private var state: AppState
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -45,7 +47,7 @@ struct UnlockScreen: View {
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .background(AtlasTheme.canvas.ignoresSafeArea())
+      .background(AtlasCanvasBackground().ignoresSafeArea())
       .toolbar(.hidden, for: .navigationBar)
       .atlasKeyboardDoneButton()
       .animation(
@@ -66,17 +68,17 @@ struct UnlockScreen: View {
         if !state.isUnlocking { firstAttemptFinished = true }
       }
       .confirmationDialog(
-        "Preserve damaged vault and start clean?",
+        "Set aside the damaged vault and start clean?",
         isPresented: $confirmsDamagedVaultQuarantine,
         titleVisibility: .visible
       ) {
-        Button("Preserve in quarantine and start clean", role: .destructive) {
+        Button("Set aside and start clean", role: .destructive) {
           Task { await state.quarantineDamagedVaultAndStartClean() }
         }
         Button("Cancel", role: .cancel) {}
       } message: {
         Text(
-          "A crash-durable private copy of vault.sqlite and every SQLite sidecar is verified first. Only then does an empty local vault open with the same Keychain key. Nothing is downloaded."
+          "The damaged vault is copied to a private folder, and the copy is checked first. Only then does an empty vault open, with the same Keychain key. Nothing is downloaded."
         )
       }
       .fileImporter(
@@ -96,7 +98,7 @@ struct UnlockScreen: View {
 
   private var lockedPage: some View {
     ScrollView {
-      VStack(spacing: 24) {
+      VStack(spacing: 20) {
         IOSPersistentStatus()
         header
         unlockButton
@@ -108,12 +110,12 @@ struct UnlockScreen: View {
 
         recoveryCard
 
-        LearnMoreDisclosure("Privacy-safe diagnostics", systemImage: "stethoscope") {
+        LearnMoreDisclosure("Diagnostics", systemImage: "stethoscope") {
           diagnosticsControls
         }
-
-        UnlockTrustFooter()
       }
+      // Wider than the hard card shadows of the Candy and Pixel themes, which
+      // fall to the right and below.
       .padding(.horizontal, 20)
       .padding(.vertical, 32)
       .frame(maxWidth: 520)
@@ -122,22 +124,30 @@ struct UnlockScreen: View {
     .scrollDismissesKeyboard(.interactively)
   }
 
+  private var headerMessage: String {
+    if state.damagedVaultRecoveryAvailability != nil {
+      return "The saved portfolio on this \(PlatformCopy.deviceNoun) is damaged."
+    }
+    if !state.error.isEmpty {
+      return "The vault didn't open. Try again, or restore from a recovery kit."
+    }
+    return "The portfolio is encrypted with a key in this \(PlatformCopy.deviceNoun)'s Keychain."
+  }
+
   private var header: some View {
     VStack(spacing: 14) {
       UnlockBrandTile(size: 72)
       Text("Vault locked")
-        .font(.system(.largeTitle, design: .rounded).weight(.bold))
+        .font(AtlasTheme.font(.display, size: 32, relativeTo: .largeTitle, weight: .bold))
+        .tracking(AtlasTheme.tracking(.display, size: 32))
+        .foregroundStyle(AtlasTheme.ink)
         .multilineTextAlignment(.center)
         .accessibilityAddTraits(.isHeader)
-      Text(
-        state.error.isEmpty
-          ? "Your portfolio is encrypted with a key kept in this \(PlatformCopy.deviceNoun)'s Keychain."
-          : "The vault didn't open. Try again, or restore with your recovery kit."
-      )
-      .font(AtlasTheme.font(.body, .callout))
-      .foregroundStyle(AtlasTheme.ink2)
-      .multilineTextAlignment(.center)
-      .fixedSize(horizontal: false, vertical: true)
+      Text(headerMessage)
+        .font(AtlasTheme.font(.body, .callout))
+        .foregroundStyle(AtlasTheme.ink2)
+        .multilineTextAlignment(.center)
+        .fixedSize(horizontal: false, vertical: true)
     }
   }
 
@@ -150,20 +160,18 @@ struct UnlockScreen: View {
           HStack(spacing: 8) {
             ProgressView()
               .controlSize(.small)
-              .tint(AtlasTheme.paper)
+              .tint(AtlasTheme.onAccent)
             Text("Unlocking…")
           }
         } else {
-          Label("Unlock vault", systemImage: "lock.open.fill")
+          Label("Unlock", systemImage: "lock.open.fill")
         }
       }
-      .font(AtlasTheme.font(.body, .body, weight: .semibold))
-      .frame(maxWidth: .infinity, minHeight: 50)
-      .contentShape(Rectangle())
+      .modifier(UnlockScreenFullWidthLabel())
     }
     .buttonStyle(AtlasPrimaryButtonStyle())
     .disabled(state.isUnlocking)
-    .accessibilityHint("Opens the encrypted vault with the key stored in this device's Keychain.")
+    .accessibilityHint("Opens the vault with the key in this device's Keychain.")
     .accessibilityIdentifier("unlock-button")
   }
 
@@ -171,107 +179,98 @@ struct UnlockScreen: View {
 
   @ViewBuilder
   private func damagedVaultCard(_ recovery: DamagedVaultRecoveryAvailability) -> some View {
-    VStack(alignment: .leading, spacing: 14) {
-      UnlockCardHeader(
-        title: "Local vault needs attention",
-        subtitle: recovery == .validatedRollbackCheckpoint
-          ? "A verified encrypted restore point is available."
-          : "Preserve the damaged vault, then start clean.",
-        systemImage: "exclamationmark.shield.fill",
-        tint: AtlasTheme.warning
-      )
-      if recovery == .validatedRollbackCheckpoint {
-        Button {
-          Task { await state.recoverDamagedVaultFromRollbackCheckpoint() }
+    Surface(padding: 16, style: .warning) {
+      VStack(alignment: .leading, spacing: 14) {
+        UnlockCardHeader(
+          title: "Local vault is damaged",
+          subtitle: recovery == .validatedRollbackCheckpoint
+            ? "An earlier copy passed its checks. Restore it, or set the damaged vault aside and start clean."
+            : "No earlier copy is available. Set the damaged vault aside and start clean, then restore a copy you saved elsewhere.",
+          systemImage: "exclamationmark.shield.fill",
+          tint: AtlasTheme.warning,
+          soft: AtlasTheme.warningSoft
+        )
+        if recovery == .validatedRollbackCheckpoint {
+          Button {
+            Task { await state.recoverDamagedVaultFromRollbackCheckpoint() }
+          } label: {
+            Text("Restore earlier copy")
+              .modifier(UnlockScreenFullWidthLabel())
+          }
+          .buttonStyle(AtlasPrimaryButtonStyle())
+          .disabled(state.isUnlocking)
+          .accessibilityHint(
+            "Replaces the damaged vault with the earlier copy that passed its checks. Nothing is downloaded."
+          )
+        }
+        Button(role: .destructive) {
+          confirmsDamagedVaultQuarantine = true
         } label: {
-          Text("Restore the earlier copy")
+          Text("Set aside and start clean")
             .modifier(UnlockScreenFullWidthLabel())
         }
-        .buttonStyle(AtlasPrimaryButtonStyle())
+        .buttonStyle(AtlasSecondaryButtonStyle())
         .disabled(state.isUnlocking)
-        .accessibilityHint(
-          "Replaces the damaged vault with the verified encrypted restore point. Nothing is downloaded."
-        )
+        .accessibilityHint("Asks you to confirm before the damaged vault is set aside.")
       }
-      Button(role: .destructive) {
-        confirmsDamagedVaultQuarantine = true
-      } label: {
-        Text("Preserve damaged vault and start clean")
-          .modifier(UnlockScreenFullWidthLabel())
-      }
-      .buttonStyle(AtlasSecondaryButtonStyle())
-      .disabled(state.isUnlocking)
-      .accessibilityHint("Asks for confirmation before quarantining the damaged vault.")
-    }
-    .padding(16)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(AtlasTheme.warning.opacity(0.09))
-    .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.large, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: AtlasRadius.large, style: .continuous)
-        .stroke(AtlasTheme.warning.opacity(0.3), lineWidth: 1)
     }
   }
 
   // MARK: - Recovery kit
 
   private var recoveryCard: some View {
-    VStack(alignment: .leading, spacing: 14) {
-      UnlockCardHeader(
-        title: "Restore with a recovery kit",
-        subtitle: "Your recovery file plus its separate code.",
-        systemImage: "key.fill",
-        tint: AtlasTheme.accent
-      )
-      HStack(spacing: 8) {
-        Group {
-          if revealsRestoreCode {
-            TextField("Recovery code", text: $restoreCode)
-          } else {
-            SecureField("Recovery code", text: $restoreCode)
+    IOSCard {
+      VStack(alignment: .leading, spacing: 14) {
+        UnlockCardHeader(
+          title: "Restore from a recovery kit",
+          subtitle: "You need the recovery file and its separate code.",
+          systemImage: "key.fill",
+          tint: AtlasTheme.accent,
+          soft: AtlasTheme.accentSoft
+        )
+        HStack(spacing: 8) {
+          Group {
+            if revealsRestoreCode {
+              TextField("Recovery code", text: $restoreCode)
+            } else {
+              SecureField("Recovery code", text: $restoreCode)
+            }
           }
+          .font(AtlasTheme.font(.mono, .callout))
+          .textFieldStyle(AtlasTextFieldStyle())
+          .atlasIdentifierInput()
+          .submitLabel(.done)
+          .accessibilityLabel("Recovery code")
+          .accessibilityHint("Enter the code you stored separately from the recovery file.")
+          Button {
+            revealsRestoreCode.toggle()
+          } label: {
+            Image(systemName: revealsRestoreCode ? "eye.slash" : "eye")
+              .font(AtlasTheme.font(.body, .callout))
+              .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+              .foregroundStyle(AtlasTheme.ink3)
+              .frame(width: 44, height: 44)
+              .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel(revealsRestoreCode ? "Hide recovery code" : "Show recovery code")
         }
-        .textFieldStyle(AtlasTextFieldStyle())
-        .atlasIdentifierInput()
-        .submitLabel(.done)
-        .accessibilityLabel("Recovery code")
-        .accessibilityHint("Enter the code you stored separately from the recovery file.")
         Button {
-          revealsRestoreCode.toggle()
+          showsRecoveryFileImporter = true
         } label: {
-          Image(systemName: revealsRestoreCode ? "eye.slash" : "eye")
-            .font(AtlasTheme.font(.body, .callout))
-            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-            .foregroundStyle(AtlasTheme.ink3)
-            .frame(width: 44, height: 44)
-            .contentShape(Rectangle())
+          Label("Choose recovery file", systemImage: "doc.badge.arrow.up")
+            .modifier(UnlockScreenFullWidthLabel())
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(revealsRestoreCode ? "Hide recovery code" : "Show recovery code")
+        .buttonStyle(AtlasSecondaryButtonStyle())
+        .disabled(state.isUnlocking || trimmedRestoreCode.isEmpty)
+        .accessibilityHint(
+          "Opens the Files picker. The recovery file is checked before anything in Keychain changes."
+        )
+        Text("Nothing changes unless the kit opens the portfolio on this device.")
+          .font(AtlasTheme.font(.label, .caption))
+          .foregroundStyle(AtlasTheme.ink3)
+          .fixedSize(horizontal: false, vertical: true)
       }
-      Button {
-        showsRecoveryFileImporter = true
-      } label: {
-        Label("Choose recovery file", systemImage: "doc.badge.arrow.up")
-          .modifier(UnlockScreenFullWidthLabel())
-      }
-      .buttonStyle(AtlasSecondaryButtonStyle())
-      .disabled(state.isUnlocking || trimmedRestoreCode.isEmpty)
-      .accessibilityHint(
-        "Opens the Files picker. The recovery file is verified before anything in Keychain is changed."
-      )
-      Text("Nothing changes unless the kit opens the portfolio on this device.")
-        .font(AtlasTheme.font(.label, .caption))
-        .foregroundStyle(AtlasTheme.ink3)
-        .fixedSize(horizontal: false, vertical: true)
-    }
-    .padding(16)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(AtlasTheme.surface)
-    .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.large, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: AtlasRadius.large, style: .continuous)
-        .stroke(AtlasTheme.ruleSoft, lineWidth: 1)
     }
   }
 
@@ -287,21 +286,40 @@ struct UnlockScreen: View {
           }
         }
         await state.restoreRecoveryKit(from: url, recoveryCode: recoveryCode)
-        guard state.error.isEmpty, state.notice.hasPrefix("Recovery kit restored") else {
+        // The restore worked when no error is left and the notice says the
+        // key was restored. The wording around that is the state layer's.
+        guard state.error.isEmpty, Self.isRestoreNotice(state.notice) else {
           return
         }
         restoreCode = ""
         revealsRestoreCode = false
-        // Say what came back: the key, which opens the portfolio stored on
-        // this device. Follow-up notices (upload recovery) are kept.
-        if state.notice == "Recovery kit restored." {
-          state.notice = "Encryption key restored. Your portfolio on this device is open again."
+        // Say what came back when the state layer only confirmed the restore;
+        // a notice that already says more (an interrupted upload, an empty
+        // vault) is kept as it is.
+        if Self.isBareRestoreConfirmation(state.notice) {
+          state.notice = "Encryption key restored. Your portfolio on this device is open."
         }
       }
-    case .failure:
+    case .failure(let error):
+      // Closing the picker without a choice is not a failure.
+      if (error as? CocoaError)?.code == .userCancelled { return }
       state.notice = ""
-      state.error = "The recovery file could not be opened. Nothing in Keychain was changed."
+      state.error =
+        "Couldn't open that file. Nothing in Keychain changed. Choose the recovery file again."
     }
+  }
+
+  private static func isRestoreNotice(_ notice: String) -> Bool {
+    notice.lowercased().contains("restored")
+  }
+
+  /// A restore notice of a single sentence: it confirms the restore and says
+  /// nothing else.
+  private static func isBareRestoreConfirmation(_ notice: String) -> Bool {
+    guard isRestoreNotice(notice) else { return false }
+    let sentences = notice.split(whereSeparator: { ".!?".contains($0) })
+      .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    return sentences.count == 1
   }
 
   // MARK: - Privacy-safe diagnostics
@@ -310,7 +328,7 @@ struct UnlockScreen: View {
     let report = state.privacySafeDiagnosticsReport()
     return VStack(alignment: .leading, spacing: 10) {
       Text(
-        "App versions, state flags, and failure codes only. No addresses, labels, amounts, credentials, URLs, or file paths."
+        "App versions, state flags and failure codes only. No addresses, labels, amounts, credentials, URLs or file paths."
       )
       .fixedSize(horizontal: false, vertical: true)
       AdaptiveStack(horizontalSpacing: 10, verticalSpacing: 10) {
@@ -323,12 +341,12 @@ struct UnlockScreen: View {
         .buttonStyle(AtlasSecondaryButtonStyle())
         .accessibilityLabel("Copy diagnostics")
         .accessibilityHint(
-          "Copies a bounded technical report that excludes portfolio content and identifiers."
+          "Copies a short technical report. It has no portfolio content or identifiers."
         )
         ShareLink(
           item: report,
-          subject: Text("Address Atlas privacy-safe diagnostics"),
-          preview: SharePreview("Privacy-safe diagnostics")
+          subject: Text("Address Atlas diagnostics"),
+          preview: SharePreview("Diagnostics")
         ) {
           Label("Share", systemImage: "square.and.arrow.up")
             .modifier(UnlockScreenFullWidthLabel())
@@ -336,7 +354,7 @@ struct UnlockScreen: View {
         .buttonStyle(AtlasSecondaryButtonStyle())
         .accessibilityLabel("Share diagnostics")
         .accessibilityHint(
-          "Shares the same bounded technical report through the share sheet. It excludes portfolio content and identifiers."
+          "Shares the same technical report through the share sheet. It has no portfolio content or identifiers."
         )
       }
     }
@@ -346,11 +364,11 @@ struct UnlockScreen: View {
     let pasteboard = UIPasteboard.general
     pasteboard.string = report
     if pasteboard.hasStrings {
-      state.notice = "Privacy-safe diagnostics copied."
+      state.notice = "Diagnostics copied."
       state.error = ""
     } else {
       state.notice = ""
-      state.error = "Diagnostics could not be copied. No vault data was placed on the clipboard."
+      state.error = "Couldn't copy diagnostics. Nothing was put on the clipboard. Try again."
     }
   }
 }
@@ -371,37 +389,36 @@ private struct UnlockSplash: View {
     VStack(spacing: 18) {
       UnlockBrandTile(size: 84)
       Text("Address Atlas")
-        .font(AtlasTheme.font(.display, .title2))
+        .font(AtlasTheme.font(.display, .title2, weight: .bold))
+        .tracking(AtlasTheme.tracking(.display, size: 22))
         .foregroundStyle(AtlasTheme.ink)
       ProgressView()
+        .tint(AtlasTheme.accent)
         .padding(.top, 4)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .accessibilityElement(children: .ignore)
-    .accessibilityLabel("Address Atlas. Opening your encrypted vault.")
+    .accessibilityLabel("Address Atlas. Unlocking.")
     .accessibilityIdentifier("unlock-splash")
   }
 }
 
+/// The app mark: the atlas glyph on the theme's soft accent fill, outlined and
+/// shadowed like any other card of the theme.
 private struct UnlockBrandTile: View {
   var size: CGFloat
 
   var body: some View {
-    RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
-      .fill(
-        LinearGradient(
-          colors: [AtlasTheme.accent, AtlasTheme.accent.opacity(0.72)],
-          startPoint: .topLeading,
-          endPoint: .bottomTrailing
-        )
-      )
+    Image(systemName: "map.fill")
+      .font(.system(size: size * 0.42, weight: .semibold))
+      .foregroundStyle(AtlasTheme.accent)
       .frame(width: size, height: size)
-      .overlay {
-        Image(systemName: "map.fill")
-          .font(.system(size: size * 0.42, weight: .semibold))
-          .foregroundStyle(AtlasTheme.paper)
-      }
-      .shadow(color: AtlasTheme.accent.opacity(0.28), radius: 14, y: 6)
+      .atlasChrome(
+        fill: AtlasTheme.accentSoft,
+        border: AtlasTheme.outline,
+        level: .card,
+        radius: min(AtlasRadius.large, size * 0.3)
+      )
       .accessibilityHidden(true)
   }
 }
@@ -411,47 +428,35 @@ private struct UnlockCardHeader: View {
   var subtitle: String
   var systemImage: String
   var tint: Color
+  var soft: Color
 
   var body: some View {
     HStack(alignment: .top, spacing: 12) {
       Image(systemName: systemImage)
         .font(AtlasTheme.font(.body, .body, weight: .semibold))
+        // The tile is a fixed size, so the glyph stops growing with it.
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         .foregroundStyle(tint)
-        .frame(width: 34, height: 34)
-        .background(tint.opacity(0.12))
-        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .frame(width: 36, height: 36)
+        .background(soft, in: RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
+        .overlay {
+          if AtlasTheme.shape.hasBoldBorders {
+            RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
+              .stroke(AtlasTheme.outline, lineWidth: 1.5)
+          }
+        }
         .accessibilityHidden(true)
-      VStack(alignment: .leading, spacing: 2) {
+      VStack(alignment: .leading, spacing: 3) {
         Text(title)
           .font(AtlasTheme.font(.display, .headline))
           .foregroundStyle(AtlasTheme.ink)
         Text(subtitle)
           .font(AtlasTheme.font(.body, .subheadline))
-          .foregroundStyle(AtlasTheme.ink3)
+          .foregroundStyle(AtlasTheme.ink2)
           .fixedSize(horizontal: false, vertical: true)
       }
       Spacer(minLength: 0)
     }
     .accessibilityElement(children: .combine)
-  }
-}
-
-private struct UnlockTrustFooter: View {
-  var body: some View {
-    ViewThatFits(in: .horizontal) {
-      HStack(spacing: 16) { items }
-      VStack(spacing: 8) { items }
-    }
-    .font(AtlasTheme.font(.label, .caption, weight: .medium))
-    .foregroundStyle(AtlasTheme.ink3)
-    .frame(maxWidth: .infinity)
-    .accessibilityElement(children: .combine)
-  }
-
-  @ViewBuilder
-  private var items: some View {
-    Label("Read-only", systemImage: "eye")
-    Label("No private keys", systemImage: "hand.raised")
-    Label("Encrypted", systemImage: "lock.fill")
   }
 }
