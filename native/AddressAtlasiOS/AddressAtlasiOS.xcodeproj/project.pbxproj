@@ -25,6 +25,7 @@
 		5320277B5CFC780C186CCAB8 /* SettingsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB6599F39A81C8F170E79B74 /* SettingsScreen.swift */; };
 		5362D54DF67A225118265A96 /* IOSSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 794806A4DD437BC916CAD7A7 /* IOSSupport.swift */; };
 		5B79D516A4A1DDBB22F3D0DD /* TokensScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 606FA4F090348CF9EC1664FC /* TokensScreen.swift */; };
+		621C0321D444D17C3A087B22 /* PortfolioChartContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45A9E6A6ED3EF7FD0D8ECB63 /* PortfolioChartContract.swift */; };
 		690317403BDDC5EDE5257CA6 /* AppStateScanning.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04E59E2E786153253189CD5F /* AppStateScanning.swift */; };
 		6C98C84D5ED74C0F80410E5C /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5301917867ACFE8CBB9F33FA /* RootView.swift */; };
 		6E9D1606CAA6C4CE538E5EB8 /* UnlockScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67ADF2440084A336EC7A193E /* UnlockScreen.swift */; };
@@ -70,6 +71,7 @@
 		374D5366490E6CB10977C60D /* AtlasSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasSection.swift; sourceTree = "<group>"; };
 		383C93D63BFF8FDF8528563C /* AtlasThemeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasThemeModel.swift; sourceTree = "<group>"; };
 		4448B631DE49335B0A5E5218 /* AtlasDisplayPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasDisplayPreferences.swift; sourceTree = "<group>"; };
+		45A9E6A6ED3EF7FD0D8ECB63 /* PortfolioChartContract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortfolioChartContract.swift; sourceTree = "<group>"; };
 		478987FC2E1C1206E20F758E /* AssetsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssetsScreen.swift; sourceTree = "<group>"; };
 		494600BE507D8CD4AE731861 /* UserFacingErrors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserFacingErrors.swift; sourceTree = "<group>"; };
 		4F04D2CEE0AC93D87843CC0A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
@@ -208,6 +210,14 @@
 			path = Sources;
 			sourceTree = "<group>";
 		};
+		D1B221DA0E90E59F3EC7A71B /* Charts */ = {
+			isa = PBXGroup;
+			children = (
+				45A9E6A6ED3EF7FD0D8ECB63 /* PortfolioChartContract.swift */,
+			);
+			path = Charts;
+			sourceTree = "<group>";
+		};
 		D43234349A8B88D3B7D527C8 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
@@ -219,6 +229,7 @@
 		E060A0274E2E808C040581F7 /* SharedMacSources */ = {
 			isa = PBXGroup;
 			children = (
+				D1B221DA0E90E59F3EC7A71B /* Charts */,
 				AC93E4A10CF81A60F0D50C66 /* AppState.swift */,
 				C04752AA39E3937CDF9A758E /* AppStateAccountLifecycle.swift */,
 				533EC174E4E518D135EF3EFD /* AppStateDiagnostics.swift */,
@@ -366,6 +377,7 @@
 				9FA8EB661F0A60FA57768699 /* MainShell.swift in Sources */,
 				9CEB3517BE932E3FE1EA0B77 /* OnboardingScreen.swift in Sources */,
 				3A4DE02A5C1046DE6B93E213 /* PasskeyWebAuthenticator.swift in Sources */,
+				621C0321D444D17C3A087B22 /* PortfolioChartContract.swift in Sources */,
 				2CA0D0C8D880A88CE0A06062 /* PortfolioScreen.swift in Sources */,
 				6C98C84D5ED74C0F80410E5C /* RootView.swift in Sources */,
 				5320277B5CFC780C186CCAB8 /* SettingsScreen.swift in Sources */,
