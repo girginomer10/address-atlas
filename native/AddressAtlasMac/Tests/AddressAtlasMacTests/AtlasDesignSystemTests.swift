@@ -49,6 +49,7 @@ final class AtlasDesignSystemTests: XCTestCase {
       document: try populatedDocument(vaultKey: vaultKey),
       endpointConfigClient: FixedEndpointConfigClient(config: .bundled)
     )
+    let preferences = isolatedPreferences()
     let screens: [(String, AnyView)] = [
       ("portfolio", AnyView(PortfolioView().environmentObject(state))),
       ("wallets", AnyView(WalletsView().environmentObject(state))),
@@ -58,7 +59,10 @@ final class AtlasDesignSystemTests: XCTestCase {
       ("exchanges", AnyView(ExchangesView().environmentObject(state))),
       ("sync", AnyView(SyncView().environmentObject(state))),
       ("export", AnyView(ExportView().environmentObject(state))),
-      ("settings", AnyView(SettingsView().environmentObject(state))),
+      (
+        "settings",
+        AnyView(SettingsView().environmentObject(state).environmentObject(preferences))
+      ),
     ]
 
     for (name, screen) in screens {
@@ -157,6 +161,66 @@ final class AtlasDesignSystemTests: XCTestCase {
       to: captureDirectory.appending(path: "app-shell-light.png"),
       options: .atomic
     )
+  }
+
+  /// Renders the Portfolio and Settings screens in each theme with the
+  /// synthetic fixture vault when `ADDRESS_ATLAS_THEME_CAPTURE_DIR` is set;
+  /// otherwise it only checks that every theme lays out.
+  @MainActor
+  func testEveryThemeRendersPortfolioAndSettingsWithSyntheticData() throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let vaultKey = try VaultCrypto().generateVaultKey()
+    let store = try EncryptedSQLiteVaultStore(
+      path: directory.appending(path: "vault.sqlite"),
+      vaultKey: vaultKey
+    )
+    _ = try store.load()
+    let state = AppState(
+      testStore: store,
+      document: try populatedDocument(vaultKey: vaultKey),
+      endpointConfigClient: FixedEndpointConfigClient(config: .bundled)
+    )
+    let preferences = isolatedPreferences()
+    let captureDirectory = ProcessInfo.processInfo.environment["ADDRESS_ATLAS_THEME_CAPTURE_DIR"]
+      .flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) }
+    if let captureDirectory {
+      try FileManager.default.createDirectory(
+        at: captureDirectory, withIntermediateDirectories: true)
+    }
+    let sections: [(String, MainView.Section)] = [
+      ("portfolio", .portfolio), ("settings", .settings),
+    ]
+    for theme in AtlasThemeID.allCases {
+      preferences.theme = theme
+      preferences.appearanceMode = .system
+      let isDark = theme.supportedAppearances == .darkOnly || theme == .heatmap
+      for (name, section) in sections {
+        let content = MainView(initialSection: section)
+          .environmentObject(state)
+          .environmentObject(preferences)
+          .atlasThemeRoot(preferences)
+          .transaction {
+            $0.animation = nil
+            $0.disablesAnimations = true
+          }
+        assertValidLayout(content, size: NSSize(width: 900, height: 600), context: "\(theme) \(name)")
+        guard let captureDirectory else { continue }
+        let data = try XCTUnwrap(
+          renderedPNG(
+            content.frame(width: 1_200, height: 800, alignment: .topLeading),
+            size: NSSize(width: 1_200, height: 800),
+            appearanceName: isDark ? .darkAqua : .aqua
+          )
+        )
+        XCTAssertGreaterThan(data.count, 10_000, "\(theme) \(name)")
+        try data.write(
+          to: captureDirectory.appending(path: "mac-\(name)-\(theme.rawValue).png"),
+          options: .atomic
+        )
+      }
+    }
   }
 
   @MainActor
@@ -487,38 +551,92 @@ final class AtlasDesignSystemTests: XCTestCase {
     XCTAssertEqual(table?.tableColumns.count, 2)
   }
 
-  func testSecondaryTextMeetsNormalTextContrastOnBothPaperSurfaces() {
-    let foreground = AtlasTheme.ink3RGB
-
-    XCTAssertGreaterThanOrEqual(
-      contrastRatio(foreground, AtlasTheme.paperRGB),
-      4.5
-    )
-    XCTAssertGreaterThanOrEqual(
-      contrastRatio(foreground, AtlasTheme.paper2RGB),
-      4.5
-    )
+  func testSecondaryTextMeetsNormalTextContrastOnCanvasAndSurfaceInEveryTheme() {
+    for (theme, appearance, palette) in everyThemePalette() {
+      for (name, foreground) in [("ink", palette.ink), ("ink2", palette.ink2), ("ink3", palette.ink3)] {
+        for (groundName, ground) in [("canvas", palette.canvas), ("surface", palette.surface)] {
+          XCTAssertGreaterThanOrEqual(
+            contrastRatio(foreground, ground),
+            4.5,
+            "\(theme) \(appearance) \(name) on \(groundName)"
+          )
+        }
+      }
+      for (name, foreground) in [("ink", palette.ink), ("ink2", palette.ink2)] {
+        XCTAssertGreaterThanOrEqual(
+          contrastRatio(foreground, palette.surfaceMuted),
+          4.5,
+          "\(theme) \(appearance) \(name) on surfaceMuted"
+        )
+      }
+      if appearance.isHighContrast {
+        XCTAssertGreaterThanOrEqual(
+          contrastRatio(palette.ink3, palette.canvas),
+          7,
+          "\(theme) \(appearance) Increase Contrast keeps secondary text at 7:1"
+        )
+      }
+    }
   }
 
-  func testWarningTextMeetsNormalTextContrastOnBothPaperSurfaces() {
-    XCTAssertGreaterThanOrEqual(
-      contrastRatio(AtlasTheme.warningRGB, AtlasTheme.paperRGB),
-      4.5
-    )
-    XCTAssertGreaterThanOrEqual(
-      contrastRatio(AtlasTheme.warningRGB, AtlasTheme.paper2RGB),
-      4.5
-    )
+  func testWarningGainAndLossTextMeetNormalTextContrastOnCanvasAndSurfaceInEveryTheme() {
+    for (theme, appearance, palette) in everyThemePalette() {
+      for (name, foreground) in [
+        ("warning", palette.warning), ("gain", palette.gain), ("loss", palette.loss),
+      ] {
+        for (groundName, ground) in [("canvas", palette.canvas), ("surface", palette.surface)] {
+          XCTAssertGreaterThanOrEqual(
+            contrastRatio(foreground, ground),
+            4.5,
+            "\(theme) \(appearance) \(name) on \(groundName)"
+          )
+        }
+        if appearance.isHighContrast {
+          XCTAssertGreaterThanOrEqual(
+            contrastRatio(foreground, palette.canvas),
+            7,
+            "\(theme) \(appearance) \(name) is pushed to 7:1 with Increase Contrast"
+          )
+        }
+      }
+    }
   }
 
-  func testPrimaryActionLabelMeetsNormalTextContrastInEveryAppearance() {
-    for appearance in AtlasAppearanceVariant.allCases {
-      let palette = AtlasTheme.palette(for: appearance)
+  func testPrimaryActionLabelAndAccentMeetNormalTextContrastInEveryThemeAndAppearance() {
+    for (theme, appearance, palette) in everyThemePalette() {
       XCTAssertGreaterThanOrEqual(
-        contrastRatio(palette.paper, palette.accent),
+        contrastRatio(palette.onAccent, palette.accent),
         4.5,
-        "\(appearance) primary action text must remain readable"
+        "\(theme) \(appearance) primary action text must remain readable"
       )
+      // The accent is also used as link and icon colour on the page.
+      for (groundName, ground) in [("canvas", palette.canvas), ("surface", palette.surface)] {
+        XCTAssertGreaterThanOrEqual(
+          contrastRatio(palette.accent, ground),
+          4.5,
+          "\(theme) \(appearance) accent on \(groundName)"
+        )
+      }
+      XCTAssertGreaterThanOrEqual(
+        contrastRatio(palette.onSelection, palette.selection),
+        4.5,
+        "\(theme) \(appearance) selected navigation label"
+      )
+    }
+  }
+
+  func testBodyInkIsReadableOnEveryTintedCalloutFill() {
+    for (theme, appearance, palette) in everyThemePalette() {
+      for (name, fill) in [
+        ("accentSoft", palette.accentSoft), ("gainSoft", palette.gainSoft),
+        ("warningSoft", palette.warningSoft), ("lossSoft", palette.lossSoft),
+      ] {
+        XCTAssertGreaterThanOrEqual(
+          contrastRatio(palette.ink, fill),
+          4.5,
+          "\(theme) \(appearance) ink on \(name)"
+        )
+      }
     }
   }
 
@@ -529,24 +647,29 @@ final class AtlasDesignSystemTests: XCTestCase {
 
   @MainActor
   func testThemeColorsResolveThroughLightAndDarkMacOSAppearances() throws {
+    let previous = (AtlasThemeRuntime.shared.theme, AtlasThemeRuntime.shared.appearanceMode)
+    defer { AtlasThemeRuntime.shared.apply(theme: previous.0, appearanceMode: previous.1) }
     let appearances: [(AtlasAppearanceVariant, NSAppearance.Name)] = [
       (.light, .aqua),
       (.dark, .darkAqua),
     ]
 
-    for (variant, name) in appearances {
-      let appearance = try XCTUnwrap(NSAppearance(named: name))
-      let expected = AtlasTheme.palette(for: variant).paper
-      var resolved: NSColor?
+    for theme in AtlasThemeID.allCases {
+      AtlasThemeRuntime.shared.apply(theme: theme, appearanceMode: .system)
+      for (variant, name) in appearances {
+        let appearance = try XCTUnwrap(NSAppearance(named: name))
+        let expected = AtlasTheme.palette(for: variant).paper
+        var resolved: NSColor?
 
-      appearance.performAsCurrentDrawingAppearance {
-        resolved = NSColor(AtlasTheme.paper).usingColorSpace(.sRGB)
+        appearance.performAsCurrentDrawingAppearance {
+          resolved = NSColor(AtlasTheme.paper).usingColorSpace(.sRGB)
+        }
+
+        let color = try XCTUnwrap(resolved)
+        XCTAssertEqual(Double(color.redComponent), expected.red, accuracy: 0.001, "\(theme) \(variant)")
+        XCTAssertEqual(Double(color.greenComponent), expected.green, accuracy: 0.001, "\(theme) \(variant)")
+        XCTAssertEqual(Double(color.blueComponent), expected.blue, accuracy: 0.001, "\(theme) \(variant)")
       }
-
-      let color = try XCTUnwrap(resolved)
-      XCTAssertEqual(Double(color.redComponent), expected.red, accuracy: 0.001)
-      XCTAssertEqual(Double(color.greenComponent), expected.green, accuracy: 0.001)
-      XCTAssertEqual(Double(color.blueComponent), expected.blue, accuracy: 0.001)
     }
   }
 
@@ -565,10 +688,8 @@ final class AtlasDesignSystemTests: XCTestCase {
     )
   }
 
-  func testNormalControlBoundariesMeetThreeToOneInEverySupportedAppearance() {
-    for appearance in AtlasAppearanceVariant.allCases {
-      let palette = AtlasTheme.palette(for: appearance)
-
+  func testNormalControlBoundariesMeetThreeToOneInEveryThemeAndAppearance() {
+    for (theme, appearance, palette) in everyThemePalette() {
       for kind in [AtlasControlKind.textField, .secondaryButton] {
         let tokens = AtlasControlStyleResolver.tokens(
           for: kind,
@@ -577,23 +698,24 @@ final class AtlasDesignSystemTests: XCTestCase {
             isEnabled: true,
             isPressed: false,
             isFocused: false
-          )
+          ),
+          theme: theme
         )
 
         XCTAssertGreaterThanOrEqual(
           contrastRatio(tokens.boundary, tokens.background),
           3,
-          "\(appearance) \(kind) boundary must contrast with its fill"
+          "\(theme) \(appearance) \(kind) boundary must contrast with its fill"
         )
         XCTAssertGreaterThanOrEqual(
-          contrastRatio(tokens.boundary, palette.paper2),
+          contrastRatio(tokens.boundary, palette.canvas),
           3,
-          "\(appearance) \(kind) boundary must contrast with an adjacent secondary surface"
+          "\(theme) \(appearance) \(kind) boundary must contrast with the canvas"
         )
         XCTAssertGreaterThanOrEqual(
           contrastRatio(tokens.foreground, tokens.background),
           4.5,
-          "\(appearance) \(kind) text must remain readable"
+          "\(theme) \(appearance) \(kind) text must remain readable"
         )
         XCTAssertGreaterThanOrEqual(tokens.boundaryWidth, 1.5)
         XCTAssertEqual(tokens.focusRingWidth, 0)
@@ -602,9 +724,7 @@ final class AtlasDesignSystemTests: XCTestCase {
   }
 
   func testFocusedTextFieldsAndSecondaryControlsGainExplicitThreePointFocusRing() {
-    for appearance in AtlasAppearanceVariant.allCases {
-      let palette = AtlasTheme.palette(for: appearance)
-
+    for (theme, appearance, palette) in everyThemePalette() {
       for kind in [AtlasControlKind.textField, .secondaryButton] {
         let unfocused = AtlasControlStyleResolver.tokens(
           for: kind,
@@ -613,7 +733,8 @@ final class AtlasDesignSystemTests: XCTestCase {
             isEnabled: true,
             isPressed: false,
             isFocused: false
-          )
+          ),
+          theme: theme
         )
         let focused = AtlasControlStyleResolver.tokens(
           for: kind,
@@ -622,21 +743,22 @@ final class AtlasDesignSystemTests: XCTestCase {
             isEnabled: true,
             isPressed: false,
             isFocused: true
-          )
+          ),
+          theme: theme
         )
 
         XCTAssertEqual(unfocused.focusRingWidth, 0)
         XCTAssertGreaterThanOrEqual(focused.focusRingWidth, 3)
         XCTAssertGreaterThanOrEqual(focused.focusRingOutset, focused.focusRingWidth)
         XCTAssertGreaterThanOrEqual(
-          contrastRatio(focused.focusRing, palette.paper),
+          contrastRatio(focused.focusRing, palette.canvas),
           3,
-          "\(appearance) \(kind) focus ring must contrast with the primary surface"
+          "\(theme) \(appearance) \(kind) focus ring must contrast with the primary surface"
         )
         XCTAssertGreaterThanOrEqual(
-          contrastRatio(focused.focusRing, palette.paper2),
+          contrastRatio(focused.focusRing, palette.surface),
           3,
-          "\(appearance) \(kind) focus ring must contrast with the secondary surface"
+          "\(theme) \(appearance) \(kind) focus ring must contrast with the secondary surface"
         )
       }
     }
@@ -758,27 +880,30 @@ final class AtlasDesignSystemTests: XCTestCase {
     XCTAssertLessThan(label.utf8.count, 256)
   }
 
+  /// Every theme in every appearance variant (light, dark, and both Increase
+  /// Contrast variants). Single-mode themes resolve all variants to their one
+  /// supported palette family.
+  private func everyThemePalette() -> [(AtlasThemeID, AtlasAppearanceVariant, AtlasPalette)] {
+    AtlasThemeID.allCases.flatMap { theme in
+      AtlasAppearanceVariant.allCases.map { variant in
+        (theme, variant, AtlasTheme.palette(for: theme, appearance: variant))
+      }
+    }
+  }
+
   private func contrastRatio(
     _ first: AtlasRGB,
     _ second: AtlasRGB
   ) -> Double {
-    let lighter = max(relativeLuminance(first), relativeLuminance(second))
-    let darker = min(relativeLuminance(first), relativeLuminance(second))
-    return (lighter + 0.05) / (darker + 0.05)
+    first.contrast(with: second)
   }
 
-  private func relativeLuminance(
-    _ color: AtlasRGB
-  ) -> Double {
-    0.2126 * linearized(color.red)
-      + 0.7152 * linearized(color.green)
-      + 0.0722 * linearized(color.blue)
-  }
-
-  private func linearized(_ component: Double) -> Double {
-    component <= 0.04045
-      ? component / 12.92
-      : pow((component + 0.055) / 1.055, 2.4)
+  @MainActor
+  private func isolatedPreferences() -> AtlasDisplayPreferences {
+    let suiteName = "AtlasDesignSystemTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName) ?? .standard
+    defaults.removePersistentDomain(forName: suiteName)
+    return AtlasDisplayPreferences(defaults: defaults)
   }
 
   private func reconstructedPreview(

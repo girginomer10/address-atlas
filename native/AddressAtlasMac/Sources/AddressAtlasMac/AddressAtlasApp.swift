@@ -50,11 +50,16 @@ final class AddressAtlasApplicationDelegate: NSObject, NSApplicationDelegate {
 struct AddressAtlasMacApp: App {
   @NSApplicationDelegateAdaptor(AddressAtlasApplicationDelegate.self)
   private var appDelegate
+  /// Theme, light/dark choice and portfolio view preferences. Not sensitive,
+  /// so they live in UserDefaults rather than the encrypted vault.
+  @StateObject private var displayPreferences = AtlasDisplayPreferences()
 
   var body: some Scene {
     Window("Address Atlas", id: "main") {
       RootView()
         .environmentObject(appDelegate.state)
+        .environmentObject(displayPreferences)
+        .atlasThemeRoot(displayPreferences)
         .task {
           await appDelegate.state.unlock()
         }
@@ -67,6 +72,8 @@ struct AddressAtlasMacApp: App {
     Settings {
       SettingsView()
         .environmentObject(appDelegate.state)
+        .environmentObject(displayPreferences)
+        .atlasThemeRoot(displayPreferences)
         .frame(minWidth: 900, minHeight: 650)
         .background(AtlasTheme.canvas)
     }

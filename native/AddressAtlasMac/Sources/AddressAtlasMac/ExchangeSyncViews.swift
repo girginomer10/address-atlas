@@ -743,6 +743,10 @@ struct SettingsView: View {
       statValue: "USD"
     ) {
       Surface {
+        AtlasThemeSection()
+      }
+
+      Surface {
         VStack(alignment: .leading, spacing: 20) {
           PanelHeader(
             title: "Portfolio preferences",

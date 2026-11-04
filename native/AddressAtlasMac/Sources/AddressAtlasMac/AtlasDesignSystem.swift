@@ -8,228 +8,6 @@ import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct AtlasRGB: Equatable, Sendable {
-  let red: Double
-  let green: Double
-  let blue: Double
-
-  var color: Color {
-    Color(red: red, green: green, blue: blue)
-  }
-
-  #if canImport(AppKit)
-    var nsColor: NSColor {
-      NSColor(srgbRed: red, green: green, blue: blue, alpha: 1)
-    }
-  #else
-    var uiColor: UIColor {
-      UIColor(red: red, green: green, blue: blue, alpha: 1)
-    }
-  #endif
-}
-
-enum AtlasAppearanceVariant: CaseIterable, Equatable, Sendable {
-  case light
-  case dark
-  case highContrastLight
-  case highContrastDark
-
-  init(colorScheme: ColorScheme, contrast: ColorSchemeContrast) {
-    switch (colorScheme, contrast) {
-    case (.light, .standard): self = .light
-    case (.dark, .standard): self = .dark
-    case (.light, .increased): self = .highContrastLight
-    case (.dark, .increased): self = .highContrastDark
-    @unknown default: self = colorScheme == .dark ? .dark : .light
-    }
-  }
-
-  #if canImport(AppKit)
-    init(appearance: NSAppearance, increaseContrast: Bool) {
-      let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-      self.init(isDark: isDark, increaseContrast: increaseContrast)
-    }
-  #else
-    init(traitCollection: UITraitCollection) {
-      self.init(
-        isDark: traitCollection.userInterfaceStyle == .dark,
-        increaseContrast: traitCollection.accessibilityContrast == .high
-      )
-    }
-  #endif
-
-  init(isDark: Bool, increaseContrast: Bool) {
-    switch (isDark, increaseContrast) {
-    case (false, false): self = .light
-    case (true, false): self = .dark
-    case (false, true): self = .highContrastLight
-    case (true, true): self = .highContrastDark
-    }
-  }
-}
-
-struct AtlasPalette: Equatable, Sendable {
-  let paper: AtlasRGB
-  let paper2: AtlasRGB
-  let paper3: AtlasRGB
-  let ink: AtlasRGB
-  let ink2: AtlasRGB
-  let ink3: AtlasRGB
-  let rule: AtlasRGB
-  let ruleSoft: AtlasRGB
-  let controlBoundary: AtlasRGB
-  let controlBoundaryDisabled: AtlasRGB
-  let focusRing: AtlasRGB
-  let accent: AtlasRGB
-  let gain: AtlasRGB
-  let loss: AtlasRGB
-  let warning: AtlasRGB
-}
-
-enum AtlasTheme {
-  static let lightPalette = AtlasPalette(
-    paper: AtlasRGB(red: 0.965, green: 0.969, blue: 0.976),
-    paper2: AtlasRGB(red: 1, green: 1, blue: 1),
-    paper3: AtlasRGB(red: 0.90, green: 0.916, blue: 0.945),
-    ink: AtlasRGB(red: 0.09, green: 0.105, blue: 0.14),
-    ink2: AtlasRGB(red: 0.27, green: 0.30, blue: 0.36),
-    ink3: AtlasRGB(red: 0.36, green: 0.39, blue: 0.45),
-    rule: AtlasRGB(red: 0.72, green: 0.75, blue: 0.80),
-    ruleSoft: AtlasRGB(red: 0.84, green: 0.86, blue: 0.90),
-    controlBoundary: AtlasRGB(red: 0.37, green: 0.40, blue: 0.46),
-    controlBoundaryDisabled: AtlasRGB(red: 0.50, green: 0.53, blue: 0.59),
-    focusRing: AtlasRGB(red: 0.20, green: 0.39, blue: 0.88),
-    accent: AtlasRGB(red: 0.20, green: 0.39, blue: 0.88),
-    gain: AtlasRGB(red: 0.08, green: 0.48, blue: 0.30),
-    loss: AtlasRGB(red: 0.76, green: 0.14, blue: 0.19),
-    warning: AtlasRGB(red: 0.57, green: 0.30, blue: 0.02)
-  )
-
-  static let darkPalette = AtlasPalette(
-    paper: AtlasRGB(red: 0.055, green: 0.063, blue: 0.078),
-    paper2: AtlasRGB(red: 0.085, green: 0.096, blue: 0.12),
-    paper3: AtlasRGB(red: 0.13, green: 0.145, blue: 0.175),
-    ink: AtlasRGB(red: 0.95, green: 0.96, blue: 0.98),
-    ink2: AtlasRGB(red: 0.79, green: 0.81, blue: 0.85),
-    ink3: AtlasRGB(red: 0.68, green: 0.71, blue: 0.77),
-    rule: AtlasRGB(red: 0.31, green: 0.34, blue: 0.40),
-    ruleSoft: AtlasRGB(red: 0.21, green: 0.23, blue: 0.28),
-    controlBoundary: AtlasRGB(red: 0.46, green: 0.50, blue: 0.58),
-    controlBoundaryDisabled: AtlasRGB(red: 0.36, green: 0.39, blue: 0.45),
-    focusRing: AtlasRGB(red: 0.43, green: 0.61, blue: 1.0),
-    accent: AtlasRGB(red: 0.43, green: 0.61, blue: 1.0),
-    gain: AtlasRGB(red: 0.30, green: 0.82, blue: 0.54),
-    loss: AtlasRGB(red: 1.0, green: 0.43, blue: 0.47),
-    warning: AtlasRGB(red: 0.97, green: 0.67, blue: 0.25)
-  )
-
-  static let highContrastLightPalette = AtlasPalette(
-    paper: AtlasRGB(red: 1, green: 1, blue: 1),
-    paper2: AtlasRGB(red: 0.96, green: 0.96, blue: 0.96),
-    paper3: AtlasRGB(red: 0.90, green: 0.90, blue: 0.90),
-    ink: AtlasRGB(red: 0, green: 0, blue: 0),
-    ink2: AtlasRGB(red: 0.12, green: 0.12, blue: 0.12),
-    ink3: AtlasRGB(red: 0.22, green: 0.22, blue: 0.22),
-    rule: AtlasRGB(red: 0.18, green: 0.18, blue: 0.18),
-    ruleSoft: AtlasRGB(red: 0.35, green: 0.35, blue: 0.35),
-    controlBoundary: AtlasRGB(red: 0, green: 0, blue: 0),
-    controlBoundaryDisabled: AtlasRGB(red: 0.18, green: 0.18, blue: 0.18),
-    focusRing: AtlasRGB(red: 0, green: 0.20, blue: 0.65),
-    accent: AtlasRGB(red: 0, green: 0.20, blue: 0.65),
-    gain: AtlasRGB(red: 0, green: 0.34, blue: 0.10),
-    loss: AtlasRGB(red: 0.68, green: 0, blue: 0),
-    warning: AtlasRGB(red: 0.45, green: 0.20, blue: 0)
-  )
-
-  static let highContrastDarkPalette = AtlasPalette(
-    paper: AtlasRGB(red: 0, green: 0, blue: 0),
-    paper2: AtlasRGB(red: 0.04, green: 0.04, blue: 0.04),
-    paper3: AtlasRGB(red: 0.10, green: 0.10, blue: 0.10),
-    ink: AtlasRGB(red: 1, green: 1, blue: 1),
-    ink2: AtlasRGB(red: 0.90, green: 0.90, blue: 0.90),
-    ink3: AtlasRGB(red: 0.78, green: 0.78, blue: 0.78),
-    rule: AtlasRGB(red: 0.82, green: 0.82, blue: 0.82),
-    ruleSoft: AtlasRGB(red: 0.62, green: 0.62, blue: 0.62),
-    controlBoundary: AtlasRGB(red: 1, green: 1, blue: 1),
-    controlBoundaryDisabled: AtlasRGB(red: 0.82, green: 0.82, blue: 0.82),
-    focusRing: AtlasRGB(red: 0.50, green: 0.80, blue: 1),
-    accent: AtlasRGB(red: 0.50, green: 0.80, blue: 1),
-    gain: AtlasRGB(red: 0.52, green: 1, blue: 0.62),
-    loss: AtlasRGB(red: 1, green: 0.52, blue: 0.48),
-    warning: AtlasRGB(red: 1, green: 0.78, blue: 0.32)
-  )
-
-  static let paperRGB = lightPalette.paper
-  static let paper2RGB = lightPalette.paper2
-  static let ink3RGB = lightPalette.ink3
-  static let warningRGB = lightPalette.warning
-
-  static let paper = dynamicColor("paper", \.paper)
-  static let paper2 = dynamicColor("paper2", \.paper2)
-  static let paper3 = dynamicColor("paper3", \.paper3)
-  static let ink = dynamicColor("ink", \.ink)
-  static let ink2 = dynamicColor("ink2", \.ink2)
-  static let ink3 = dynamicColor("ink3", \.ink3)
-  static let rule = dynamicColor("rule", \.rule)
-  static let ruleSoft = dynamicColor("ruleSoft", \.ruleSoft)
-  static let accent = dynamicColor("accent", \.accent)
-  static let gain = dynamicColor("gain", \.gain)
-  static let loss = dynamicColor("loss", \.loss)
-  /// Dark enough for normal-size warning text on each supported surface.
-  static let warning = dynamicColor("warning", \.warning)
-
-  static let canvas = paper
-  static let surface = paper2
-  static let surfaceMuted = paper3
-
-  static func palette(for appearance: AtlasAppearanceVariant) -> AtlasPalette {
-    switch appearance {
-    case .light: lightPalette
-    case .dark: darkPalette
-    case .highContrastLight: highContrastLightPalette
-    case .highContrastDark: highContrastDarkPalette
-    }
-  }
-
-  private static func dynamicColor(
-    _ name: String,
-    _ keyPath: KeyPath<AtlasPalette, AtlasRGB>
-  ) -> Color {
-    #if canImport(AppKit)
-      return Color(
-        nsColor: NSColor(name: NSColor.Name("AddressAtlas.\(name)")) { appearance in
-          palette(
-            for: AtlasAppearanceVariant(
-              appearance: appearance,
-              increaseContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
-            ))[keyPath: keyPath].nsColor
-        })
-    #else
-      return Color(
-        uiColor: UIColor { traitCollection in
-          palette(for: AtlasAppearanceVariant(traitCollection: traitCollection))[keyPath: keyPath]
-            .uiColor
-        })
-    #endif
-  }
-}
-
-enum AtlasRadius {
-  static let small: CGFloat = 8
-  static let control: CGFloat = 10
-  static let card: CGFloat = 14
-  static let large: CGFloat = 20
-}
-
-enum AtlasMotion {
-  static let quick = Animation.easeOut(duration: 0.16)
-  static let standard = Animation.spring(response: 0.34, dampingFraction: 0.86)
-
-  static func animation(_ animation: Animation, reduceMotion: Bool) -> Animation? {
-    reduceMotion ? nil : animation
-  }
-}
-
 struct Page<Content: View>: View {
   /// Desktop pages reserve a readable minimum width; compact iOS layouts must
   /// never force horizontal scrolling.
@@ -297,27 +75,21 @@ struct Page<Content: View>: View {
       }
       .scrollContentBackground(.hidden)
     }
-    .background(
-      LinearGradient(
-        colors: [AtlasTheme.canvas, AtlasTheme.surfaceMuted.opacity(0.22)],
-        startPoint: .top,
-        endPoint: .bottom
-      )
-    )
+    .background(AtlasCanvasBackground())
   }
 
   private func heading(lineLimit: Int) -> some View {
     VStack(alignment: .leading, spacing: 10) {
       Text(eyebrow)
-        .font(.caption.weight(.semibold))
+        .font(AtlasTheme.font(.label, .caption, weight: .semibold))
         .foregroundStyle(AtlasTheme.accent)
       Text(title)
-        .font(.system(size: titleSize, weight: .bold, design: .rounded))
-        .tracking(-1.1)
+        .font(AtlasTheme.font(.display, size: titleSize, relativeTo: .largeTitle, weight: .bold))
+        .tracking(AtlasTheme.tracking(.display, size: titleSize))
         .lineLimit(lineLimit)
         .minimumScaleFactor(0.7)
       Text(subtitle)
-        .font(.body)
+        .font(AtlasTheme.font(.body, .body))
         .foregroundStyle(AtlasTheme.ink2)
         .lineSpacing(2)
         .frame(maxWidth: 680, alignment: .leading)
@@ -327,21 +99,38 @@ struct Page<Content: View>: View {
   private var headerStat: some View {
     VStack(alignment: .leading, spacing: 5) {
       Text(statTitle)
-        .font(.caption.weight(.medium))
+        .font(AtlasTheme.font(.label, .caption, weight: .medium))
         .foregroundStyle(AtlasTheme.ink3)
       Text(statValue)
-        .font(.callout.monospacedDigit().weight(.semibold))
+        .font(AtlasTheme.font(.number, .callout, weight: .semibold))
         .foregroundStyle(AtlasTheme.ink)
     }
     .padding(.horizontal, 16)
     .padding(.vertical, 12)
-    .background(AtlasTheme.surface)
-    .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
-        .stroke(AtlasTheme.ruleSoft, lineWidth: 1)
-    }
+    .atlasChrome(
+      fill: AtlasTheme.surface,
+      border: AtlasTheme.outline,
+      level: .control,
+      radius: AtlasRadius.control,
+      borderWidth: AtlasTheme.shape.cardBorderWidth
+    )
     .accessibilityElement(children: .combine)
+  }
+}
+
+/// The window canvas: the theme's canvas colour, with a faint gradient where
+/// the theme asks for one.
+struct AtlasCanvasBackground: View {
+  var body: some View {
+    if AtlasTheme.shape.canvasGradient {
+      LinearGradient(
+        colors: [AtlasTheme.canvas, AtlasTheme.surfaceMuted.opacity(0.22)],
+        startPoint: .top,
+        endPoint: .bottom
+      )
+    } else {
+      AtlasTheme.canvas
+    }
   }
 }
 
@@ -354,7 +143,6 @@ enum AtlasSurfaceStyle {
 }
 
 struct Surface<Content: View>: View {
-  @Environment(\.colorSchemeContrast) private var contrast
   var padding: CGFloat
   var style: AtlasSurfaceStyle
   var content: Content
@@ -373,36 +161,34 @@ struct Surface<Content: View>: View {
     content
       .padding(padding)
       .frame(maxWidth: .infinity, alignment: .leading)
-      .background(background)
       .foregroundStyle(AtlasTheme.ink)
-      .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.card, style: .continuous))
-      .overlay {
-        RoundedRectangle(cornerRadius: AtlasRadius.card, style: .continuous)
-          .stroke(border, lineWidth: contrast == .increased ? 2 : 1)
-      }
-      .shadow(
-        color: contrast == .increased ? .clear : .black.opacity(style == .standard ? 0.07 : 0.035),
-        radius: style == .standard ? 12 : 6,
-        y: style == .standard ? 4 : 2
+      .atlasChrome(
+        fill: background,
+        border: border,
+        level: .card,
+        showsShadow: style == .standard || AtlasTheme.shape.hasHardShadows
       )
   }
 
   private var background: Color {
     switch style {
     case .standard: AtlasTheme.surface
-    case .subtle: AtlasTheme.surfaceMuted.opacity(0.48)
-    case .accent: AtlasTheme.accent.opacity(0.09)
-    case .warning: AtlasTheme.warning.opacity(0.09)
-    case .danger: AtlasTheme.loss.opacity(0.08)
+    case .subtle: AtlasTheme.surfaceMuted
+    case .accent: AtlasTheme.accentSoft
+    case .warning: AtlasTheme.warningSoft
+    case .danger: AtlasTheme.lossSoft
     }
   }
 
+  /// Brutal themes outline every card in ink; quiet themes tint the outline of
+  /// callout cards with their tone.
   private var border: Color {
+    if AtlasTheme.shape.hasBoldBorders { return AtlasTheme.outline }
     switch style {
-    case .standard, .subtle: AtlasTheme.ruleSoft
-    case .accent: AtlasTheme.accent.opacity(0.30)
-    case .warning: AtlasTheme.warning.opacity(0.34)
-    case .danger: AtlasTheme.loss.opacity(0.34)
+    case .standard, .subtle: return AtlasTheme.outline
+    case .accent: return AtlasTheme.accent.opacity(0.30)
+    case .warning: return AtlasTheme.warning.opacity(0.34)
+    case .danger: return AtlasTheme.loss.opacity(0.34)
     }
   }
 }
@@ -461,14 +247,14 @@ struct SectionHeader: View {
 
   private var headerTitle: some View {
     Text(title)
-      .font(.headline.weight(.semibold))
+      .font(AtlasTheme.font(.display, .headline, weight: .bold))
       .foregroundStyle(AtlasTheme.ink)
       .accessibilityAddTraits(.isHeader)
   }
 
   private var headerMeta: some View {
     Text(meta)
-      .font(.caption)
+      .font(AtlasTheme.font(.label, .caption))
       .foregroundStyle(AtlasTheme.ink3)
   }
 }
@@ -482,11 +268,13 @@ struct AtlasLabel: View {
 
   var body: some View {
     Text(text)
-      .font(.caption.weight(.semibold))
+      .font(AtlasTheme.font(.label, .caption, weight: .semibold))
       .foregroundStyle(AtlasTheme.ink3)
   }
 }
 
+/// A chip or pill: a short status or tag in a tone colour. Quiet themes tint
+/// the chip; outlined themes draw it as a bordered, hard-edged tag.
 struct Badge: View {
   var text: String
   var color: Color
@@ -497,15 +285,21 @@ struct Badge: View {
   }
 
   var body: some View {
+    let shape = AtlasTheme.shape
     Text(text)
-      .font(.caption2.weight(.semibold))
+      .font(AtlasTheme.font(.label, .caption2, weight: .semibold))
       .foregroundStyle(color)
       .padding(.horizontal, 9)
       .padding(.vertical, 5)
       .frame(minHeight: 24)
-      .background(color.opacity(0.11))
-      .clipShape(Capsule())
-      .overlay(Capsule().stroke(color.opacity(0.28), lineWidth: 1))
+      .atlasChrome(
+        fill: shape.hasBoldBorders ? AtlasTheme.surface : color.opacity(0.11),
+        border: shape.hasBoldBorders ? AtlasTheme.outline : color.opacity(0.28),
+        level: .control,
+        radius: shape.pillControls ? 999 : shape.radiusSmall,
+        borderWidth: shape.hasBoldBorders ? min(shape.controlBorderWidth, 2) : 1,
+        showsShadow: false
+      )
   }
 }
 
@@ -522,7 +316,7 @@ struct TableHeader: View {
 
   var body: some View {
     Text(text)
-      .font(.caption.weight(.semibold))
+      .font(AtlasTheme.font(.label, .caption, weight: .semibold))
       .foregroundStyle(AtlasTheme.ink3)
       .frame(width: width, alignment: alignment)
       .frame(maxWidth: width == nil ? .infinity : nil, alignment: alignment)
@@ -537,11 +331,11 @@ struct KeyValueGrid: View {
       ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
         HStack(alignment: .firstTextBaseline, spacing: 16) {
           Text(row.0)
-            .font(.callout.weight(.medium))
+            .font(AtlasTheme.font(.body, .callout, weight: .medium))
             .foregroundStyle(AtlasTheme.ink3)
             .frame(width: 160, alignment: .leading)
           Text(row.1)
-            .font(.callout)
+            .font(AtlasTheme.font(.body, .callout))
             .foregroundStyle(AtlasTheme.ink2)
             .textSelection(.enabled)
           Spacer()
@@ -566,12 +360,12 @@ struct EmptyState: View {
         .font(.title3.weight(.semibold))
         .foregroundStyle(AtlasTheme.accent)
         .frame(width: 46, height: 46)
-        .background(AtlasTheme.accent.opacity(0.10))
-        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .background(AtlasTheme.accentSoft)
+        .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
       Text(title)
-        .font(.title3.weight(.semibold))
+        .font(AtlasTheme.font(.display, .title3, weight: .bold))
       Text(copy)
-        .font(.callout)
+        .font(AtlasTheme.font(.body, .callout))
         .foregroundStyle(AtlasTheme.ink3)
         .multilineTextAlignment(.center)
     }
@@ -581,7 +375,11 @@ struct EmptyState: View {
     .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.card, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: AtlasRadius.card, style: .continuous)
-        .stroke(AtlasTheme.ruleSoft, style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+        .stroke(
+          AtlasTheme.shape.hasBoldBorders ? AtlasTheme.outline : AtlasTheme.ruleSoft,
+          style: StrokeStyle(
+            lineWidth: max(1, AtlasTheme.shape.cardBorderWidth * 0.8), dash: [5, 4])
+        )
     }
   }
 }
@@ -589,26 +387,23 @@ struct EmptyState: View {
 struct BrandLockup: View {
   var body: some View {
     HStack(spacing: 11) {
-      ZStack {
-        RoundedRectangle(cornerRadius: 11, style: .continuous)
-          .fill(
-            LinearGradient(
-              colors: [AtlasTheme.accent, AtlasTheme.accent.opacity(0.72)],
-              startPoint: .topLeading,
-              endPoint: .bottomTrailing
-            ))
-        Image(systemName: "map.fill")
-          .font(.body.weight(.semibold))
-          .foregroundStyle(AtlasTheme.paper)
-      }
-      .frame(width: 38, height: 38)
-      .shadow(color: AtlasTheme.accent.opacity(0.22), radius: 8, y: 3)
+      Image(systemName: "map.fill")
+        .font(.body.weight(.semibold))
+        .foregroundStyle(AtlasTheme.onAccent)
+        .frame(width: 38, height: 38)
+        .atlasChrome(
+          fill: AtlasTheme.accent,
+          border: AtlasTheme.outline,
+          level: .control,
+          radius: AtlasTheme.shape.pillControls ? 12 : AtlasRadius.control,
+          borderWidth: AtlasTheme.shape.hasBoldBorders ? AtlasTheme.shape.controlBorderWidth : 0
+        )
 
       VStack(alignment: .leading, spacing: 2) {
         Text("Address Atlas")
-          .font(.headline.weight(.semibold))
+          .font(AtlasTheme.font(.display, .headline, weight: .bold))
         Text("Private portfolio map")
-          .font(.caption)
+          .font(AtlasTheme.font(.label, .caption))
           .foregroundStyle(AtlasTheme.ink3)
       }
     }
@@ -628,9 +423,9 @@ struct SidebarTrustLine: View {
         .padding(.top, 1)
       VStack(alignment: .leading, spacing: 2) {
         Text(title)
-          .font(.callout.weight(.medium))
+          .font(AtlasTheme.font(.body, .callout, weight: .medium))
         Text(copy)
-          .font(.caption)
+          .font(AtlasTheme.font(.label, .caption))
           .foregroundStyle(AtlasTheme.ink3)
       }
     }
@@ -650,11 +445,11 @@ struct FieldLabel: View {
   var body: some View {
     HStack(spacing: 6) {
       Text(title)
-        .font(.callout.weight(.medium))
+        .font(AtlasTheme.font(.body, .callout, weight: .medium))
         .foregroundStyle(AtlasTheme.ink2)
       if let detail {
         Text(detail)
-          .font(.caption)
+          .font(AtlasTheme.font(.label, .caption))
           .foregroundStyle(AtlasTheme.ink3)
       }
     }
@@ -684,6 +479,15 @@ enum AtlasCalloutTone {
     case .danger: AtlasTheme.loss
     }
   }
+
+  var softFill: Color {
+    switch self {
+    case .info: AtlasTheme.accentSoft
+    case .success: AtlasTheme.gainSoft
+    case .warning: AtlasTheme.warningSoft
+    case .danger: AtlasTheme.lossSoft
+    }
+  }
 }
 
 struct InfoCallout: View {
@@ -699,21 +503,23 @@ struct InfoCallout: View {
         .padding(.top, 1)
       VStack(alignment: .leading, spacing: 3) {
         Text(title)
-          .font(.callout.weight(.semibold))
+          .font(AtlasTheme.font(.body, .callout, weight: .semibold))
         Text(copy)
-          .font(.callout)
+          .font(AtlasTheme.font(.body, .callout))
           .foregroundStyle(AtlasTheme.ink2)
           .lineSpacing(2)
       }
     }
     .padding(14)
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(tone.color.opacity(0.08))
-    .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
-        .stroke(tone.color.opacity(0.22), lineWidth: 1)
-    }
+    .atlasChrome(
+      fill: tone.softFill,
+      border: AtlasTheme.shape.hasBoldBorders ? AtlasTheme.outline : tone.color.opacity(0.30),
+      level: .control,
+      radius: AtlasRadius.control,
+      borderWidth: AtlasTheme.shape.hasBoldBorders ? AtlasTheme.shape.controlBorderWidth : 1,
+      showsShadow: false
+    )
     .accessibilityElement(children: .combine)
   }
 }
@@ -731,12 +537,12 @@ struct PanelHeader: View {
         .foregroundStyle(tint)
         .frame(width: 36, height: 36)
         .background(tint.opacity(0.10))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.small, style: .continuous))
       VStack(alignment: .leading, spacing: 3) {
         Text(title)
-          .font(.headline.weight(.semibold))
+          .font(AtlasTheme.font(.display, .headline, weight: .bold))
         Text(subtitle)
-          .font(.callout)
+          .font(AtlasTheme.font(.body, .callout))
           .foregroundStyle(AtlasTheme.ink3)
       }
       Spacer(minLength: 0)
@@ -752,18 +558,18 @@ struct PrivacyCard: View {
         Image(systemName: "lock.shield.fill")
           .foregroundStyle(AtlasTheme.gain)
           .frame(width: 28, height: 28)
-          .background(AtlasTheme.gain.opacity(0.10))
-          .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+          .background(AtlasTheme.gainSoft)
+          .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.small, style: .continuous))
         VStack(alignment: .leading, spacing: 1) {
           Text("Private by design")
-            .font(.callout.weight(.semibold))
+            .font(AtlasTheme.font(.body, .callout, weight: .semibold))
           Text("Encrypted on this \(PlatformCopy.deviceNoun)")
-            .font(.caption)
+            .font(AtlasTheme.font(.label, .caption))
             .foregroundStyle(AtlasTheme.ink3)
         }
       }
       Text("Credentials and portfolio data stay encrypted before storage or sync.")
-        .font(.caption)
+        .font(AtlasTheme.font(.body, .caption))
         .foregroundStyle(AtlasTheme.ink3)
         .lineSpacing(2)
     }
@@ -772,7 +578,9 @@ struct PrivacyCard: View {
     .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.card, style: .continuous))
     .overlay {
       RoundedRectangle(cornerRadius: AtlasRadius.card, style: .continuous)
-        .stroke(AtlasTheme.ruleSoft, lineWidth: 1)
+        .stroke(
+          AtlasTheme.shape.hasBoldBorders ? AtlasTheme.outline : AtlasTheme.ruleSoft,
+          lineWidth: max(1, AtlasTheme.shape.cardBorderWidth * 0.6))
     }
     .accessibilityElement(children: .combine)
   }
@@ -981,22 +789,11 @@ struct StatusLine: View {
             .accessibilityHint(state.updateActionHint)
           }
         }
-        .font(.callout)
+        .font(AtlasTheme.font(.body, .callout))
         .padding(.horizontal, presentation == .pinned ? 16 : 0)
         .padding(.vertical, presentation == .pinned ? 13 : 0)
         .frame(maxWidth: presentation == .pinned ? .infinity : nil, alignment: .leading)
-        .background {
-          if presentation == .pinned {
-            RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
-              .fill(AtlasTheme.surface)
-          }
-        }
-        .overlay {
-          if presentation == .pinned {
-            RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
-              .stroke(AtlasTheme.ruleSoft, lineWidth: 1)
-          }
-        }
+        .modifier(PinnedStatusChrome(isPinned: presentation == .pinned))
         .padding(.horizontal, presentation == .pinned ? 24 : 0)
         .padding(.top, presentation == .pinned ? 12 : 0)
         .transition(.opacity.combined(with: .move(edge: .top)))
@@ -1053,6 +850,26 @@ struct StatusLine: View {
   }
 }
 
+/// The pinned status banner is a themed toast: card chrome when pinned, bare
+/// inline text otherwise.
+private struct PinnedStatusChrome: ViewModifier {
+  var isPinned: Bool
+
+  func body(content: Content) -> some View {
+    if isPinned {
+      content.atlasChrome(
+        fill: AtlasTheme.surface,
+        border: AtlasTheme.outline,
+        level: .control,
+        radius: AtlasRadius.control,
+        borderWidth: max(1, AtlasTheme.shape.cardBorderWidth)
+      )
+    } else {
+      content
+    }
+  }
+}
+
 enum AtlasControlKind: Equatable, Sendable {
   case textField
   case secondaryButton
@@ -1075,12 +892,16 @@ struct AtlasControlStyleTokens: Equatable, Sendable {
 }
 
 enum AtlasControlStyleResolver {
+  /// Colours and widths of a text field or secondary button. `theme` defaults
+  /// to the selected theme; tests pass each theme explicitly.
   static func tokens(
     for kind: AtlasControlKind,
     appearance: AtlasAppearanceVariant,
-    state: AtlasControlVisualState
+    state: AtlasControlVisualState,
+    theme: AtlasThemeID? = nil
   ) -> AtlasControlStyleTokens {
-    let palette = AtlasTheme.palette(for: appearance)
+    let definition = theme.map(AtlasThemeCatalog.definition(for:)) ?? AtlasTheme.definition
+    let palette = definition.palette(for: appearance)
     let foreground: AtlasRGB
     let boundary: AtlasRGB
 
@@ -1097,29 +918,47 @@ enum AtlasControlStyleResolver {
 
     return AtlasControlStyleTokens(
       foreground: foreground,
-      background: state.isEnabled ? palette.paper2 : palette.paper3,
+      background: state.isEnabled ? palette.surface : palette.surfaceMuted,
       boundary: boundary,
       focusRing: palette.focusRing,
-      boundaryWidth: appearance == .highContrastLight || appearance == .highContrastDark ? 2 : 1.5,
+      boundaryWidth: max(Double(definition.shape.controlBorderWidth), appearance.isHighContrast ? 2 : 1.5),
       focusRingWidth: state.isEnabled && state.isFocused ? 3 : 0,
       focusRingOutset: 3
     )
   }
 }
 
-private struct AtlasControlOutline: View {
-  let tokens: AtlasControlStyleTokens
+/// The 3 pt keyboard-focus ring drawn outside a control.
+private struct AtlasFocusRing: View {
+  var color: Color
+  var width: CGFloat
+  var outset: CGFloat = 3
+  var radius: CGFloat
 
   var body: some View {
-    RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
+    if width > 0 {
+      RoundedRectangle(cornerRadius: radius + 2, style: .continuous)
+        .stroke(color, lineWidth: width)
+        .padding(-outset)
+        .accessibilityHidden(true)
+    }
+  }
+}
+
+private struct AtlasControlOutline: View {
+  let tokens: AtlasControlStyleTokens
+  let radius: CGFloat
+
+  var body: some View {
+    RoundedRectangle(cornerRadius: radius, style: .continuous)
       .stroke(tokens.boundary.color, lineWidth: tokens.boundaryWidth)
       .overlay {
-        if tokens.focusRingWidth > 0 {
-          RoundedRectangle(cornerRadius: AtlasRadius.control + 2, style: .continuous)
-            .stroke(tokens.focusRing.color, lineWidth: tokens.focusRingWidth)
-            .padding(-tokens.focusRingOutset)
-            .accessibilityHidden(true)
-        }
+        AtlasFocusRing(
+          color: tokens.focusRing.color,
+          width: tokens.focusRingWidth,
+          outset: tokens.focusRingOutset,
+          radius: radius
+        )
       }
       .accessibilityHidden(true)
   }
@@ -1149,6 +988,7 @@ struct AtlasTextFieldStyle: TextFieldStyle {
         isFocused: isFocused
       )
     )
+    let radius = AtlasRadius.control
 
     #if os(iOS)
       configuration
@@ -1159,9 +999,9 @@ struct AtlasTextFieldStyle: TextFieldStyle {
         .padding(.vertical, 10)
         .frame(minHeight: 42)
         .background(tokens.background.color)
-        .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
-        .overlay(AtlasControlOutline(tokens: tokens))
-        .contentShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        .overlay(AtlasControlOutline(tokens: tokens, radius: radius))
+        .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
         .onTapGesture {
           if isEnabled { tapFocused = true }
         }
@@ -1173,8 +1013,8 @@ struct AtlasTextFieldStyle: TextFieldStyle {
         .padding(.vertical, 10)
         .frame(minHeight: 42)
         .background(tokens.background.color)
-        .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
-        .overlay(AtlasControlOutline(tokens: tokens))
+        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        .overlay(AtlasControlOutline(tokens: tokens, radius: radius))
     #endif
   }
 }
@@ -1183,39 +1023,42 @@ struct AtlasPrimaryButtonStyle: ButtonStyle {
   @Environment(\.isEnabled) private var isEnabled
   @Environment(\.isFocused) private var isFocused
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.atlasTheme) private var tokens
 
   func makeBody(configuration: Configuration) -> some View {
+    let shape = AtlasTheme.shape
+    let radius: CGFloat = shape.pillControls ? 999 : shape.radiusControl
+    let pressed = configuration.isPressed && isEnabled
+    // An accent fill in the shadow's own colour (Candy's black button) would
+    // only grow a smudge; it keeps its border and loses the offset.
+    let hidesShadow = tokens.palette.accent == tokens.palette.shadow
     configuration.label
-      .font(.callout.weight(.semibold))
-      .foregroundStyle(isEnabled ? AtlasTheme.paper : AtlasTheme.ink3)
+      .font(AtlasTheme.font(.body, .callout, weight: .semibold))
+      .foregroundStyle(isEnabled ? AtlasTheme.onAccent : AtlasTheme.ink3)
       .padding(.horizontal, 16)
       .frame(minHeight: 42)
-      .background(
-        isEnabled
-          ? AtlasTheme.accent.opacity(configuration.isPressed ? 0.82 : 1)
-          : AtlasTheme.surfaceMuted
+      .atlasChrome(
+        fill: isEnabled
+          ? AtlasTheme.accent.opacity(pressed && !shape.hasHardShadows ? 0.82 : 1)
+          : AtlasTheme.surfaceMuted,
+        border: isEnabled
+          ? (shape.hasBoldBorders ? AtlasTheme.outline : AtlasTheme.accent.opacity(0.25))
+          : AtlasTheme.ruleSoft,
+        level: .control,
+        radius: radius,
+        borderWidth: shape.hasBoldBorders ? shape.controlBorderWidth : 1,
+        isPressed: pressed && !hidesShadow,
+        showsShadow: isEnabled && !hidesShadow
       )
-      .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
       .overlay {
-        RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
-          .stroke(isEnabled ? AtlasTheme.accent.opacity(0.25) : AtlasTheme.ruleSoft, lineWidth: 1)
-          .overlay {
-            if isEnabled && isFocused {
-              RoundedRectangle(cornerRadius: AtlasRadius.control + 2, style: .continuous)
-                .stroke(AtlasTheme.accent, lineWidth: 3)
-                .padding(-3)
-                .accessibilityHidden(true)
-            }
-          }
+        AtlasFocusRing(
+          color: AtlasTheme.focusRing,
+          width: isEnabled && isFocused ? 3 : 0,
+          radius: min(radius, 21)
+        )
       }
-      .shadow(
-        color: isEnabled
-          ? AtlasTheme.accent.opacity(configuration.isPressed ? 0.08 : 0.18) : .clear,
-        radius: configuration.isPressed ? 2 : 7,
-        y: configuration.isPressed ? 1 : 3
-      )
-      .contentShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
-      .scaleEffect(configuration.isPressed && isEnabled ? 0.985 : 1)
+      .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+      .scaleEffect(pressed && (!shape.hasHardShadows || hidesShadow) ? 0.985 : 1)
       .opacity(isEnabled ? 1 : 0.72)
       .animation(
         AtlasMotion.animation(AtlasMotion.quick, reduceMotion: reduceMotion),
@@ -1232,6 +1075,7 @@ struct AtlasSecondaryButtonStyle: ButtonStyle {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   func makeBody(configuration: Configuration) -> some View {
+    let shape = AtlasTheme.shape
     let tokens = AtlasControlStyleResolver.tokens(
       for: .secondaryButton,
       appearance: AtlasAppearanceVariant(
@@ -1244,17 +1088,33 @@ struct AtlasSecondaryButtonStyle: ButtonStyle {
         isFocused: isFocused
       )
     )
+    let radius: CGFloat = shape.pillControls ? 999 : shape.radiusControl
+    let pressed = configuration.isPressed && isEnabled
 
     configuration.label
-      .font(.callout.weight(.medium))
+      .font(AtlasTheme.font(.body, .callout, weight: .medium))
       .foregroundStyle(tokens.foreground.color)
       .padding(.horizontal, 14)
       .frame(minHeight: 40)
-      .background(tokens.background.color)
-      .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
-      .overlay(AtlasControlOutline(tokens: tokens))
-      .contentShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
-      .scaleEffect(configuration.isPressed && isEnabled ? 0.985 : 1)
+      .atlasChrome(
+        fill: tokens.background.color,
+        border: tokens.boundary.color,
+        level: .control,
+        radius: radius,
+        borderWidth: tokens.boundaryWidth,
+        isPressed: pressed,
+        showsShadow: isEnabled
+      )
+      .overlay {
+        AtlasFocusRing(
+          color: tokens.focusRing.color,
+          width: tokens.focusRingWidth,
+          outset: tokens.focusRingOutset,
+          radius: min(radius, 21)
+        )
+      }
+      .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+      .scaleEffect(pressed && !shape.hasHardShadows ? 0.985 : 1)
       .animation(
         AtlasMotion.animation(AtlasMotion.quick, reduceMotion: reduceMotion),
         value: configuration.isPressed
@@ -1262,31 +1122,39 @@ struct AtlasSecondaryButtonStyle: ButtonStyle {
   }
 }
 
+/// Navigation row: the selected item uses the theme's selection fill, outlined
+/// (and shadowed) in the themes that draw hard edges.
 struct SidebarButtonStyle: ButtonStyle {
   @Environment(\.isFocused) private var isFocused
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  @Environment(\.colorSchemeContrast) private var contrast
   var active: Bool
 
   func makeBody(configuration: Configuration) -> some View {
+    let shape = AtlasTheme.shape
+    let radius = AtlasRadius.control
     configuration.label
-      .font(.callout.weight(active ? .semibold : .medium))
-      .foregroundStyle(active ? AtlasTheme.paper : AtlasTheme.ink2)
-      .background(
-        active
-          ? AtlasTheme.accent
-          : (configuration.isPressed ? AtlasTheme.surfaceMuted.opacity(0.75) : Color.clear)
+      .font(AtlasTheme.font(.body, .callout, weight: active ? .semibold : .medium))
+      .foregroundStyle(active ? AtlasTheme.onSelection : AtlasTheme.ink2)
+      .atlasChrome(
+        fill: active
+          ? AtlasTheme.selection
+          : (configuration.isPressed ? AtlasTheme.surfaceMuted.opacity(0.75) : Color.clear),
+        border: active ? AtlasTheme.outline : Color.clear,
+        level: .control,
+        radius: radius,
+        borderWidth: active && (shape.hasBoldBorders || contrast == .increased)
+          ? max(shape.controlBorderWidth, 2) : 0,
+        showsShadow: active
       )
-      .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
       .overlay {
-        if isFocused {
-          RoundedRectangle(cornerRadius: AtlasRadius.control + 2, style: .continuous)
-            .stroke(AtlasTheme.accent, lineWidth: 3)
-            .padding(-3)
-            .accessibilityHidden(true)
-        }
+        AtlasFocusRing(
+          color: AtlasTheme.focusRing,
+          width: isFocused ? 3 : 0,
+          radius: radius
+        )
       }
-      .shadow(color: active ? AtlasTheme.accent.opacity(0.16) : .clear, radius: 6, y: 2)
-      .scaleEffect(configuration.isPressed ? 0.99 : 1)
+      .scaleEffect(configuration.isPressed && !shape.hasHardShadows ? 0.99 : 1)
       .animation(
         AtlasMotion.animation(AtlasMotion.quick, reduceMotion: reduceMotion),
         value: configuration.isPressed
@@ -1320,7 +1188,7 @@ struct IconButtonStyle: ButtonStyle {
       .overlay {
         if isFocused {
           RoundedRectangle(cornerRadius: AtlasRadius.small, style: .continuous)
-            .stroke(AtlasTheme.accent, lineWidth: 3)
+            .stroke(AtlasTheme.focusRing, lineWidth: 3)
             .accessibilityHidden(true)
         }
       }

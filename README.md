@@ -210,4 +210,4 @@ Security issues do not belong in public issues. Use [GitHub private vulnerabilit
 
 ## License
 
-Address Atlas is available under the [MIT License](LICENSE).
+Address Atlas is available under the [MIT License](LICENSE). The native apps bundle fonts under the SIL Open Font License; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

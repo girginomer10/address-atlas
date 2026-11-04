@@ -22,7 +22,12 @@ let package = Package(
     ),
     .executableTarget(
       name: "AddressAtlasMac",
-      dependencies: ["AddressAtlasCore"]
+      dependencies: ["AddressAtlasCore"],
+      resources: [
+        // Bundled OFL fonts and their licences, registered at runtime by
+        // AtlasFonts. The iOS project ships the same folder as a resource.
+        .copy("Fonts")
+      ]
     ),
     .testTarget(
       name: "AddressAtlasCoreTests",

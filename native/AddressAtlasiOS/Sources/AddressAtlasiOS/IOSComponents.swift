@@ -77,7 +77,7 @@ enum IOSOnboarding {
 /// same asset always gets the same color across Portfolio and Assets; a few
 /// well-known assets use their familiar hue.
 struct TokenMonogram: View {
-  @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.atlasTheme) private var tokens
   var symbol: String
   var size: CGFloat = 36
   var isPlaceholder = false
@@ -105,24 +105,30 @@ struct TokenMonogram: View {
     return String(letters.prefix(1))
   }
 
+  /// The mark is the asset's colour in the selected theme (brand colours in
+  /// Chain colours and Acid, pastel blocks in Heatmap and Candy, ...), with
+  /// black or white initial, whichever reads better.
   var body: some View {
-    let hue = Self.hue(for: symbol)
-    let foreground =
-      isPlaceholder
-      ? AtlasTheme.ink3
-      : Color(hue: hue, saturation: 0.72, brightness: colorScheme == .dark ? 0.92 : 0.62)
-    let background =
-      isPlaceholder
-      ? AtlasTheme.ink3.opacity(0.12)
-      : Color(hue: hue, saturation: 0.6, brightness: 0.85).opacity(colorScheme == .dark ? 0.24 : 0.16)
+    let theme = tokens.shape
+    let fill = tokens.chart.asset(symbol)
+    let background: Color = isPlaceholder ? AtlasTheme.ink3.opacity(0.12) : fill.color
+    let foreground: Color = isPlaceholder ? AtlasTheme.ink3 : fill.readableInk.color
+    let markShape: AnyShape =
+      theme.pillControls
+      ? AnyShape(Circle())
+      : AnyShape(
+        RoundedRectangle(cornerRadius: min(theme.radiusSmall, size * 0.25), style: .continuous))
     ZStack {
-      Circle().fill(background)
+      markShape.fill(background)
+      if theme.hasBoldBorders && !isPlaceholder {
+        markShape.stroke(tokens.palette.outline.color, lineWidth: max(1.5, size * 0.05))
+      }
       if isPlaceholder {
         Image(systemName: "ellipsis")
           .font(.system(size: size * 0.36, weight: .bold))
       } else {
         Text(initials.isEmpty ? "?" : initials)
-          .font(.system(size: size * 0.42, weight: .bold, design: .rounded))
+          .font(tokens.font(.number, size: size * 0.42, relativeTo: .body, weight: .bold))
           .minimumScaleFactor(0.6)
           .lineLimit(1)
       }
@@ -828,7 +834,7 @@ struct IOSStatusToast: View {
             .foregroundStyle(display.tone.color)
             .accessibilityHidden(true)
           Text(display.text)
-            .font(.callout.weight(.medium))
+            .font(AtlasTheme.font(.body, .callout, weight: .medium))
             .foregroundStyle(AtlasTheme.ink)
             .multilineTextAlignment(.leading)
             .fixedSize(horizontal: false, vertical: true)
@@ -852,8 +858,8 @@ struct IOSStatusToast: View {
           navigation.open(.portfolio, then: .runFirstScan)
         } label: {
           Text("Scan now")
-            .font(.callout.weight(.semibold))
-            .foregroundStyle(AtlasTheme.paper)
+            .font(AtlasTheme.font(.body, .callout, weight: .semibold))
+            .foregroundStyle(AtlasTheme.onAccent)
             .padding(.horizontal, 14)
             .frame(minHeight: 36)
             .background(Capsule().fill(AtlasTheme.accent))
@@ -869,15 +875,14 @@ struct IOSStatusToast: View {
     .padding(.horizontal, 16)
     .padding(.vertical, display.offersFirstScan ? 6 : 12)
     .frame(minHeight: 48)
-    .background(
-      RoundedRectangle(cornerRadius: AtlasRadius.card, style: .continuous)
-        .fill(.regularMaterial)
+    .atlasChrome(
+      fill: AtlasTheme.surface,
+      border: AtlasTheme.shape.hasBoldBorders
+        ? AtlasTheme.outline : display.tone.color.opacity(0.45),
+      level: .card,
+      radius: AtlasRadius.card,
+      borderWidth: max(1, AtlasTheme.shape.cardBorderWidth)
     )
-    .overlay {
-      RoundedRectangle(cornerRadius: AtlasRadius.card, style: .continuous)
-        .stroke(display.tone.color.opacity(0.35), lineWidth: 1)
-    }
-    .shadow(color: .black.opacity(0.12), radius: 14, y: 6)
     .frame(maxWidth: 560)
   }
 }
