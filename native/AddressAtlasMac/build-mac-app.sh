@@ -153,6 +153,10 @@ elif [[ -n "$PROVISIONING_PROFILE" ]]; then
   exit 64
 fi
 BINARIES=()
+# SwiftPM puts the target's resources (the bundled OFL fonts) in a bundle next
+# to each architecture's executable. They are identical across architectures.
+RESOURCE_BUNDLE_NAME="AddressAtlasMac_AddressAtlasMac.bundle"
+RESOURCE_BUNDLE_SOURCE=""
 for architecture in "${ARCHITECTURES[@]}"; do
   case "$architecture" in
     arm64|x86_64) ;;
@@ -176,7 +180,14 @@ for architecture in "${ARCHITECTURES[@]}"; do
   swift build -c release --product AddressAtlasMac --triple "$triple" --sdk "$SDK_PATH"
   bin_dir="$(swift build -c release --show-bin-path --triple "$triple" --sdk "$SDK_PATH")"
   BINARIES+=("$bin_dir/AddressAtlasMac")
+  if [[ -z "$RESOURCE_BUNDLE_SOURCE" ]]; then
+    RESOURCE_BUNDLE_SOURCE="$bin_dir/$RESOURCE_BUNDLE_NAME"
+  fi
 done
+if [[ ! -d "$RESOURCE_BUNDLE_SOURCE/Fonts" || -L "$RESOURCE_BUNDLE_SOURCE" ]]; then
+  echo "The SwiftPM resource bundle with the bundled fonts is missing or unsafe: $RESOURCE_BUNDLE_SOURCE" >&2
+  exit 66
+fi
 
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
@@ -241,6 +252,16 @@ plutil -lint "$ICON_WORK_DIR/AppIcon-Info.plist" >/dev/null
 cp "$ROOT/Resources/PrivacyInfo.xcprivacy" "$APP_DIR/Contents/Resources/PrivacyInfo.xcprivacy"
 cp "$ROOT/Resources/container-migration.plist" \
   "$APP_DIR/Contents/Resources/container-migration.plist"
+# The themes' fonts (SIL OFL, each family with its OFL.txt). AtlasFonts looks
+# for them in this bundle at launch and registers them with CoreText.
+ditto "$RESOURCE_BUNDLE_SOURCE" "$APP_DIR/Contents/Resources/$RESOURCE_BUNDLE_NAME"
+for font_family in BricolageGrotesque Geist GeistMono PixelifySans PlusJakartaSans Silkscreen SpaceGrotesk SpaceMono; do
+  font_directory="$APP_DIR/Contents/Resources/$RESOURCE_BUNDLE_NAME/Fonts/$font_family"
+  [[ -s "$font_directory/OFL.txt" ]] && compgen -G "$font_directory/*.ttf" >/dev/null || {
+    echo "The bundled $font_family font or its OFL licence is missing from the app." >&2
+    exit 74
+  }
+done
 
 if [[ -n "$PROVISIONING_PROFILE" ]]; then
   PROFILE_PLIST="$ICON_WORK_DIR/provisioning-profile.plist"

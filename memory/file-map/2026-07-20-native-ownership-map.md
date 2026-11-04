@@ -18,6 +18,13 @@ related_files: [native/AddressAtlasMac/Sources/AddressAtlasMac/AppState.swift, n
 - `ExportPipeline.swift` owns view-free export payloads, the render pipeline,
   the preview accessibility model, and the disclosure copy (`ExportCopy`);
   `ExportView` keeps forwarding statics for the tests.
+- Theme engine (2026-11-04, shared with iOS): `AtlasThemeModel.swift` (types,
+  colour math, palettes' high-contrast derivation), `AtlasThemeCatalog.swift`
+  (the six themes' data), `AtlasThemeRuntime.swift` (selected theme, static
+  `AtlasTheme.*` tokens, `\.atlasTheme`, `atlasThemeRoot`, `atlasChrome`),
+  `AtlasDisplayPreferences.swift`, `AtlasFonts.swift`, `AtlasThemePicker.swift`;
+  fonts under `Sources/AddressAtlasMac/Fonts/` (excluded from the iOS source glob,
+  added as a folder resource).
 - macOS-only presentation stays in `AddressAtlasApp.swift`,
   `AppShellViews.swift`, `PortfolioViews.swift`, `PortfolioComponents.swift`,
   `ExchangeSyncViews.swift`, `ICloudSyncView.swift`, and

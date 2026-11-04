@@ -56,6 +56,7 @@ struct SettingsScreen: View {
 
   var body: some View {
     IOSPage(title: "Settings") {
+      themeSection
       portfolioSection
       recoverySection
       supportSection
@@ -109,6 +110,16 @@ struct SettingsScreen: View {
       case .failure(let error):
         state.presentUserFacingError(error)
       }
+    }
+  }
+
+  // MARK: - Theme
+
+  /// Theme grid and light/dark control. The choice is stored on this device
+  /// only (not in the vault) and restyles the app immediately.
+  private var themeSection: some View {
+    SettingsGroup(title: "Theme", framed: false) {
+      AtlasThemePicker()
     }
   }
 
@@ -802,34 +813,45 @@ private struct SettingsRecoveryExport {
 private struct SettingsGroup<Content: View>: View {
   var title: String
   var footer: String?
+  /// False for content that draws its own cards (the theme grid).
+  var framed = true
   var content: Content
 
-  init(title: String, footer: String? = nil, @ViewBuilder content: () -> Content) {
+  init(
+    title: String,
+    footer: String? = nil,
+    framed: Bool = true,
+    @ViewBuilder content: () -> Content
+  ) {
     self.title = title
     self.footer = footer
+    self.framed = framed
     self.content = content()
   }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 7) {
       Text(title)
-        .font(.footnote.weight(.semibold))
+        .font(AtlasTheme.font(.label, .footnote, weight: .semibold))
         .foregroundStyle(AtlasTheme.ink3)
         .padding(.horizontal, 4)
         .accessibilityAddTraits(.isHeader)
-      VStack(alignment: .leading, spacing: 0) {
+      if framed {
+        VStack(alignment: .leading, spacing: 0) {
+          content
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .atlasChrome(
+          fill: AtlasTheme.surface,
+          border: AtlasTheme.outline,
+          level: .card
+        )
+      } else {
         content
-      }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .background(AtlasTheme.surface)
-      .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.card, style: .continuous))
-      .overlay {
-        RoundedRectangle(cornerRadius: AtlasRadius.card, style: .continuous)
-          .stroke(AtlasTheme.ruleSoft, lineWidth: 1)
       }
       if let footer {
         Text(footer)
-          .font(.footnote)
+          .font(AtlasTheme.font(.body, .footnote))
           .foregroundStyle(AtlasTheme.ink3)
           .padding(.horizontal, 4)
           .fixedSize(horizontal: false, vertical: true)

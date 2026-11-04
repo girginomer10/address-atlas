@@ -50,7 +50,7 @@ struct MainView: View {
           onNavigate: {
             state.clearTransientMessagesForNavigation()
           })
-        Rectangle().fill(AtlasTheme.ruleSoft).frame(width: 1)
+        Rectangle().fill(AtlasTheme.outline).frame(width: max(1, AtlasTheme.shape.cardBorderWidth))
         Group {
           switch selected {
           case .portfolio: PortfolioView()
@@ -118,7 +118,7 @@ struct Sidebar: View {
                   .frame(maxWidth: .infinity, alignment: .leading)
                 if selection == item {
                   Circle()
-                    .fill(AtlasTheme.paper.opacity(0.88))
+                    .fill(AtlasTheme.onSelection.opacity(0.88))
                     .frame(width: 5, height: 5)
                     .accessibilityHidden(true)
                 }

@@ -117,6 +117,14 @@ if plutil -extract CFBundleSupportedPlatforms.1 raw "$INFO_PLIST" >/dev/null 2>&
 fi
 [[ -s "$APP_PATH/Contents/Resources/Assets.car" ]]
 [[ -s "$APP_PATH/Contents/Resources/AppIcon.icns" ]]
+# Bundled SIL OFL fonts ship with their licences.
+FONT_BUNDLE="$APP_PATH/Contents/Resources/AddressAtlasMac_AddressAtlasMac.bundle/Fonts"
+for font_family in BricolageGrotesque Geist GeistMono PixelifySans PlusJakartaSans Silkscreen SpaceGrotesk SpaceMono; do
+  [[ -s "$FONT_BUNDLE/$font_family/OFL.txt" ]] && compgen -G "$FONT_BUNDLE/$font_family/*.ttf" >/dev/null || {
+    echo "The bundled $font_family font or its OFL licence is missing." >&2
+    exit 65
+  }
+done
 
 build_version="$(plutil -extract CFBundleVersion raw "$INFO_PLIST")"
 [[ "$build_version" =~ ^[1-9][0-9]{0,3}(\.[0-9]{1,2}){0,2}$ ]] || {
