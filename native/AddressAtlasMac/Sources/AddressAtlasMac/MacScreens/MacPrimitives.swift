@@ -512,7 +512,7 @@ struct MacStat: View {
       MacFigure(text: value, size: 15, weight: .semibold)
       if let detail {
         Text(detail)
-          .font(AtlasTheme.font(.label, .caption))
+          .font(AtlasTheme.font(.label, .caption, figuresIn: detail))
           .foregroundStyle(AtlasTheme.ink3)
           .lineLimit(1)
       }

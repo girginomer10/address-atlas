@@ -118,7 +118,7 @@ struct ListChartView: View {
           .truncationMode(.tail)
         if isFull {
           Text(subtitle)
-            .font(tokens.chartKitLabelFont(11))
+            .font(tokens.chartKitLabelFont(11, figuresIn: subtitle))
             .foregroundStyle(tokens.color(.ink2))
             .lineLimit(1)
             .truncationMode(.tail)
@@ -236,8 +236,9 @@ struct ListChartView: View {
           .lineLimit(1)
           .truncationMode(.tail)
         if isFull {
-          Text(unpriced.name ?? ChartKitFormat.holdings(unpriced.holdingCount))
-            .font(tokens.chartKitLabelFont(11))
+          let unpricedText = unpriced.name ?? ChartKitFormat.holdings(unpriced.holdingCount)
+          Text(unpricedText)
+            .font(tokens.chartKitLabelFont(11, figuresIn: unpricedText))
             .foregroundStyle(tokens.color(.ink2))
             .lineLimit(1)
             .truncationMode(.tail)

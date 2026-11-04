@@ -674,6 +674,16 @@ struct AtlasThemeTokens: Equatable, Sendable {
   func font(_ role: AtlasFontRole, _ textStyle: Font.TextStyle, weight: Font.Weight? = nil) -> Font {
     font(role, size: AtlasThemeFonts.pointSize(for: textStyle), relativeTo: textStyle, weight: weight)
   }
+
+  /// As `AtlasTheme.font(_:_:weight:figuresIn:)`: text with a digit moves from a
+  /// face that draws a five like an S to the number face.
+  func font(
+    _ role: AtlasFontRole, _ textStyle: Font.TextStyle, weight: Font.Weight? = nil,
+    figuresIn text: String
+  ) -> Font {
+    let readable = typography[role].family.drawsFiveLikeS && text.contains(where: \.isNumber)
+    return font(readable ? .number : role, textStyle, weight: weight)
+  }
 }
 
 enum AtlasThemeFonts {

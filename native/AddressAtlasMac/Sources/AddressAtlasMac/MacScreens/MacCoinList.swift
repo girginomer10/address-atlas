@@ -67,7 +67,7 @@ struct MacCoinRowView: View {
             }
           }
           Text(row.whereText)
-            .font(AtlasTheme.font(.label, .caption))
+            .font(AtlasTheme.font(.label, .caption, figuresIn: row.whereText))
             .foregroundStyle(AtlasTheme.ink3)
             .lineLimit(1)
             .truncationMode(.tail)

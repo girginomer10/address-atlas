@@ -73,6 +73,15 @@ enum AtlasFontFamily: String, CaseIterable, Sendable {
     }
   }
 
+  /// The five is drawn like an S, so a figure set in this face is misread
+  /// ("$5,082" reads "$S,082"). Figures use the number face instead.
+  var drawsFiveLikeS: Bool {
+    switch self {
+    case .pixelifySans, .silkscreen: true
+    default: false
+    }
+  }
+
   /// System design used when the bundled files cannot be loaded.
   var fallbackDesign: Font.Design {
     switch self {

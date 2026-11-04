@@ -384,55 +384,6 @@ struct EmptyState: View {
   }
 }
 
-struct BrandLockup: View {
-  var body: some View {
-    HStack(spacing: 11) {
-      Image(systemName: "map.fill")
-        .font(.body.weight(.semibold))
-        .foregroundStyle(AtlasTheme.onAccent)
-        .frame(width: 38, height: 38)
-        .atlasChrome(
-          fill: AtlasTheme.accent,
-          border: AtlasTheme.outline,
-          level: .control,
-          radius: AtlasTheme.shape.pillControls ? 12 : AtlasRadius.control,
-          borderWidth: AtlasTheme.shape.hasBoldBorders ? AtlasTheme.shape.controlBorderWidth : 0
-        )
-
-      VStack(alignment: .leading, spacing: 2) {
-        Text("Address Atlas")
-          .font(AtlasTheme.font(.display, .headline, weight: .bold))
-        Text("Private portfolio map")
-          .font(AtlasTheme.font(.label, .caption))
-          .foregroundStyle(AtlasTheme.ink3)
-      }
-    }
-    .accessibilityElement(children: .combine)
-  }
-}
-
-struct SidebarTrustLine: View {
-  var title: String
-  var copy: String
-
-  var body: some View {
-    HStack(alignment: .top, spacing: 10) {
-      Image(systemName: "checkmark.circle.fill")
-        .font(.callout)
-        .foregroundStyle(AtlasTheme.gain)
-        .padding(.top, 1)
-      VStack(alignment: .leading, spacing: 2) {
-        Text(title)
-          .font(AtlasTheme.font(.body, .callout, weight: .medium))
-        Text(copy)
-          .font(AtlasTheme.font(.label, .caption))
-          .foregroundStyle(AtlasTheme.ink3)
-      }
-    }
-    .accessibilityElement(children: .combine)
-  }
-}
-
 struct FieldLabel: View {
   var title: String
   var detail: String?
@@ -546,41 +497,6 @@ struct PanelHeader: View {
           .foregroundStyle(AtlasTheme.ink3)
       }
       Spacer(minLength: 0)
-    }
-    .accessibilityElement(children: .combine)
-  }
-}
-
-struct PrivacyCard: View {
-  var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      HStack(spacing: 9) {
-        Image(systemName: "lock.shield.fill")
-          .foregroundStyle(AtlasTheme.gain)
-          .frame(width: 28, height: 28)
-          .background(AtlasTheme.gainSoft)
-          .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.small, style: .continuous))
-        VStack(alignment: .leading, spacing: 1) {
-          Text("Private by design")
-            .font(AtlasTheme.font(.body, .callout, weight: .semibold))
-          Text("Encrypted on this \(PlatformCopy.deviceNoun)")
-            .font(AtlasTheme.font(.label, .caption))
-            .foregroundStyle(AtlasTheme.ink3)
-        }
-      }
-      Text("Credentials and portfolio data stay encrypted before storage or sync.")
-        .font(AtlasTheme.font(.body, .caption))
-        .foregroundStyle(AtlasTheme.ink3)
-        .lineSpacing(2)
-    }
-    .padding(14)
-    .background(AtlasTheme.surfaceMuted.opacity(0.44))
-    .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.card, style: .continuous))
-    .overlay {
-      RoundedRectangle(cornerRadius: AtlasRadius.card, style: .continuous)
-        .stroke(
-          AtlasTheme.shape.hasBoldBorders ? AtlasTheme.outline : AtlasTheme.ruleSoft,
-          lineWidth: max(1, AtlasTheme.shape.cardBorderWidth * 0.6))
     }
     .accessibilityElement(children: .combine)
   }

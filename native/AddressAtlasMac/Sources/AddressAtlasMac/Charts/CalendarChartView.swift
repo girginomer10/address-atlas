@@ -260,13 +260,13 @@ struct CalendarChartView: View {
     return HistoryFlowLayout(spacing: 12, lineSpacing: 4) {
       HStack(spacing: 5) {
         Text(verbatim: "\u{2212}\(scale)")
-          .font(style.smallFont)
+          .font(style.smallFigureFont)
           .foregroundStyle(style.ink3)
         RoundedRectangle(cornerRadius: 3, style: .continuous)
           .fill(LinearGradient(colors: [loss, neutral, gain], startPoint: .leading, endPoint: .trailing))
           .frame(width: isCompact ? 54 : 84, height: 9)
         Text(verbatim: "+\(scale)")
-          .font(style.smallFont)
+          .font(style.smallFigureFont)
           .foregroundStyle(style.ink3)
       }
       HStack(spacing: 5) {
@@ -302,7 +302,7 @@ struct CalendarChartView: View {
       let lines = CalendarHeatmapModel.lines(for: cell, timeZone: input.timeZone)
       VStack(alignment: .leading, spacing: 4) {
         Text(verbatim: lines[0])
-          .font(style.captionFont)
+          .font(style.captionFont(figuresIn: lines[0]))
           .foregroundStyle(style.ink3)
         if let entry = cell.entry {
           Text(verbatim: HistoryChartFormat.usd(entry.point.totalValueUsd))
@@ -354,14 +354,14 @@ struct CalendarChartView: View {
     let change = cell.entry?.marketChange ?? 0
     return VStack(alignment: .leading, spacing: 0) {
       Text(verbatim: title)
-        .font(style.smallFont)
+        .font(style.smallFont(figuresIn: title))
         .foregroundStyle(style.ink3)
       HStack(spacing: 6) {
         Text(verbatim: HistoryChartFormat.signedPercent(change))
           .font(style.numberFont(13, relativeTo: .footnote))
           .foregroundStyle(change >= 0 ? style.gain : style.loss)
         Text(verbatim: CalendarHeatmapModel.title(cell.day, timeZone: input.timeZone))
-          .font(style.captionFont)
+          .font(style.captionFigureFont)
           .foregroundStyle(style.ink2)
           .lineLimit(1)
       }

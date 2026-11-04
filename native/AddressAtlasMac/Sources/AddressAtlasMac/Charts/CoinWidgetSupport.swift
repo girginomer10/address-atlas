@@ -278,7 +278,7 @@ struct CoinWidgetRow: View {
           .lineLimit(1)
         if let detail {
           Text(verbatim: detail)
-            .font(style.smallFont)
+            .font(style.smallFont(figuresIn: detail))
             .foregroundStyle(style.ink3)
             .lineLimit(1)
         }

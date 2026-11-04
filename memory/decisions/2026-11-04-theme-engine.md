@@ -51,6 +51,12 @@ synthetic fixtures still apply.
 
 ## Consequences
 
+- Holding-state colours (`AtlasChartPalette.states`) must tell apart on the theme's
+  own canvas: Acid uses lime, cyan, orange, pink and violet (the earlier
+  near-white and olive steps were indistinguishable in the strip and the amount
+  history). Grey is left for "sources changed". Where a role's face draws a five
+  like an S (Pixel's Pixelify Sans and Silkscreen) figures use the number role; see
+  the chart digits gotcha.
 - Add colours through `AtlasPalette` roles in the catalog, never as literals in
   screens. A new palette must pass the contrast tests for all four variants.
 - Adding a file under `Sources/AddressAtlasMac` needs `./generate-project.sh`.

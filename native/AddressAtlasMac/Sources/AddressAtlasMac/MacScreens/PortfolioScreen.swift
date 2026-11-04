@@ -286,7 +286,7 @@ struct MacPortfolioHero: View {
         }
         if !snapshot.sourcesText.isEmpty {
           Text(snapshot.sourcesText)
-            .font(tokens.font(.label, .caption))
+            .font(tokens.font(.label, .caption, figuresIn: snapshot.sourcesText))
             .foregroundStyle(quietInk)
         }
       }

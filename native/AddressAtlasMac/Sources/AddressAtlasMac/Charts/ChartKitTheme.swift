@@ -80,6 +80,17 @@ extension AtlasThemeTokens {
     font(.label, size: size, relativeTo: .caption, weight: weight)
   }
 
+  /// A caption that may carry a count or an amount ("2 holdings"): the number face
+  /// where the label face draws a five like an S (Silkscreen in the Pixel theme).
+  func chartKitLabelFont(
+    _ size: CGFloat = 11, weight: Font.Weight? = nil, figuresIn text: String
+  ) -> Font {
+    if typography.label.family.drawsFiveLikeS, text.contains(where: \.isNumber) {
+      return chartKitNumberFont(size, weight: weight)
+    }
+    return chartKitLabelFont(size, weight: weight)
+  }
+
   /// Figures: shares and values, tabular.
   func chartKitNumberFont(_ size: CGFloat = 12, weight: Font.Weight? = nil) -> Font {
     font(.number, size: size, relativeTo: .body, weight: weight)

@@ -148,7 +148,7 @@ struct CoinCustodyView: View {
       }
       if part.sources.count > Self.maximumSources {
         Text(verbatim: "and \(part.sources.count - Self.maximumSources) more")
-          .font(style.smallFont)
+          .font(style.smallFigureFont)
           .foregroundStyle(style.ink3)
           .padding(.leading, 36)
       }
