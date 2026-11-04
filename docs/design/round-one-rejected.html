@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Address Atlas directions</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Inter+Tight:wght@400;500;700;800&family=Newsreader:opsz,wght@6..72,400;6..72,500&family=JetBrains+Mono:wght@400;500&family=IBM+Plex+Serif:wght@400;500&family=IBM+Plex+Mono:wght@400&family=Fraunces:opsz,wght@9..144,400;9..144,600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#ecebe8;--fg:#1b1b1a;--mut:#6b6a66;--line:#d4d2cc}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#161615;--fg:#ecebe8;--mut:#9a9893;--line:#2e2d2b}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+.page{max-width:1380px;margin:0 auto;padding:40px 16px 80px}
+.intro{max-width:720px;margin-bottom:48px}
+.intro h1{font:500 28px/1.2 Inter;margin:0 0 8px}
+.intro p{color:var(--mut);margin:0}
+section.dir{margin:0 0 72px}
+.dh{display:flex;gap:16px;align-items:baseline;border-top:1px solid var(--line);padding-top:16px;margin-bottom:20px;flex-wrap:wrap}
+.dh .n{font:500 13px Inter;color:var(--mut);width:24px}
+.dh h2{font:500 21px Inter;margin:0}
+.dh p{margin:0;color:var(--mut);flex:1 1 420px}
+.row{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap}
+.mac{width:min(960px,100%);height:580px;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 1px 0 rgba(0,0,0,.04),0 20px 50px -20px rgba(0,0,0,.35);flex:0 1 960px}
+.tb{height:34px;display:flex;align-items:center;gap:7px;padding:0 13px;flex:none}
+.tb i{width:11px;height:11px;border-radius:50%;background:#ff5f57}.tb i+i{background:#febc2e}.tb i+i+i{background:#28c840}
+.mb{flex:1;display:flex;min-height:0}
+.side{width:196px;flex:none;padding:10px 10px}
+.main{flex:1;min-width:0;padding:22px 30px;overflow:hidden}
+.phone{width:300px;height:620px;border-radius:44px;padding:10px;background:#0c0c0c;flex:none;box-shadow:0 20px 50px -20px rgba(0,0,0,.4)}
+.scr{width:100%;height:100%;border-radius:35px;overflow:hidden;display:flex;flex-direction:column;position:relative}
+.sb{height:44px;flex:none;display:flex;justify-content:space-between;align-items:center;padding:0 26px;font:600 13px Inter}
+.tabs{position:absolute;left:0;right:0;bottom:0;height:72px;display:flex;justify-content:space-around;padding-top:10px;font-size:10px}
+.tabs span{display:flex;flex-direction:column;align-items:center;gap:3px}
+.tabs b{width:20px;height:20px;border-radius:5px;display:block}
+.num{font-variant-numeric:tabular-nums}
+table{border-collapse:collapse;width:100%}
+td,th{padding:0;text-align:left;font-weight:inherit}
+.r{text-align:right}
+.copy{margin-top:20px;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px 28px;font-size:13.5px;max-width:1288px}
+.copy div{border-top:1px solid var(--line);padding-top:8px}
+.copy em{font-style:normal;color:var(--mut);display:block;font-size:12px}
+
+/* 1 ledger */
+.L{background:#f3eee3;color:#1d1b17}
+.L .tb{background:#ebe5d8;border-bottom:1px solid #d9d1c0}
+.L .side{background:#ebe5d8;border-right:1px solid #d9d1c0;font-size:13px}
+.L .brand{font:500 17px Newsreader;padding:6px 10px 18px}
+.L .nav div{padding:5px 10px;color:#4a463e}
+.L .nav .on{color:#1d1b17;font-weight:500;border-left:2px solid #233f78;padding-left:8px}
+.L .main h1{font:400 13px Inter;color:#6f685b;margin:0;display:flex;justify-content:space-between}
+.L .tot{font:400 60px/1 Newsreader;letter-spacing:-.01em;margin:14px 0 6px}
+.L .sub{font-size:13px;color:#6f685b}
+.L .sub b{color:#2f6b3f;font-weight:500}
+.L table{margin-top:26px;font-size:13.5px}
+.L th{font-size:11.5px;color:#6f685b;padding:0 0 7px;border-bottom:1px solid #1d1b17}
+.L td{padding:9px 0;border-bottom:1px solid #ddd5c4}
+.L td small{display:block;color:#7a7364;font-size:11.5px}
+.L .foot{margin-top:14px;font-size:12.5px;color:#7a5a17;display:flex;justify-content:space-between}
+.L .foot a{color:#233f78;text-decoration:underline;text-underline-offset:3px}
+.L .btn{font-size:12.5px;border:1px solid #1d1b17;padding:4px 10px;border-radius:3px;color:#1d1b17}
+.Lp{background:#f3eee3;color:#1d1b17}
+.Lp .tabs{background:#ebe5d8;border-top:1px solid #d9d1c0;color:#7a7364}.Lp .tabs b{border:1.5px solid #9b927f;background:none}.Lp .tabs .on{color:#233f78}.Lp .tabs .on b{border-color:#233f78}
+
+/* 2 system */
+.S{background:#fff;color:#1d1d1f;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,sans-serif}
+.S .tb{background:#ececec;border-bottom:1px solid #d6d6d6}
+.S .side{background:#e8e8ea;font-size:13px;border-right:1px solid #d6d6d6}
+.S .sh{font-size:11px;color:#8a8a8e;font-weight:600;padding:10px 8px 4px}
+.S .nav div{padding:4px 8px;border-radius:6px;display:flex;gap:8px;align-items:center}
+.S .nav div:before{content:"";width:14px;height:14px;border-radius:3px;background:#0a7aff;opacity:.85}
+.S .nav .on{background:#d0d0d5}
+.S .main{padding:18px 24px}
+.S h1{font-size:22px;font-weight:700;margin:0 0 14px}
+.S .grp{background:#f5f5f7;border-radius:10px;font-size:13px}
+.S .grp div{display:flex;justify-content:space-between;padding:9px 14px;border-bottom:1px solid #e3e3e6}.S .grp div:last-child{border:0}
+.S .grp span:last-child{color:#6e6e73}
+.S .big{font-size:13px}.S .big b{font-size:26px;font-weight:600;color:#1d1d1f}
+.S table{margin-top:18px;font-size:13px}
+.S th{font-size:11.5px;color:#6e6e73;font-weight:500;padding:5px 8px;border-bottom:1px solid #e3e3e6}
+.S td{padding:6px 8px}
+.S tr:nth-child(even) td{background:#f5f5f7}
+.S .warn{margin-top:12px;font-size:12px;color:#6e6e73}
+.S .pb{background:#0a7aff;color:#fff;border-radius:6px;padding:3px 10px;font-size:12.5px}
+.Sp{background:#f2f2f7;color:#000;font-family:-apple-system,BlinkMacSystemFont,Inter,sans-serif}
+.Sp .tabs{background:rgba(249,249,249,.94);border-top:1px solid #d8d8dc;color:#8e8e93}.Sp .tabs b{background:#c7c7cc}.Sp .tabs .on{color:#0a7aff}.Sp .tabs .on b{background:#0a7aff}
+
+/* 3 instrument */
+.I{background:#0f1011;color:#d8d9da;font-family:"JetBrains Mono",monospace}
+.I .tb{background:#0f1011;border-bottom:1px solid #222426}
+.I .side{background:#0f1011;border-right:1px solid #222426;font-size:12px;padding-top:14px}
+.I .nav div{padding:4px 8px;color:#7d8084;display:flex;justify-content:space-between}
+.I .nav div span{color:#4b4e52}
+.I .nav .on{color:#e9eaeb;background:#1a1c1e}
+.I .main{padding:14px 18px}
+.I .hdr{display:flex;gap:26px;align-items:baseline;font-size:12px;color:#7d8084;border-bottom:1px solid #222426;padding-bottom:12px}
+.I .hdr b{font:500 26px "JetBrains Mono";color:#f1f2f3}
+.I .up{color:#6fd39a}.I .am{color:#e8b34c}
+.I table{font-size:12px;margin-top:6px}
+.I th{color:#5d6064;padding:8px 6px;font-size:11px;border-bottom:1px solid #222426}
+.I td{padding:6px 6px;border-bottom:1px solid #18191b}
+.I .bar{height:3px;background:#2a2c2f;width:70px;display:inline-block;vertical-align:middle}
+.I .bar i{display:block;height:3px;background:#9ea2a7}
+.I .keys{position:relative;margin-top:14px;font-size:11px;color:#5d6064;display:flex;gap:18px}
+.I .keys kbd{border:1px solid #33363a;border-radius:3px;padding:0 4px;color:#a8abaf;font-family:inherit}
+.Ip{background:#0f1011;color:#d8d9da;font-family:"JetBrains Mono",monospace}
+.Ip .sb{font-family:Inter;color:#fff}
+.Ip .tabs{background:#0f1011;border-top:1px solid #222426;color:#5d6064}.Ip .tabs b{background:#2a2c2f}.Ip .tabs .on{color:#e9eaeb}.Ip .tabs .on b{background:#e9eaeb}
+
+/* 4 atlas */
+.A{background:#f4f1ea;color:#22261f}
+.A .tb{background:#e9e4d8;border-bottom:1px solid #d5cdb9}
+.A .side{background:#e9e4d8;border-right:1px solid #d5cdb9;font-size:13px}
+.A .brand{font:600 16px Fraunces;padding:6px 10px 16px;display:flex;gap:8px;align-items:center}
+.A .nav div{padding:5px 10px;border-radius:6px;color:#4b4f45}
+.A .nav .on{background:#22261f;color:#f4f1ea}
+.A .hero{position:relative;height:150px;border-radius:10px;overflow:hidden;background:#e7e2d4;padding:18px 20px;border:1px solid #d5cdb9}
+.A .hero svg{position:absolute;inset:0;width:100%;height:100%}
+.A .hero .t{position:relative;font-size:12px;color:#5d6153}
+.A .hero .v{position:relative;font:400 44px/1.1 Fraunces;margin-top:6px}
+.A .hero .d{position:relative;font-size:12.5px;color:#3d6b45;margin-top:4px}
+.A .terr{display:flex;height:12px;border-radius:3px;overflow:hidden;margin:18px 0 8px}
+.A .leg{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12px;color:#4b4f45}
+.A .leg i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px}
+.A table{margin-top:14px;font-size:13px}
+.A th{font-size:11.5px;color:#7a7d70;padding-bottom:6px;border-bottom:1px solid #cfc7b2}
+.A td{padding:7px 0;border-bottom:1px dashed #d8d1bf}
+.Ap{background:#f4f1ea;color:#22261f}
+.Ap .tabs{background:#e9e4d8;border-top:1px solid #d5cdb9;color:#7a7d70}.Ap .tabs b{background:#cfc7b2}.Ap .tabs .on{color:#22261f}.Ap .tabs .on b{background:#22261f}
+
+/* 5 swiss */
+.W{background:#fff;color:#111;font-family:"Inter Tight",Inter,sans-serif}
+.W .tb{background:#fff;border-bottom:2px solid #111}
+.W .side{background:#fff;border-right:2px solid #111;font-size:14px;font-weight:500;padding:18px 16px}
+.W .nav div{padding:3px 0;color:#9a9a9a}
+.W .nav .on{color:#111}
+.W .nav .on:after{content:"";display:inline-block;width:8px;height:8px;background:#e2231a;margin-left:8px}
+.W .main{padding:22px 32px}
+.W .lab{font-size:12px;font-weight:500;text-transform:none;color:#111}
+.W .tot{font:800 84px/0.95 "Inter Tight";letter-spacing:-.045em;margin:6px 0 10px}
+.W .meta{display:flex;gap:36px;font-size:13px;border-top:2px solid #111;padding-top:8px}
+.W .meta b{display:block;font-size:20px;font-weight:700;letter-spacing:-.02em}
+.W .red{color:#e2231a}
+.W table{margin-top:22px;font-size:14px}
+.W th{font-size:12px;font-weight:500;padding-bottom:6px;border-bottom:2px solid #111}
+.W td{padding:8px 0;border-bottom:1px solid #e3e3e3;font-weight:500}
+.Wp{background:#fff;color:#111;font-family:"Inter Tight",Inter,sans-serif}
+.Wp .tabs{background:#fff;border-top:2px solid #111;color:#9a9a9a;font-weight:500;font-size:11px}.Wp .tabs b{display:none}.Wp .tabs span{justify-content:center;height:24px}.Wp .tabs .on{color:#111}
+
+/* 6 statement */
+.T{background:#fbfaf7;color:#1e1e1c;font-family:"IBM Plex Serif",serif}
+.T .tb{background:#fbfaf7;border-bottom:1px solid #e6e3dc}
+.T .mb{flex-direction:column}
+.T .top{display:flex;justify-content:center;gap:22px;font:13px Inter;color:#8b887f;padding:12px 0;border-bottom:1px solid #eeebe4}
+.T .top .on{color:#1e1e1c;border-bottom:1px solid #1e1e1c}
+.T .col{width:560px;margin:0 auto;padding:26px 0}
+.T .hd{display:flex;justify-content:space-between;font:12px "IBM Plex Mono";color:#8b887f}
+.T .tot{font:400 46px/1.1 "IBM Plex Serif";margin:16px 0 4px;text-align:center}
+.T .cap{text-align:center;font-size:14px;color:#6c6a63;font-style:italic}
+.T .ln{display:flex;align-items:baseline;gap:8px;font-size:14.5px;padding:7px 0}
+.T .ln .dots{flex:1;border-bottom:1px dotted #b9b5aa;transform:translateY(-4px)}
+.T .ln small{color:#8b887f;font-size:12.5px}
+.T hr{border:0;border-top:1px solid #1e1e1c;margin:18px 0 10px}
+.T .note{font:12.5px Inter;color:#8b887f;text-align:center;margin-top:16px}
+.Tp{background:#fbfaf7;color:#1e1e1c;font-family:"IBM Plex Serif",serif}
+.Tp .tabs{background:#fbfaf7;border-top:1px solid #e6e3dc;color:#8b887f;font:11px Inter}.Tp .tabs b{display:none}.Tp .tabs span{justify-content:center;height:24px}.Tp .tabs .on{color:#1e1e1c;text-decoration:underline;text-underline-offset:4px}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="intro">
+    <h1>Address Atlas: six directions</h1>
+    <p>Same Portfolio screen, same synthetic data, same plain copy. Only the visual system changes. Mac on the left, iPhone on the right.</p>
+  </div>
+
+  <!-- 1 LEDGER -->
+  <section class="dir">
+    <div class="dh"><span class="n">1</span><h2>Ledger</h2><p>Paper and ink, picked up from the existing atlas icon. Hairline rules instead of cards, a serif only for money, one ink-blue for links and selection.</p></div>
+    <div class="row">
+      <div class="mac L">
+        <div class="tb"><i></i><i></i><i></i></div>
+        <div class="mb">
+          <div class="side">
+            <div class="brand">Address Atlas</div>
+            <div class="nav"><div class="on">Portfolio</div><div>Wallets</div><div>Exchanges</div><div>Assets</div><div>History</div><div style="margin-top:14px">Export</div><div>Settings</div></div>
+          </div>
+          <div class="main">
+            <h1><span>Total value</span><span class="btn">Scan</span></h1>
+            <div class="tot num">$49,210.55</div>
+            <div class="sub num"><b>+$1,204.30</b> since 3 Nov · scanned 4 Nov, 09:12 · 3 wallets, 1 exchange</div>
+            <table class="num">
+              <tr><th>Asset</th><th>Where</th><th class="r">Amount</th><th class="r">Value</th></tr>
+              <tr><td>Bitcoin</td><td>Cold storage</td><td class="r">0.4120 BTC</td><td class="r">$27,980.10</td></tr>
+              <tr><td>Ether</td><td>Ethereum, Base</td><td class="r">4.10 ETH</td><td class="r">$13,120.00</td></tr>
+              <tr><td>Solana</td><td>Phantom</td><td class="r">38.5 SOL</td><td class="r">$5,082.00</td></tr>
+              <tr><td>Cosmos<small>300 staked · 1.21 rewards</small></td><td>Keplr</td><td class="r">310.2 ATOM</td><td class="r">$2,108.40</td></tr>
+              <tr><td>USD Coin</td><td>Kraken</td><td class="r">920.05 USDC</td><td class="r">$920.05</td></tr>
+            </table>
+            <div class="foot"><span>NEW on Base has no price, so it’s left out of the total.</span><a>Show 3 small balances</a></div>
+          </div>
+        </div>
+      </div>
+      <div class="phone"><div class="scr Lp">
+        <div class="sb"><span>9:41</span><span>●●●</span></div>
+        <div style="padding:8px 22px">
+          <div style="font-size:12px;color:#6f685b">Total value</div>
+          <div class="num" style="font:400 40px/1.1 Newsreader;margin:6px 0">$49,210.55</div>
+          <div class="num" style="font-size:12px;color:#6f685b"><span style="color:#2f6b3f">+$1,204.30</span> since 3 Nov</div>
+          <div style="margin-top:22px;border-top:1px solid #1d1b17;font-size:14px" class="num">
+            <div style="display:flex;justify-content:space-between;padding:11px 0;border-bottom:1px solid #ddd5c4"><span>Bitcoin</span><span>$27,980.10</span></div>
+            <div style="display:flex;justify-content:space-between;padding:11px 0;border-bottom:1px solid #ddd5c4"><span>Ether</span><span>$13,120.00</span></div>
+            <div style="display:flex;justify-content:space-between;padding:11px 0;border-bottom:1px solid #ddd5c4"><span>Solana</span><span>$5,082.00</span></div>
+            <div style="display:flex;justify-content:space-between;padding:11px 0;border-bottom:1px solid #ddd5c4"><span>Cosmos</span><span>$2,108.40</span></div>
+            <div style="display:flex;justify-content:space-between;padding:11px 0;border-bottom:1px solid #ddd5c4"><span>USD Coin</span><span>$920.05</span></div>
+          </div>
+          <div style="font-size:12px;color:#7a5a17;margin-top:12px">1 asset has no price.</div>
+        </div>
+        <div class="tabs"><span class="on"><b></b>Portfolio</span><span><b></b>Sources</span><span><b></b>History</span><span><b></b>Settings</span></div>
+      </div></div>
+    </div>
+  </section>
+
+  <!-- 2 SYSTEM -->
+  <section class="dir">
+    <div class="dh"><span class="n">2</span><h2>Pure system</h2><p>Almost no custom styling. Standard sidebar, grouped rows, a native Table, system blue. Feels like software Apple ships; identity comes only from the icon and the words.</p></div>
+    <div class="row">
+      <div class="mac S">
+        <div class="tb"><i></i><i></i><i></i></div>
+        <div class="mb">
+          <div class="side">
+            <div class="nav"><div class="on">Portfolio</div><div>Assets</div><div>History</div></div>
+            <div class="sh">Sources</div>
+            <div class="nav"><div>Wallets</div><div>Exchanges</div><div>Tokens</div></div>
+            <div class="sh">Data</div>
+            <div class="nav"><div>Export</div><div>iCloud</div></div>
+          </div>
+          <div class="main">
+            <div style="display:flex;justify-content:space-between;align-items:center"><h1>Portfolio</h1><span class="pb">Scan</span></div>
+            <div class="grp num">
+              <div class="big"><span>Total value</span><b>$49,210.55</b></div>
+              <div><span>Since last scan</span><span style="color:#1a8d3f">+$1,204.30</span></div>
+              <div><span>Last scan</span><span>Today at 09:12</span></div>
+              <div><span>Sources</span><span>3 wallets, 1 exchange</span></div>
+            </div>
+            <table class="num">
+              <tr><th>Asset</th><th>Network</th><th>Source</th><th class="r">Amount</th><th class="r">Value</th></tr>
+              <tr><td>BTC</td><td>Bitcoin</td><td>Cold storage</td><td class="r">0.4120</td><td class="r">$27,980.10</td></tr>
+              <tr><td>ETH</td><td>Ethereum, Base</td><td>Main</td><td class="r">4.10</td><td class="r">$13,120.00</td></tr>
+              <tr><td>SOL</td><td>Solana</td><td>Phantom</td><td class="r">38.5</td><td class="r">$5,082.00</td></tr>
+              <tr><td>ATOM</td><td>Cosmos Hub</td><td>Keplr</td><td class="r">310.2</td><td class="r">$2,108.40</td></tr>
+              <tr><td>USDC</td><td>Exchange</td><td>Kraken</td><td class="r">920.05</td><td class="r">$920.05</td></tr>
+            </table>
+            <div class="warn">NEW on Base has no price and isn’t in the total.</div>
+          </div>
+        </div>
+      </div>
+      <div class="phone"><div class="scr Sp">
+        <div class="sb"><span>9:41</span><span>●●●</span></div>
+        <div style="padding:4px 16px">
+          <div style="font-size:30px;font-weight:700;margin:4px 4px 12px">Portfolio</div>
+          <div class="num" style="background:#fff;border-radius:10px;font-size:15px">
+            <div style="padding:12px 14px;border-bottom:1px solid #e5e5ea"><div style="font-size:12px;color:#8e8e93">Total value</div><div style="font-size:28px;font-weight:600">$49,210.55</div><div style="font-size:13px;color:#1a8d3f">+$1,204.30 since last scan</div></div>
+          </div>
+          <div style="font-size:12px;color:#8e8e93;margin:18px 14px 6px">HOLDINGS</div>
+          <div class="num" style="background:#fff;border-radius:10px;font-size:15px">
+            <div style="display:flex;justify-content:space-between;padding:11px 14px;border-bottom:1px solid #e5e5ea"><span>BTC</span><span>$27,980.10</span></div>
+            <div style="display:flex;justify-content:space-between;padding:11px 14px;border-bottom:1px solid #e5e5ea"><span>ETH</span><span>$13,120.00</span></div>
+            <div style="display:flex;justify-content:space-between;padding:11px 14px;border-bottom:1px solid #e5e5ea"><span>SOL</span><span>$5,082.00</span></div>
+            <div style="display:flex;justify-content:space-between;padding:11px 14px"><span>ATOM</span><span>$2,108.40</span></div>
+          </div>
+        </div>
+        <div class="tabs"><span class="on"><b></b>Portfolio</span><span><b></b>Sources</span><span><b></b>History</span><span><b></b>Settings</span></div>
+      </div></div>
+    </div>
+  </section>
+
+  <!-- 3 INSTRUMENT -->
+  <section class="dir">
+    <div class="dh"><span class="n">3</span><h2>Instrument</h2><p>Graphite, monospaced, dense. Numbers do all the talking, every action has a key. For people who live in the app. Closest to the terminal look that was dropped in July, so it needs care to not read as a toy.</p></div>
+    <div class="row">
+      <div class="mac I">
+        <div class="tb"><i></i><i></i><i></i></div>
+        <div class="mb">
+          <div class="side">
+            <div class="nav"><div class="on">portfolio <span>1</span></div><div>assets <span>2</span></div><div>history <span>3</span></div><div style="margin-top:12px">wallets <span>3</span></div><div>exchanges <span>1</span></div><div>tokens <span>4</span></div><div style="margin-top:12px">export</div><div>settings</div></div>
+          </div>
+          <div class="main">
+            <div class="hdr num"><b>$49,210.55</b><span class="up">+1,204.30 (+2.5%)</span><span>scan 04 Nov 09:12</span><span>4 sources</span><span class="am">1 unpriced</span></div>
+            <table class="num">
+              <tr><th>asset</th><th>network</th><th class="r">amount</th><th class="r">price</th><th class="r">value</th><th class="r">share</th></tr>
+              <tr><td>BTC</td><td>bitcoin</td><td class="r">0.41200000</td><td class="r">67,912.86</td><td class="r">27,980.10</td><td class="r"><span class="bar"><i style="width:57%"></i></span> 57%</td></tr>
+              <tr><td>ETH</td><td>eth, base</td><td class="r">4.10000000</td><td class="r">3,200.00</td><td class="r">13,120.00</td><td class="r"><span class="bar"><i style="width:27%"></i></span> 27%</td></tr>
+              <tr><td>SOL</td><td>solana</td><td class="r">38.50000000</td><td class="r">132.00</td><td class="r">5,082.00</td><td class="r"><span class="bar"><i style="width:10%"></i></span> 10%</td></tr>
+              <tr><td>ATOM</td><td>cosmoshub</td><td class="r">310.20000000</td><td class="r">6.80</td><td class="r">2,108.40</td><td class="r"><span class="bar"><i style="width:4%"></i></span> 4%</td></tr>
+              <tr><td>&nbsp;└ staked</td><td></td><td class="r">300.00000000</td><td></td><td></td><td></td></tr>
+              <tr><td>USDC</td><td>kraken</td><td class="r">920.05000000</td><td class="r">1.00</td><td class="r">920.05</td><td class="r"><span class="bar"><i style="width:2%"></i></span> 2%</td></tr>
+              <tr><td class="am">NEW</td><td>base</td><td class="r">42.00000000</td><td class="r am">—</td><td class="r">—</td><td></td></tr>
+            </table>
+            <div class="keys"><span><kbd>⌘R</kbd> scan</span><span><kbd>⌘N</kbd> add source</span><span><kbd>⌘F</kbd> filter</span><span><kbd>⌘E</kbd> export</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="phone"><div class="scr Ip">
+        <div class="sb"><span>9:41</span><span>●●●</span></div>
+        <div style="padding:8px 18px;font-size:12px" class="num">
+          <div style="font:500 30px 'JetBrains Mono';color:#f1f2f3">$49,210.55</div>
+          <div><span style="color:#6fd39a">+1,204.30</span> <span style="color:#5d6064">· 09:12 · 4 src</span></div>
+          <div style="margin-top:18px;border-top:1px solid #222426">
+            <div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #18191b"><span>BTC</span><span style="color:#5d6064">57%</span><span>27,980.10</span></div>
+            <div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #18191b"><span>ETH</span><span style="color:#5d6064">27%</span><span>13,120.00</span></div>
+            <div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #18191b"><span>SOL</span><span style="color:#5d6064">10%</span><span>5,082.00</span></div>
+            <div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #18191b"><span>ATOM</span><span style="color:#5d6064">4%</span><span>2,108.40</span></div>
+            <div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #18191b"><span>USDC</span><span style="color:#5d6064">2%</span><span>920.05</span></div>
+            <div style="display:flex;justify-content:space-between;padding:9px 0;color:#e8b34c"><span>NEW</span><span>—</span><span>unpriced</span></div>
+          </div>
+        </div>
+        <div class="tabs"><span class="on"><b></b>portfolio</span><span><b></b>sources</span><span><b></b>history</span><span><b></b>settings</span></div>
+      </div></div>
+    </div>
+  </section>
+
+  <!-- 4 ATLAS -->
+  <section class="dir">
+    <div class="dh"><span class="n">4</span><h2>Atlas</h2><p>Takes the name literally. Faint contour lines behind the total, networks as territories with a muted earth-tone legend, a distribution strip instead of a pie. Most ownable; risk is it tipping into decoration.</p></div>
+    <div class="row">
+      <div class="mac A">
+        <div class="tb"><i></i><i></i><i></i></div>
+        <div class="mb">
+          <div class="side">
+            <div class="brand">Address Atlas</div>
+            <div class="nav"><div class="on">Portfolio</div><div>Wallets</div><div>Exchanges</div><div>Assets</div><div>History</div><div style="margin-top:14px">Export</div><div>Settings</div></div>
+          </div>
+          <div class="main">
+            <div class="hero">
+              <svg viewBox="0 0 700 150" preserveAspectRatio="none" fill="none" stroke="#c9c0a8" stroke-width="1"><path d="M380 150c20-40 70-60 120-55s90-30 110-70 60-40 90-20"/><path d="M420 150c20-30 60-45 100-42s80-25 100-60 50-35 80-18"/><path d="M460 150c18-22 50-33 80-30s65-20 85-48 40-28 75-14"/><path d="M500 150c15-15 40-22 62-20s50-14 68-36 32-20 70-10"/><path d="M540 150c12-9 30-13 46-12s38-9 52-26 25-14 62-6"/><circle cx="640" cy="70" r="16"/><circle cx="640" cy="70" r="30"/></svg>
+              <div class="t">Total value · scanned 4 Nov, 09:12</div>
+              <div class="v num">$49,210.55</div>
+              <div class="d num">+$1,204.30 since 3 Nov</div>
+            </div>
+            <div class="terr"><i style="width:57%;background:#b98b4a"></i><i style="width:27%;background:#5e7a8c"></i><i style="width:10%;background:#7d8f5a"></i><i style="width:4%;background:#8c6d8a"></i><i style="width:2%;background:#a9a28f"></i></div>
+            <div class="leg"><span><i style="background:#b98b4a"></i>Bitcoin 57%</span><span><i style="background:#5e7a8c"></i>Ethereum + Base 27%</span><span><i style="background:#7d8f5a"></i>Solana 10%</span><span><i style="background:#8c6d8a"></i>Cosmos 4%</span><span><i style="background:#a9a28f"></i>Kraken 2%</span></div>
+            <table class="num">
+              <tr><th>Asset</th><th>Territory</th><th class="r">Amount</th><th class="r">Value</th></tr>
+              <tr><td>BTC</td><td>Bitcoin · Cold storage</td><td class="r">0.4120</td><td class="r">$27,980.10</td></tr>
+              <tr><td>ETH</td><td>Ethereum, Base · Main</td><td class="r">4.10</td><td class="r">$13,120.00</td></tr>
+              <tr><td>SOL</td><td>Solana · Phantom</td><td class="r">38.5</td><td class="r">$5,082.00</td></tr>
+              <tr><td>ATOM</td><td>Cosmos Hub · Keplr · 300 staked</td><td class="r">310.2</td><td class="r">$2,108.40</td></tr>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="phone"><div class="scr Ap">
+        <div class="sb"><span>9:41</span><span>●●●</span></div>
+        <div style="padding:6px 16px">
+          <div style="position:relative;border-radius:14px;background:#e7e2d4;border:1px solid #d5cdb9;padding:16px;height:150px;overflow:hidden">
+            <svg viewBox="0 0 260 150" style="position:absolute;inset:0;width:100%;height:100%" fill="none" stroke="#c9c0a8"><path d="M120 150c10-30 40-40 70-36s40-30 70-50"/><path d="M150 150c10-20 30-28 50-26s30-22 60-36"/><path d="M180 150c8-12 20-16 32-15s22-14 48-22"/></svg>
+            <div style="position:relative;font-size:11px;color:#5d6153">Total value</div>
+            <div class="num" style="position:relative;font:400 36px/1.15 Fraunces;margin-top:4px">$49,210.55</div>
+            <div class="num" style="position:relative;font-size:12px;color:#3d6b45">+$1,204.30 since 3 Nov</div>
+          </div>
+          <div style="display:flex;height:10px;border-radius:3px;overflow:hidden;margin:16px 0 14px"><i style="width:57%;background:#b98b4a"></i><i style="width:27%;background:#5e7a8c"></i><i style="width:10%;background:#7d8f5a"></i><i style="width:4%;background:#8c6d8a"></i><i style="width:2%;background:#a9a28f"></i></div>
+          <div class="num" style="font-size:14px">
+            <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px dashed #d8d1bf"><span><i style="display:inline-block;width:8px;height:8px;background:#b98b4a;margin-right:8px"></i>BTC</span><span>$27,980.10</span></div>
+            <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px dashed #d8d1bf"><span><i style="display:inline-block;width:8px;height:8px;background:#5e7a8c;margin-right:8px"></i>ETH</span><span>$13,120.00</span></div>
+            <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px dashed #d8d1bf"><span><i style="display:inline-block;width:8px;height:8px;background:#7d8f5a;margin-right:8px"></i>SOL</span><span>$5,082.00</span></div>
+            <div style="display:flex;justify-content:space-between;padding:10px 0"><span><i style="display:inline-block;width:8px;height:8px;background:#8c6d8a;margin-right:8px"></i>ATOM</span><span>$2,108.40</span></div>
+          </div>
+        </div>
+        <div class="tabs"><span class="on"><b></b>Portfolio</span><span><b></b>Sources</span><span><b></b>History</span><span><b></b>Settings</span></div>
+      </div></div>
+    </div>
+  </section>
+
+  <!-- 5 SWISS -->
+  <section class="dir">
+    <div class="dh"><span class="n">5</span><h2>Swiss</h2><p>White, black, one red. Heavy grotesk, a huge total, thick rules, a strict grid. Confident and poster-like; red is used only for the current place and for losses.</p></div>
+    <div class="row">
+      <div class="mac W">
+        <div class="tb"><i></i><i></i><i></i></div>
+        <div class="mb">
+          <div class="side">
+            <div style="font-size:15px;font-weight:700;margin-bottom:22px;letter-spacing:-.01em">Address<br>Atlas</div>
+            <div class="nav"><div class="on">Portfolio</div><div>Wallets</div><div>Exchanges</div><div>Assets</div><div>History</div><div style="margin-top:18px">Export</div><div>Settings</div></div>
+          </div>
+          <div class="main">
+            <div class="lab">Total value</div>
+            <div class="tot num">$49,210</div>
+            <div class="meta num"><div>Since 3 Nov<b>+$1,204</b></div><div>Scanned<b>09:12</b></div><div>Sources<b>4</b></div><div>No price<b class="red">1</b></div></div>
+            <table class="num">
+              <tr><th>Asset</th><th>Network</th><th class="r">Amount</th><th class="r">Value</th><th class="r">Share</th></tr>
+              <tr><td>BTC</td><td>Bitcoin</td><td class="r">0.4120</td><td class="r">$27,980</td><td class="r">57%</td></tr>
+              <tr><td>ETH</td><td>Ethereum, Base</td><td class="r">4.10</td><td class="r">$13,120</td><td class="r">27%</td></tr>
+              <tr><td>SOL</td><td>Solana</td><td class="r">38.5</td><td class="r">$5,082</td><td class="r">10%</td></tr>
+              <tr><td>ATOM</td><td>Cosmos Hub</td><td class="r">310.2</td><td class="r">$2,108</td><td class="r">4%</td></tr>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="phone"><div class="scr Wp">
+        <div class="sb"><span>9:41</span><span>●●●</span></div>
+        <div style="padding:8px 20px">
+          <div style="font-size:12px;font-weight:500">Total value</div>
+          <div class="num" style="font:800 58px/0.95 'Inter Tight';letter-spacing:-.045em;margin:6px 0 12px">$49,210</div>
+          <div class="num" style="display:flex;gap:22px;border-top:2px solid #111;padding-top:6px;font-size:11px"><div>Since 3 Nov<b style="display:block;font-size:17px">+$1,204</b></div><div>No price<b style="display:block;font-size:17px;color:#e2231a">1</b></div></div>
+          <div class="num" style="margin-top:20px;border-top:2px solid #111;font-size:15px;font-weight:500">
+            <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #e3e3e3"><span>BTC</span><span>$27,980</span></div>
+            <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #e3e3e3"><span>ETH</span><span>$13,120</span></div>
+            <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #e3e3e3"><span>SOL</span><span>$5,082</span></div>
+            <div style="display:flex;justify-content:space-between;padding:10px 0"><span>ATOM</span><span>$2,108</span></div>
+          </div>
+        </div>
+        <div class="tabs"><span class="on">Portfolio</span><span>Sources</span><span>History</span><span>Settings</span></div>
+      </div></div>
+    </div>
+  </section>
+
+  <!-- 6 STATEMENT -->
+  <section class="dir">
+    <div class="dh"><span class="n">6</span><h2>Statement</h2><p>The app as a private bank statement. One centered column, serif body, dotted leaders, navigation as a quiet text line. Calm and readable; least “app-like”, weakest for dense data.</p></div>
+    <div class="row">
+      <div class="mac T">
+        <div class="tb"><i></i><i></i><i></i></div>
+        <div class="mb">
+          <div class="top"><span class="on">Portfolio</span><span>Sources</span><span>Assets</span><span>History</span><span>Export</span><span>Settings</span></div>
+          <div class="col">
+            <div class="hd"><span>Statement as of 4 Nov 2026, 09:12</span><span>4 sources</span></div>
+            <div class="tot num">$49,210.55</div>
+            <div class="cap num">up $1,204.30 since the scan on 3 November</div>
+            <hr>
+            <div class="ln num"><span>Bitcoin <small>· Cold storage</small></span><span class="dots"></span><span>$27,980.10</span></div>
+            <div class="ln num"><span>Ether <small>· Ethereum, Base</small></span><span class="dots"></span><span>$13,120.00</span></div>
+            <div class="ln num"><span>Solana <small>· Phantom</small></span><span class="dots"></span><span>$5,082.00</span></div>
+            <div class="ln num"><span>Cosmos <small>· 300 staked, 1.21 in rewards</small></span><span class="dots"></span><span>$2,108.40</span></div>
+            <div class="ln num"><span>USD Coin <small>· Kraken</small></span><span class="dots"></span><span>$920.05</span></div>
+            <div class="note">NEW on Base has no price and isn’t counted.</div>
+          </div>
+        </div>
+      </div>
+      <div class="phone"><div class="scr Tp">
+        <div class="sb" style="font-family:Inter"><span>9:41</span><span>●●●</span></div>
+        <div style="padding:10px 22px">
+          <div style="font:11px 'IBM Plex Mono';color:#8b887f;text-align:center">As of 4 Nov, 09:12</div>
+          <div class="num" style="font-size:36px;text-align:center;margin:10px 0 2px">$49,210.55</div>
+          <div class="num" style="font-size:13px;font-style:italic;color:#6c6a63;text-align:center">up $1,204.30 since 3 Nov</div>
+          <div style="border-top:1px solid #1e1e1c;margin:18px 0 6px"></div>
+          <div class="num" style="font-size:14px">
+            <div style="display:flex;gap:6px;padding:8px 0"><span>Bitcoin</span><span style="flex:1;border-bottom:1px dotted #b9b5aa;transform:translateY(-4px)"></span><span>$27,980.10</span></div>
+            <div style="display:flex;gap:6px;padding:8px 0"><span>Ether</span><span style="flex:1;border-bottom:1px dotted #b9b5aa;transform:translateY(-4px)"></span><span>$13,120.00</span></div>
+            <div style="display:flex;gap:6px;padding:8px 0"><span>Solana</span><span style="flex:1;border-bottom:1px dotted #b9b5aa;transform:translateY(-4px)"></span><span>$5,082.00</span></div>
+            <div style="display:flex;gap:6px;padding:8px 0"><span>Cosmos</span><span style="flex:1;border-bottom:1px dotted #b9b5aa;transform:translateY(-4px)"></span><span>$2,108.40</span></div>
+            <div style="display:flex;gap:6px;padding:8px 0"><span>USD Coin</span><span style="flex:1;border-bottom:1px dotted #b9b5aa;transform:translateY(-4px)"></span><span>$920.05</span></div>
+          </div>
+        </div>
+        <div class="tabs"><span class="on">Portfolio</span><span>Sources</span><span>History</span><span>Settings</span></div>
+      </div></div>
+    </div>
+  </section>
+
+  <section class="dir">
+    <div class="dh"><span class="n">—</span><h2>Copy, before and after</h2><p>Applies to whichever direction wins. Rule: say what a thing is or does, once, in as few words as possible. No slogans, no eyebrow labels, no subtitle under every title.</p></div>
+    <div class="copy">
+      <div><em>Sidebar card, before</em>Private by design · Encrypted on this Mac · Credentials and portfolio data stay encrypted before storage or sync.<em style="margin-top:6px">After</em>(removed; covered once in Settings → Privacy)</div>
+      <div><em>Portfolio header, before</em>Portfolio overview / Portfolio / A unified view of wallets, exchange balances, custom tokens, staking, and rewards.<em style="margin-top:6px">After</em>Total value</div>
+      <div><em>Scan panel, before</em>Refresh portfolio · Scan every saved wallet and exchange · Scan all sources · Encrypted storage ✓ Private sync ✓ Direct connections ✓<em style="margin-top:6px">After</em>Scan</div>
+      <div><em>Add wallet, before</em>Add a wallet · Paste a public address—never a seed phrase or private key · Watch-only access: Address Atlas reads public blockchain data. It cannot sign transactions or move funds.<em style="margin-top:6px">After</em>Field placeholder: 0x…, bc1…, or any supported address. One line under it: Public addresses only.</div>
+      <div><em>Warning box, before</em>Partial scan warnings · 1 issue · A price source was temporarily unavailable for one token.<em style="margin-top:6px">After</em>NEW on Base has no price, so it’s left out of the total.</div>
+      <div><em>Welcome, before</em>Everything you track. Nothing to hand over.<em style="margin-top:6px">After</em>Add a wallet address or an exchange to see what you hold.</div>
+      <div><em>Saved count, before</em>Saved wallets · 1 encrypted on this Mac<em style="margin-top:6px">After</em>Wallets</div>
+      <div><em>Error, before</em>A wallet label changed while the vault was being saved. Review it and try again.<em style="margin-top:6px">After</em>That name changed while saving. Try again.</div>
+      <div><em>README tagline, before</em>The private crypto portfolio tracker that sees what others miss.<em style="margin-top:6px">After</em>A read-only crypto portfolio for Mac and iPhone. Your data stays on your devices.</div>
+    </div>
+  </section>
+</div>
+</body>
+</html>

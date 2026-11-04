@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Address Atlas views</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0d0e12;color:#eef0f6;font:14px/1.5 Geist,Inter,sans-serif;-webkit-font-smoothing:antialiased}
+.page{max-width:1380px;margin:0 auto;padding:40px 16px 80px}
+h1{font:600 28px Geist;margin:0 0 6px;letter-spacing:-.01em}
+h2{font:600 20px Geist;margin:56px 0 4px}
+.lead{color:#8b90a0;margin:0 0 22px;max-width:820px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:16px}
+.card{background:#15171d;border:1px solid #23262f;border-radius:16px;padding:16px 18px}
+.card h3{margin:0;font:600 15px Geist}
+.card p{margin:2px 0 12px;color:#8b90a0;font-size:12.5px}
+.card svg{display:block;width:100%;height:auto}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 18px}
+.chips span{padding:5px 12px;border-radius:99px;background:#1b1e26;color:#8b90a0;font-size:12.5px;border:1px solid #23262f}
+.chips span.on{background:#eef0f6;color:#0d0e12;border-color:#eef0f6}
+.lab{font-size:11.5px;color:#8b90a0;margin-right:6px;align-self:center}
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:#b6bac6;margin-top:8px}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px}
+.wide{grid-column:span 2}
+@media (max-width:860px){.wide{grid-column:span 1}}
+.coin{display:grid;grid-template-columns:1.1fr 1fr;gap:18px}
+@media (max-width:860px){.coin{grid-template-columns:1fr}}
+.kv{display:grid;grid-template-columns:1fr auto;gap:6px 12px;font-size:13px}
+.kv span:nth-child(even){text-align:right;font-family:"Geist Mono";font-variant-numeric:tabular-nums}
+.mono{font-family:"Geist Mono";font-variant-numeric:tabular-nums}
+.big{font:600 30px Geist;letter-spacing:-.02em}
+.mut{color:#8b90a0}
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Ways to see a portfolio</h1>
+  <p class="lead">Every view is independent of the theme, and every view takes a “group by”. Shown here in the Heatmap theme with one synthetic portfolio. The same views work on a single coin, further down.</p>
+
+  <div class="chips"><span class="lab">View</span><span class="on">Map</span><span>Ring</span><span>Strip</span><span>Grid</span><span>Bubbles</span><span>Rings in rings</span><span>Flow</span><span>List</span><span>Over time</span><span>What changed</span></div>
+  <div class="chips"><span class="lab">Group by</span><span class="on">Asset</span><span>Network</span><span>Wallet or exchange</span><span>State</span><span>Type</span></div>
+
+  <h2>Portfolio views</h2>
+  <p class="lead">Ten ways to show the same $49k.</p>
+  <div class="grid" id="views"></div>
+
+  <h2>One view, five groupings</h2>
+  <p class="lead">The map, regrouped. “State” is liquid, staked, unbonding, rewards, or on an exchange.</p>
+  <div class="grid" id="groups"></div>
+
+  <h2>Coin views</h2>
+  <p class="lead">Open any coin to see where it is and what state it’s in. Same view switcher.</p>
+  <div class="grid" id="coins"></div>
+</div>
+
+<script>
+const C={BTC:'#ffab4a',ETH:'#8fa2ff',SOL:'#c49bff',ATOM:'#7ee0b5',USDC:'#7cc4ff'};
+const P={BTC:67912.86,ETH:3200,SOL:132,ATOM:6.8,USDC:1};
+const rows=[
+ {s:'BTC',net:'Bitcoin',src:'Cold storage',st:'Liquid',type:'Native',amt:0.362},
+ {s:'BTC',net:'Kraken',src:'Kraken',st:'On exchange',type:'Native',amt:0.05},
+ {s:'ETH',net:'Ethereum',src:'Main',st:'Liquid',type:'Native',amt:2.6},
+ {s:'ETH',net:'Base',src:'Main',st:'Liquid',type:'Native',amt:1.0},
+ {s:'ETH',net:'Kraken',src:'Kraken',st:'On exchange',type:'Native',amt:0.5},
+ {s:'SOL',net:'Solana',src:'Phantom',st:'Liquid',type:'Native',amt:12.5},
+ {s:'SOL',net:'Solana',src:'Phantom',st:'Staked',type:'Native',amt:26},
+ {s:'ATOM',net:'Cosmos Hub',src:'Keplr',st:'Liquid',type:'Native',amt:4.2},
+ {s:'ATOM',net:'Cosmos Hub',src:'Keplr',st:'Staked',type:'Native',amt:280},
+ {s:'ATOM',net:'Cosmos Hub',src:'Keplr',st:'Unbonding',type:'Native',amt:24.79},
+ {s:'ATOM',net:'Cosmos Hub',src:'Keplr',st:'Rewards',type:'Native',amt:1.21},
+ {s:'USDC',net:'Kraken',src:'Kraken',st:'On exchange',type:'Stablecoin',amt:920.05},
+];
+rows.forEach(r=>r.v=r.amt*P[r.s]);
+const TOTAL=rows.reduce((a,r)=>a+r.v,0);
+const NETC={Bitcoin:'#ffab4a',Ethereum:'#8fa2ff',Base:'#5b7cff',Solana:'#c49bff','Cosmos Hub':'#7ee0b5',Kraken:'#b9a6ff'};
+const SRCC={'Cold storage':'#ffab4a',Main:'#8fa2ff',Phantom:'#c49bff',Keplr:'#7ee0b5',Kraken:'#f28cc0'};
+const STC={Liquid:'#8fd3a8',Staked:'#5aa9ff',Unbonding:'#ffcc66',Rewards:'#ff9ecf','On exchange':'#b9a6ff'};
+const TYC={Native:'#ffab4a',Stablecoin:'#7cc4ff'};
+const fmt=v=>'$'+Math.round(v).toLocaleString('en-US');
+const fmt2=v=>'$'+v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+const pct=v=>Math.round(v/TOTAL*100)+'%';
+function group(key,colors,list=rows){const m=new Map();list.forEach(r=>{const k=r[key];m.set(k,(m.get(k)||0)+r.v)});return [...m].map(([k,v])=>({k,v,c:colors[k]||'#888'})).sort((a,b)=>b.v-a.v)}
+const byAsset=group('s',C);
+
+function squarify(data,x,y,w,h){const tot=data.reduce((a,d)=>a+d.v,0),sc=w*h/tot;const it=data.map(d=>({...d,a:d.v*sc}));const out=[];let i=0;
+ while(i<it.length){const side=Math.min(w,h);let row=[it[i]],j=i+1;const worst=r=>{const s=r.reduce((a,d)=>a+d.a,0),mx=Math.max(...r.map(d=>d.a)),mn=Math.min(...r.map(d=>d.a));return Math.max(side*side*mx/(s*s),s*s/(side*side*mn))};
+ while(j<it.length&&worst([...row,it[j]])<=worst(row)){row.push(it[j]);j++}const s=row.reduce((a,d)=>a+d.a,0);
+ if(w>=h){const cw=s/h;let yy=y;row.forEach(d=>{const ch=d.a/cw;out.push({...d,x,y:yy,w:cw,h:ch});yy+=ch});x+=cw;w-=cw}
+ else{const ch=s/w;let xx=x;row.forEach(d=>{const cw=d.a/ch;out.push({...d,x:xx,y,w:cw,h:ch});xx+=cw});y+=ch;h-=ch}i=j}return out}
+function tmSVG(data,W=400,H=250,total=TOTAL){return `<svg viewBox="0 0 ${W} ${H}">`+squarify(data,0,0,W,H).map(r=>{const big=r.w>70&&r.h>44;return `<rect x="${r.x+2}" y="${r.y+2}" width="${Math.max(0,r.w-4)}" height="${Math.max(0,r.h-4)}" rx="9" fill="${r.c}"/>`+(r.w>34&&r.h>22?`<text x="${r.x+10}" y="${r.y+19}" font-size="11" fill="#111" opacity=".75">${r.k}${big?' · '+Math.round(r.v/total*100)+'%':''}</text>`:'')+(big?`<text x="${r.x+10}" y="${r.y+r.h-12}" font-size="${r.w>150?18:13}" font-weight="600" fill="#111">${fmt(r.v)}</text>`:'')}).join('')+'</svg>'}
+function arc(cx,cy,r0,r1,a0,a1){const p=(r,a)=>[cx+r*Math.sin(a),cy-r*Math.cos(a)];const L=a1-a0>Math.PI?1:0;const[a,b]=p(r1,a0),[c,d]=p(r1,a1),[e,f]=p(r0,a1),[g,h]=p(r0,a0);return `M${a} ${b}A${r1} ${r1} 0 ${L} 1 ${c} ${d}L${e} ${f}A${r0} ${r0} 0 ${L} 0 ${g} ${h}Z`}
+function ring(data,cx,cy,r0,r1,gap=.012,total){total=total||data.reduce((a,d)=>a+d.v,0);let a=0;return data.map(d=>{const s=d.v/total*Math.PI*2;const p=`<path d="${arc(cx,cy,r0,r1,a+gap,a+s-gap)}" fill="${d.c}"/>`;a+=s;return p}).join('')}
+function legend(data,total){total=total||data.reduce((a,d)=>a+d.v,0);return `<div class="legend">${data.map(d=>`<span><i style="background:${d.c}"></i>${d.k} ${Math.round(d.v/total*100)}%</span>`).join('')}</div>`}
+function card(t,p,body,cls=''){return `<div class="card ${cls}"><h3>${t}</h3><p>${p}</p>${body}</div>`}
+
+const V=[];
+V.push(card('Map','Area is value. Best at a glance; the one you picked.',tmSVG(byAsset)));
+V.push(card('Ring','Classic share of whole, total in the middle.',`<svg viewBox="0 0 400 250">${ring(byAsset,200,125,70,112)}<text x="200" y="122" text-anchor="middle" font-size="22" font-weight="600" fill="#eef0f6">${fmt(TOTAL)}</text><text x="200" y="142" text-anchor="middle" font-size="11" fill="#8b90a0">5 assets</text></svg>`));
+(()=>{let x=0;const W=400;const bars=byAsset.map(d=>{const w=d.v/TOTAL*W;const s=`<rect x="${x+1}" y="40" width="${Math.max(0,w-2)}" height="54" rx="6" fill="${d.c}"/>`+(w>40?`<text x="${x+8}" y="114" font-size="11" fill="#b6bac6">${d.k}</text><text x="${x+8}" y="130" font-size="12" font-weight="600" fill="#eef0f6">${pct(d.v)}</text>`:'');x+=w;return s}).join('');
+ let x2=0;const thin=byAsset.map(d=>{const w=d.v/TOTAL*W;const s=`<rect x="${x2}" y="190" width="${w}" height="10" fill="${d.c}"/>`;x2+=w;return s}).join('');
+ V.push(card('Strip','One bar, 100% wide. Fits anywhere, even a menu bar.',`<svg viewBox="0 0 400 250">${bars}<text x="0" y="176" font-size="11" fill="#8b90a0">Compact version</text>${thin}</svg>`))})();
+(()=>{const cells=100;let alloc=byAsset.map(d=>({...d,n:Math.floor(d.v/TOTAL*cells),r:(d.v/TOTAL*cells)%1}));let left=cells-alloc.reduce((a,d)=>a+d.n,0);[...alloc].sort((a,b)=>b.r-a.r).slice(0,left).forEach(d=>d.n++);let seq=[];alloc.forEach(d=>{for(let i=0;i<d.n;i++)seq.push(d.c)});
+ let s='';seq.forEach((c,i)=>{const col=i%10,row=Math.floor(i/10);s+=`<rect x="${100+col*20}" y="${12+row*22.6}" width="17" height="19.6" rx="4" fill="${c}"/>`});
+ V.push(card('Grid','100 squares, one per percent. Easy to count.',`<svg viewBox="0 0 400 250">${s}</svg>`))})();
+(()=>{const mx=Math.sqrt(byAsset[0].v);const R=d=>Math.sqrt(d.v)/mx*92;const pos=[[130,128],[278,92],[298,192],[226,198],[350,140]];
+ V.push(card('Bubbles','Circle size is value. Softer, more playful.',`<svg viewBox="0 0 400 250">${byAsset.map((d,i)=>`<circle cx="${pos[i][0]}" cy="${pos[i][1]}" r="${R(d)}" fill="${d.c}"/><text x="${pos[i][0]}" y="${pos[i][1]+4}" text-anchor="middle" font-size="${R(d)>30?13:10}" font-weight="600" fill="#111">${d.k}</text>`).join('')}</svg>`))})();
+(()=>{let s='';let a=0;byAsset.forEach(d=>{const span=d.v/TOTAL*Math.PI*2;s+=`<path d="${arc(200,125,46,80,a+.01,a+span-.01)}" fill="${d.c}"/>`;const subs=rows.filter(r=>r.s===d.k);let b=a;const key=subs.some(r=>r.st!=='Liquid'&&r.st!=='On exchange')?'st':'net';subs.forEach((r,i)=>{const sp=r.v/TOTAL*Math.PI*2;s+=`<path d="${arc(200,125,84,116,b+.01,b+sp-.01)}" fill="${d.c}" opacity="${1-i*.22}"/>`;b+=sp});a+=span});
+ V.push(card('Rings in rings','Inner ring is the coin, outer ring splits it: networks, or staked and liquid.',`<svg viewBox="0 0 400 250">${s}<text x="200" y="129" text-anchor="middle" font-size="13" font-weight="600" fill="#eef0f6">${fmt(TOTAL)}</text></svg>`))})();
+function sankey(cols,links,W,H,colorOf){const pad=14,nw=10;const val={};links.forEach(l=>{val[l.a]=(val[l.a]||0);val[l.b]=(val[l.b]||0)});const outv={},inv={};links.forEach(l=>{outv[l.a]=(outv[l.a]||0)+l.v;inv[l.b]=(inv[l.b]||0)+l.v});
+ const nodes={};const k=Math.min(...cols.map(c=>(H-pad*(c.length-1))/c.reduce((a,n)=>a+Math.max(outv[n]||0,inv[n]||0),0)));
+ cols.forEach((c,ci)=>{let y=0;const x=ci*(W-nw)/(cols.length-1);c.forEach(n=>{const h=Math.max(outv[n]||0,inv[n]||0)*k;nodes[n]={x,y,h,oo:0,io:0};y+=h+pad})});
+ let s='';links.forEach(l=>{const A=nodes[l.a],B=nodes[l.b];const h=l.v*k;const y0=A.y+A.oo,y1=B.y+B.io;A.oo+=h;B.io+=h;const x0=A.x+nw,x1=B.x,mx=(x0+x1)/2;s+=`<path d="M${x0} ${y0}C${mx} ${y0} ${mx} ${y1} ${x1} ${y1}L${x1} ${y1+h}C${mx} ${y1+h} ${mx} ${y0+h} ${x0} ${y0+h}Z" fill="${colorOf(l)}" opacity=".55"/>`});
+ Object.entries(nodes).forEach(([n,N])=>{s+=`<rect x="${N.x}" y="${N.y}" width="${nw}" height="${Math.max(2,N.h)}" rx="2" fill="#eef0f6"/>`;const right=N.x>W/2;s+=`<text x="${right?N.x-4:N.x+nw+4}" y="${N.y+N.h/2+4}" font-size="10.5" fill="#cfd3dd" text-anchor="${right?'end':'start'}">${n}</text>`});return s}
+(()=>{const L=[];const add=(a,b,v,c)=>{const e=L.find(l=>l.a===a&&l.b===b);if(e)e.v+=v;else L.push({a,b,v,c})};rows.forEach(r=>{add(r.src,r.s,r.v,C[r.s]);add(r.s,r.st,r.v,C[r.s])});
+ const cols=[['Cold storage','Main','Kraken','Phantom','Keplr'],['BTC','ETH','SOL','ATOM','USDC'],['Liquid','On exchange','Staked','Unbonding','Rewards']];
+ V.push(card('Flow','Where it sits, what it is, what state it’s in. Wallets on the left, coins in the middle, state on the right.',`<svg viewBox="0 0 400 320">${sankey(cols,L,400,320,l=>l.c)}</svg>`))})();
+V.push(card('List','The table, with a share bar per row. Most detail per pixel.',`<svg viewBox="0 0 400 250">${byAsset.map((d,i)=>{const y=22+i*44;return `<circle cx="14" cy="${y}" r="11" fill="${d.c}"/><text x="34" y="${y+4}" font-size="13" fill="#eef0f6">${d.k}</text><rect x="110" y="${y-3}" width="150" height="6" rx="3" fill="#23262f"/><rect x="110" y="${y-3}" width="${150*d.v/byAsset[0].v}" height="6" rx="3" fill="${d.c}"/><text x="272" y="${y+4}" font-size="11" fill="#8b90a0">${pct(d.v)}</text><text x="400" y="${y+4}" font-size="13" text-anchor="end" fill="#eef0f6" class="mono">${fmt2(d.v)}</text>`}).join('')}</svg>`));
+(()=>{const n=12;const series=byAsset.map((d,i)=>({...d,pts:Array.from({length:n},(_,t)=>d.v*(0.72+0.28*t/(n-1))*(1+0.07*Math.sin(t*1.3+i)))}));const tot=Array.from({length:n},(_,t)=>series.reduce((a,s)=>a+s.pts[t],0));const mx=Math.max(...tot)*1.05;const W=400,H=220,X=t=>t/(n-1)*W,Y=v=>H-v/mx*H+10;
+ let base=Array(n).fill(0);let s='';[...series].reverse().forEach(se=>{const top=base.map((b,t)=>b+se.pts[t]);s+=`<path d="M${top.map((v,t)=>X(t)+' '+Y(v)).join('L')}L${[...base].reverse().map((v,i)=>X(n-1-i)+' '+Y(v)).join('L')}Z" fill="${se.c}" opacity=".9"/>`;base=top});
+ V.push(card('Over time','Stacked by coin across your saved snapshots. Shows whether growth came from one coin or many.',`<svg viewBox="0 0 400 250">${s}<text x="0" y="246" font-size="10.5" fill="#8b90a0">22 Oct</text><text x="400" y="246" font-size="10.5" fill="#8b90a0" text-anchor="end">4 Nov</text></svg>`))})();
+(()=>{const steps=[['3 Nov',48007,'t'],['BTC',+820],['ETH',+410],['SOL',-46],['ATOM',+20],['4 Nov',0,'t']];let run=0;const vals=[];steps.forEach(([k,d,t])=>{if(t){if(k==='3 Nov'){run=d;vals.push({k,a:0,b:run,c:'#5d6274'})}else vals.push({k,a:0,b:run,c:'#eef0f6'})}else{vals.push({k,a:run,b:run+d,c:d>=0?'#4ade80':'#ff6b6b',d});run+=d}});
+ const lo=47700,hi=49400,H=200,Y=v=>H-(Math.max(v,lo)-lo)/(hi-lo)*H+20;const bw=50,gap=17;
+ const s=vals.map((v,i)=>{const x=10+i*(bw+gap);const y0=Y(Math.max(v.a,v.b)),y1=Y(Math.min(v.a,v.b));return `<rect x="${x}" y="${y0}" width="${bw}" height="${Math.max(2,y1-y0)}" rx="4" fill="${v.c}"/><text x="${x+bw/2}" y="244" font-size="10.5" text-anchor="middle" fill="#8b90a0">${v.k}</text><text x="${x+bw/2}" y="${y0-5}" font-size="10.5" text-anchor="middle" fill="#cfd3dd">${v.d!==undefined?(v.d>0?'+':'−')+'$'+Math.abs(v.d):fmt(v.b)}</text>`}).join('');
+ V.push(card('What changed','Since the last scan, coin by coin. Green added value, red took it away.',`<svg viewBox="0 0 400 250">${s}</svg>`))})();
+document.getElementById('views').innerHTML=V.join('');
+
+const G=[['Asset',group('s',C)],['Network',group('net',NETC)],['Wallet or exchange',group('src',SRCC)],['State',group('st',STC)],['Type',group('type',TYC)]];
+document.getElementById('groups').innerHTML=G.map(([t,d])=>card('Group by '+t.toLowerCase(),d.map(x=>x.k).slice(0,5).join(', '),tmSVG(d,400,200)+legend(d))).join('');
+
+const atom=rows.filter(r=>r.s==='ATOM');const atomT=atom.reduce((a,r)=>a+r.v,0);
+const atomSt=atom.map(r=>({k:r.st,v:r.v,amt:r.amt,c:STC[r.st]})).sort((a,b)=>b.v-a.v);
+const eth=rows.filter(r=>r.s==='ETH');const ethT=eth.reduce((a,r)=>a+r.v,0);
+const ethLoc=eth.map(r=>({k:r.net+(r.src!==r.net?' · '+r.src:''),v:r.v,amt:r.amt,c:NETC[r.net]}));
+const sol=rows.filter(r=>r.s==='SOL');
+const CO=[];
+(()=>{let x=0;const strip=atomSt.map(d=>{const w=d.v/atomT*400;const s=`<rect x="${x+1}" y="0" width="${Math.max(1,w-2)}" height="30" rx="5" fill="${d.c}"/>`;x+=w;return s}).join('');
+ const tl=`<line x1="20" y1="70" x2="380" y2="70" stroke="#2c303b" stroke-width="2"/><circle cx="20" cy="70" r="5" fill="#ffcc66"/><text x="20" y="92" font-size="11" fill="#8b90a0">Unbonding started 26 Oct</text><circle cx="380" cy="70" r="5" fill="none" stroke="#ffcc66" stroke-width="2"/><text x="380" y="92" font-size="11" fill="#8b90a0" text-anchor="end">24.79 ATOM free on 16 Nov</text><line x1="20" y1="70" x2="${20+360*9/21}" y2="70" stroke="#ffcc66" stroke-width="2"/><text x="${20+360*9/21}" y="60" font-size="11" fill="#ffcc66" text-anchor="middle">today</text>`;
+ CO.push(card('Cosmos · state','310.2 ATOM, split by what it can do right now.',`<div class="big mono">${fmt2(atomT)}</div><div class="mut mono" style="margin-bottom:12px">310.2 ATOM · $6.80</div><svg viewBox="0 0 400 100">${strip.replace(/y="0"/g,'y="0"')}</svg><div class="kv" style="margin:6px 0 10px">${atomSt.map(d=>`<span><i style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${d.c};margin-right:8px"></i>${d.k}</span><span>${d.amt} ATOM · ${fmt2(d.v)}</span>`).join('')}</div><svg viewBox="0 0 400 100">${tl}</svg>`))})();
+CO.push(card('Cosmos · state as a ring','Same split, ring view. Staked share in the middle.',`<svg viewBox="0 0 400 250">${ring(atomSt,200,125,70,112,.015)}<text x="200" y="122" text-anchor="middle" font-size="22" font-weight="600" fill="#eef0f6">90%</text><text x="200" y="142" text-anchor="middle" font-size="11" fill="#8b90a0">staked</text></svg>${legend(atomSt)}`));
+(()=>{const n=12;const staked=Array.from({length:n},(_,t)=>t<8?304.79:280);const unb=Array.from({length:n},(_,t)=>t<8?0:24.79);const rew=Array.from({length:n},(_,t)=>0.2+t*0.1);const liq=Array.from({length:n},()=>4.2);
+ const mx=330,W=400,H=200,X=t=>t/(n-1)*W,Y=v=>H-v/mx*H+10;let base=Array(n).fill(0);let s='';[[liq,STC.Liquid],[staked,STC.Staked],[unb,STC.Unbonding],[rew,STC.Rewards]].forEach(([se,c])=>{const top=base.map((b,t)=>b+se[t]);s+=`<path d="M${top.map((v,t)=>X(t)+' '+Y(v)).join('L')}L${[...base].reverse().map((v,i)=>X(n-1-i)+' '+Y(v)).join('L')}Z" fill="${c}"/>`;base=top});
+ CO.push(card('Cosmos · amount over time','Coins, not dollars, so price moves don’t hide what you did. You can see the unstake on 26 Oct.',`<svg viewBox="0 0 400 250">${s}<line x1="${X(7.5)}" y1="10" x2="${X(7.5)}" y2="215" stroke="#eef0f6" stroke-dasharray="3 3" opacity=".6"/><text x="${X(7.5)+5}" y="24" font-size="10.5" fill="#eef0f6">Unstaked 24.79</text><text x="0" y="246" font-size="10.5" fill="#8b90a0">22 Oct</text><text x="400" y="246" font-size="10.5" fill="#8b90a0" text-anchor="end">4 Nov</text></svg>`))})();
+CO.push(card('Ether · where it is','4.10 ETH across two networks and an exchange.',`<div class="big mono">${fmt2(ethT)}</div><div class="mut mono" style="margin-bottom:12px">4.10 ETH · $3,200.00</div>${tmSVG(ethLoc,400,170,ethT)}<div class="kv" style="margin-top:8px">${ethLoc.map(d=>`<span>${d.k}</span><span>${d.amt} ETH</span>`).join('')}</div>`));
+(()=>{const priceEff=380,amtEff=30;const s=`<text x="0" y="20" font-size="12" fill="#8b90a0">Ether changed +$410 since 3 Nov</text>
+<rect x="0" y="40" width="${380/410*380}" height="34" rx="6" fill="#8fa2ff"/><text x="10" y="62" font-size="12" font-weight="600" fill="#111">Price +$380</text>
+<rect x="${380/410*380+4}" y="40" width="${30/410*380}" height="34" rx="6" fill="#4ade80"/><text x="400" y="92" font-size="12" fill="#4ade80" text-anchor="end">Amount +$30</text>
+<text x="0" y="118" font-size="12" fill="#cfd3dd">Price went from $3,107 to $3,200.</text><text x="0" y="138" font-size="12" fill="#cfd3dd">You also received 0.0094 ETH on Base.</text>`;
+ CO.push(card('Ether · why it changed','Splits a change into price moves and coins moving in or out.',`<svg viewBox="0 0 400 150">${s}</svg>`))})();
+(()=>{const L=[];sol.forEach(r=>L.push({a:'Phantom',b:r.st,v:r.v,c:STC[r.st]}));rows.filter(r=>r.s==='BTC').forEach(r=>L.push({a:r.src,b:'BTC '+(r.st==='Liquid'?'self-custody':'on exchange'),v:r.v,c:r.st==='Liquid'?'#ffab4a':'#b9a6ff'}));
+ const btcSelf=rows.filter(r=>r.s==='BTC'&&r.st==='Liquid').reduce((a,r)=>a+r.v,0),btcT=rows.filter(r=>r.s==='BTC').reduce((a,r)=>a+r.v,0);
+ CO.push(card('Bitcoin · self-custody share','How much of a coin you hold yourself versus on exchanges.',`<div class="big mono">88%</div><div class="mut" style="margin-bottom:14px">0.362 of 0.412 BTC is in your own wallets</div><svg viewBox="0 0 400 60"><rect x="0" y="0" width="${btcSelf/btcT*400-2}" height="30" rx="6" fill="#ffab4a"/><rect x="${btcSelf/btcT*400+2}" y="0" width="${400-btcSelf/btcT*400-2}" height="30" rx="6" fill="#b9a6ff"/><text x="0" y="50" font-size="11" fill="#8b90a0">Cold storage · 0.362</text><text x="400" y="50" font-size="11" fill="#8b90a0" text-anchor="end">Kraken · 0.05</text></svg>`))})();
+document.getElementById('coins').innerHTML=CO.join('');
+</script>
+</body>
+</html>
