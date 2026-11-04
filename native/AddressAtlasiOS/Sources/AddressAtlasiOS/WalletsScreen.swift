@@ -41,7 +41,7 @@ struct WalletsScreen: View {
           }
         } footer: {
           Text("Watch-only · encrypted on this device")
-            .font(.footnote)
+            .font(AtlasTheme.font(.body, .footnote))
             .foregroundStyle(AtlasTheme.ink3)
         }
       }
@@ -53,18 +53,6 @@ struct WalletsScreen: View {
       AtlasMotion.animation(AtlasMotion.standard, reduceMotion: reduceMotion),
       value: wallets.map(\.id)
     )
-    .navigationTitle("Wallets")
-    .navigationBarTitleDisplayMode(.large)
-    .toolbarBackground(AtlasTheme.canvas, for: .navigationBar)
-    .toolbar {
-      ToolbarItem(placement: .primaryAction) {
-        Button(action: openAddSheet) {
-          Image(systemName: "plus")
-        }
-        .accessibilityLabel("Add wallet")
-        .accessibilityHint("Opens a form to paste one or more public addresses.")
-      }
-    }
     .sheet(isPresented: $showsAddSheet) {
       AddWalletSheet()
     }
@@ -284,13 +272,13 @@ private struct WalletRowLabel: View {
       }
       VStack(alignment: .leading, spacing: 3) {
         Text(name)
-          .font(.body.weight(.semibold))
+          .font(AtlasTheme.font(.body, .body, weight: .semibold))
           .foregroundStyle(AtlasTheme.ink)
           .lineLimit(dynamicTypeSize.isAccessibilitySize ? 4 : 1)
         // A short address never breaks across lines; it shrinks a little
         // instead at the largest text sizes.
         Text(WalletPresentation.shortAddress(wallet.address))
-          .font(.subheadline)
+          .font(AtlasTheme.font(.body, .subheadline))
           .foregroundStyle(AtlasTheme.ink3)
           .lineLimit(1)
           .minimumScaleFactor(0.6)
@@ -304,7 +292,7 @@ private struct WalletRowLabel: View {
           .fixedSize()
       }
       Image(systemName: "chevron.right")
-        .font(.footnote.weight(.semibold))
+        .font(AtlasTheme.font(.body, .footnote, weight: .semibold))
         .foregroundStyle(AtlasTheme.ink3)
         .accessibilityHidden(true)
     }
@@ -424,7 +412,7 @@ private struct AddWalletSheet: View {
         .accessibilityHint("Paste one address, or several separated by new lines or commas.")
 
         detectionLine
-          .font(.footnote)
+          .font(AtlasTheme.font(.body, .footnote))
           .fixedSize(horizontal: false, vertical: true)
 
         let chips = WalletPresentation.networkChips(for: newAddresses)
@@ -468,7 +456,7 @@ private struct AddWalletSheet: View {
 
         if isBusyElsewhere {
           Text("Available when the current scan or sync finishes.")
-            .font(.footnote)
+            .font(AtlasTheme.font(.body, .footnote))
             .foregroundStyle(AtlasTheme.ink3)
         }
       }
@@ -477,7 +465,7 @@ private struct AddWalletSheet: View {
         "Watch-only. Address Atlas can't sign or move funds.",
         systemImage: "eye"
       )
-      .font(.footnote)
+      .font(AtlasTheme.font(.body, .footnote))
       .foregroundStyle(AtlasTheme.ink3)
 
       LearnMoreDisclosure("Supported networks", systemImage: "network") {
@@ -735,23 +723,23 @@ private struct WalletDetailSheet: View {
       VStack(spacing: 8) {
         WalletNetworkMonogram(info: info, size: 60)
         Text(name)
-          .font(.title2.weight(.semibold))
+          .font(AtlasTheme.font(.display, .title2))
           .multilineTextAlignment(.center)
           .lineLimit(3)
         if let value {
           Text(money(value.total))
-            .font(.title3.weight(.semibold))
+            .font(AtlasTheme.font(.display, .title3))
             .monospacedDigit()
             .foregroundStyle(AtlasTheme.ink)
           Text(
             value.assets == 1
               ? "1 asset · latest scan" : "\(value.assets) assets · latest scan"
           )
-          .font(.footnote)
+          .font(AtlasTheme.font(.body, .footnote))
           .foregroundStyle(AtlasTheme.ink3)
         } else {
           Text("Not in a scan yet")
-            .font(.footnote)
+            .font(AtlasTheme.font(.body, .footnote))
             .foregroundStyle(AtlasTheme.ink3)
         }
         Badge(info.badge, color: AtlasTheme.accent)
@@ -766,7 +754,7 @@ private struct WalletDetailSheet: View {
           Spacer(minLength: 8)
           if draftLength > Self.nameLimit - 15 {
             Text("\(draftLength)/\(Self.nameLimit)")
-              .font(.caption.monospacedDigit())
+              .font(AtlasTheme.font(.number, .caption))
               .foregroundStyle(nameIsTooLong ? AtlasTheme.loss : AtlasTheme.ink3)
               .accessibilityLabel("\(draftLength) of \(Self.nameLimit) characters")
           }
@@ -795,7 +783,7 @@ private struct WalletDetailSheet: View {
             "Names can be up to \(Self.nameLimit) characters.",
             systemImage: "exclamationmark.circle.fill"
           )
-          .font(.footnote)
+          .font(AtlasTheme.font(.body, .footnote))
           .foregroundStyle(AtlasTheme.loss)
         }
         IOSInlineError()
@@ -804,7 +792,7 @@ private struct WalletDetailSheet: View {
       VStack(alignment: .leading, spacing: 8) {
         FieldLabel("Address")
         Text(wallet.address)
-          .font(.callout.monospaced())
+          .font(AtlasTheme.font(.mono, .callout))
           .foregroundStyle(AtlasTheme.ink)
           .textSelection(.enabled)
           .fixedSize(horizontal: false, vertical: true)
@@ -839,7 +827,7 @@ private struct WalletDetailSheet: View {
         FieldLabel(info.isRetired ? "Network" : "Networks scanned")
         if info.isRetired {
           Text("\(info.badge) is no longer scanned. Remove this wallet if you no longer need it.")
-            .font(.callout)
+            .font(AtlasTheme.font(.body, .callout))
             .foregroundStyle(AtlasTheme.warning)
             .fixedSize(horizontal: false, vertical: true)
         } else {
@@ -984,12 +972,12 @@ struct SourcesEmptyState: View {
         .accessibilityHidden(true)
       VStack(spacing: 6) {
         Text(title)
-          .font(.title3.weight(.semibold))
+          .font(AtlasTheme.font(.display, .title3))
           .foregroundStyle(AtlasTheme.ink)
           .fixedSize(horizontal: false, vertical: true)
           .accessibilityAddTraits(.isHeader)
         Text(copy)
-          .font(.callout)
+          .font(AtlasTheme.font(.body, .callout))
           .foregroundStyle(AtlasTheme.ink3)
           .fixedSize(horizontal: false, vertical: true)
       }

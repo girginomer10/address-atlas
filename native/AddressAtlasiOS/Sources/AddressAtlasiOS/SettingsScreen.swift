@@ -182,7 +182,7 @@ struct SettingsScreen: View {
             }
           }
       }
-      .font(.body.monospacedDigit())
+      .font(AtlasTheme.font(.number, .body))
       .padding(.horizontal, 10)
       .frame(minHeight: 36)
       .background(AtlasTheme.surfaceMuted.opacity(0.6))
@@ -207,7 +207,7 @@ struct SettingsScreen: View {
 
       if let dustThresholdError {
         Label(dustThresholdError, systemImage: "exclamationmark.circle.fill")
-          .font(.footnote)
+          .font(AtlasTheme.font(.body, .footnote))
           .foregroundStyle(AtlasTheme.loss)
           .fixedSize(horizontal: false, vertical: true)
           .padding(.horizontal, 14)
@@ -270,7 +270,7 @@ struct SettingsScreen: View {
           tint: AtlasTheme.accent
         ) {
           Image(systemName: "chevron.down")
-            .font(.footnote.weight(.semibold))
+            .font(AtlasTheme.font(.body, .footnote, weight: .semibold))
             .foregroundStyle(AtlasTheme.ink3)
             .rotationEffect(.degrees(isRestoreFormExpanded ? 180 : 0))
         }
@@ -312,7 +312,7 @@ struct SettingsScreen: View {
           revealsRestoreCode.toggle()
         } label: {
           Image(systemName: revealsRestoreCode ? "eye.slash" : "eye")
-            .font(.callout)
+            .font(AtlasTheme.font(.body, .callout))
             .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
             .foregroundStyle(AtlasTheme.ink3)
             .frame(width: 44, height: 44)
@@ -371,12 +371,12 @@ struct SettingsScreen: View {
       Label {
         VStack(alignment: .leading, spacing: 4) {
           Text("Encryption key restored")
-            .font(.callout.weight(.semibold))
+            .font(AtlasTheme.font(.body, .callout, weight: .semibold))
             .foregroundStyle(AtlasTheme.ink)
           Text(
             "This device can open its saved portfolio with the kit's key. To bring in a portfolio saved from another device, restore its iCloud copy."
           )
-          .font(.footnote)
+          .font(AtlasTheme.font(.body, .footnote))
           .foregroundStyle(AtlasTheme.ink2)
           .fixedSize(horizontal: false, vertical: true)
         }
@@ -387,7 +387,7 @@ struct SettingsScreen: View {
       .accessibilityElement(children: .combine)
       Button {
         restoreSucceeded = false
-        navigation.open(.iCloud)
+        navigation.openICloud()
       } label: {
         Label("Open iCloud", systemImage: "icloud")
           .settingsControlLabel()
@@ -414,7 +414,7 @@ struct SettingsScreen: View {
           Image(systemName: "checkmark.circle.fill")
             .foregroundStyle(AtlasTheme.gain)
         }
-        .font(.footnote.weight(.medium))
+        .font(AtlasTheme.font(.body, .footnote, weight: .medium))
         .foregroundStyle(AtlasTheme.ink2)
       }
       Label {
@@ -423,12 +423,12 @@ struct SettingsScreen: View {
         Image(systemName: "exclamationmark.triangle.fill")
           .foregroundStyle(AtlasTheme.warning)
       }
-      .font(.footnote.weight(.medium))
+      .font(AtlasTheme.font(.body, .footnote, weight: .medium))
       .foregroundStyle(AtlasTheme.ink2)
       .fixedSize(horizontal: false, vertical: true)
 
       Text(revealedRecoveryCode)
-        .font(.callout.monospaced())
+        .font(AtlasTheme.font(.mono, .callout))
         .foregroundStyle(AtlasTheme.ink)
         .privacySensitive()
         .padding(14)
@@ -601,11 +601,11 @@ struct SettingsScreen: View {
         .foregroundStyle(AtlasTheme.accent)
         Spacer(minLength: 8)
         Image(systemName: "arrow.up.right")
-          .font(.footnote.weight(.semibold))
+          .font(AtlasTheme.font(.body, .footnote, weight: .semibold))
           .foregroundStyle(AtlasTheme.ink3)
           .accessibilityHidden(true)
       }
-      .font(.body)
+      .font(AtlasTheme.font(.body, .body))
       .padding(.horizontal, 14)
       .frame(minHeight: 48)
       .contentShape(Rectangle())
@@ -619,7 +619,7 @@ struct SettingsScreen: View {
     Text(
       "Address Atlas is read-only analytics. It never stores private keys, signs transactions, trades, or gives investment advice."
     )
-    .font(.footnote)
+    .font(AtlasTheme.font(.body, .footnote))
     .foregroundStyle(AtlasTheme.ink3)
     .multilineTextAlignment(.center)
     .frame(maxWidth: .infinity)
@@ -887,7 +887,7 @@ private struct SettingsIcon: View {
 
   private var tile: some View {
     Image(systemName: systemImage)
-      .font(.subheadline.weight(.semibold))
+      .font(AtlasTheme.font(.body, .subheadline, weight: .semibold))
       .foregroundStyle(tint)
       .frame(width: 30, height: 30)
       .background(tint.opacity(0.12))
@@ -901,7 +901,7 @@ private struct SettingsChevron: View {
 
   var body: some View {
     Image(systemName: systemImage)
-      .font(.footnote.weight(.semibold))
+      .font(AtlasTheme.font(.body, .footnote, weight: .semibold))
       .foregroundStyle(AtlasTheme.ink3)
       .accessibilityHidden(true)
   }
@@ -935,11 +935,11 @@ private struct SettingsRowLabel<Trailing: View>: View {
       SettingsIcon(systemImage: systemImage, tint: isEnabled ? tint : AtlasTheme.ink3)
       VStack(alignment: .leading, spacing: 2) {
         Text(title)
-          .font(.body)
+          .font(AtlasTheme.font(.body, .body))
           .foregroundStyle(isEnabled ? AtlasTheme.ink : AtlasTheme.ink3)
         if let subtitle {
           Text(subtitle)
-            .font(.footnote)
+            .font(AtlasTheme.font(.body, .footnote))
             .foregroundStyle(AtlasTheme.ink3)
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -967,7 +967,7 @@ private struct SettingsToggleRow: View {
       HStack(spacing: 12) {
         SettingsIcon(systemImage: systemImage, tint: tint)
         Text(title)
-          .font(.body)
+          .font(AtlasTheme.font(.body, .body))
           .foregroundStyle(AtlasTheme.ink)
       }
     }
@@ -1024,7 +1024,7 @@ private struct SettingsValueRow<Accessory: View>: View {
       }
       .frame(maxWidth: .infinity, alignment: .leading)
     }
-    .font(.body)
+    .font(AtlasTheme.font(.body, .body))
     .padding(.horizontal, 14)
     .padding(.vertical, 8)
     .frame(minHeight: 48)

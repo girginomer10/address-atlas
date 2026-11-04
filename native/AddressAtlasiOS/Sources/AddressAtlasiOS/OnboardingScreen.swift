@@ -43,7 +43,7 @@ struct OnboardingScreen: View {
       // does the same, so VoiceOver never reaches an invisible button.
       if !isLastPage {
         Button("Skip") { onFinish(nil) }
-          .font(.body.weight(.medium))
+          .font(AtlasTheme.font(.body, .body, weight: .medium))
           .foregroundStyle(AtlasTheme.ink2)
           .frame(minWidth: 44, minHeight: 44)
           .padding(.horizontal, 8)
@@ -67,7 +67,7 @@ struct OnboardingScreen: View {
             onFinish(nil)
           } label: {
             Text("Explore first")
-              .font(.body.weight(.medium))
+              .font(AtlasTheme.font(.body, .body, weight: .medium))
               .foregroundStyle(AtlasTheme.ink2)
               .frame(maxWidth: .infinity, minHeight: 50)
               .contentShape(Rectangle())
@@ -82,7 +82,7 @@ struct OnboardingScreen: View {
             }
           } label: {
             Text("Continue")
-              .font(.body.weight(.semibold))
+              .font(AtlasTheme.font(.body, .body, weight: .semibold))
               .frame(maxWidth: .infinity, minHeight: 50)
           }
           .buttonStyle(OnboardingPrimaryButtonStyle())
@@ -130,7 +130,7 @@ private struct OnboardingPageScaffold<Hero: View, Content: View>: View {
               .accessibilityAddTraits(.isHeader)
             if let message {
               Text(message)
-                .font(.title3)
+                .font(AtlasTheme.font(.display, .title3))
                 .foregroundStyle(AtlasTheme.ink2)
                 .multilineTextAlignment(.center)
                 .lineSpacing(2)
@@ -257,7 +257,7 @@ private struct OnboardingChoiceCard: View {
         // At accessibility sizes the words need the whole width.
         if !dynamicTypeSize.isAccessibilitySize {
           Image(systemName: systemImage)
-            .font(.title3.weight(.semibold))
+            .font(AtlasTheme.font(.display, .title3))
             .foregroundStyle(isPrimary ? AtlasTheme.paper : AtlasTheme.accent)
             .frame(width: 46, height: 46)
             .background(
@@ -268,10 +268,10 @@ private struct OnboardingChoiceCard: View {
         }
         VStack(alignment: .leading, spacing: 3) {
           Text(title)
-            .font(.body.weight(.semibold))
+            .font(AtlasTheme.font(.body, .body, weight: .semibold))
             .foregroundStyle(isPrimary ? AtlasTheme.paper : AtlasTheme.ink)
           Text(detail)
-            .font(.subheadline)
+            .font(AtlasTheme.font(.body, .subheadline))
             .foregroundStyle(isPrimary ? AtlasTheme.paper.opacity(0.82) : AtlasTheme.ink3)
             .fixedSize(horizontal: false, vertical: true)
         }
@@ -279,7 +279,7 @@ private struct OnboardingChoiceCard: View {
         Spacer(minLength: 8)
         if !dynamicTypeSize.isAccessibilitySize {
           Image(systemName: "chevron.right")
-            .font(.footnote.weight(.bold))
+            .font(AtlasTheme.font(.body, .footnote, weight: .bold))
             .foregroundStyle(isPrimary ? AtlasTheme.paper.opacity(0.8) : AtlasTheme.ink3)
             .accessibilityHidden(true)
         }

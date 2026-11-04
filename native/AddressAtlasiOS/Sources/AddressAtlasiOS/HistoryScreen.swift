@@ -6,7 +6,7 @@ import SwiftUI
 /// snapshot, and any partial-scan warnings; tapping opens the snapshot with
 /// its top holdings. Removal (swipe, context menu, or the detail sheet)
 /// always asks first and goes through `AppState.removeScanRun(id:)`.
-struct SnapshotsScreen: View {
+struct HistoryScreen: View {
   @EnvironmentObject private var state: AppState
   @EnvironmentObject private var navigation: IOSNavigationModel
   @State private var selectedRunID: UUID?
@@ -171,7 +171,7 @@ struct SnapshotsScreen: View {
       }
       Text("Keeps the latest \(AppState.maximumStoredScanRuns) snapshots on this device.")
     }
-    .font(.footnote)
+    .font(AtlasTheme.font(.body, .footnote))
     .foregroundStyle(AtlasTheme.ink3)
     .textCase(nil)
     .padding(.top, 4)
@@ -198,7 +198,7 @@ struct SnapshotsScreen: View {
         title: "No snapshots yet",
         copy: "Add a wallet, then scan. Every scan saves a snapshot here.",
         actionTitle: "Add a wallet",
-        action: { navigation.open(.wallets, then: .addWallet) })
+        action: { navigation.open(.sources, then: .addWallet) })
     }
   }
 }
@@ -321,7 +321,7 @@ private struct SnapshotRowView: View {
 
   private var dateText: some View {
     Text(AtlasFormatting.dateTime(run.generatedAt))
-      .font(.body.weight(.semibold))
+      .font(AtlasTheme.font(.body, .body, weight: .semibold))
       .foregroundStyle(AtlasTheme.ink)
   }
 
@@ -331,7 +331,7 @@ private struct SnapshotRowView: View {
         "\(SnapshotFormatting.relative(run.generatedAt, now: context.date)) · \(SnapshotFormatting.assetCount(run))"
       )
     }
-    .font(.subheadline)
+    .font(AtlasTheme.font(.body, .subheadline))
     .foregroundStyle(AtlasTheme.ink3)
   }
 
@@ -362,7 +362,7 @@ private struct SnapshotRowView: View {
 
   private var totalText: some View {
     Text(money(run.totalUsd))
-      .font(.body.weight(.semibold).monospacedDigit())
+      .font(AtlasTheme.font(.number, .body, weight: .semibold))
       .foregroundStyle(AtlasTheme.ink)
   }
 
@@ -370,7 +370,7 @@ private struct SnapshotRowView: View {
   private var changeText: some View {
     if let change {
       Text(change.text)
-        .font(.subheadline.monospacedDigit())
+        .font(AtlasTheme.font(.number, .subheadline))
         .foregroundStyle(change.color)
     }
   }
@@ -396,7 +396,7 @@ private struct SnapshotWarningBadge: View {
   var body: some View {
     Label("\(count)", systemImage: "exclamationmark.triangle.fill")
       .labelStyle(.titleAndIcon)
-      .font(.caption.weight(.semibold))
+      .font(AtlasTheme.font(.label, .caption, weight: .semibold))
       .foregroundStyle(AtlasTheme.warning)
       .padding(.horizontal, 7)
       .padding(.vertical, 2)
@@ -435,7 +435,7 @@ private struct SnapshotsEmptyView: View {
           ProgressView()
         } else {
           Image(systemName: systemImage)
-            .font(.title2.weight(.semibold))
+            .font(AtlasTheme.font(.display, .title2))
             .foregroundStyle(AtlasTheme.accent)
         }
       }
@@ -445,10 +445,10 @@ private struct SnapshotsEmptyView: View {
       .accessibilityHidden(true)
       VStack(spacing: 6) {
         Text(title)
-          .font(.title3.weight(.semibold))
+          .font(AtlasTheme.font(.display, .title3))
           .foregroundStyle(AtlasTheme.ink)
         Text(copy)
-          .font(.callout)
+          .font(AtlasTheme.font(.body, .callout))
           .foregroundStyle(AtlasTheme.ink3)
       }
       .multilineTextAlignment(.center)
@@ -502,12 +502,12 @@ private struct SnapshotDetailSheet: View {
             ForEach(Array(run.warnings.enumerated()), id: \.offset) { _, warning in
               HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                  .font(.subheadline)
+                  .font(AtlasTheme.font(.body, .subheadline))
                   .foregroundStyle(AtlasTheme.warning)
                   .padding(.top, 2)
                   .accessibilityHidden(true)
                 Text(warning)
-                  .font(.callout)
+                  .font(AtlasTheme.font(.body, .callout))
                   .foregroundStyle(AtlasTheme.ink2)
                   .textSelection(.enabled)
                   .fixedSize(horizontal: false, vertical: true)
@@ -529,7 +529,7 @@ private struct SnapshotDetailSheet: View {
               Button(showsAllHoldings ? "Show top \(Self.topHoldingCount)" : "Show all \(holdings.count)") {
                 showsAllHoldings.toggle()
               }
-              .font(.callout.weight(.semibold))
+              .font(AtlasTheme.font(.body, .callout, weight: .semibold))
               .foregroundStyle(AtlasTheme.accent)
               .frame(minHeight: 44)
             }
@@ -559,7 +559,7 @@ private struct SnapshotDetailSheet: View {
             }
             Button("Cancel", role: .cancel) {}
           } message: {
-            Text(SnapshotsScreen.removalMessage(run, isLatest: isLatest))
+            Text(HistoryScreen.removalMessage(run, isLatest: isLatest))
           }
         }
         .listRowBackground(AtlasTheme.surface)
@@ -584,20 +584,20 @@ private struct SnapshotDetailSheet: View {
     let change = SnapshotChange(run: run, previous: previous, state: state)
     return VStack(alignment: .leading, spacing: 6) {
       Text(AtlasFormatting.dateTime(run.generatedAt))
-        .font(.subheadline.weight(.medium))
+        .font(AtlasTheme.font(.body, .subheadline, weight: .medium))
         .foregroundStyle(AtlasTheme.ink3)
       Text(money(run.totalUsd))
-        .font(.largeTitle.weight(.semibold).monospacedDigit())
+        .font(AtlasTheme.font(.number, .largeTitle, weight: .semibold))
         .foregroundStyle(AtlasTheme.ink)
         .lineLimit(2)
         .minimumScaleFactor(0.5)
       if let change {
         Text(change.detailText)
-          .font(.subheadline.monospacedDigit())
+          .font(AtlasTheme.font(.number, .subheadline))
           .foregroundStyle(change.color)
       }
       Text(summaryLine)
-        .font(.subheadline)
+        .font(AtlasTheme.font(.body, .subheadline))
         .foregroundStyle(AtlasTheme.ink3)
     }
     .fixedSize(horizontal: false, vertical: true)
@@ -648,10 +648,10 @@ private struct SnapshotHoldingRow: View {
           HStack(spacing: 10) {
             TokenMonogram(symbol: asset.symbol, size: 40)
             Text(asset.symbol)
-              .font(.body.weight(.semibold))
+              .font(AtlasTheme.font(.body, .body, weight: .semibold))
           }
           Text(network)
-            .font(.subheadline)
+            .font(AtlasTheme.font(.body, .subheadline))
             .foregroundStyle(AtlasTheme.ink3)
           value
         }
@@ -661,10 +661,10 @@ private struct SnapshotHoldingRow: View {
           TokenMonogram(symbol: asset.symbol, size: 36)
           VStack(alignment: .leading, spacing: 2) {
             Text(asset.symbol)
-              .font(.body.weight(.semibold))
+              .font(AtlasTheme.font(.body, .body, weight: .semibold))
               .lineLimit(1)
             Text(network)
-              .font(.subheadline)
+              .font(AtlasTheme.font(.body, .subheadline))
               .foregroundStyle(AtlasTheme.ink3)
               .lineLimit(1)
           }
@@ -696,9 +696,14 @@ private struct SnapshotHoldingRow: View {
         .foregroundStyle(asset.pricingStatus == .priced ? AtlasTheme.ink : AtlasTheme.warning)
       if let shareText {
         Text(shareText)
-          .font(.subheadline.monospacedDigit())
+          .font(AtlasTheme.font(.number, .subheadline))
           .foregroundStyle(AtlasTheme.ink3)
       }
     }
   }
+}
+
+struct SnapshotDetailScreen: View {
+  var runID: UUID
+  var body: some View { Text(runID.uuidString) }
 }

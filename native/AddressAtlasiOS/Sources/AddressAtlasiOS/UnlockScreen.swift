@@ -134,7 +134,7 @@ struct UnlockScreen: View {
           ? "Your portfolio is encrypted with a key kept in this \(PlatformCopy.deviceNoun)'s Keychain."
           : "The vault didn't open. Try again, or restore with your recovery kit."
       )
-      .font(.callout)
+      .font(AtlasTheme.font(.body, .callout))
       .foregroundStyle(AtlasTheme.ink2)
       .multilineTextAlignment(.center)
       .fixedSize(horizontal: false, vertical: true)
@@ -157,7 +157,7 @@ struct UnlockScreen: View {
           Label("Unlock vault", systemImage: "lock.open.fill")
         }
       }
-      .font(.body.weight(.semibold))
+      .font(AtlasTheme.font(.body, .body, weight: .semibold))
       .frame(maxWidth: .infinity, minHeight: 50)
       .contentShape(Rectangle())
     }
@@ -240,7 +240,7 @@ struct UnlockScreen: View {
           revealsRestoreCode.toggle()
         } label: {
           Image(systemName: revealsRestoreCode ? "eye.slash" : "eye")
-            .font(.callout)
+            .font(AtlasTheme.font(.body, .callout))
             .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
             .foregroundStyle(AtlasTheme.ink3)
             .frame(width: 44, height: 44)
@@ -261,7 +261,7 @@ struct UnlockScreen: View {
         "Opens the Files picker. The recovery file is verified before anything in Keychain is changed."
       )
       Text("Nothing changes unless the kit opens the portfolio on this device.")
-        .font(.caption)
+        .font(AtlasTheme.font(.label, .caption))
         .foregroundStyle(AtlasTheme.ink3)
         .fixedSize(horizontal: false, vertical: true)
     }
@@ -371,7 +371,7 @@ private struct UnlockSplash: View {
     VStack(spacing: 18) {
       UnlockBrandTile(size: 84)
       Text("Address Atlas")
-        .font(.title2.weight(.semibold))
+        .font(AtlasTheme.font(.display, .title2))
         .foregroundStyle(AtlasTheme.ink)
       ProgressView()
         .padding(.top, 4)
@@ -415,7 +415,7 @@ private struct UnlockCardHeader: View {
   var body: some View {
     HStack(alignment: .top, spacing: 12) {
       Image(systemName: systemImage)
-        .font(.body.weight(.semibold))
+        .font(AtlasTheme.font(.body, .body, weight: .semibold))
         .foregroundStyle(tint)
         .frame(width: 34, height: 34)
         .background(tint.opacity(0.12))
@@ -423,10 +423,10 @@ private struct UnlockCardHeader: View {
         .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 2) {
         Text(title)
-          .font(.headline)
+          .font(AtlasTheme.font(.display, .headline))
           .foregroundStyle(AtlasTheme.ink)
         Text(subtitle)
-          .font(.subheadline)
+          .font(AtlasTheme.font(.body, .subheadline))
           .foregroundStyle(AtlasTheme.ink3)
           .fixedSize(horizontal: false, vertical: true)
       }
@@ -442,7 +442,7 @@ private struct UnlockTrustFooter: View {
       HStack(spacing: 16) { items }
       VStack(spacing: 8) { items }
     }
-    .font(.caption.weight(.medium))
+    .font(AtlasTheme.font(.label, .caption, weight: .medium))
     .foregroundStyle(AtlasTheme.ink3)
     .frame(maxWidth: .infinity)
     .accessibilityElement(children: .combine)

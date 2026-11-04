@@ -6,7 +6,7 @@ import UIKit
 
 /// A task that one screen asks another to start, such as the onboarding
 /// finish or a Portfolio empty-state button opening the add-wallet sheet on
-/// the Wallets tab. The destination screen consumes it exactly once.
+/// the Sources tab. The destination screen consumes it exactly once.
 enum IOSPendingAction: Equatable, Sendable {
   case addWallet
   case connectExchange
@@ -17,37 +17,66 @@ enum IOSPendingAction: Equatable, Sendable {
   case runFirstScan
 }
 
-/// Shared iPhone/iPad navigation intent. `TabShell` and `SplitShell` switch
-/// to `selectedSection` whenever `openRequest` changes (so reopening the
-/// section the person already left still works); screens observe
+/// A screen pushed onto a tab's navigation stack.
+enum IOSRoute: Hashable, Sendable {
+  /// Coin detail, by `CoinIdentity.key`.
+  case coin(String)
+  /// One saved scan in History.
+  case snapshot(UUID)
+  case iCloud
+  case export
+}
+
+/// Narrows Assets to one slice of a chart (a network, a wallet or exchange, a
+/// state or a type), set when the person taps that slice.
+struct IOSAssetsFilter: Equatable, Sendable {
+  var grouping: PortfolioGrouping
+  var key: String
+  var label: String
+}
+
+/// Shared iPhone/iPad navigation intent. `TabShell` and `SplitShell` show
+/// `selectedSection` and keep one route stack per section; screens observe
 /// `pendingAction` and clear it with `consume(_:)` once they have presented
 /// the requested sheet.
 @MainActor
 final class IOSNavigationModel: ObservableObject {
-  @Published private(set) var selectedSection: AtlasSection = .portfolio
-  @Published private(set) var openRequest = 0
+  @Published var selectedSection: AtlasSection = .portfolio
   @Published var pendingAction: IOSPendingAction?
-  /// Search text Assets applies once when it appears (then clears), so a
-  /// Portfolio allocation row can open Assets filtered to one symbol.
-  @Published var assetsQuery: IOSAssetsQuery?
+  /// Applied by Assets until the person clears it.
+  @Published var assetsFilter: IOSAssetsFilter?
+  /// Pushed routes per section. Stacks read and write this directly.
+  @Published var paths: [AtlasSection: [IOSRoute]] = [:]
 
   func open(_ section: AtlasSection, then action: IOSPendingAction? = nil) {
     selectedSection = section
     pendingAction = action
-    openRequest &+= 1
   }
 
-  /// Opens Assets showing exactly the holdings of `symbol` (nil = all).
-  func openAssets(symbol: String?) {
-    assetsQuery = IOSAssetsQuery(symbol: symbol)
-    open(.assets)
+  /// Pushes a route onto the stack of the section that is showing.
+  func push(_ route: IOSRoute) {
+    paths[selectedSection, default: []].append(route)
   }
 
-  /// Returns and clears the pending Assets query.
-  func consumeAssetsQuery() -> IOSAssetsQuery? {
-    guard let query = assetsQuery else { return nil }
-    assetsQuery = nil
-    return query
+  func openCoin(_ key: String) {
+    push(.coin(key))
+  }
+
+  /// Shows Assets, narrowed to `filter` (nil shows every coin).
+  func openAssets(filter: IOSAssetsFilter?) {
+    assetsFilter = filter
+    paths[.assets] = []
+    selectedSection = .assets
+  }
+
+  func openSnapshot(_ id: UUID) {
+    paths[.history] = [.snapshot(id)]
+    selectedSection = .history
+  }
+
+  func openICloud() {
+    paths[.settings] = [.iCloud]
+    selectedSection = .settings
   }
 
   /// Returns true (and clears the request) when `action` is pending.
@@ -56,13 +85,6 @@ final class IOSNavigationModel: ObservableObject {
     pendingAction = nil
     return true
   }
-}
-
-/// A one-shot Assets search request. `symbol` matches holdings whose symbol
-/// is exactly this one (case-insensitive) while the search text is unchanged.
-struct IOSAssetsQuery: Equatable, Sendable {
-  var id = UUID()
-  var symbol: String?
 }
 
 /// The first-run walkthrough is shown once per install, and only while the
@@ -350,7 +372,7 @@ struct IOSInlineError: View {
         Text(state.error)
           .fixedSize(horizontal: false, vertical: true)
       }
-      .font(.callout)
+      .font(AtlasTheme.font(.body, .callout))
       .foregroundStyle(AtlasTheme.loss)
       .padding(12)
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -402,12 +424,12 @@ struct LearnMoreDisclosure<Content: View>: View {
               .accessibilityHidden(true)
           }
           Text(title)
-            .font(.callout.weight(.medium))
+            .font(AtlasTheme.font(.body, .callout, weight: .medium))
             .foregroundStyle(AtlasTheme.ink)
             .multilineTextAlignment(.leading)
           Spacer(minLength: 8)
           Image(systemName: "chevron.down")
-            .font(.footnote.weight(.semibold))
+            .font(AtlasTheme.font(.body, .footnote, weight: .semibold))
             .foregroundStyle(AtlasTheme.ink3)
             .rotationEffect(.degrees(isExpanded ? 180 : 0))
             .accessibilityHidden(true)
@@ -423,7 +445,7 @@ struct LearnMoreDisclosure<Content: View>: View {
         VStack(alignment: .leading, spacing: 10) {
           content
         }
-        .font(.callout)
+        .font(AtlasTheme.font(.body, .callout))
         .foregroundStyle(AtlasTheme.ink2)
         .fixedSize(horizontal: false, vertical: true)
         .padding(.bottom, 10)
@@ -446,16 +468,16 @@ struct IOSFactRow: View {
   var body: some View {
     HStack(alignment: .top, spacing: 12) {
       Image(systemName: systemImage)
-        .font(.body.weight(.semibold))
+        .font(AtlasTheme.font(.body, .body, weight: .semibold))
         .foregroundStyle(tint)
         .frame(width: 28)
         .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 2) {
         Text(title)
-          .font(.callout.weight(.semibold))
+          .font(AtlasTheme.font(.body, .callout, weight: .semibold))
           .foregroundStyle(AtlasTheme.ink)
         Text(copy)
-          .font(.callout)
+          .font(AtlasTheme.font(.body, .callout))
           .foregroundStyle(AtlasTheme.ink3)
           .fixedSize(horizontal: false, vertical: true)
       }
@@ -477,7 +499,7 @@ extension View {
           UIApplication.shared.sendAction(
             #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         }
-        .font(.body.weight(.semibold))
+        .font(AtlasTheme.font(.body, .body, weight: .semibold))
       }
     }
   }
@@ -513,7 +535,7 @@ struct IOSPersistentStatus: View {
           .accessibilityHint(state.updateActionHint)
         }
       }
-      .font(.callout)
+      .font(AtlasTheme.font(.body, .callout))
       .fixedSize(horizontal: false, vertical: true)
     }
   }
@@ -842,7 +864,7 @@ struct IOSStatusToast: View {
           Spacer(minLength: 0)
           if display.tone == .error {
             Image(systemName: "xmark")
-              .font(.caption.weight(.bold))
+              .font(AtlasTheme.font(.label, .caption, weight: .bold))
               .foregroundStyle(AtlasTheme.ink3)
               .accessibilityHidden(true)
           }
@@ -913,7 +935,7 @@ struct IOSPrivacyCover: View {
         .frame(width: 72, height: 72)
         .shadow(color: AtlasTheme.accent.opacity(0.25), radius: 12, y: 5)
         Text("Address Atlas")
-          .font(.headline)
+          .font(AtlasTheme.font(.display, .headline))
           .foregroundStyle(AtlasTheme.ink)
       }
     }
@@ -987,9 +1009,7 @@ extension IOSPendingAction {
   /// The screen that owns the sheet for this action.
   var section: AtlasSection {
     switch self {
-    case .addWallet: .wallets
-    case .connectExchange: .exchanges
-    case .addManualHolding, .addCustomToken: .tokens
+    case .addWallet, .connectExchange, .addManualHolding, .addCustomToken: .sources
     case .runFirstScan: .portfolio
     }
   }

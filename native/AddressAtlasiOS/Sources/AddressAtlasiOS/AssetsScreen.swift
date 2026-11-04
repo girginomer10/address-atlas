@@ -125,8 +125,6 @@ struct AssetsScreen: View {
     .sheet(item: $selectedAsset) { asset in
       AssetDetailSheet(asset: asset)
     }
-    .onAppear { applyPendingQuery() }
-    .onChange(of: navigation.assetsQuery) { _, _ in applyPendingQuery() }
     .onChange(of: query) { _, newValue in
       // Typing replaces the symbol filter with a normal search.
       if let exactSymbol,
@@ -217,7 +215,7 @@ struct AssetsScreen: View {
           : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 8))
         totalLayout {
           Text(money(total))
-            .font(.title2.weight(.semibold).monospacedDigit())
+            .font(AtlasTheme.font(.number, .title2, weight: .semibold))
             .foregroundStyle(AtlasTheme.ink)
             .lineLimit(1)
             .minimumScaleFactor(0.5)
@@ -231,7 +229,7 @@ struct AssetsScreen: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(filtered ? "Filtered total \(money(total))" : "Total \(money(total))")
         Text(detail)
-          .font(.subheadline)
+          .font(AtlasTheme.font(.body, .subheadline))
           .foregroundStyle(AtlasTheme.ink3)
           .fixedSize(horizontal: false, vertical: true)
       }
@@ -247,7 +245,7 @@ struct AssetsScreen: View {
               .fontWeight(.semibold)
               .foregroundStyle(AtlasTheme.accent)
           }
-          .font(.subheadline)
+          .font(AtlasTheme.font(.body, .subheadline))
           .frame(minHeight: 32, alignment: .leading)
           .contentShape(Rectangle())
         }
@@ -269,7 +267,7 @@ struct AssetsScreen: View {
               showAllText
             }
           }
-          .font(.subheadline)
+          .font(AtlasTheme.font(.body, .subheadline))
           .frame(minHeight: 32, alignment: .leading)
           .contentShape(Rectangle())
         }
@@ -371,7 +369,7 @@ struct AssetsScreen: View {
         title: "No assets yet",
         copy: "Add a wallet, then scan to see your holdings.",
         actionTitle: "Add a wallet",
-        action: { navigation.open(.wallets, then: .addWallet) })
+        action: { navigation.open(.sources, then: .addWallet) })
     }
   }
 
@@ -469,20 +467,6 @@ struct AssetsScreen: View {
     Task {
       await state.setDustThreshold(value)
       isUpdatingDustPreference = false
-    }
-  }
-
-  /// Portfolio's allocation rows open Assets for one symbol ("Other" and
-  /// "All assets" open it unfiltered).
-  private func applyPendingQuery() {
-    guard let request = navigation.consumeAssetsQuery() else { return }
-    selectedAsset = nil
-    if let symbol = request.symbol {
-      exactSymbol = symbol
-      query = symbol
-    } else {
-      exactSymbol = nil
-      query = ""
     }
   }
 
@@ -605,13 +589,13 @@ private struct AssetRowView: View {
       VStack(alignment: .leading, spacing: 3) {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
           Text(asset.symbol)
-            .font(.body.weight(.semibold))
+            .font(AtlasTheme.font(.body, .body, weight: .semibold))
             .foregroundStyle(AtlasTheme.ink)
             .lineLimit(1)
             .layoutPriority(1)
           if let name = asset.atlasDisplayName {
             Text(name)
-              .font(.subheadline)
+              .font(AtlasTheme.font(.body, .subheadline))
               .foregroundStyle(AtlasTheme.ink3)
               .lineLimit(1)
           }
@@ -626,7 +610,7 @@ private struct AssetRowView: View {
               .truncationMode(.tail)
           }
         }
-        .font(.subheadline)
+        .font(AtlasTheme.font(.body, .subheadline))
         .foregroundStyle(AtlasTheme.ink3)
         .lineLimit(1)
       }
@@ -635,7 +619,7 @@ private struct AssetRowView: View {
         AssetValueText(asset: asset)
           .fixedSize()
         Text(AtlasAmount.compact(asset))
-          .font(.subheadline.monospacedDigit())
+          .font(AtlasTheme.font(.number, .subheadline))
           .foregroundStyle(AtlasTheme.ink2)
           .lineLimit(1)
           .minimumScaleFactor(0.75)
@@ -650,13 +634,13 @@ private struct AssetRowView: View {
       HStack(spacing: 12) {
         TokenMonogram(symbol: asset.symbol, size: 44)
         Text(asset.symbol)
-          .font(.body.weight(.semibold))
+          .font(AtlasTheme.font(.body, .body, weight: .semibold))
           .foregroundStyle(AtlasTheme.ink)
           .lineLimit(2)
       }
       if let name = asset.atlasDisplayName {
         Text(name)
-          .font(.subheadline)
+          .font(AtlasTheme.font(.body, .subheadline))
           .foregroundStyle(AtlasTheme.ink3)
       }
       // Money and amounts shrink instead of breaking mid-number.
@@ -664,12 +648,12 @@ private struct AssetRowView: View {
         .lineLimit(1)
         .minimumScaleFactor(0.5)
       Text(AtlasAmount.compact(asset))
-        .font(.subheadline.monospacedDigit())
+        .font(AtlasTheme.font(.number, .subheadline))
         .foregroundStyle(AtlasTheme.ink2)
         .lineLimit(1)
         .minimumScaleFactor(0.5)
       Text(asset.atlasSecondaryLine)
-        .font(.subheadline)
+        .font(AtlasTheme.font(.body, .subheadline))
         .foregroundStyle(AtlasTheme.ink3)
     }
     .fixedSize(horizontal: false, vertical: true)
@@ -683,15 +667,15 @@ private struct AssetValueText: View {
     switch asset.pricingStatus {
     case .priced:
       Text(money(asset.valueUsd))
-        .font(.body.weight(.semibold).monospacedDigit())
+        .font(AtlasTheme.font(.number, .body, weight: .semibold))
         .foregroundStyle(AtlasTheme.ink)
     case .unpriced:
       Text("Unpriced")
-        .font(.subheadline.weight(.medium))
+        .font(AtlasTheme.font(.body, .subheadline, weight: .medium))
         .foregroundStyle(AtlasTheme.warning)
     case .valuationUnavailable:
       Text("Value unavailable")
-        .font(.subheadline.weight(.medium))
+        .font(AtlasTheme.font(.body, .subheadline, weight: .medium))
         .foregroundStyle(AtlasTheme.warning)
     }
   }
@@ -769,15 +753,15 @@ private struct AssetGroupRowView: View {
     return VStack(alignment: dynamicTypeSize.isAccessibilitySize ? .leading : .trailing, spacing: 3) {
       if allUnpriced {
         Text("Unpriced")
-          .font(.subheadline.weight(.medium))
+          .font(AtlasTheme.font(.body, .subheadline, weight: .medium))
           .foregroundStyle(AtlasTheme.warning)
       } else {
         Text(money(group.pricedTotal))
-          .font(.body.weight(.semibold).monospacedDigit())
+          .font(AtlasTheme.font(.number, .body, weight: .semibold))
           .foregroundStyle(AtlasTheme.ink)
         if group.unpricedCount > 0 {
           Text("+ \(group.unpricedCount) unpriced")
-            .font(.subheadline)
+            .font(AtlasTheme.font(.body, .subheadline))
             .foregroundStyle(AtlasTheme.warning)
         }
       }
@@ -791,14 +775,14 @@ private struct AssetGroupRowView: View {
           HStack(spacing: 12) {
             TokenMonogram(symbol: group.symbol, size: 44)
             Text(group.symbol)
-              .font(.body.weight(.semibold))
+              .font(AtlasTheme.font(.body, .body, weight: .semibold))
               .foregroundStyle(AtlasTheme.ink)
           }
           valueText
             .lineLimit(1)
             .minimumScaleFactor(0.5)
           Text(subtitle)
-            .font(.subheadline)
+            .font(AtlasTheme.font(.body, .subheadline))
             .foregroundStyle(AtlasTheme.ink3)
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -807,11 +791,11 @@ private struct AssetGroupRowView: View {
           TokenMonogram(symbol: group.symbol, size: 40)
           VStack(alignment: .leading, spacing: 3) {
             Text(group.symbol)
-              .font(.body.weight(.semibold))
+              .font(AtlasTheme.font(.body, .body, weight: .semibold))
               .foregroundStyle(AtlasTheme.ink)
               .lineLimit(1)
             Text(subtitle)
-              .font(.subheadline)
+              .font(AtlasTheme.font(.body, .subheadline))
               .foregroundStyle(AtlasTheme.ink3)
               .lineLimit(1)
               .truncationMode(.middle)
@@ -856,7 +840,7 @@ private struct AssetsEmptyView: View {
           ProgressView()
         } else {
           Image(systemName: systemImage)
-            .font(.title2.weight(.semibold))
+            .font(AtlasTheme.font(.display, .title2))
             .foregroundStyle(AtlasTheme.accent)
         }
       }
@@ -866,10 +850,10 @@ private struct AssetsEmptyView: View {
       .accessibilityHidden(true)
       VStack(spacing: 6) {
         Text(title)
-          .font(.title3.weight(.semibold))
+          .font(AtlasTheme.font(.display, .title3))
           .foregroundStyle(AtlasTheme.ink)
         Text(copy)
-          .font(.callout)
+          .font(AtlasTheme.font(.body, .callout))
           .foregroundStyle(AtlasTheme.ink3)
       }
       .multilineTextAlignment(.center)
@@ -950,10 +934,10 @@ private struct AssetDetailSheet: View {
         TokenMonogram(symbol: asset.symbol, size: 52)
         VStack(alignment: .leading, spacing: 2) {
           Text(asset.symbol)
-            .font(.title3.weight(.semibold))
+            .font(AtlasTheme.font(.display, .title3))
             .foregroundStyle(AtlasTheme.ink)
           Text(asset.atlasDisplayName ?? asset.atlasNetworkLabel)
-            .font(.subheadline)
+            .font(AtlasTheme.font(.body, .subheadline))
             .foregroundStyle(AtlasTheme.ink3)
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -961,11 +945,11 @@ private struct AssetDetailSheet: View {
       Group {
         if asset.pricingStatus == .priced {
           Text(money(asset.valueUsd))
-            .font(.largeTitle.weight(.semibold).monospacedDigit())
+            .font(AtlasTheme.font(.number, .largeTitle, weight: .semibold))
             .foregroundStyle(AtlasTheme.ink)
         } else {
           Text(asset.pricingStatus == .unpriced ? "Unpriced" : "Value unavailable")
-            .font(.title.weight(.semibold))
+            .font(AtlasTheme.font(.display, .title))
             .foregroundStyle(AtlasTheme.warning)
         }
       }
@@ -1061,7 +1045,7 @@ private struct AssetDetailRow: View {
 
   private var titleText: some View {
     Text(title)
-      .font(.subheadline)
+      .font(AtlasTheme.font(.body, .subheadline))
       .foregroundStyle(AtlasTheme.ink3)
   }
 
@@ -1083,7 +1067,7 @@ private struct AssetDetailRow: View {
       }
     } label: {
       Image(systemName: copied ? "checkmark" : "doc.on.doc")
-        .font(.callout.weight(.semibold))
+        .font(AtlasTheme.font(.body, .callout, weight: .semibold))
         .foregroundStyle(copied ? AtlasTheme.gain : AtlasTheme.accent)
         .frame(width: 44, height: 44)
         .contentShape(Rectangle())

@@ -42,7 +42,7 @@ struct ExportScreen: View {
   }
 
   var body: some View {
-    IOSPage(title: "Export", subtitle: "Files are generated on this device.") {
+    IOSPage(title: "Export") {
       shareSaferSurface
       fullIdentifyingSurface
     }
@@ -117,7 +117,7 @@ struct ExportScreen: View {
         HStack(alignment: .top, spacing: 12) {
           if !dynamicTypeSize.isAccessibilitySize {
             Image(systemName: "person.crop.circle.badge.checkmark")
-              .font(.title3.weight(.semibold))
+              .font(AtlasTheme.font(.display, .title3))
               .foregroundStyle(AtlasTheme.accent)
               .frame(width: 44, height: 44)
               .background(AtlasTheme.accent.opacity(0.12))
@@ -126,15 +126,15 @@ struct ExportScreen: View {
           }
           VStack(alignment: .leading, spacing: 3) {
             Text("Share-safer summary")
-              .font(.headline.weight(.semibold))
+              .font(AtlasTheme.font(.display, .headline))
               .foregroundStyle(AtlasTheme.ink)
               .accessibilityAddTraits(.isHeader)
             Text("Grouped ranges, no addresses or exact amounts.")
-              .font(.callout)
+              .font(AtlasTheme.font(.body, .callout))
               .foregroundStyle(AtlasTheme.ink2)
               .fixedSize(horizontal: false, vertical: true)
             Text(latestScanLine)
-              .font(.caption)
+              .font(AtlasTheme.font(.label, .caption))
               .foregroundStyle(AtlasTheme.ink3)
               .padding(.top, 2)
           }
@@ -152,7 +152,7 @@ struct ExportScreen: View {
             Image(systemName: "eye.trianglebadge.exclamationmark")
               .foregroundStyle(AtlasTheme.warning)
           }
-          .font(.footnote)
+          .font(AtlasTheme.font(.body, .footnote))
           .foregroundStyle(AtlasTheme.ink2)
 
           LearnMoreDisclosure("What's left out", systemImage: "list.bullet.rectangle") {
@@ -177,7 +177,7 @@ struct ExportScreen: View {
           HStack(alignment: .center, spacing: 12) {
             if !dynamicTypeSize.isAccessibilitySize {
               Image(systemName: "exclamationmark.triangle.fill")
-                .font(.body.weight(.semibold))
+                .font(AtlasTheme.font(.body, .body, weight: .semibold))
                 .foregroundStyle(AtlasTheme.loss)
                 .frame(width: 36, height: 36)
                 .background(AtlasTheme.loss.opacity(0.10))
@@ -185,15 +185,15 @@ struct ExportScreen: View {
             }
             VStack(alignment: .leading, spacing: 2) {
               Text("Full identifying reports")
-                .font(.headline.weight(.semibold))
+                .font(AtlasTheme.font(.display, .headline))
                 .foregroundStyle(AtlasTheme.ink)
               Text("Addresses and exact balances")
-                .font(.callout)
+                .font(AtlasTheme.font(.body, .callout))
                 .foregroundStyle(AtlasTheme.ink3)
             }
             Spacer(minLength: 8)
             Image(systemName: "chevron.down")
-              .font(.callout.weight(.semibold))
+              .font(AtlasTheme.font(.body, .callout, weight: .semibold))
               .foregroundStyle(AtlasTheme.ink3)
               .rotationEffect(.degrees(showFullIdentifyingExports ? 180 : 0))
           }
@@ -212,7 +212,7 @@ struct ExportScreen: View {
           Text(
             "Anyone with these files can see your addresses, labels, and exact balances. They contain no exchange credentials and are not backups."
           )
-          .font(.callout)
+          .font(AtlasTheme.font(.body, .callout))
           .foregroundStyle(AtlasTheme.ink)
           .fixedSize(horizontal: false, vertical: true)
           .accessibilityLabel(
@@ -512,7 +512,7 @@ private struct ExportScreenFormatPicker: View {
       .frame(minHeight: 36)
       .accessibilityLabel("Format")
       Text(detail)
-        .font(.caption)
+        .font(AtlasTheme.font(.label, .caption))
         .foregroundStyle(AtlasTheme.ink3)
         .fixedSize(horizontal: false, vertical: true)
     }
@@ -578,14 +578,14 @@ private struct ExportScreenPreviewSheet: View {
         VStack(alignment: .leading, spacing: 14) {
           VStack(alignment: .leading, spacing: 4) {
             Text(displayName)
-              .font(.headline)
+              .font(AtlasTheme.font(.display, .headline))
               .foregroundStyle(AtlasTheme.ink)
             Text("The exact file contents. Nothing is saved or shared from here.")
-              .font(.callout)
+              .font(AtlasTheme.font(.body, .callout))
               .foregroundStyle(AtlasTheme.ink2)
               .fixedSize(horizontal: false, vertical: true)
             Text(model.sourceLineCount == 1 ? "1 line" : "\(model.sourceLineCount) lines")
-              .font(.caption)
+              .font(AtlasTheme.font(.label, .caption))
               .foregroundStyle(AtlasTheme.ink3)
               .accessibilityLabel(model.accessibilitySummaryLabel)
           }
@@ -594,12 +594,12 @@ private struct ExportScreenPreviewSheet: View {
             ForEach(model.rows) { row in
               HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text(row.part == 1 ? "\(row.sourceLine)" : "")
-                  .font(.caption2.monospacedDigit())
+                  .font(AtlasTheme.font(.number, .caption2))
                   .foregroundStyle(AtlasTheme.ink3)
                   .frame(minWidth: 24, alignment: .trailing)
                   .accessibilityHidden(true)
                 Text(row.visibleContent)
-                  .font(.caption.monospaced())
+                  .font(AtlasTheme.font(.mono, .caption))
                   .foregroundStyle(AtlasTheme.ink)
                   .textSelection(.enabled)
                   .fixedSize(horizontal: false, vertical: true)

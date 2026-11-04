@@ -43,7 +43,7 @@ struct ICloudScreen: View {
   }
 
   var body: some View {
-    IOSPage(title: "iCloud", subtitle: "An encrypted copy in your own iCloud.") {
+    IOSPage(title: "iCloud") {
       statusCard
       actionsCard
       if hasKrakenConnection {
@@ -151,7 +151,7 @@ struct ICloudScreen: View {
                 .controlSize(.regular)
             } else {
               Image(systemName: status.systemImage)
-                .font(.title3.weight(.semibold))
+                .font(AtlasTheme.font(.display, .title3))
                 .foregroundStyle(status.tint)
             }
           }
@@ -160,10 +160,10 @@ struct ICloudScreen: View {
           .accessibilityHidden(true)
           VStack(alignment: .leading, spacing: 3) {
             Text(status.title)
-              .font(.headline)
+              .font(AtlasTheme.font(.display, .headline))
               .foregroundStyle(AtlasTheme.ink)
             Text(status.detail)
-              .font(.callout)
+              .font(AtlasTheme.font(.body, .callout))
               .foregroundStyle(AtlasTheme.ink2)
           }
           .fixedSize(horizontal: false, vertical: true)
@@ -263,10 +263,10 @@ struct ICloudScreen: View {
         .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 2) {
         Text("Kraken stays on this device")
-          .font(.callout.weight(.semibold))
+          .font(AtlasTheme.font(.body, .callout, weight: .semibold))
           .foregroundStyle(AtlasTheme.ink)
         Text("After restoring elsewhere, add a separate read-only Kraken key there.")
-          .font(.footnote)
+          .font(AtlasTheme.font(.body, .footnote))
           .foregroundStyle(AtlasTheme.ink2)
           .fixedSize(horizontal: false, vertical: true)
       }
@@ -325,7 +325,7 @@ struct ICloudScreen: View {
   private var manageSection: some View {
     VStack(alignment: .leading, spacing: 7) {
       Text("Manage")
-        .font(.footnote.weight(.semibold))
+        .font(AtlasTheme.font(.body, .footnote, weight: .semibold))
         .foregroundStyle(AtlasTheme.ink3)
         .padding(.horizontal, 4)
         .accessibilityAddTraits(.isHeader)
@@ -427,7 +427,7 @@ struct ICloudScreen: View {
       .buttonStyle(ICloudRowButtonStyle())
       .iCloudGroupedCard()
       Text("Nothing here deletes the portfolio on this device.")
-        .font(.footnote)
+        .font(AtlasTheme.font(.body, .footnote))
         .foregroundStyle(AtlasTheme.ink3)
         .padding(.horizontal, 4)
         .fixedSize(horizontal: false, vertical: true)
@@ -444,9 +444,9 @@ struct ICloudScreen: View {
             .accessibilityHidden(true)
           VStack(alignment: .leading, spacing: 2) {
             Text("Unfinished transfer from the old server")
-              .font(.callout.weight(.semibold))
+              .font(AtlasTheme.font(.body, .callout, weight: .semibold))
             Text("Finish migration to keep this vault and stop it. Server data isn’t deleted.")
-              .font(.footnote)
+              .font(AtlasTheme.font(.body, .footnote))
               .foregroundStyle(AtlasTheme.ink2)
           }
           .fixedSize(horizontal: false, vertical: true)
@@ -680,11 +680,11 @@ private struct ICloudScreenStatusRow: View {
   var body: some View {
     HStack(alignment: .firstTextBaseline, spacing: 12) {
       Text(label)
-        .font(.footnote)
+        .font(AtlasTheme.font(.body, .footnote))
         .foregroundStyle(AtlasTheme.ink3)
       Spacer(minLength: 8)
       Text(value)
-        .font(.caption.monospaced())
+        .font(AtlasTheme.font(.mono, .caption))
         .foregroundStyle(AtlasTheme.ink2)
         .lineLimit(1)
         .truncationMode(.middle)
@@ -717,7 +717,7 @@ private struct ICloudActionRow: View {
             .tint(isProminent ? AtlasTheme.paper : AtlasTheme.accent)
         } else {
           Image(systemName: systemImage)
-            .font(.body.weight(.semibold))
+            .font(AtlasTheme.font(.body, .body, weight: .semibold))
             .foregroundStyle(
               isProminent && isEnabled
                 ? AtlasTheme.paper : (isEnabled ? AtlasTheme.accent : AtlasTheme.ink3))
@@ -728,10 +728,10 @@ private struct ICloudActionRow: View {
       .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 2) {
         Text(title)
-          .font(.body.weight(.semibold))
+          .font(AtlasTheme.font(.body, .body, weight: .semibold))
           .foregroundStyle(isEnabled ? AtlasTheme.ink : AtlasTheme.ink3)
         Text(detail)
-          .font(.footnote)
+          .font(AtlasTheme.font(.body, .footnote))
           .foregroundStyle(AtlasTheme.ink3)
           .fixedSize(horizontal: false, vertical: true)
       }
@@ -766,12 +766,12 @@ private struct ICloudManageRow: View {
           .accessibilityHidden(true)
       } else if !dynamicTypeSize.isAccessibilitySize {
         Image(systemName: systemImage)
-          .font(.body.weight(.medium))
+          .font(AtlasTheme.font(.body, .body, weight: .medium))
           .frame(width: 26)
           .accessibilityHidden(true)
       }
       Text(isActive ? progressTitle : title)
-        .font(.body)
+        .font(AtlasTheme.font(.body, .body))
       Spacer(minLength: 0)
     }
     .foregroundStyle(isEnabled ? tint : AtlasTheme.ink3)

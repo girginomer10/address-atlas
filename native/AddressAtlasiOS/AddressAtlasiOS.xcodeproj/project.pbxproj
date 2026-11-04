@@ -13,10 +13,10 @@
 		05D13E3C54220C13F1F919BC /* CoinUnlockTimelineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF149B5B54B41F154B6FC866 /* CoinUnlockTimelineView.swift */; };
 		0CCA57D11E44DF0096B308FA /* AddressAtlasCore in Frameworks */ = {isa = PBXBuildFile; productRef = 801905FA6FA9C4F51B290652 /* AddressAtlasCore */; };
 		0F53F456FBD30AA3CDE94A04 /* ChartKitLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5F15EDF1D9324832E125F99 /* ChartKitLayout.swift */; };
+		0FE71EEB3200D8D603DAD550 /* CoinDetailScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = C360C2C2CB0E5D7FAB33D35D /* CoinDetailScreen.swift */; };
 		10EA303F0575B012DC6BEE29 /* ChartKitFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AC3944CACE38318019DCCD5 /* ChartKitFormat.swift */; };
 		11294C4166459BABF937B078 /* CoinAmountHistoryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31C4C7345210D32D3C34E8A8 /* CoinAmountHistoryModel.swift */; };
 		142AE29C7A4EFAAFCF310318 /* BubblesChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C1F163CE971718FA827F295 /* BubblesChartView.swift */; };
-		185D080067EB67F924B283B5 /* SnapshotsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA18A3E4D8663AF413B9BECB /* SnapshotsScreen.swift */; };
 		1CA89A8DD856DAA8A22B3159 /* ExchangesScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35DD59B780459F2D86827A3F /* ExchangesScreen.swift */; };
 		21057DE447CC3FA791F3ABB3 /* WalletsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02D92FF63369E31CF04D24D0 /* WalletsScreen.swift */; };
 		258CBBB7D06F08EA42EC2C45 /* SlopeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBB4C9FDD1723A1CF35A048B /* SlopeModel.swift */; };
@@ -46,11 +46,13 @@
 		5D8C5928422A44A6FC4DD9F5 /* RingsInRingsChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 235FFDA379D16323FE28C741 /* RingsInRingsChartView.swift */; };
 		621C0321D444D17C3A087B22 /* PortfolioChartContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45A9E6A6ED3EF7FD0D8ECB63 /* PortfolioChartContract.swift */; };
 		64CC8143572696A5374AC116 /* CoinCustodyModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B57382B0F22994663113085 /* CoinCustodyModel.swift */; };
+		65EF04E639D7DEB95BEB4E18 /* DemoFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4F11EC92DFB360DCE9E90E4 /* DemoFixture.swift */; };
 		690317403BDDC5EDE5257CA6 /* AppStateScanning.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04E59E2E786153253189CD5F /* AppStateScanning.swift */; };
 		6C98C84D5ED74C0F80410E5C /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5301917867ACFE8CBB9F33FA /* RootView.swift */; };
 		6E9D1606CAA6C4CE538E5EB8 /* UnlockScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67ADF2440084A336EC7A193E /* UnlockScreen.swift */; };
 		6F917A57C8F7822AC6F0A78F /* AtlasThemeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 383C93D63BFF8FDF8528563C /* AtlasThemeModel.swift */; };
 		74F5AFCA1B2D58B553B863A7 /* ICloudVaultService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A42E9764A079F1DE8C8F572 /* ICloudVaultService.swift */; };
+		7681AE9E6B8B681855DA8AC2 /* IOSTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF9AF1044F92A348B6D25470 /* IOSTheme.swift */; };
 		78D4E4B69394B3D7FA81F24A /* AtlasThemeRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E33A941FCC20EC45E4E3471 /* AtlasThemeRuntime.swift */; };
 		7B2E7B739410FAE02E90A1F9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0DA31591CD25C1D10EA3119E /* Assets.xcassets */; };
 		80AFD4B2F3823A2D681F67FF /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC93E4A10CF81A60F0D50C66 /* AppState.swift */; };
@@ -71,8 +73,10 @@
 		9B7E5EC08CB8A1BF722781C6 /* AtlasDesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 933502CCA3204D600DEC264D /* AtlasDesignSystem.swift */; };
 		9CEB3517BE932E3FE1EA0B77 /* OnboardingScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1693EBD1E006CBDCBA9814D7 /* OnboardingScreen.swift */; };
 		9FA8EB661F0A60FA57768699 /* MainShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3FE2888AB7E4FA0A1465760 /* MainShell.swift */; };
+		ACED484E357ED05D2DCFEF02 /* HistoryScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3972B1BA1C92A828574B362 /* HistoryScreen.swift */; };
 		B026FF23FEDC3C3010BBCCA0 /* UserFacingErrors.swift in Sources */ = {isa = PBXBuildFile; fileRef = 494600BE507D8CD4AE731861 /* UserFacingErrors.swift */; };
 		B5106DC7C5F6D58B8F63FD0A /* AppStateVaultSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F46649DE17C5B4463770E88 /* AppStateVaultSync.swift */; };
+		B70859C36097DE5F28C1DCCE /* SourcesScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2730780329651EB5423D8EEC /* SourcesScreen.swift */; };
 		BA61E8F000D5B50FF1AC7139 /* AppStateAccountLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = C04752AA39E3937CDF9A758E /* AppStateAccountLifecycle.swift */; };
 		BD9CB67CB93CA33374A57804 /* AppStateTermination.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99E3451BFA9F65AFC461CE22 /* AppStateTermination.swift */; };
 		BF435609B7D527DD975C98F3 /* SlopeChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 028BDA1323473FA7F670354A /* SlopeChartView.swift */; };
@@ -116,6 +120,7 @@
 		1F46649DE17C5B4463770E88 /* AppStateVaultSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateVaultSync.swift; sourceTree = "<group>"; };
 		20FB7043B3920081808DDCD4 /* AddressAtlasMac */ = {isa = PBXFileReference; lastKnownFileType = folder; name = AddressAtlasMac; path = ../AddressAtlasMac; sourceTree = SOURCE_ROOT; };
 		235FFDA379D16323FE28C741 /* RingsInRingsChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RingsInRingsChartView.swift; sourceTree = "<group>"; };
+		2730780329651EB5423D8EEC /* SourcesScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourcesScreen.swift; sourceTree = "<group>"; };
 		2ACE44D82238BC346DF95F78 /* CoinChangeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoinChangeView.swift; sourceTree = "<group>"; };
 		2C1F163CE971718FA827F295 /* BubblesChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BubblesChartView.swift; sourceTree = "<group>"; };
 		31C4C7345210D32D3C34E8A8 /* CoinAmountHistoryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoinAmountHistoryModel.swift; sourceTree = "<group>"; };
@@ -165,8 +170,8 @@
 		AC93E4A10CF81A60F0D50C66 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		B359B2FB3A992F00F892A48F /* StripChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StripChartView.swift; sourceTree = "<group>"; };
 		B7D98C270270EE394DEA0B3D /* CoinChangeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoinChangeModel.swift; sourceTree = "<group>"; };
-		BA18A3E4D8663AF413B9BECB /* SnapshotsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotsScreen.swift; sourceTree = "<group>"; };
 		C04752AA39E3937CDF9A758E /* AppStateAccountLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateAccountLifecycle.swift; sourceTree = "<group>"; };
+		C360C2C2CB0E5D7FAB33D35D /* CoinDetailScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoinDetailScreen.swift; sourceTree = "<group>"; };
 		C4E62E9262392CE6B2ED782B /* ChartKitTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartKitTheme.swift; sourceTree = "<group>"; };
 		C5F15EDF1D9324832E125F99 /* ChartKitLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartKitLayout.swift; sourceTree = "<group>"; };
 		C637B52D89C7E95B55870379 /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Version.xcconfig; sourceTree = "<group>"; };
@@ -175,10 +180,12 @@
 		D352BD8AE1BBE853A681D41A /* FlowChartModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlowChartModel.swift; sourceTree = "<group>"; };
 		D38FF3D35B71472E47CDDBE6 /* AtlasThemeCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasThemeCatalog.swift; sourceTree = "<group>"; };
 		D3FE2888AB7E4FA0A1465760 /* MainShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainShell.swift; sourceTree = "<group>"; };
+		D4F11EC92DFB360DCE9E90E4 /* DemoFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoFixture.swift; sourceTree = "<group>"; };
 		D581C732D0BA6109E966EA7E /* GridChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GridChartView.swift; sourceTree = "<group>"; };
 		D6FB152490C1606077FD362E /* AppStateCharts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateCharts.swift; sourceTree = "<group>"; };
 		DD9FB11E654FCC8900DE663E /* SankeyLayoutEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SankeyLayoutEngine.swift; sourceTree = "<group>"; };
 		DE56FC9A41FAD9556228BD4B /* AddressAtlasiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AddressAtlasiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DF9AF1044F92A348B6D25470 /* IOSTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSTheme.swift; sourceTree = "<group>"; };
 		E4C43B692B10AD943CC995C2 /* AppStateICloud.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateICloud.swift; sourceTree = "<group>"; };
 		E4DE41F373F99E6B5FC4FCA5 /* CoinCustodyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoinCustodyView.swift; sourceTree = "<group>"; };
 		E6ACFD9600D7C27BD7E6A927 /* CoinUnlockTimelineModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoinUnlockTimelineModel.swift; sourceTree = "<group>"; };
@@ -188,6 +195,7 @@
 		EBB4C9FDD1723A1CF35A048B /* SlopeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SlopeModel.swift; sourceTree = "<group>"; };
 		EE5DE62950399E609B200B01 /* AtlasMapChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasMapChartView.swift; sourceTree = "<group>"; };
 		F04C152CC22B660608D36F9D /* PowerDiagramTreemap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PowerDiagramTreemap.swift; sourceTree = "<group>"; };
+		F3972B1BA1C92A828574B362 /* HistoryScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryScreen.swift; sourceTree = "<group>"; };
 		FA4BBBEAE1E61B59D35A181E /* WhatChangedChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhatChangedChartView.swift; sourceTree = "<group>"; };
 		FA68BBA92A4983A0704EA966 /* AtlasFormatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasFormatting.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -264,17 +272,21 @@
 				7E36EA502005E2033B62F7B9 /* AddressAtlasiOSApp.swift */,
 				478987FC2E1C1206E20F758E /* AssetsScreen.swift */,
 				374D5366490E6CB10977C60D /* AtlasSection.swift */,
+				C360C2C2CB0E5D7FAB33D35D /* CoinDetailScreen.swift */,
+				D4F11EC92DFB360DCE9E90E4 /* DemoFixture.swift */,
 				35DD59B780459F2D86827A3F /* ExchangesScreen.swift */,
 				0D52FBF704ADD4D782C73EF6 /* ExportScreen.swift */,
+				F3972B1BA1C92A828574B362 /* HistoryScreen.swift */,
 				E776BCC56C7A58C6ADC73F23 /* ICloudScreen.swift */,
 				96E46AE1BF72888A837ACFAA /* IOSComponents.swift */,
 				794806A4DD437BC916CAD7A7 /* IOSSupport.swift */,
+				DF9AF1044F92A348B6D25470 /* IOSTheme.swift */,
 				D3FE2888AB7E4FA0A1465760 /* MainShell.swift */,
 				1693EBD1E006CBDCBA9814D7 /* OnboardingScreen.swift */,
 				084E3DF7E79C8C8A2BC7C779 /* PortfolioScreen.swift */,
 				5301917867ACFE8CBB9F33FA /* RootView.swift */,
 				EB6599F39A81C8F170E79B74 /* SettingsScreen.swift */,
-				BA18A3E4D8663AF413B9BECB /* SnapshotsScreen.swift */,
+				2730780329651EB5423D8EEC /* SourcesScreen.swift */,
 				606FA4F090348CF9EC1664FC /* TokensScreen.swift */,
 				67ADF2440084A336EC7A193E /* UnlockScreen.swift */,
 				02D92FF63369E31CF04D24D0 /* WalletsScreen.swift */,
@@ -518,6 +530,7 @@
 				D2E64B76B48816ABC6BDE84A /* CoinChangeView.swift in Sources */,
 				64CC8143572696A5374AC116 /* CoinCustodyModel.swift in Sources */,
 				8616AED142B2119315050101 /* CoinCustodyView.swift in Sources */,
+				0FE71EEB3200D8D603DAD550 /* CoinDetailScreen.swift in Sources */,
 				F471F2EDAC93E2628A950D9A /* CoinStateStripModel.swift in Sources */,
 				55D784CF6CE6C4B0AE747805 /* CoinStateStripView.swift in Sources */,
 				CA815D110BB5D26A10247E1E /* CoinUnlockTimelineModel.swift in Sources */,
@@ -525,6 +538,7 @@
 				5D6E7FD02AB7C129F149701A /* CoinWidgetSupport.swift in Sources */,
 				91B66049674FF9D48C918BE3 /* ConcentrationChartView.swift in Sources */,
 				4341E4B0E4AAC1DB84F00E75 /* ConcentrationModel.swift in Sources */,
+				65EF04E639D7DEB95BEB4E18 /* DemoFixture.swift in Sources */,
 				1CA89A8DD856DAA8A22B3159 /* ExchangesScreen.swift in Sources */,
 				86729B4037637FAFAE252D93 /* ExportPipeline.swift in Sources */,
 				2A94988F6444A42C36C5A438 /* ExportScreen.swift in Sources */,
@@ -532,10 +546,12 @@
 				9066115C1C45CEFD94A901C2 /* FlowChartView.swift in Sources */,
 				962F637364AD0E7C9A186604 /* GridChartView.swift in Sources */,
 				392DC60003DFCBC0AF7C8BEB /* HistoryChartSupport.swift in Sources */,
+				ACED484E357ED05D2DCFEF02 /* HistoryScreen.swift in Sources */,
 				001D86EF3E9452AD1BF9C46D /* ICloudScreen.swift in Sources */,
 				74F5AFCA1B2D58B553B863A7 /* ICloudVaultService.swift in Sources */,
 				362FFBE7F6BA38363B97A8DD /* IOSComponents.swift in Sources */,
 				5362D54DF67A225118265A96 /* IOSSupport.swift in Sources */,
+				7681AE9E6B8B681855DA8AC2 /* IOSTheme.swift in Sources */,
 				00A04A55ED3AC4291FF60CC0 /* ListChartView.swift in Sources */,
 				9FA8EB661F0A60FA57768699 /* MainShell.swift in Sources */,
 				459E1C69C9F460557BE7606B /* MapChartView.swift in Sources */,
@@ -554,7 +570,7 @@
 				5320277B5CFC780C186CCAB8 /* SettingsScreen.swift in Sources */,
 				BF435609B7D527DD975C98F3 /* SlopeChartView.swift in Sources */,
 				258CBBB7D06F08EA42EC2C45 /* SlopeModel.swift in Sources */,
-				185D080067EB67F924B283B5 /* SnapshotsScreen.swift in Sources */,
+				B70859C36097DE5F28C1DCCE /* SourcesScreen.swift in Sources */,
 				5643EE6E20CFE88747F6CE01 /* StripChartView.swift in Sources */,
 				5B79D516A4A1DDBB22F3D0DD /* TokensScreen.swift in Sources */,
 				6E9D1606CAA6C4CE538E5EB8 /* UnlockScreen.swift in Sources */,

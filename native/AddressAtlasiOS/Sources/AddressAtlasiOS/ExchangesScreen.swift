@@ -42,7 +42,7 @@ struct ExchangesScreen: View {
           }
         } footer: {
           Text("Read-only keys · encrypted on this device")
-            .font(.footnote)
+            .font(AtlasTheme.font(.body, .footnote))
             .foregroundStyle(AtlasTheme.ink3)
         }
       }
@@ -54,18 +54,6 @@ struct ExchangesScreen: View {
       AtlasMotion.animation(AtlasMotion.standard, reduceMotion: reduceMotion),
       value: connections.map(\.id)
     )
-    .navigationTitle("Exchanges")
-    .navigationBarTitleDisplayMode(.large)
-    .toolbarBackground(AtlasTheme.canvas, for: .navigationBar)
-    .toolbar {
-      ToolbarItem(placement: .primaryAction) {
-        Button(action: openConnectSheet) {
-          Image(systemName: "plus")
-        }
-        .accessibilityLabel("Connect exchange")
-        .accessibilityHint("Opens a form to add a read-only API key.")
-      }
-    }
     .sheet(isPresented: $showsConnectSheet) {
       ConnectExchangeSheet()
     }
@@ -335,7 +323,7 @@ private struct ExchangeRowLabel: View {
       }
       VStack(alignment: .leading, spacing: 3) {
         Text(connection.label)
-          .font(.body.weight(.semibold))
+          .font(AtlasTheme.font(.body, .body, weight: .semibold))
           .foregroundStyle(AtlasTheme.ink)
           .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 1)
         HStack(spacing: 6) {
@@ -344,7 +332,7 @@ private struct ExchangeRowLabel: View {
             .frame(width: 7, height: 7)
             .accessibilityHidden(true)
           Text(ExchangePresentation.summary(connection))
-            .font(.subheadline)
+            .font(AtlasTheme.font(.body, .subheadline))
             .foregroundStyle(
               ExchangePresentation.needsAttention(connection) ? AtlasTheme.loss : AtlasTheme.ink3
             )
@@ -358,7 +346,7 @@ private struct ExchangeRowLabel: View {
           .accessibilityHidden(true)
       }
       Image(systemName: "chevron.right")
-        .font(.footnote.weight(.semibold))
+        .font(AtlasTheme.font(.body, .footnote, weight: .semibold))
         .foregroundStyle(AtlasTheme.ink3)
         .accessibilityHidden(true)
     }
@@ -424,7 +412,7 @@ private struct ConnectExchangeSheet: View {
         ForEach(Array(provider.exchangesSetupSteps.enumerated()), id: \.offset) { index, step in
           HStack(alignment: .top, spacing: 10) {
             Text("\(index + 1)")
-              .font(.caption.monospacedDigit().weight(.bold))
+              .font(AtlasTheme.font(.number, .caption, weight: .bold))
               .foregroundStyle(AtlasTheme.accent)
               .frame(width: 22, height: 22)
               .background(AtlasTheme.accent.opacity(0.12))
@@ -449,7 +437,7 @@ private struct ConnectExchangeSheet: View {
           "Use a separate key on every device. A Kraken key saved here works only on this device.",
           systemImage: "iphone"
         )
-        .font(.footnote)
+        .font(AtlasTheme.font(.body, .footnote))
         .foregroundStyle(AtlasTheme.warning)
         .fixedSize(horizontal: false, vertical: true)
       }
@@ -503,7 +491,7 @@ private struct ConnectExchangeSheet: View {
         provider.exchangesScopeLine,
         systemImage: provider.exchangesVerifiesScope ? "checkmark.shield.fill" : "exclamationmark.shield.fill"
       )
-      .font(.footnote)
+      .font(AtlasTheme.font(.body, .footnote))
       .foregroundStyle(provider.exchangesVerifiesScope ? AtlasTheme.ink3 : AtlasTheme.warning)
       .fixedSize(horizontal: false, vertical: true)
 
@@ -649,7 +637,7 @@ private struct ExchangeProviderPicker: View {
           HStack(spacing: 12) {
             ProviderMonogram(provider: provider, size: 36)
             Text(provider.label)
-              .font(.callout.weight(.semibold))
+              .font(AtlasTheme.font(.body, .callout, weight: .semibold))
             Spacer(minLength: 0)
             if isSelected {
               Image(systemName: "checkmark.circle.fill")
@@ -661,7 +649,7 @@ private struct ExchangeProviderPicker: View {
           VStack(spacing: 8) {
             ProviderMonogram(provider: provider, size: 36)
             Text(provider.label)
-              .font(.callout.weight(.semibold))
+              .font(AtlasTheme.font(.body, .callout, weight: .semibold))
               .lineLimit(1)
               .minimumScaleFactor(0.8)
           }
@@ -741,7 +729,7 @@ private struct ExchangesSecretField: View {
       }
       if let issue {
         Label(issue, systemImage: "exclamationmark.circle.fill")
-          .font(.footnote)
+          .font(AtlasTheme.font(.body, .footnote))
           .foregroundStyle(AtlasTheme.loss)
           .fixedSize(horizontal: false, vertical: true)
           .accessibilityHidden(true)
@@ -835,11 +823,11 @@ private struct ExchangeDetailSheet: View {
       VStack(spacing: 10) {
         ProviderMonogram(provider: connection.provider, size: 60)
         Text(connection.label)
-          .font(.title2.weight(.semibold))
+          .font(AtlasTheme.font(.display, .title2))
           .multilineTextAlignment(.center)
         if let provider = ExchangePresentation.providerSubtitle(connection) {
           Text(provider)
-            .font(.callout)
+            .font(AtlasTheme.font(.body, .callout))
             .foregroundStyle(AtlasTheme.ink3)
         }
       }
@@ -861,13 +849,13 @@ private struct ExchangeDetailSheet: View {
         Divider().overlay(AtlasTheme.ruleSoft)
         detailRow("Last updated") {
           Text(connection.lastSyncAt.map(AtlasFormatting.dateTime) ?? "Not yet")
-            .font(.callout)
+            .font(AtlasTheme.font(.body, .callout))
             .foregroundStyle(AtlasTheme.ink2)
         }
         Divider().overlay(AtlasTheme.ruleSoft)
         detailRow("Added") {
           Text(AtlasFormatting.dateTime(connection.createdAt))
-            .font(.callout)
+            .font(AtlasTheme.font(.body, .callout))
             .foregroundStyle(AtlasTheme.ink2)
         }
       }
@@ -897,7 +885,7 @@ private struct ExchangeDetailSheet: View {
             ? "This key was saved before permissions were checked. Make sure it is read-only in \(connection.provider.label)."
             : "\(connection.provider.label) scope can't be checked automatically. Make sure trading and transfer permissions are off."
         )
-        .font(.footnote)
+        .font(AtlasTheme.font(.body, .footnote))
         .foregroundStyle(AtlasTheme.ink3)
         .fixedSize(horizontal: false, vertical: true)
       }
@@ -906,7 +894,7 @@ private struct ExchangeDetailSheet: View {
 
       if !replacedMessage.isEmpty {
         Label(replacedMessage, systemImage: "checkmark.circle.fill")
-          .font(.callout)
+          .font(AtlasTheme.font(.body, .callout))
           .foregroundStyle(AtlasTheme.ink2)
           .fixedSize(horizontal: false, vertical: true)
           .padding(12)
@@ -985,14 +973,14 @@ private struct ExchangeDetailSheet: View {
     ViewThatFits(in: .horizontal) {
       HStack(spacing: 12) {
         Text(title)
-          .font(.callout)
+          .font(AtlasTheme.font(.body, .callout))
           .foregroundStyle(AtlasTheme.ink3)
         Spacer(minLength: 8)
         value()
       }
       VStack(alignment: .leading, spacing: 6) {
         Text(title)
-          .font(.callout)
+          .font(AtlasTheme.font(.body, .callout))
           .foregroundStyle(AtlasTheme.ink3)
         value()
       }
@@ -1035,7 +1023,7 @@ private struct ReplaceExchangeKeysView: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 18) {
         Text("The new key replaces the saved one for \(connection.label).")
-          .font(.callout)
+          .font(AtlasTheme.font(.body, .callout))
           .foregroundStyle(AtlasTheme.ink2)
           .fixedSize(horizontal: false, vertical: true)
 
@@ -1044,7 +1032,7 @@ private struct ReplaceExchangeKeysView: View {
             "Use a key made for this device. It will work only here.",
             systemImage: "iphone"
           )
-          .font(.footnote)
+          .font(AtlasTheme.font(.body, .footnote))
           .foregroundStyle(AtlasTheme.warning)
           .fixedSize(horizontal: false, vertical: true)
         }
@@ -1082,7 +1070,7 @@ private struct ReplaceExchangeKeysView: View {
           systemImage: provider.exchangesVerifiesScope
             ? "checkmark.shield.fill" : "exclamationmark.shield.fill"
         )
-        .font(.footnote)
+        .font(AtlasTheme.font(.body, .footnote))
         .foregroundStyle(provider.exchangesVerifiesScope ? AtlasTheme.ink3 : AtlasTheme.warning)
         .fixedSize(horizontal: false, vertical: true)
 
@@ -1191,7 +1179,7 @@ private struct ExchangesTouchIconButtonStyle: ButtonStyle {
 
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .font(.callout)
+      .font(AtlasTheme.font(.body, .callout))
       .foregroundStyle(
         isEnabled
           ? (configuration.isPressed

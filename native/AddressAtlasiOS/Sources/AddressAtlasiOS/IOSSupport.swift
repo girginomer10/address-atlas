@@ -6,19 +6,17 @@ import UniformTypeIdentifiers
 
 // MARK: - Page container
 
-/// Compact-width page: a large navigation title, persistent status (transient
-/// notices and errors float in `IOSStatusToast`), an optional one-line
-/// subtitle, and content stacked with 16pt gutters. Screens use this
-/// instead of the desktop `Page`, whose 42pt in-page title and 32pt gutters
-/// are sized for a window.
+/// Compact-width page: a themed inline title, persistent status (transient
+/// notices and errors float in `IOSStatusToast`), and content stacked with
+/// 16pt gutters. Screens use this instead of the desktop `Page`, whose 42pt
+/// in-page title and 32pt gutters are sized for a window.
 struct IOSPage<Content: View>: View {
+  @Environment(\.iosPageIsEmbedded) private var isEmbedded
   var title: String
-  var subtitle: String?
   var content: Content
 
-  init(title: String, subtitle: String? = nil, @ViewBuilder content: () -> Content) {
+  init(title: String, @ViewBuilder content: () -> Content) {
     self.title = title
-    self.subtitle = subtitle
     self.content = content()
   }
 
@@ -26,13 +24,6 @@ struct IOSPage<Content: View>: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 18) {
         IOSPersistentStatus()
-        if let subtitle, !subtitle.isEmpty {
-          Text(subtitle)
-            .font(.subheadline)
-            .foregroundStyle(AtlasTheme.ink2)
-            .lineSpacing(2)
-            .fixedSize(horizontal: false, vertical: true)
-        }
         content
       }
       .padding(.horizontal, 16)
@@ -42,11 +33,35 @@ struct IOSPage<Content: View>: View {
       .frame(maxWidth: .infinity)
     }
     .scrollDismissesKeyboard(.interactively)
-    .background(AtlasTheme.canvas)
+    .background(AtlasCanvasBackground().ignoresSafeArea())
     .atlasKeyboardDoneButton()
-    .navigationTitle(title)
-    .navigationBarTitleDisplayMode(.large)
-    .toolbarBackground(AtlasTheme.canvas, for: .navigationBar)
+    .modifier(IOSPageTitle(title: title, isEmbedded: isEmbedded))
+  }
+}
+
+/// Set by a host screen (Sources) that owns the navigation bar, so the page
+/// it embeds does not set a second title.
+private struct IOSPageEmbeddedKey: EnvironmentKey {
+  static let defaultValue = false
+}
+
+extension EnvironmentValues {
+  var iosPageIsEmbedded: Bool {
+    get { self[IOSPageEmbeddedKey.self] }
+    set { self[IOSPageEmbeddedKey.self] = newValue }
+  }
+}
+
+private struct IOSPageTitle: ViewModifier {
+  var title: String
+  var isEmbedded: Bool
+
+  func body(content: Content) -> some View {
+    if isEmbedded {
+      content
+    } else {
+      content.iosTitle(title)
+    }
   }
 }
 

@@ -54,7 +54,7 @@ struct PortfolioScreen: View {
 
         Link(destination: AppState.coinGeckoAttributionURL) {
           Text("Prices by CoinGecko")
-            .font(.caption2)
+            .font(AtlasTheme.font(.label, .caption2))
             .foregroundStyle(AtlasTheme.ink3)
             .frame(maxWidth: .infinity, minHeight: 44)
         }
@@ -123,7 +123,7 @@ struct PortfolioScreen: View {
   /// Nil opens every asset; a symbol opens Assets filtered to it.
   private func openAssets(symbol: String?) {
     state.clearTransientMessagesForNavigation()
-    navigation.openAssets(symbol: symbol)
+    navigation.openAssets(filter: nil)
   }
 
   /// `IOSPendingAction.runFirstScan`: another screen (the toast after the
@@ -211,10 +211,10 @@ private struct PortfolioSourcesChangedBanner: View {
   private var copy: some View {
     VStack(alignment: .leading, spacing: 2) {
       Text("Sources changed")
-        .font(.callout.weight(.semibold))
+        .font(AtlasTheme.font(.body, .callout, weight: .semibold))
         .foregroundStyle(AtlasTheme.ink)
       Text("\(detail) since the last scan")
-        .font(.footnote)
+        .font(AtlasTheme.font(.body, .footnote))
         .foregroundStyle(AtlasTheme.ink3)
         .fixedSize(horizontal: false, vertical: true)
     }
@@ -229,7 +229,7 @@ private struct PortfolioSourcesChangedBanner: View {
     layout {
       if !dynamicTypeSize.isAccessibilitySize {
         Image(systemName: "arrow.triangle.2.circlepath")
-          .font(.body.weight(.semibold))
+          .font(AtlasTheme.font(.body, .body, weight: .semibold))
           .foregroundStyle(AtlasTheme.accent)
           .frame(width: 32, height: 32)
           .background(AtlasTheme.accent.opacity(0.12))
@@ -277,7 +277,7 @@ private struct PortfolioCompactScanButton: View {
         }
         Text(state.scanning ? "Scanning" : "Scan")
       }
-      .font(.callout.weight(.semibold))
+      .font(AtlasTheme.font(.body, .callout, weight: .semibold))
       .foregroundStyle(AtlasTheme.paper)
       .padding(.horizontal, 16)
       .frame(minHeight: 34)
@@ -389,11 +389,11 @@ private struct PortfolioStartCard: View {
 
       VStack(spacing: 6) {
         Text("Add your first source")
-          .font(.title2.weight(.bold))
+          .font(AtlasTheme.font(.display, .title2))
           .multilineTextAlignment(.center)
           .accessibilityAddTraits(.isHeader)
         Text("Track a wallet by its public address, or connect an exchange read-only.")
-          .font(.callout)
+          .font(AtlasTheme.font(.body, .callout))
           .foregroundStyle(AtlasTheme.ink2)
           .multilineTextAlignment(.center)
           .fixedSize(horizontal: false, vertical: true)
@@ -401,7 +401,7 @@ private struct PortfolioStartCard: View {
 
       VStack(spacing: 10) {
         Button {
-          open(.wallets, then: .addWallet)
+          open(.sources, then: .addWallet)
         } label: {
           Label {
             Text("Add a wallet")
@@ -415,7 +415,7 @@ private struct PortfolioStartCard: View {
         .accessibilityIdentifier("portfolio-empty-add-wallet")
 
         Button {
-          open(.exchanges, then: .connectExchange)
+          open(.sources, then: .connectExchange)
         } label: {
           Label {
             Text("Connect an exchange")
@@ -463,13 +463,13 @@ private struct PortfolioFirstScanCard: View {
       PortfolioBadgeIcon(systemImage: "arrow.clockwise")
       VStack(spacing: 6) {
         Text("Run your first scan")
-          .font(.title2.weight(.bold))
+          .font(AtlasTheme.font(.display, .title2))
           .multilineTextAlignment(.center)
           .accessibilityAddTraits(.isHeader)
         Text(
           "Reads the balances of your \(sourceCount) source\(sourceCount == 1 ? "" : "s") and saves a private snapshot."
         )
-        .font(.callout)
+        .font(AtlasTheme.font(.body, .callout))
         .foregroundStyle(AtlasTheme.ink2)
         .multilineTextAlignment(.center)
         .fixedSize(horizontal: false, vertical: true)
@@ -495,7 +495,7 @@ private struct PortfolioBadgeIcon: View {
 
   var body: some View {
     Image(systemName: systemImage)
-      .font(.title2.weight(.semibold))
+      .font(AtlasTheme.font(.display, .title2))
       .foregroundStyle(AtlasTheme.paper)
       .frame(width: 56, height: 56)
       .background(
@@ -520,7 +520,7 @@ private struct PortfolioOfflineBanner: View {
         .foregroundStyle(AtlasTheme.warning)
         .accessibilityHidden(true)
       Text("Offline. Scans resume when you reconnect.")
-        .font(.callout)
+        .font(AtlasTheme.font(.body, .callout))
         .foregroundStyle(AtlasTheme.ink2)
         .fixedSize(horizontal: false, vertical: true)
       Spacer(minLength: 0)
@@ -568,7 +568,7 @@ private struct PortfolioHero: View {
       VStack(alignment: .leading, spacing: 6) {
         HStack(spacing: 8) {
           Text(unpricedCount > 0 ? "Priced subtotal" : "Total value")
-            .font(.subheadline.weight(.medium))
+            .font(AtlasTheme.font(.body, .subheadline, weight: .medium))
             .foregroundStyle(AtlasTheme.ink3)
           if unpricedCount > 0 {
             Badge("Partial", color: AtlasTheme.warning)
@@ -591,7 +591,7 @@ private struct PortfolioHero: View {
         }
         TimelineView(.periodic(from: .now, by: 30)) { context in
           Text("Updated \(Self.relative(generatedAt, now: context.date))")
-            .font(.footnote)
+            .font(AtlasTheme.font(.body, .footnote))
             .foregroundStyle(AtlasTheme.ink3)
         }
       }
@@ -605,7 +605,7 @@ private struct PortfolioHero: View {
             Text("\(hiddenDustCount) small balances hidden (\(money(hiddenDustValueUsd))), still counted")
           }
         }
-        .font(.caption)
+        .font(AtlasTheme.font(.label, .caption))
         .foregroundStyle(AtlasTheme.ink3)
         .fixedSize(horizontal: false, vertical: true)
       }
@@ -685,7 +685,7 @@ private struct PortfolioChangeLine: View {
   var body: some View {
     HStack(alignment: .firstTextBaseline, spacing: 6) {
       Image(systemName: symbol)
-        .font(.footnote.weight(.bold))
+        .font(AtlasTheme.font(.body, .footnote, weight: .bold))
         .foregroundStyle(color)
         .accessibilityHidden(true)
       text
@@ -699,19 +699,19 @@ private struct PortfolioChangeLine: View {
   private var text: Text {
     if case .sourcesChanged = change {
       return Text("Sources changed since the previous scan")
-        .font(.subheadline)
+        .font(AtlasTheme.font(.body, .subheadline))
         .foregroundStyle(AtlasTheme.ink3)
     }
     if direction == 0 {
       return Text("No change since last scan")
-        .font(.subheadline)
+        .font(AtlasTheme.font(.body, .subheadline))
         .foregroundStyle(AtlasTheme.ink3)
     }
     let amount = Text(percentText.map { "\(amountText) (\($0))" } ?? amountText)
-      .font(.subheadline.weight(.semibold).monospacedDigit())
+      .font(AtlasTheme.font(.number, .subheadline, weight: .semibold))
       .foregroundStyle(color)
     let caption = Text("since last scan")
-      .font(.subheadline)
+      .font(AtlasTheme.font(.body, .subheadline))
       .foregroundStyle(AtlasTheme.ink3)
     return Text("\(amount) \(caption)")
   }
@@ -744,11 +744,11 @@ private struct PortfolioStatsRow: View {
   private func item(_ stat: PortfolioStat) -> some View {
     HStack(spacing: 6) {
       Image(systemName: stat.systemImage)
-        .font(.footnote.weight(.semibold))
+        .font(AtlasTheme.font(.body, .footnote, weight: .semibold))
         .foregroundStyle(AtlasTheme.ink3)
         .accessibilityHidden(true)
       Text(stat.text)
-        .font(.subheadline.weight(.medium))
+        .font(AtlasTheme.font(.body, .subheadline, weight: .medium))
         .foregroundStyle(AtlasTheme.ink2)
         .fixedSize()
     }
@@ -782,16 +782,16 @@ private struct PortfolioWarnings: View {
           }
           VStack(alignment: .leading, spacing: 1) {
             Text("Last scan was incomplete")
-              .font(.callout.weight(.semibold))
+              .font(AtlasTheme.font(.body, .callout, weight: .semibold))
               .foregroundStyle(AtlasTheme.ink)
             Text("\(warnings.count) issue\(warnings.count == 1 ? "" : "s"). Some balances may be missing.")
-              .font(.footnote)
+              .font(AtlasTheme.font(.body, .footnote))
               .foregroundStyle(AtlasTheme.ink3)
           }
           .multilineTextAlignment(.leading)
           Spacer(minLength: 8)
           Image(systemName: "chevron.down")
-            .font(.footnote.weight(.semibold))
+            .font(AtlasTheme.font(.body, .footnote, weight: .semibold))
             .foregroundStyle(AtlasTheme.ink3)
             .rotationEffect(.degrees(isExpanded ? 180 : 0))
             .accessibilityHidden(true)
@@ -814,7 +814,7 @@ private struct PortfolioWarnings: View {
                 .padding(.top, 7)
                 .accessibilityHidden(true)
               Text(warning)
-                .font(.callout)
+                .font(AtlasTheme.font(.body, .callout))
                 .foregroundStyle(AtlasTheme.ink2)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -930,7 +930,7 @@ private struct PortfolioAllocationSection: View {
 
   private var headerTitle: some View {
     Text("Allocation")
-      .font(.title3.weight(.semibold))
+      .font(AtlasTheme.font(.display, .title3))
       .foregroundStyle(AtlasTheme.ink)
   }
 
@@ -938,9 +938,9 @@ private struct PortfolioAllocationSection: View {
     HStack(spacing: 4) {
       Text("All assets")
       Image(systemName: "chevron.right")
-        .font(.footnote.weight(.semibold))
+        .font(AtlasTheme.font(.body, .footnote, weight: .semibold))
     }
-    .font(.subheadline.weight(.medium))
+    .font(AtlasTheme.font(.body, .subheadline, weight: .medium))
     .foregroundStyle(AtlasTheme.accent)
   }
 
@@ -989,7 +989,7 @@ private struct PortfolioAllocationSection: View {
           if unpricedCount > 0 {
             Divider().overlay(AtlasTheme.ruleSoft)
             Text("\(unpricedCount) without a USD price, not shown")
-              .font(.caption)
+              .font(AtlasTheme.font(.label, .caption))
               .foregroundStyle(AtlasTheme.ink3)
               .frame(maxWidth: .infinity, alignment: .leading)
               .padding(.horizontal, 16)
@@ -1101,15 +1101,15 @@ private struct PortfolioAllocationRow: View {
   private var accessibilitySizeContent: some View {
     VStack(alignment: .leading, spacing: 6) {
       Text(title)
-        .font(.body.weight(.semibold))
+        .font(AtlasTheme.font(.body, .body, weight: .semibold))
         .foregroundStyle(AtlasTheme.ink)
       Text(money(entry.valueUsd))
-        .font(.body.monospacedDigit())
+        .font(AtlasTheme.font(.number, .body))
         .foregroundStyle(AtlasTheme.ink)
         .lineLimit(1)
         .minimumScaleFactor(0.5)
       Text("\(percentText) · \(subtitle)")
-        .font(.caption)
+        .font(AtlasTheme.font(.label, .caption))
         .foregroundStyle(AtlasTheme.ink3)
       PortfolioAllocationBar(fraction: entry.fraction, color: barColor)
     }
@@ -1126,26 +1126,26 @@ private struct PortfolioAllocationRow: View {
       VStack(alignment: .leading, spacing: 6) {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
           Text(title)
-            .font(.body.weight(.semibold))
+            .font(AtlasTheme.font(.body, .body, weight: .semibold))
             .foregroundStyle(AtlasTheme.ink)
             .lineLimit(1)
             .truncationMode(.middle)
           Spacer(minLength: 8)
           Text(money(entry.valueUsd))
-            .font(.callout.monospacedDigit().weight(.semibold))
+            .font(AtlasTheme.font(.number, .callout, weight: .semibold))
             .foregroundStyle(AtlasTheme.ink)
             .lineLimit(1)
             .layoutPriority(1)
         }
         HStack(alignment: .firstTextBaseline, spacing: 8) {
           Text(subtitle)
-            .font(.caption)
+            .font(AtlasTheme.font(.label, .caption))
             .foregroundStyle(AtlasTheme.ink3)
             .lineLimit(1)
             .truncationMode(.middle)
           Spacer(minLength: 8)
           Text(percentText)
-            .font(.caption.monospacedDigit())
+            .font(AtlasTheme.font(.number, .caption))
             .foregroundStyle(AtlasTheme.ink3)
             .lineLimit(1)
             .layoutPriority(1)
@@ -1155,7 +1155,7 @@ private struct PortfolioAllocationRow: View {
 
       if showsChevron {
         Image(systemName: "chevron.right")
-          .font(.footnote.weight(.semibold))
+          .font(AtlasTheme.font(.body, .footnote, weight: .semibold))
           .foregroundStyle(AtlasTheme.ink3)
           .accessibilityHidden(true)
       }
