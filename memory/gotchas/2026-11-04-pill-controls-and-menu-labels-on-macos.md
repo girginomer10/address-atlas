@@ -23,6 +23,16 @@ related_files: [native/AddressAtlasMac/Sources/AddressAtlasMac/MacScreens/MacBut
   `NSHostingView.cacheDisplay` can, and also draws the `Canvas` charts. An
   AppKit `Table` still shows no rows in an offscreen render.
 
+## Fixed in the shared chrome
+
+`AtlasChrome` and the two button styles now draw outlines with `AtlasOutline`
+(`AtlasThemeRuntime.swift`): a circular-corner capsule when the radius reaches
+half the shorter side (pill controls pass 999), a continuous rounded rectangle
+otherwise. A render of `AtlasPrimaryButtonStyle`, `AtlasSecondaryButtonStyle` and
+`Badge` through `NSHostingView` in Chain colours shows no bars. The Mac-only
+styles in `MacButtons.swift` can be removed once a live window confirms it; the
+`Menu` label limit below still applies.
+
 ## Safe practice
 
 - Mac screens use `MacPrimaryButtonStyle`, `MacSecondaryButtonStyle`,
