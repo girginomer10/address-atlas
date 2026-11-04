@@ -1057,7 +1057,7 @@ struct AtlasPrimaryButtonStyle: ButtonStyle {
           radius: min(radius, 21)
         )
       }
-      .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+      .contentShape(AtlasOutline(radius: radius))
       .scaleEffect(pressed && (!shape.hasHardShadows || hidesShadow) ? 0.985 : 1)
       .opacity(isEnabled ? 1 : 0.72)
       .animation(
@@ -1113,7 +1113,7 @@ struct AtlasSecondaryButtonStyle: ButtonStyle {
           radius: min(radius, 21)
         )
       }
-      .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+      .contentShape(AtlasOutline(radius: radius))
       .scaleEffect(pressed && !shape.hasHardShadows ? 0.985 : 1)
       .animation(
         AtlasMotion.animation(AtlasMotion.quick, reduceMotion: reduceMotion),

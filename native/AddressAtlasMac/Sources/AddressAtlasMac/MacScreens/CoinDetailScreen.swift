@@ -11,7 +11,8 @@ struct CoinDetailView: View {
   @Environment(\.macNow) private var now
 
   @State private var visualization: PortfolioVisualization
-  @State private var grouping: PortfolioGrouping
+  /// The grouping the user picked here (or the app was opened with), if any.
+  @State private var chosenGrouping: PortfolioGrouping?
   /// Limits the holdings list to one slice the user picked in a chart.
   @State private var rowFilter: MacSliceFilter?
 
@@ -29,8 +30,22 @@ struct CoinDetailView: View {
     self.coinKey = coinKey
     _visualization = State(
       initialValue: visualization.worksForSingleCoin ? visualization : .map)
-    _grouping = State(
-      initialValue: Self.groupings.contains(grouping) ? grouping : .network)
+    // The portfolio's default grouping is not a choice about this coin.
+    _chosenGrouping = State(
+      initialValue: grouping != .network && Self.groupings.contains(grouping) ? grouping : nil)
+  }
+
+  /// A coin held in one state (all liquid, say) splits usefully by network, but
+  /// one held in several (liquid, staked, unbonding) shows more by state, and
+  /// a single-network coin would otherwise show one block of 100%. Only the
+  /// default is chosen here; the menu always wins.
+  private var grouping: PortfolioGrouping {
+    if let chosenGrouping { return chosenGrouping }
+    return Set(holdings.map { HoldingState($0) }).count > 1 ? .state : .network
+  }
+
+  private var groupingBinding: Binding<PortfolioGrouping> {
+    Binding(get: { grouping }, set: { chosenGrouping = $0 })
   }
 
   private var holdingsCount: Int { holdings.count }
@@ -169,13 +184,13 @@ struct CoinDetailView: View {
           MacViewSwitcher(selection: $visualization, options: options)
           Spacer(minLength: 8)
           if visualization.usesGrouping {
-            MacGroupingMenu(selection: $grouping, options: Self.groupings)
+            MacGroupingMenu(selection: groupingBinding, options: Self.groupings)
           }
         }
         VStack(alignment: .leading, spacing: 10) {
           MacViewSwitcher(selection: $visualization, options: options)
           if visualization.usesGrouping {
-            MacGroupingMenu(selection: $grouping, options: Self.groupings)
+            MacGroupingMenu(selection: groupingBinding, options: Self.groupings)
           }
         }
       }
