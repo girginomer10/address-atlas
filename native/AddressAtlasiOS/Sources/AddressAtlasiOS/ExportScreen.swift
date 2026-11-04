@@ -201,13 +201,13 @@ struct ExportScreen: View {
 
         if showFullIdentifyingExports {
           Text(
-            "Anyone with these files can see your addresses, labels, and exact balances. They contain no exchange credentials and are not backups."
+            "Anyone with these files can see your addresses, wallet names, and exact balances. They contain no exchange API keys and are not backups."
           )
           .font(AtlasTheme.font(.body, .callout))
           .foregroundStyle(AtlasTheme.ink)
           .fixedSize(horizontal: false, vertical: true)
           .accessibilityLabel(
-            "Warning: anyone with these files can see your addresses, labels, and exact balances. They contain no exchange credentials and are not backups."
+            "Warning: anyone with these files can see your addresses, wallet names, and exact balances. They contain no exchange API keys and are not backups."
           )
 
           ExportScreenFormatPicker(selection: $fullFormat, detail: key.detail)
@@ -300,7 +300,7 @@ struct ExportScreen: View {
       return try makePayload()
     } catch WalletLabelDraftError.invalidLabel {
       state.notice = ""
-      state.error = "A wallet label has to be 1 to 80 characters. Fix it in Sources, then export again."
+      state.error = "A wallet name has to be 1 to 80 characters. Fix it in Sources, then export again."
       return nil
     } catch {
       state.presentUserFacingError(error)
@@ -440,7 +440,7 @@ private enum ExportScreenExportKey: Equatable {
     switch self {
     case .shareSafeCSV: "Opens in any spreadsheet app."
     case .shareSafeJSON: "The same summary as structured data."
-    case .fullCSV: "Latest addresses, labels, asset names, and exact balances."
+    case .fullCSV: "Latest addresses, wallet names, asset names, and exact balances."
     case .fullJSON: "Adds portfolio records, settings, timestamps, and scan history."
     }
   }

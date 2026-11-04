@@ -862,7 +862,7 @@ private struct ExchangeDetailSheet: View {
     if ExchangePresentation.hasInvalidKrakenBinding(connection) {
       IOSNotice(
         systemImage: "exclamationmark.triangle.fill",
-        text: "This Kraken key predates device binding. Replace it with a new read-only key made for this device before you scan."
+        text: "This Kraken key was saved before keys were tied to one device. Replace it with a new read-only key made for this device before you scan."
       )
     }
 

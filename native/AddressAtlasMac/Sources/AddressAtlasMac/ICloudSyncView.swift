@@ -51,7 +51,7 @@ struct SyncView: View {
         }
         VStack(alignment: .leading, spacing: 8) {
           Text(
-            "Nothing transfers until you choose. Restoring replaces this Mac\u{2019}s portfolio after saving a local rollback copy, and newer changes from another device are never overwritten silently."
+            "Nothing transfers until you choose. Restoring replaces this Mac\u{2019}s portfolio after saving a backup copy on this Mac, and newer changes from another device are never overwritten silently."
           )
           Text(
             "Exchange keys travel encrypted, but Kraken needs its own API key on each Mac. The copy counts toward your iCloud storage."
@@ -63,12 +63,12 @@ struct SyncView: View {
 
         if state.pendingVaultUpload != nil || state.quarantinedPendingVaultUpload != nil {
           InfoCallout(
-            title: "A transfer from the old sync server is saved locally",
+            title: "An upload to the old sync server didn\u{2019}t finish",
             copy:
-              "Finish the migration to keep this vault and stop that transfer. Data already on the old server is not deleted.",
+              "Stop it to keep your portfolio as it is on this Mac. Data already on the old server isn\u{2019}t deleted.",
             tone: .warning
           )
-          Button("Finish local migration\u{2026}") { migrationConfirmation = true }
+          Button("Stop the upload\u{2026}") { migrationConfirmation = true }
             .buttonStyle(MacSecondaryButtonStyle())
             .disabled(state.syncing || state.scanning || state.isPersisting)
         }
@@ -77,7 +77,7 @@ struct SyncView: View {
 
         AdaptiveStack(horizontalSpacing: 12) {
           if state.hasVaultRollbackCheckpoint {
-            Button("Restore previous local copy") {
+            Button("Restore earlier copy") {
               rollbackConfirmation = true
             }
             .buttonStyle(MacSecondaryButtonStyle())
@@ -103,7 +103,7 @@ struct SyncView: View {
       }
     } message: {
       Text(
-        "A local rollback copy is saved first. Export your data separately if you want to keep both portfolios."
+        "A backup copy is saved on this Mac first. Export your data separately if you want to keep both portfolios."
       )
     }
     .confirmationDialog(
@@ -115,10 +115,12 @@ struct SyncView: View {
       Text("Your portfolio stays on this Mac, and other devices keep their local copies.")
     }
     .confirmationDialog(
-      "Stop the old server transfer and keep the local vault?",
+      "Stop the old server upload and keep your portfolio on this Mac?",
       isPresented: $migrationConfirmation
     ) {
-      Button("Keep local vault and migrate") { Task { await state.finishLegacySyncMigration() } }
+      Button("Stop upload") { Task { await state.finishLegacySyncMigration() } }
+    } message: {
+      Text("Data already on the old server isn\u{2019}t deleted.")
     }
     .confirmationDialog(
       "Reset this Mac\u{2019}s iCloud connection?", isPresented: $resetConfirmation
@@ -130,13 +132,13 @@ struct SyncView: View {
       )
     }
     .confirmationDialog(
-      "Restore the previous local portfolio?", isPresented: $rollbackConfirmation
+      "Replace this Mac\u{2019}s portfolio with the earlier copy?", isPresented: $rollbackConfirmation
     ) {
-      Button("Restore previous local copy", role: .destructive) {
+      Button("Restore earlier copy", role: .destructive) {
         Task { await state.restoreVaultRollbackCheckpoint() }
       }
     } message: {
-      Text("This replaces the current local portfolio. The iCloud copy is not changed.")
+      Text("This replaces the current portfolio on this Mac. The iCloud copy isn\u{2019}t changed.")
     }
   }
 }

@@ -590,7 +590,7 @@ struct SettingsScreen: View {
         SettingsRowLabel(
           title: "Privacy-safe report",
           subtitle:
-            "App version, state flags, count ranges and error codes. No addresses, labels, amounts or keys.",
+            "App version, state flags, count ranges and error codes. No addresses, names, amounts or keys.",
           systemImage: "stethoscope"
         ) {
           EmptyView()
@@ -606,7 +606,7 @@ struct SettingsScreen: View {
           .buttonStyle(AtlasSecondaryButtonStyle())
           .accessibilityLabel("Copy diagnostics")
           .accessibilityHint(
-            "Copies a bounded technical report that excludes portfolio content and identifiers."
+            "Copies a short technical report that leaves out portfolio content and identifiers."
           )
           .accessibilityIdentifier("settings.copyDiagnostics")
           ShareLink(
@@ -619,7 +619,7 @@ struct SettingsScreen: View {
           .buttonStyle(AtlasSecondaryButtonStyle())
           .accessibilityLabel("Share diagnostics")
           .accessibilityHint(
-            "Opens the share sheet with the same bounded report, for example to attach it to a support message."
+            "Opens the share sheet with the same short report, for example to attach it to a support message."
           )
         }
         .padding(.horizontal, 14)

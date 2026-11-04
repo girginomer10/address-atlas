@@ -9,7 +9,7 @@ struct PrivacySafeDiagnosticsControls: View {
     VStack(alignment: .leading, spacing: 14) {
       MacHeading("Diagnostics")
       Text(
-        "Copies app and schema versions, state flags, count ranges and failure codes. It leaves out addresses, names, amounts, credentials, URLs, file paths and raw errors."
+        "Copies app and schema versions, state flags, count ranges and failure codes. It leaves out addresses, names, amounts, keys, URLs, file paths and raw errors."
       )
       .font(AtlasTheme.font(.body, .callout))
       .foregroundStyle(AtlasTheme.ink2)
@@ -35,7 +35,7 @@ struct PrivacySafeDiagnosticsControls: View {
       state.error = ""
     } else {
       state.notice = ""
-      state.error = "Diagnostics couldn\u{2019}t be copied. Nothing from your vault was placed on the clipboard."
+      state.error = "Diagnostics couldn\u{2019}t be copied. Nothing was placed on the clipboard."
     }
   }
 }
