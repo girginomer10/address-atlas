@@ -27,11 +27,15 @@ Balances are read directly from public chain, price, and exchange providers, so 
 
 Rendered from a synthetic portfolio.
 
-| Map, Chain colours | Flow, Candy brutal | Ring, Heatmap (dark) |
-| --- | --- | --- |
-| <img src="docs/design/screenshots/phase2/map-chainColors-light-full.png" alt="Map view in the Chain colours theme: BTC, ETH, SOL, ATOM, and USDC as blocks sized by value" width="100%"> | <img src="docs/design/screenshots/phase2/flow-candy-light-full.png" alt="Flow view in the Candy brutal theme: wallets and exchanges on the left, coins in the middle, liquid, on exchange, staked, unbonding, and rewards on the right" width="100%"> | <img src="docs/design/screenshots/phase2/ring-heatmap-dark-full.png" alt="Ring view in the Heatmap theme, dark: a donut of five assets with a legend" width="100%"> |
+| Portfolio, Chain colours | Coin detail, Candy brutal |
+| --- | --- |
+| <img src="docs/design/screenshots/phase3/mac/portfolio-map-chainColors.png" alt="Portfolio screen on Mac in the Chain colours theme: total value, a map of BTC, ETH, SOL and other coins as blocks sized by value, and the holdings list" width="100%"> | <img src="docs/design/screenshots/phase3/mac/coin-atom-candy.png" alt="ATOM detail on Mac in the Candy brutal theme: liquid, staked, unbonding and rewards, 24.79 ATOM unbonding until Nov 16, and where each part is held" width="100%"> |
 
-<!-- TODO(phase3): replace with phase 3 screenshots (docs/design/screenshots/phase3/) once the Mac and iOS screens are rebuilt -->
+| Flow, Candy brutal | Ring, Heatmap (dark) |
+| --- | --- |
+| <img src="docs/design/screenshots/phase2/flow-candy-light-full.png" alt="Flow view in the Candy brutal theme: wallets and exchanges on the left, coins in the middle, liquid, on exchange, staked, unbonding, and rewards on the right" width="100%"> | <img src="docs/design/screenshots/phase2/ring-heatmap-dark-full.png" alt="Ring view in the Heatmap theme, dark: a donut of five assets with a legend" width="100%"> |
+
+<!-- TODO(phase3): add iPhone screenshots (docs/design/screenshots/phase3/ios/) once the iOS screens are rebuilt -->
 
 ## What you get
 
