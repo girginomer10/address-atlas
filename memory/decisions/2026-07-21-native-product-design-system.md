@@ -15,12 +15,19 @@ credential setup feel less trustworthy than the underlying security model.
 
 ## Decision
 
-- Use semantic surfaces, restrained navy/blue accents, rounded system type, soft
-  borders, and hierarchy from spacing and weight rather than decoration.
+> Update 2026-11-04: the single-palette parts below are superseded by
+> `2026-11-04-theme-engine.md` (six selectable themes). The bullets marked
+> *superseded* describe the old default look only; the others still apply.
+
+- *Superseded:* Use semantic surfaces, restrained navy/blue accents, rounded
+  system type, soft borders, and hierarchy from spacing and weight rather than
+  decoration. (Semantic surfaces and hierarchy from spacing remain; the palette,
+  type and borders now come from the selected theme.)
 - Keep the main navigation and page language calm and literal. Privacy claims
   must explain the concrete boundary instead of using slogans.
-- Use the appearance-aware `paper` foreground on accent fills so primary actions
-  meet normal-text contrast in light, dark, and high-contrast appearances.
+- *Superseded wording:* primary actions use `onAccent` on `accent` (every theme
+  and appearance, tested at 4.5:1). `paper` on accent still happens to pass
+  because each accent is the inverse of its canvas.
 - Respect Reduce Motion for page, control, and value transitions; do not make
   essential state depend on animation.
 - Every primary surface must render at the minimum supported content width, with
@@ -37,7 +44,8 @@ credential setup feel less trustworthy than the underlying security model.
 
 - New native screens should compose the shared typography, surface, radius,
   control, status, and motion primitives before introducing local styling.
-- Changes to palette or primary controls must retain contrast, keyboard focus,
-  Reduce Motion, minimum-width render, and full Swift/Thread Sanitizer coverage.
+- Changes to palette or primary controls must retain contrast (all themes and
+  variants), keyboard focus, Reduce Motion, minimum-width render, and full
+  Swift/Thread Sanitizer coverage.
 - Never capture real wallet addresses, balances, API keys, or recovery material
   for screenshots, documentation, tests, or public repository assets.
