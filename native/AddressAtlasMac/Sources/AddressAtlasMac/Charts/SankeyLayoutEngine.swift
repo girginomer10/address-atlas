@@ -76,21 +76,36 @@ struct SankeyGraph: Equatable {
     otherLabel: (Int) -> String = { _ in "Other" }
   ) -> SankeyGraph {
     guard maximumPerColumn >= 2 else { return self }
+    return collapsing(
+      keepCount: { _, members in members.count > maximumPerColumn ? maximumPerColumn : members.count },
+      otherLabel: otherLabel)
+  }
+
+  /// Like `collapsingSmallNodes`, with a per-column rule: `keepCount` receives
+  /// a column and its nodes (largest first) and returns how many nodes the
+  /// column should end with, counting the "Other" node that holds the rest. A
+  /// result of 2 or more and below the node count folds the smallest nodes; any
+  /// other result leaves the column alone.
+  func collapsing(
+    keepCount: (_ column: Int, _ members: [Node]) -> Int,
+    otherLabel: (Int) -> String = { _ in "Other" }
+  ) -> SankeyGraph {
     var replacement: [String: String] = [:]
     var newNodes: [Node] = []
     for column in columns {
       let members = nodes(inColumn: column)
-      guard members.count > maximumPerColumn else {
-        newNodes += members
-        continue
-      }
       let ordered = members.sorted { lhs, rhs in
         if lhs.value != rhs.value { return lhs.value > rhs.value }
         if lhs.label != rhs.label { return lhs.label < rhs.label }
         return lhs.id < rhs.id
       }
-      let kept = ordered.prefix(maximumPerColumn - 1)
-      let folded = ordered.dropFirst(maximumPerColumn - 1)
+      let keep = keepCount(column, ordered)
+      guard keep >= 2, keep < ordered.count else {
+        newNodes += members
+        continue
+      }
+      let kept = ordered.prefix(keep - 1)
+      let folded = ordered.dropFirst(keep - 1)
       newNodes += kept
       let otherID = Self.otherID(column: column)
       for node in folded { replacement[node.id] = otherID }
