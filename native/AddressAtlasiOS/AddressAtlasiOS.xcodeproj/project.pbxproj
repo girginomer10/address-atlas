@@ -55,6 +55,7 @@
 		7B2E7B739410FAE02E90A1F9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0DA31591CD25C1D10EA3119E /* Assets.xcassets */; };
 		80AFD4B2F3823A2D681F67FF /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC93E4A10CF81A60F0D50C66 /* AppState.swift */; };
 		81FE9C5E87E8D8C731A66A3E /* CoinAmountHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA0046DE1956BD3F654EB7D0 /* CoinAmountHistoryView.swift */; };
+		82CC0B8B8BEF2B0A1885C791 /* PortfolioVisualizationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41707741ABFD7AFBA2EBE526 /* PortfolioVisualizationView.swift */; };
 		85D37CE8976363FADB9B4D4B /* AppStateICloud.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4C43B692B10AD943CC995C2 /* AppStateICloud.swift */; };
 		8616AED142B2119315050101 /* CoinCustodyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4DE41F373F99E6B5FC4FCA5 /* CoinCustodyView.swift */; };
 		86729B4037637FAFAE252D93 /* ExportPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EF4CAB228D89D371EE0BB39 /* ExportPipeline.swift */; };
@@ -125,6 +126,7 @@
 		391A6FFA696CA546B3044C62 /* CoinWidgetSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoinWidgetSupport.swift; sourceTree = "<group>"; };
 		3A57371D5C1EBCEB3A911934 /* ChartKitComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartKitComponents.swift; sourceTree = "<group>"; };
 		3EC0B0BFB888653BE9ADDE19 /* CoinStateStripView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoinStateStripView.swift; sourceTree = "<group>"; };
+		41707741ABFD7AFBA2EBE526 /* PortfolioVisualizationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortfolioVisualizationView.swift; sourceTree = "<group>"; };
 		4448B631DE49335B0A5E5218 /* AtlasDisplayPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasDisplayPreferences.swift; sourceTree = "<group>"; };
 		45A9E6A6ED3EF7FD0D8ECB63 /* PortfolioChartContract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortfolioChartContract.swift; sourceTree = "<group>"; };
 		478987FC2E1C1206E20F758E /* AssetsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssetsScreen.swift; sourceTree = "<group>"; };
@@ -331,6 +333,7 @@
 				08BBD93DF237CDFC6F5FD274 /* OverTimeChartView.swift */,
 				86764035C81826F165B2E67C /* OverTimeModel.swift */,
 				45A9E6A6ED3EF7FD0D8ECB63 /* PortfolioChartContract.swift */,
+				41707741ABFD7AFBA2EBE526 /* PortfolioVisualizationView.swift */,
 				F04C152CC22B660608D36F9D /* PowerDiagramTreemap.swift */,
 				6C286DCB338A454BFD0514EC /* RingChartView.swift */,
 				235FFDA379D16323FE28C741 /* RingsInRingsChartView.swift */,
@@ -538,6 +541,7 @@
 				3A4DE02A5C1046DE6B93E213 /* PasskeyWebAuthenticator.swift in Sources */,
 				621C0321D444D17C3A087B22 /* PortfolioChartContract.swift in Sources */,
 				2CA0D0C8D880A88CE0A06062 /* PortfolioScreen.swift in Sources */,
+				82CC0B8B8BEF2B0A1885C791 /* PortfolioVisualizationView.swift in Sources */,
 				F2CD5036EB5EE660BDF5501F /* PowerDiagramTreemap.swift in Sources */,
 				96BD19E73D2E650719478DEF /* RingChartView.swift in Sources */,
 				5D8C5928422A44A6FC4DD9F5 /* RingsInRingsChartView.swift in Sources */,
