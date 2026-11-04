@@ -79,6 +79,12 @@ struct RootView: View {
       IOSPrivacyShield.shared.install()
       TemporaryExportFiles.purgeStale()
       await state.unlock()
+      #if DEBUG
+        if DemoFixture.isEnabled {
+          DemoFixture.seed(state)
+          DemoFixture.applyLaunchNavigation(navigation, state: state)
+        }
+      #endif
       state.excludeLocalStoreFromDeviceBackups()
     }
     .task(id: autoRefreshTaskID) {

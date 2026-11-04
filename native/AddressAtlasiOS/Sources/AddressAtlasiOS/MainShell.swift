@@ -14,207 +14,118 @@ struct MainShell: View {
   }
 }
 
-enum MainTab: Hashable, Sendable {
-  case section(AtlasSection)
-  case more
+/// Where each pushed route leads. Every tab's stack uses this.
+struct IOSRouteDestination: View {
+  var route: IOSRoute
+
+  var body: some View {
+    switch route {
+    case .coin(let key): CoinDetailScreen(coinKey: key)
+    case .snapshot(let id): SnapshotDetailScreen(runID: id)
+    case .iCloud: ICloudScreen()
+    case .export: ExportScreen()
+    }
+  }
 }
 
-/// iPhone: four primary tabs plus a "More" list for the remaining sections.
-/// The selected section lives in `IOSNavigationModel` so onboarding and
-/// empty-state buttons can switch tabs; a "More" section is pushed onto the
-/// More stack.
-struct TabShell: View {
-  @EnvironmentObject private var state: AppState
+/// One tab's navigation stack. The pushed routes live in `IOSNavigationModel`
+/// so a chart, a toast or another tab can open a coin or a snapshot.
+private struct SectionStack: View {
   @EnvironmentObject private var navigation: IOSNavigationModel
-  @State private var selectedTab: MainTab = .section(.portfolio)
-  @State private var morePath = NavigationPath()
-
-  /// The source page's transient status is cleared before SwiftUI installs
-  /// the destination, matching the ordering the macOS sidebar relies on.
-  private var tabSelection: Binding<MainTab> {
-    Binding(
-      get: { selectedTab },
-      set: { newValue in
-        guard newValue != selectedTab else {
-          if case .more = newValue { morePath = NavigationPath() }
-          return
-        }
-        state.clearTransientMessagesForNavigation()
-        selectedTab = newValue
-      }
-    )
-  }
-
-  var body: some View {
-    TabView(selection: tabSelection) {
-      ForEach(AtlasSection.primaryTabs) { section in
-        NavigationStack {
-          section.screen
-        }
-        .tabItem { Label(section.title, systemImage: section.systemImage) }
-        .tag(MainTab.section(section))
-      }
-
-      NavigationStack(path: $morePath) {
-        MoreList(path: $morePath)
-          .navigationDestination(for: AtlasSection.self) { section in
-            section.screen
-          }
-      }
-      .tabItem { Label("More", systemImage: "ellipsis.circle") }
-      .tag(MainTab.more)
-    }
-    .toolbarBackground(AtlasTheme.surface, for: .tabBar)
-    .toolbarBackground(.visible, for: .tabBar)
-    .onAppear {
-      if navigation.openRequest > 0 { follow(navigation.selectedSection) }
-    }
-    .onChange(of: navigation.openRequest) { _, _ in
-      follow(navigation.selectedSection)
-    }
-  }
-
-  private func follow(_ section: AtlasSection) {
-    if AtlasSection.primaryTabs.contains(section) {
-      guard selectedTab != .section(section) else { return }
-      selectedTab = .section(section)
-    } else {
-      selectedTab = .more
-      var path = NavigationPath()
-      path.append(section)
-      morePath = path
-    }
-  }
-}
-
-/// The iPhone "More" tab: the remaining sections plus a one-row privacy note.
-struct MoreList: View {
-  @EnvironmentObject private var state: AppState
-  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-  @Binding var path: NavigationPath
-
-  var body: some View {
-    List {
-      Section {
-        ForEach(AtlasSection.moreSections) { section in
-          // A Button (not NavigationLink) so the transient status is cleared
-          // before the destination is pushed; a gesture attached to a link
-          // would compete with the row's own tap handling.
-          Button {
-            state.clearTransientMessagesForNavigation()
-            path.append(section)
-          } label: {
-            HStack(spacing: 14) {
-              // At accessibility sizes the words need the whole width; a
-              // single-word title never breaks mid-word.
-              if !dynamicTypeSize.isAccessibilitySize {
-                SectionIconTile(section: section)
-              }
-              VStack(alignment: .leading, spacing: 1) {
-                Text(section.title)
-                  .font(.body)
-                  .foregroundStyle(AtlasTheme.ink)
-                  .lineLimit(1)
-                  .minimumScaleFactor(0.6)
-                Text(section.summary)
-                  .font(.footnote)
-                  .foregroundStyle(AtlasTheme.ink3)
-                  .fixedSize(horizontal: false, vertical: true)
-              }
-              Spacer(minLength: 8)
-              if !dynamicTypeSize.isAccessibilitySize {
-                Image(systemName: "chevron.right")
-                  .font(.footnote.weight(.semibold))
-                  .foregroundStyle(AtlasTheme.ink3.opacity(0.7))
-                  .accessibilityHidden(true)
-              }
-            }
-            .padding(.vertical, 4)
-            .frame(minHeight: 44)
-            .contentShape(Rectangle())
-          }
-          .buttonStyle(.plain)
-          .accessibilityLabel(section.title)
-          .accessibilityHint(section.summary)
-          .accessibilityAddTraits(.isLink)
-        }
-      }
-      .listRowBackground(AtlasTheme.surface)
-
-      Section {
-        CompactPrivacyRow()
-      }
-      .listRowBackground(AtlasTheme.surface)
-    }
-    .scrollContentBackground(.hidden)
-    .background(AtlasTheme.canvas)
-    .navigationTitle("More")
-  }
-}
-
-/// Settings-style colored tile behind a section's symbol.
-private struct SectionIconTile: View {
-  @ScaledMetric(relativeTo: .body) private var size: CGFloat = 30
   var section: AtlasSection
 
   var body: some View {
-    Image(systemName: section.systemImage)
-      .font(.system(size: size * 0.5, weight: .semibold))
-      .foregroundStyle(.white)
-      .frame(width: size, height: size)
-      .background(
-        RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
-          .fill(section.iconTint.gradient)
+    NavigationStack(
+      path: Binding(
+        get: { navigation.paths[section] ?? [] },
+        set: { navigation.paths[section] = $0 }
       )
-      .accessibilityHidden(true)
+    ) {
+      section.screen
+        .navigationDestination(for: IOSRoute.self) { route in
+          IOSRouteDestination(route: route)
+        }
+    }
   }
 }
 
-/// The privacy promise in one full-width row; the details live on the
-/// screens where they matter.
-private struct CompactPrivacyRow: View {
+/// iPhone: five tabs drawn by `IOSTabBar` (the system bar takes no theme
+/// font or shape). Each tab keeps its own stack; choosing the tab that is
+/// already showing returns to its first screen.
+struct TabShell: View {
+  @EnvironmentObject private var state: AppState
+  @EnvironmentObject private var navigation: IOSNavigationModel
+
+  private func select(_ section: AtlasSection) {
+    if section == navigation.selectedSection {
+      navigation.paths[section] = []
+      return
+    }
+    // The source page's transient status is cleared before SwiftUI installs
+    // the destination, matching the ordering the macOS sidebar relies on.
+    state.clearTransientMessagesForNavigation()
+    navigation.selectedSection = section
+  }
+
   var body: some View {
-    HStack(spacing: 14) {
-      Image(systemName: "lock.shield.fill")
+    TabView(selection: $navigation.selectedSection) {
+      ForEach(AtlasSection.allCases) { section in
+        SectionStack(section: section)
+          .toolbar(.hidden, for: .tabBar)
+          .tag(section)
+      }
+    }
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      IOSTabBar(selection: navigation.selectedSection, select: select)
+        // Like the system bar, the labels stop growing early; a wide theme
+        // face (Pixel) would otherwise truncate every label.
+        .dynamicTypeSize(...DynamicTypeSize.xLarge)
+    }
+    .ignoresSafeArea(.keyboard, edges: .bottom)
+  }
+}
+
+/// The wordmark, without a tagline.
+struct IOSBrandMark: View {
+  var body: some View {
+    HStack(spacing: 10) {
+      Image(systemName: "map.fill")
         .font(.body.weight(.semibold))
-        .foregroundStyle(AtlasTheme.gain)
-        .frame(width: 30, height: 30)
-        .background(
-          RoundedRectangle(cornerRadius: 7, style: .continuous)
-            .fill(AtlasTheme.gain.opacity(0.12))
+        .foregroundStyle(AtlasTheme.onAccent)
+        .frame(width: 34, height: 34)
+        .atlasChrome(
+          fill: AtlasTheme.accent,
+          border: AtlasTheme.outline,
+          level: .control,
+          radius: AtlasTheme.shape.pillControls ? 12 : AtlasRadius.control,
+          borderWidth: AtlasTheme.shape.hasBoldBorders ? AtlasTheme.shape.controlBorderWidth : 0,
+          showsShadow: false
         )
         .accessibilityHidden(true)
-      VStack(alignment: .leading, spacing: 1) {
-        Text("Private by design")
-          .font(.subheadline.weight(.semibold))
-          .foregroundStyle(AtlasTheme.ink)
-        Text("Read-only and encrypted on this \(PlatformCopy.deviceNoun)")
-          .font(.footnote)
-          .foregroundStyle(AtlasTheme.ink3)
-          .fixedSize(horizontal: false, vertical: true)
-      }
-      Spacer(minLength: 0)
+      Text("Address Atlas")
+        .font(AtlasTheme.font(.display, .headline))
+        .foregroundStyle(AtlasTheme.ink)
     }
-    .padding(.vertical, 4)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel("Private by design. Read-only and encrypted on this \(PlatformCopy.deviceNoun).")
+    .accessibilityElement(children: .combine)
   }
 }
 
-/// iPad: every section in a sidebar with the brand lockup and privacy note.
+/// iPad: the five sections in a sidebar.
 struct SplitShell: View {
   @EnvironmentObject private var state: AppState
   @EnvironmentObject private var navigation: IOSNavigationModel
-  @State private var selectedSection: AtlasSection? = .portfolio
 
   private var sectionSelection: Binding<AtlasSection?> {
     Binding(
-      get: { selectedSection },
+      get: { navigation.selectedSection },
       set: { newValue in
-        guard let newValue, newValue != selectedSection else { return }
+        guard let newValue else { return }
+        if newValue == navigation.selectedSection {
+          navigation.paths[newValue] = []
+          return
+        }
         state.clearTransientMessagesForNavigation()
-        selectedSection = newValue
+        navigation.selectedSection = newValue
       }
     )
   }
@@ -223,48 +134,42 @@ struct SplitShell: View {
     NavigationSplitView {
       List(selection: sectionSelection) {
         Section {
-          BrandLockup()
+          IOSBrandMark()
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets(top: 8, leading: 8, bottom: 12, trailing: 8))
         }
         Section {
           ForEach(AtlasSection.allCases) { section in
-            Label {
-              Text(section.title)
-            } icon: {
-              SectionIconTile(section: section)
-            }
-            .tag(section)
+            Label(section.title, systemImage: section.systemImage)
+              .font(AtlasTheme.font(.body, .body, weight: .medium))
+              .tag(section)
+              .listRowBackground(
+                navigation.selectedSection == section
+                  ? AtlasTheme.selection : Color.clear
+              )
+              .foregroundStyle(
+                navigation.selectedSection == section
+                  ? AtlasTheme.onSelection : AtlasTheme.ink2
+              )
           }
-        }
-        Section {
-          CompactPrivacyRow()
-            .listRowBackground(Color.clear)
         }
       }
       .scrollContentBackground(.hidden)
       .background(AtlasTheme.surface)
-      // The brand lockup is the sidebar's title; a bar title would repeat
-      // it. The bar itself stays for the sidebar toggle.
+      // The wordmark is the sidebar's title; a bar title would repeat it.
       .navigationTitle("")
       .navigationBarTitleDisplayMode(.inline)
       .toolbarBackground(AtlasTheme.surface, for: .navigationBar)
       .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 320)
     } detail: {
-      NavigationStack {
-        (selectedSection ?? .portfolio).screen
-          .id(selectedSection ?? .portfolio)
-      }
-      // Inside the detail column so the toast centers on the content and
-      // never spans the sidebar.
-      .overlay {
-        IOSStatusToast(bottomPadding: 24)
-      }
+      SectionStack(section: navigation.selectedSection)
+        .id(navigation.selectedSection)
+        // Inside the detail column so the toast centers on the content and
+        // never spans the sidebar.
+        .overlay {
+          IOSStatusToast(bottomPadding: 24)
+        }
     }
     .navigationSplitViewStyle(.balanced)
-    .onAppear { selectedSection = navigation.selectedSection }
-    .onChange(of: navigation.openRequest) { _, _ in
-      selectedSection = navigation.selectedSection
-    }
   }
 }

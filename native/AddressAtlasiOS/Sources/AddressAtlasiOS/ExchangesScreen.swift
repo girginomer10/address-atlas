@@ -1,12 +1,13 @@
 import AddressAtlasCore
 import SwiftUI
 
-/// Read-only exchange connections, list first. Connecting happens in a sheet
-/// opened from the toolbar "+", the empty state, or another screen through
-/// `IOSNavigationModel` (`.connectExchange`). The sheet keeps the macOS flow:
-/// provider-specific guidance, the scope check inside
+/// Read-only exchange connections, one themed card per connection. Connecting
+/// happens in a sheet opened from the Sources "+" menu, the empty state, or
+/// another screen through `IOSNavigationModel` (`.connectExchange`). The sheet
+/// keeps the macOS flow: provider-specific guidance, the scope check inside
 /// `saveExchangeConnection`, and masked credentials that are re-hidden when
-/// the app leaves the foreground and discarded when the sheet closes.
+/// the app leaves the foreground and discarded when the sheet closes. The
+/// Sources host owns the navigation title and toolbar.
 struct ExchangesScreen: View {
   @EnvironmentObject private var state: AppState
   @EnvironmentObject private var navigation: IOSNavigationModel
@@ -24,48 +25,25 @@ struct ExchangesScreen: View {
       SourcesPersistentStatusSection()
 
       if connections.isEmpty {
-        Section {
-          SourcesEmptyState(
-            systemImage: "building.columns",
-            title: "No exchanges connected",
-            copy: "Add a read-only API key to include exchange balances.",
-            actionTitle: "Connect an exchange",
-            action: openConnectSheet
-          )
-        }
-        .listRowBackground(Color.clear)
-        .listRowInsets(EdgeInsets())
+        SourcesEmptyState(
+          systemImage: "building.columns",
+          title: "No exchanges yet",
+          copy: "Connect a read-only API key to see your exchange balances.",
+          actionTitle: "Connect exchange",
+          action: openConnectSheet
+        )
+        .sourcesEmptyRow()
       } else {
-        Section {
-          ForEach(connections) { connection in
-            connectionRow(connection)
-          }
-        } footer: {
-          Text("Read-only keys · encrypted on this device")
-            .font(.footnote)
-            .foregroundStyle(AtlasTheme.ink3)
+        ForEach(connections) { connection in
+          connectionRow(connection)
         }
       }
     }
-    .listStyle(.insetGrouped)
-    .scrollContentBackground(.hidden)
-    .background(AtlasTheme.canvas)
+    .sourcesListStyle()
     .animation(
       AtlasMotion.animation(AtlasMotion.standard, reduceMotion: reduceMotion),
       value: connections.map(\.id)
     )
-    .navigationTitle("Exchanges")
-    .navigationBarTitleDisplayMode(.large)
-    .toolbarBackground(AtlasTheme.canvas, for: .navigationBar)
-    .toolbar {
-      ToolbarItem(placement: .primaryAction) {
-        Button(action: openConnectSheet) {
-          Image(systemName: "plus")
-        }
-        .accessibilityLabel("Connect exchange")
-        .accessibilityHint("Opens a form to add a read-only API key.")
-      }
-    }
     .sheet(isPresented: $showsConnectSheet) {
       ConnectExchangeSheet()
     }
@@ -83,15 +61,17 @@ struct ExchangesScreen: View {
       detailConnectionID = ExchangeDetailRequest(id: connection.id)
     } label: {
       ExchangeRowLabel(connection: connection)
+        .iosCardSurface()
     }
-    .listRowBackground(AtlasTheme.surface)
+    .buttonStyle(SourcesRowButtonStyle())
+    .iosListRow()
     .accessibilityLabel(ExchangePresentation.rowAccessibilityLabel(connection))
     .accessibilityHint("Opens the connection details.")
     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
       Button {
         pendingRemoval = connection
       } label: {
-        Label("Delete", systemImage: "trash")
+        Label("Remove", systemImage: "trash")
       }
       .tint(AtlasTheme.loss)
       .disabled(state.vaultEditsDisabled)
@@ -106,7 +86,7 @@ struct ExchangesScreen: View {
       Button(role: .destructive) {
         pendingRemoval = connection
       } label: {
-        Label("Remove connection", systemImage: "trash")
+        Label("Remove", systemImage: "trash")
       }
       .disabled(state.vaultEditsDisabled)
     }
@@ -117,7 +97,7 @@ struct ExchangesScreen: View {
       isPresented: removalBinding(for: connection),
       titleVisibility: .visible
     ) {
-      Button("Remove connection", role: .destructive) {
+      Button("Remove", role: .destructive) {
         Task { await state.removeExchangeConnection(id: connection.id) }
       }
       Button("Cancel", role: .cancel) {}
@@ -151,15 +131,6 @@ private struct ExchangeDetailRequest: Identifiable {
 // MARK: - Provider copy
 
 extension ExchangeProvider {
-  /// Hue for the provider monogram; a neutral identity color, not a logo.
-  fileprivate var exchangesHue: Double {
-    switch self {
-    case .binance: 0.1
-    case .coinbase: 0.6
-    case .kraken: 0.74
-    }
-  }
-
   fileprivate var exchangesConnectionPlaceholder: String {
     switch self {
     case .binance: "Binance main account"
@@ -208,9 +179,9 @@ extension ExchangeProvider {
   fileprivate var exchangesScopeLine: String {
     switch self {
     case .binance:
-      "Only read permissions are accepted. Keys with trading, transfer, or withdrawal rights are refused."
+      "Keys with trading, transfer, or withdrawal rights are refused."
     case .coinbase, .kraken:
-      "\(label) can't confirm a key is read-only, so check its permissions first."
+      "\(label) doesn't report key permissions. Make sure the key is read-only before you connect."
     }
   }
 
@@ -241,7 +212,7 @@ extension ExchangeProvider {
 
 private enum ExchangePresentation {
   static let removalMessage =
-    "The encrypted keys are removed from this device, including its backup copy. An older iCloud copy may still hold them until you save to iCloud again or delete that copy."
+    "The saved keys are removed from this device and its backup. An older iCloud copy keeps them until you save to iCloud again or delete that copy."
 
   /// The provider name under a connection's own name, unless the connection
   /// is simply called after its provider ("Coinbase / Coinbase").
@@ -301,29 +272,37 @@ private enum ExchangePresentation {
   }
 }
 
-/// Colored rounded-square initial for a provider (no third-party logos).
+/// The provider's initial on a theme-coloured mark (no third-party logos),
+/// drawn like `TokenMonogram`: the theme's mark shape, outline and number font.
 private struct ProviderMonogram: View {
-  @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.atlasTheme) private var tokens
   var provider: ExchangeProvider
   var size: CGFloat = 40
 
   var body: some View {
-    let hue = provider.exchangesHue
-    Text(String(provider.label.prefix(1)))
-      .font(.system(size: size * 0.44, weight: .bold, design: .rounded))
-      .foregroundStyle(
-        Color(hue: hue, saturation: 0.75, brightness: colorScheme == .dark ? 0.95 : 0.6)
-      )
-      .frame(width: size, height: size)
-      .background(
-        Color(hue: hue, saturation: 0.6, brightness: 0.88)
-          .opacity(colorScheme == .dark ? 0.24 : 0.18)
-      )
-      .clipShape(RoundedRectangle(cornerRadius: size * 0.28, style: .continuous))
-      .accessibilityHidden(true)
+    let shape = tokens.shape
+    let index = ExchangeProvider.allCases.firstIndex(of: provider) ?? 0
+    let fill = tokens.chart.categorical(at: index)
+    let markShape: AnyShape =
+      shape.pillControls
+      ? AnyShape(Circle())
+      : AnyShape(RoundedRectangle(cornerRadius: min(shape.radiusSmall, size * 0.25), style: .continuous))
+    ZStack {
+      markShape.fill(fill.color)
+      if shape.hasBoldBorders {
+        markShape.stroke(tokens.palette.outline.color, lineWidth: max(1.5, size * 0.05))
+      }
+      Text(String(provider.label.prefix(1)))
+        .font(tokens.font(.number, size: size * 0.42, relativeTo: .body, weight: .bold))
+        .foregroundStyle(fill.readableInk.color)
+    }
+    .frame(width: size, height: size)
+    .accessibilityHidden(true)
   }
 }
 
+/// The card content of one connection; the caller draws the card around it so
+/// the whole card is the tap target.
 private struct ExchangeRowLabel: View {
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   var connection: ExchangeConnectionRecord
@@ -335,16 +314,16 @@ private struct ExchangeRowLabel: View {
       }
       VStack(alignment: .leading, spacing: 3) {
         Text(connection.label)
-          .font(.body.weight(.semibold))
+          .font(AtlasTheme.font(.body, .body, weight: .semibold))
           .foregroundStyle(AtlasTheme.ink)
           .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 1)
         HStack(spacing: 6) {
           Circle()
             .fill(ExchangePresentation.statusColor(connection))
-            .frame(width: 7, height: 7)
+            .frame(width: 8, height: 8)
             .accessibilityHidden(true)
           Text(ExchangePresentation.summary(connection))
-            .font(.subheadline)
+            .font(AtlasTheme.font(.body, .subheadline))
             .foregroundStyle(
               ExchangePresentation.needsAttention(connection) ? AtlasTheme.loss : AtlasTheme.ink3
             )
@@ -358,13 +337,32 @@ private struct ExchangeRowLabel: View {
           .accessibilityHidden(true)
       }
       Image(systemName: "chevron.right")
-        .font(.footnote.weight(.semibold))
+        .font(AtlasTheme.font(.body, .footnote, weight: .semibold))
         .foregroundStyle(AtlasTheme.ink3)
         .accessibilityHidden(true)
     }
-    .padding(.vertical, 4)
-    .frame(minHeight: 52)
+    .padding(.horizontal, 14)
+    .padding(.vertical, 12)
+    .frame(minHeight: 64)
+    .frame(maxWidth: .infinity, alignment: .leading)
     .contentShape(Rectangle())
+  }
+}
+
+/// What the scope check does for this provider, in one line: a quiet note when
+/// the app verifies the key itself, a warning when the person has to.
+private struct ExchangeScopeNote: View {
+  var provider: ExchangeProvider
+
+  var body: some View {
+    if provider.exchangesVerifiesScope {
+      Label(provider.exchangesScopeLine, systemImage: "checkmark.shield.fill")
+        .font(AtlasTheme.font(.body, .footnote))
+        .foregroundStyle(AtlasTheme.ink3)
+        .fixedSize(horizontal: false, vertical: true)
+    } else {
+      IOSNotice(systemImage: "exclamationmark.shield.fill", text: provider.exchangesScopeLine)
+    }
   }
 }
 
@@ -410,7 +408,7 @@ private struct ConnectExchangeSheet: View {
   }
 
   var body: some View {
-    IOSFormSheet(title: "Connect exchange") {
+    SourcesSheet(title: "Connect exchange") {
       ExchangeProviderPicker(selection: $provider)
         .disabled(state.isValidatingExchangeCredentials)
         .toolbar {
@@ -424,10 +422,10 @@ private struct ConnectExchangeSheet: View {
         ForEach(Array(provider.exchangesSetupSteps.enumerated()), id: \.offset) { index, step in
           HStack(alignment: .top, spacing: 10) {
             Text("\(index + 1)")
-              .font(.caption.monospacedDigit().weight(.bold))
+              .font(AtlasTheme.font(.number, .caption, weight: .bold))
               .foregroundStyle(AtlasTheme.accent)
               .frame(width: 22, height: 22)
-              .background(AtlasTheme.accent.opacity(0.12))
+              .background(AtlasTheme.accentSoft)
               .clipShape(Circle())
               .accessibilityHidden(true)
             Text(step)
@@ -439,19 +437,15 @@ private struct ConnectExchangeSheet: View {
         IOSFactRow(
           systemImage: "lock.shield",
           title: "What's stored",
-          copy:
-            "Credentials are encrypted with a dedicated key on this device. Balance requests go straight from this device to \(provider.label)."
+          copy: "The key is encrypted on this device and sent only to \(provider.label)."
         )
       }
 
       if provider == .kraken {
-        Label(
-          "Use a separate key on every device. A Kraken key saved here works only on this device.",
-          systemImage: "iphone"
+        IOSNotice(
+          systemImage: "iphone",
+          text: "A Kraken key works on one device only. Create a separate key for each."
         )
-        .font(.footnote)
-        .foregroundStyle(AtlasTheme.warning)
-        .fixedSize(horizontal: false, vertical: true)
       }
 
       VStack(alignment: .leading, spacing: 14) {
@@ -499,20 +493,13 @@ private struct ConnectExchangeSheet: View {
       }
       .disabled(state.isValidatingExchangeCredentials)
 
-      Label(
-        provider.exchangesScopeLine,
-        systemImage: provider.exchangesVerifiesScope ? "checkmark.shield.fill" : "exclamationmark.shield.fill"
-      )
-      .font(.footnote)
-      .foregroundStyle(provider.exchangesVerifiesScope ? AtlasTheme.ink3 : AtlasTheme.warning)
-      .fixedSize(horizontal: false, vertical: true)
+      ExchangeScopeNote(provider: provider)
 
       if isAtConnectionLimit {
-        InfoCallout(
-          title: "Connection limit reached",
-          copy:
-            "A vault can hold \(AppState.maximumExchangeConnections) exchange connections. Remove one first.",
-          tone: .warning
+        IOSNotice(
+          systemImage: "exclamationmark.triangle.fill",
+          text:
+            "Limit of \(AppState.maximumExchangeConnections) exchange connections reached. Remove one to connect another."
         )
       }
 
@@ -621,7 +608,8 @@ private struct ConnectExchangeSheet: View {
   }
 }
 
-/// Three provider cards; falls back to a vertical list at accessibility sizes.
+/// Three provider cards in the theme's selected-chip style; a vertical list at
+/// accessibility sizes.
 private struct ExchangeProviderPicker: View {
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   @Binding var selection: ExchangeProvider
@@ -641,6 +629,8 @@ private struct ExchangeProviderPicker: View {
 
   private func card(_ provider: ExchangeProvider) -> some View {
     let isSelected = selection == provider
+    let shape = AtlasTheme.shape
+    let shadow = shape.controlShadowOffset ?? .zero
     return Button {
       selection = provider
     } label: {
@@ -649,11 +639,11 @@ private struct ExchangeProviderPicker: View {
           HStack(spacing: 12) {
             ProviderMonogram(provider: provider, size: 36)
             Text(provider.label)
-              .font(.callout.weight(.semibold))
+              .font(AtlasTheme.font(.label, .callout, weight: .semibold))
             Spacer(minLength: 0)
             if isSelected {
               Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(AtlasTheme.accent)
+                .accessibilityHidden(true)
             }
           }
           .padding(.horizontal, 12)
@@ -661,28 +651,32 @@ private struct ExchangeProviderPicker: View {
           VStack(spacing: 8) {
             ProviderMonogram(provider: provider, size: 36)
             Text(provider.label)
-              .font(.callout.weight(.semibold))
+              .font(AtlasTheme.font(.label, .callout, weight: .semibold))
               .lineLimit(1)
               .minimumScaleFactor(0.8)
           }
         }
       }
-      .foregroundStyle(AtlasTheme.ink)
+      .foregroundStyle(isSelected ? AtlasTheme.onSelection : AtlasTheme.ink)
       .frame(maxWidth: .infinity, minHeight: 44)
       .padding(.vertical, 12)
-      .background(isSelected ? AtlasTheme.accent.opacity(0.08) : AtlasTheme.surface)
-      .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
-      .overlay {
-        RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
-          .stroke(
-            isSelected ? AtlasTheme.accent : AtlasTheme.ruleSoft,
-            lineWidth: isSelected ? 2 : 1)
-      }
-      .contentShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
+      .atlasChrome(
+        fill: isSelected ? AtlasTheme.selection : AtlasTheme.surface,
+        border: isSelected ? AtlasTheme.outline : AtlasTheme.controlBoundary.opacity(0.55),
+        level: .control,
+        radius: AtlasRadius.control,
+        borderWidth: isSelected
+          ? max(shape.controlBorderWidth, 1.5) : (shape.hasBoldBorders ? 1.5 : 1),
+        showsShadow: isSelected
+      )
+      // Hard shadows need room to the right and below.
+      .padding(.trailing, shadow.width)
+      .padding(.bottom, shadow.height)
+      .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
     .accessibilityLabel(provider.label)
-    .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
   }
 }
 
@@ -721,7 +715,7 @@ private struct ExchangesSecretField: View {
         .overlay {
           if issue != nil {
             RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
-              .stroke(AtlasTheme.loss.opacity(0.7), lineWidth: 1.5)
+              .stroke(AtlasTheme.loss, lineWidth: 2)
               .allowsHitTesting(false)
           }
         }
@@ -741,7 +735,7 @@ private struct ExchangesSecretField: View {
       }
       if let issue {
         Label(issue, systemImage: "exclamationmark.circle.fill")
-          .font(.footnote)
+          .font(AtlasTheme.font(.body, .footnote))
           .foregroundStyle(AtlasTheme.loss)
           .fixedSize(horizontal: false, vertical: true)
           .accessibilityHidden(true)
@@ -785,25 +779,15 @@ private struct ExchangeDetailSheet: View {
   }
 
   var body: some View {
-    NavigationStack {
-      ScrollView {
+    SourcesSheet(title: "Connection", cancelTitle: nil) {
+      VStack(alignment: .leading, spacing: 22) {
         if let connection {
           content(for: connection)
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 32)
-            .frame(maxWidth: 640, alignment: .leading)
-            .frame(maxWidth: .infinity)
         }
       }
-      .background(AtlasTheme.canvas)
-      .navigationTitle("Connection")
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbarBackground(AtlasTheme.canvas, for: .navigationBar)
       .toolbar {
         ToolbarItem(placement: .confirmationAction) {
-          Button("Done") { dismiss() }
-            .fontWeight(.semibold)
+          FormToolbarConfirmButton(title: "Done", isEnabled: true) { dismiss() }
         }
       }
       .navigationDestination(isPresented: $isReplacingKeys) {
@@ -815,7 +799,6 @@ private struct ExchangeDetailSheet: View {
         }
       }
     }
-    .presentationDragIndicator(.visible)
     .onAppear { state.error = "" }
     .alert("Rename connection", isPresented: $isRenaming) {
       TextField("Name", text: $renameDraft)
@@ -831,21 +814,23 @@ private struct ExchangeDetailSheet: View {
   @ViewBuilder
   private func content(for connection: ExchangeConnectionRecord) -> some View {
     let verified = ExchangePresentation.isScopeVerified(connection)
-    VStack(alignment: .leading, spacing: 22) {
-      VStack(spacing: 10) {
-        ProviderMonogram(provider: connection.provider, size: 60)
-        Text(connection.label)
-          .font(.title2.weight(.semibold))
-          .multilineTextAlignment(.center)
-        if let provider = ExchangePresentation.providerSubtitle(connection) {
-          Text(provider)
-            .font(.callout)
-            .foregroundStyle(AtlasTheme.ink3)
-        }
-      }
-      .frame(maxWidth: .infinity)
-      .accessibilityElement(children: .combine)
 
+    VStack(spacing: 10) {
+      ProviderMonogram(provider: connection.provider, size: 60)
+      Text(connection.label)
+        .font(AtlasTheme.font(.display, .title2))
+        .foregroundStyle(AtlasTheme.ink)
+        .multilineTextAlignment(.center)
+      if let provider = ExchangePresentation.providerSubtitle(connection) {
+        Text(provider)
+          .font(AtlasTheme.font(.body, .callout))
+          .foregroundStyle(AtlasTheme.ink3)
+      }
+    }
+    .frame(maxWidth: .infinity)
+    .accessibilityElement(children: .combine)
+
+    Surface(padding: 0) {
       VStack(spacing: 0) {
         detailRow("Status") {
           Badge(
@@ -861,111 +846,104 @@ private struct ExchangeDetailSheet: View {
         Divider().overlay(AtlasTheme.ruleSoft)
         detailRow("Last updated") {
           Text(connection.lastSyncAt.map(AtlasFormatting.dateTime) ?? "Not yet")
-            .font(.callout)
+            .font(AtlasTheme.font(.body, .callout))
             .foregroundStyle(AtlasTheme.ink2)
         }
         Divider().overlay(AtlasTheme.ruleSoft)
         detailRow("Added") {
           Text(AtlasFormatting.dateTime(connection.createdAt))
-            .font(.callout)
+            .font(AtlasTheme.font(.body, .callout))
             .foregroundStyle(AtlasTheme.ink2)
         }
       }
       .padding(.horizontal, 14)
-      .background(AtlasTheme.surface)
-      .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.card, style: .continuous))
-      .overlay {
-        RoundedRectangle(cornerRadius: AtlasRadius.card, style: .continuous)
-          .stroke(AtlasTheme.ruleSoft, lineWidth: 1)
+    }
+
+    if ExchangePresentation.hasInvalidKrakenBinding(connection) {
+      IOSNotice(
+        systemImage: "exclamationmark.triangle.fill",
+        text: "This Kraken key predates device binding. Replace it with a new read-only key made for this device before you scan."
+      )
+    }
+
+    if let lastError = connection.lastError, !lastError.isEmpty {
+      IOSNotice(
+        systemImage: "exclamationmark.octagon.fill",
+        text: "Last scan failed. \(lastError)",
+        tone: .danger
+      )
+    }
+
+    if !verified {
+      Text(
+        connection.provider == .binance
+          ? "This key was saved before permissions were checked. Make sure it is read-only in \(connection.provider.label)."
+          : "\(connection.provider.label) doesn't report key permissions. Make sure trading and transfer are off."
+      )
+      .font(AtlasTheme.font(.body, .footnote))
+      .foregroundStyle(AtlasTheme.ink3)
+      .fixedSize(horizontal: false, vertical: true)
+    }
+
+    IOSInlineError()
+
+    if !replacedMessage.isEmpty {
+      IOSNotice(
+        systemImage: "checkmark.circle.fill",
+        text: replacedMessage,
+        tone: .success
+      )
+      .accessibilityIdentifier("exchange.keysReplaced")
+    }
+
+    VStack(spacing: 10) {
+      Button {
+        state.error = ""
+        replacedMessage = ""
+        isReplacingKeys = true
+      } label: {
+        Label("Replace keys", systemImage: "key")
+          .frame(maxWidth: .infinity, minHeight: 44)
       }
+      .buttonStyle(AtlasSecondaryButtonStyle())
+      .disabled(state.vaultEditsDisabled)
+      .accessibilityHint("Opens a form to enter a new API key and secret for this connection.")
 
-      if ExchangePresentation.hasInvalidKrakenBinding(connection) {
-        InfoCallout(
-          title: "Legacy Kraken key",
-          copy: "Replace it with a new read-only key made for this device before scanning.",
-          tone: .warning
-        )
+      Button {
+        state.error = ""
+        renameDraft = connection.label
+        isRenaming = true
+      } label: {
+        Label("Rename", systemImage: "pencil")
+          .frame(maxWidth: .infinity, minHeight: 44)
       }
+      .buttonStyle(AtlasSecondaryButtonStyle())
+      .disabled(state.vaultEditsDisabled)
 
-      if let lastError = connection.lastError, !lastError.isEmpty {
-        InfoCallout(title: "Last scan failed", copy: lastError, tone: .danger)
+      Button(role: .destructive) {
+        confirmingRemoval = true
+      } label: {
+        Label("Remove connection", systemImage: "trash")
+          .frame(maxWidth: .infinity, minHeight: 44)
       }
-
-      if !verified {
-        Text(
-          connection.provider == .binance
-            ? "This key was saved before permissions were checked. Make sure it is read-only in \(connection.provider.label)."
-            : "\(connection.provider.label) scope can't be checked automatically. Make sure trading and transfer permissions are off."
-        )
-        .font(.footnote)
-        .foregroundStyle(AtlasTheme.ink3)
-        .fixedSize(horizontal: false, vertical: true)
-      }
-
-      IOSInlineError()
-
-      if !replacedMessage.isEmpty {
-        Label(replacedMessage, systemImage: "checkmark.circle.fill")
-          .font(.callout)
-          .foregroundStyle(AtlasTheme.ink2)
-          .fixedSize(horizontal: false, vertical: true)
-          .padding(12)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .background(AtlasTheme.gain.opacity(0.08))
-          .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
-          .accessibilityIdentifier("exchange.keysReplaced")
-      }
-
-      VStack(spacing: 10) {
-        Button {
-          state.error = ""
-          replacedMessage = ""
-          isReplacingKeys = true
-        } label: {
-          Label("Replace keys", systemImage: "key")
-            .frame(maxWidth: .infinity, minHeight: 44)
-        }
-        .buttonStyle(AtlasSecondaryButtonStyle())
-        .disabled(state.vaultEditsDisabled)
-        .accessibilityHint("Opens a form to enter a new API key and secret for this connection.")
-
-        Button {
-          state.error = ""
-          renameDraft = connection.label
-          isRenaming = true
-        } label: {
-          Label("Rename", systemImage: "pencil")
-            .frame(maxWidth: .infinity, minHeight: 44)
-        }
-        .buttonStyle(AtlasSecondaryButtonStyle())
-        .disabled(state.vaultEditsDisabled)
-
-        Button(role: .destructive) {
-          confirmingRemoval = true
-        } label: {
-          Label("Remove connection", systemImage: "trash")
-            .foregroundStyle(AtlasTheme.loss)
-            .frame(maxWidth: .infinity, minHeight: 44)
-        }
-        .buttonStyle(AtlasSecondaryButtonStyle())
-        .disabled(state.vaultEditsDisabled)
-        .accessibilityLabel("Remove \(connection.label)")
-        .accessibilityHint("Asks for confirmation before removing the encrypted keys.")
-        .confirmationDialog(
-          "Remove \(connection.label)?",
-          isPresented: $confirmingRemoval,
-          titleVisibility: .visible
-        ) {
-          Button("Remove connection", role: .destructive) {
-            Task {
-              await state.removeExchangeConnection(id: connection.id)
-              if self.connection == nil { dismiss() }
-            }
+      .buttonStyle(SourcesDestructiveButtonStyle())
+      .disabled(state.vaultEditsDisabled)
+      .accessibilityLabel("Remove \(connection.label)")
+      .accessibilityHint("Asks for confirmation before removing the saved keys.")
+      .confirmationDialog(
+        "Remove \(connection.label)?",
+        isPresented: $confirmingRemoval,
+        titleVisibility: .visible
+      ) {
+        Button("Remove", role: .destructive) {
+          Task {
+            await state.removeExchangeConnection(id: connection.id)
+            if self.connection == nil { dismiss() }
           }
-          Button("Cancel", role: .cancel) {}
-        } message: {
-          Text(ExchangePresentation.removalMessage)
         }
+        Button("Cancel", role: .cancel) {}
+      } message: {
+        Text(ExchangePresentation.removalMessage)
       }
     }
   }
@@ -985,14 +963,14 @@ private struct ExchangeDetailSheet: View {
     ViewThatFits(in: .horizontal) {
       HStack(spacing: 12) {
         Text(title)
-          .font(.callout)
+          .font(AtlasTheme.font(.body, .callout))
           .foregroundStyle(AtlasTheme.ink3)
         Spacer(minLength: 8)
         value()
       }
       VStack(alignment: .leading, spacing: 6) {
         Text(title)
-          .font(.callout)
+          .font(AtlasTheme.font(.body, .callout))
           .foregroundStyle(AtlasTheme.ink3)
         value()
       }
@@ -1035,18 +1013,15 @@ private struct ReplaceExchangeKeysView: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 18) {
         Text("The new key replaces the saved one for \(connection.label).")
-          .font(.callout)
+          .font(AtlasTheme.font(.body, .callout))
           .foregroundStyle(AtlasTheme.ink2)
           .fixedSize(horizontal: false, vertical: true)
 
         if provider == .kraken {
-          Label(
-            "Use a key made for this device. It will work only here.",
-            systemImage: "iphone"
+          IOSNotice(
+            systemImage: "iphone",
+            text: "Use a key made for this device. It works only here."
           )
-          .font(.footnote)
-          .foregroundStyle(AtlasTheme.warning)
-          .fixedSize(horizontal: false, vertical: true)
         }
 
         VStack(alignment: .leading, spacing: 14) {
@@ -1077,14 +1052,7 @@ private struct ReplaceExchangeKeysView: View {
         }
         .disabled(isSaving || state.isValidatingExchangeCredentials)
 
-        Label(
-          provider.exchangesScopeLine,
-          systemImage: provider.exchangesVerifiesScope
-            ? "checkmark.shield.fill" : "exclamationmark.shield.fill"
-        )
-        .font(.footnote)
-        .foregroundStyle(provider.exchangesVerifiesScope ? AtlasTheme.ink3 : AtlasTheme.warning)
-        .fixedSize(horizontal: false, vertical: true)
+        ExchangeScopeNote(provider: provider)
 
         IOSInlineError()
 
@@ -1115,9 +1083,8 @@ private struct ReplaceExchangeKeysView: View {
       .frame(maxWidth: .infinity)
     }
     .scrollDismissesKeyboard(.interactively)
-    .background(AtlasTheme.canvas)
-    .navigationTitle("Replace keys")
-    .navigationBarTitleDisplayMode(.inline)
+    .background(AtlasCanvasBackground().ignoresSafeArea())
+    .iosTitle("Replace keys")
     .navigationBarBackButtonHidden(isSaving)
     .toolbar {
       ToolbarItem(placement: .confirmationAction) {
@@ -1191,26 +1158,25 @@ private struct ExchangesTouchIconButtonStyle: ButtonStyle {
 
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .font(.callout)
+      .font(AtlasTheme.font(.body, .callout))
       .foregroundStyle(
         isEnabled
           ? (configuration.isPressed
             ? (configuration.role == .destructive ? AtlasTheme.loss : AtlasTheme.accent)
             : AtlasTheme.ink3)
-          : AtlasTheme.rule
+          : AtlasTheme.ink3
       )
       .frame(width: 44, height: 44)
       .background(
         configuration.isPressed
-          ? (configuration.role == .destructive
-            ? AtlasTheme.loss.opacity(0.09) : AtlasTheme.accent.opacity(0.09))
+          ? (configuration.role == .destructive ? AtlasTheme.lossSoft : AtlasTheme.accentSoft)
           : Color.clear
       )
       .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
       .overlay {
         if isFocused {
           RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
-            .stroke(AtlasTheme.accent, lineWidth: 3)
+            .stroke(AtlasTheme.focusRing, lineWidth: 3)
             .accessibilityHidden(true)
         }
       }

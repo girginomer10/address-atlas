@@ -12,25 +12,15 @@ struct TokensScreen: View {
   @EnvironmentObject private var state: AppState
   @EnvironmentObject private var navigation: IOSNavigationModel
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-  @State private var segment: TokensSegment = .holdings
+  /// Which list this page shows; the Sources screen picks it.
+  var list: TokensSegment = .holdings
   @State private var isAddingHolding = false
   @State private var isAddingToken = false
   @State private var detail: TokensDetailSelection?
 
   var body: some View {
     IOSPage(title: "Tokens") {
-      Picker("List", selection: $segment) {
-        Text(dynamicTypeSize.isAccessibilitySize ? "Manual" : "Manual holdings")
-          .tag(TokensSegment.holdings)
-        Text(dynamicTypeSize.isAccessibilitySize ? "Custom" : "Custom tokens")
-          .tag(TokensSegment.customTokens)
-      }
-      .pickerStyle(.segmented)
-      .labelsHidden()
-      .accessibilityLabel("List")
-      .accessibilityIdentifier("tokens-segment-picker")
-
-      switch segment {
+      switch list {
       case .holdings:
         TokensManualHoldingList(
           onAdd: { openAddSheet(for: .holdings) },
@@ -41,19 +31,6 @@ struct TokensScreen: View {
           onAdd: { openAddSheet(for: .customTokens) },
           onSelect: { detail = .token($0) }
         )
-      }
-    }
-    .toolbar {
-      ToolbarItem(placement: .primaryAction) {
-        Button {
-          openAddSheet(for: segment)
-        } label: {
-          Image(systemName: "plus")
-            .foregroundStyle(state.vaultEditsDisabled ? AtlasTheme.ink3.opacity(0.55) : AtlasTheme.ink)
-        }
-        .disabled(state.vaultEditsDisabled)
-        .accessibilityLabel(segment == .holdings ? "Add manual holding" : "Add custom token")
-        .accessibilityIdentifier("tokens-add-button")
       }
     }
     .sheet(isPresented: $isAddingHolding) {
@@ -75,7 +52,6 @@ struct TokensScreen: View {
   }
 
   private func openAddSheet(for segment: TokensSegment) {
-    self.segment = segment
     switch segment {
     case .holdings: isAddingHolding = true
     case .customTokens: isAddingToken = true
@@ -91,7 +67,7 @@ struct TokensScreen: View {
   }
 }
 
-private enum TokensSegment: Hashable {
+enum TokensSegment: Hashable {
   case holdings
   case customTokens
 }
@@ -161,7 +137,7 @@ private struct TokensEmptyState: View {
   var body: some View {
     VStack(spacing: 14) {
       Image(systemName: systemImage)
-        .font(.title2.weight(.semibold))
+        .font(AtlasTheme.font(.display, .title2))
         .foregroundStyle(AtlasTheme.accent)
         .frame(width: 56, height: 56)
         .background(AtlasTheme.accent.opacity(0.10))
@@ -169,11 +145,11 @@ private struct TokensEmptyState: View {
         .accessibilityHidden(true)
       VStack(spacing: 6) {
         Text(title)
-          .font(.title3.weight(.semibold))
+          .font(AtlasTheme.font(.display, .title3))
           .foregroundStyle(AtlasTheme.ink)
           .accessibilityAddTraits(.isHeader)
         Text(copy)
-          .font(.callout)
+          .font(AtlasTheme.font(.body, .callout))
           .foregroundStyle(AtlasTheme.ink3)
           .multilineTextAlignment(.center)
           .fixedSize(horizontal: false, vertical: true)
@@ -201,7 +177,7 @@ private struct TokensListFooter: View {
 
   var body: some View {
     Text(text)
-      .font(.caption)
+      .font(AtlasTheme.font(.label, .caption))
       .foregroundStyle(AtlasTheme.ink3)
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.horizontal, 4)
@@ -235,10 +211,10 @@ private struct TokensManualHoldingList: View {
       VStack(alignment: .leading, spacing: 10) {
         VStack(alignment: .leading, spacing: 2) {
           Text("Included value")
-            .font(.subheadline)
+            .font(AtlasTheme.font(.body, .subheadline))
             .foregroundStyle(AtlasTheme.ink3)
           Text(money(includedValue))
-            .font(.title2.weight(.semibold))
+            .font(AtlasTheme.font(.display, .title2))
             .monospacedDigit()
             .foregroundStyle(AtlasTheme.ink)
         }
@@ -303,18 +279,18 @@ private struct TokensManualHoldingRow: View {
             .opacity(isEnabled ? 1 : 0.45)
           VStack(alignment: .leading, spacing: 2) {
             Text(holding.symbol)
-              .font(.body.weight(.semibold))
+              .font(AtlasTheme.font(.body, .body, weight: .semibold))
               .foregroundStyle(AtlasTheme.ink)
               .lineLimit(1)
             Text(detailLine)
-              .font(.subheadline)
+              .font(AtlasTheme.font(.body, .subheadline))
               .foregroundStyle(AtlasTheme.ink3)
               .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 1)
           }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         Text(money(holding.valueUsd))
-          .font(.body.weight(.semibold))
+          .font(AtlasTheme.font(.body, .body, weight: .semibold))
           .monospacedDigit()
           .foregroundStyle(isEnabled ? AtlasTheme.ink : AtlasTheme.ink3)
           .lineLimit(1)
@@ -437,19 +413,19 @@ private struct TokensCustomTokenRow: View {
         VStack(alignment: .leading, spacing: 2) {
           HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text(token.symbol)
-              .font(.body.weight(.semibold))
+              .font(AtlasTheme.font(.body, .body, weight: .semibold))
               .foregroundStyle(AtlasTheme.ink)
               .lineLimit(1)
               .layoutPriority(1)
             Text(token.name)
-              .font(.subheadline)
+              .font(AtlasTheme.font(.body, .subheadline))
               .foregroundStyle(AtlasTheme.ink2)
               .lineLimit(1)
           }
           Text(
             "\(networkName) · \(TokensCopy.shortAddress(token.address))\(isEnabled ? "" : " · Paused")"
           )
-          .font(.subheadline)
+          .font(AtlasTheme.font(.body, .subheadline))
           .foregroundStyle(AtlasTheme.ink3)
           .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 1)
         }
@@ -565,7 +541,7 @@ private struct TokensAddHoldingSheet: View {
       Text(
         isEditing
           ? "Changes apply from your next snapshot." : "Included in your next snapshot.")
-        .font(.callout)
+        .font(AtlasTheme.font(.body, .callout))
         .foregroundStyle(AtlasTheme.ink2)
 
       TokensFormField(title: "Symbol", placeholder: "BTC", kind: .symbol, text: $symbol)
@@ -601,12 +577,12 @@ private struct TokensAddHoldingSheet: View {
       VStack(alignment: .leading, spacing: 4) {
         if let impliedPrice {
           Text("≈ \(money(impliedPrice)) per \(trimmedSymbol.isEmpty ? "unit" : trimmedSymbol)")
-            .font(.callout.weight(.medium))
+            .font(AtlasTheme.font(.body, .callout, weight: .medium))
             .foregroundStyle(AtlasTheme.ink2)
             .monospacedDigit()
         }
         Text(TokensCopy.decimalHint)
-          .font(.caption)
+          .font(AtlasTheme.font(.label, .caption))
           .foregroundStyle(AtlasTheme.ink3)
           .accessibilityHidden(true)
       }
@@ -615,7 +591,7 @@ private struct TokensAddHoldingSheet: View {
         Text(
           "Limit reached: \(AppState.maximumManualHoldings) of \(AppState.maximumManualHoldings) holdings. Remove one first."
         )
-        .font(.callout)
+        .font(AtlasTheme.font(.body, .callout))
         .foregroundStyle(AtlasTheme.warning)
         .fixedSize(horizontal: false, vertical: true)
       }
@@ -639,7 +615,7 @@ private struct TokensAddHoldingSheet: View {
 
       if !isEditing {
         Text("\(holdings.count) of \(AppState.maximumManualHoldings) holdings used")
-          .font(.caption)
+          .font(AtlasTheme.font(.label, .caption))
           .foregroundStyle(AtlasTheme.ink3)
           .frame(maxWidth: .infinity)
       }
@@ -877,7 +853,7 @@ private struct TokensAddCustomTokenSheet: View {
       .accessibilityIdentifier("custom-token-address")
       if let addressProblem {
         Label(addressProblem, systemImage: "exclamationmark.triangle.fill")
-          .font(.footnote)
+          .font(AtlasTheme.font(.body, .footnote))
           .foregroundStyle(AtlasTheme.warning)
           .fixedSize(horizontal: false, vertical: true)
           .accessibilityIdentifier("custom-token-address-problem")
@@ -886,7 +862,7 @@ private struct TokensAddCustomTokenSheet: View {
           "The address decides what is scanned. Copy it from a trusted source.",
           systemImage: "checkmark.shield"
         )
-        .font(.caption)
+        .font(AtlasTheme.font(.label, .caption))
         .foregroundStyle(AtlasTheme.ink3)
         .fixedSize(horizontal: false, vertical: true)
       }
@@ -909,7 +885,7 @@ private struct TokensAddCustomTokenSheet: View {
       TokensFormField(title: "Name", placeholder: "USD Coin", kind: .name, text: $name)
       if hasStartedInput, name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         Text("Required. Use the token's full name, like USD Coin.")
-          .font(.caption)
+          .font(AtlasTheme.font(.label, .caption))
           .foregroundStyle(AtlasTheme.ink3)
           .accessibilityIdentifier("custom-token-name-hint")
       }
@@ -953,7 +929,7 @@ private struct TokensAddCustomTokenSheet: View {
       Text(
         "Limit reached: \(AppState.maximumCustomTokens) of \(AppState.maximumCustomTokens) custom tokens. Remove one first."
       )
-      .font(.callout)
+      .font(AtlasTheme.font(.body, .callout))
       .foregroundStyle(AtlasTheme.warning)
       .fixedSize(horizontal: false, vertical: true)
     }
@@ -962,7 +938,7 @@ private struct TokensAddCustomTokenSheet: View {
 
     if hasStartedInput, !missingFields.isEmpty {
       Text("Still needed: \(missingFields.joined(separator: ", ")).")
-        .font(.footnote)
+        .font(AtlasTheme.font(.body, .footnote))
         .foregroundStyle(AtlasTheme.ink3)
         .frame(maxWidth: .infinity)
         .multilineTextAlignment(.center)
@@ -986,7 +962,7 @@ private struct TokensAddCustomTokenSheet: View {
 
     if !isEditing {
       Text("\(tokens.count) of \(AppState.maximumCustomTokens) custom tokens used")
-        .font(.caption)
+        .font(AtlasTheme.font(.label, .caption))
         .foregroundStyle(AtlasTheme.ink3)
         .frame(maxWidth: .infinity)
     }
@@ -999,12 +975,12 @@ private struct TokensAddCustomTokenSheet: View {
         .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 2) {
         Text("\(token.symbol) is already built in")
-          .font(.callout.weight(.semibold))
+          .font(AtlasTheme.font(.body, .callout, weight: .semibold))
           .foregroundStyle(AtlasTheme.ink)
         Text(
           "Scans already include \(token.name) on \(selectedNetworkNameForNotice). A custom copy would be ignored, so there's nothing to add."
         )
-        .font(.callout)
+        .font(AtlasTheme.font(.body, .callout))
         .foregroundStyle(AtlasTheme.ink2)
         .fixedSize(horizontal: false, vertical: true)
       }
@@ -1036,7 +1012,7 @@ private struct TokensAddCustomTokenSheet: View {
           .foregroundStyle(AtlasTheme.ink)
         Spacer(minLength: 8)
         Image(systemName: "chevron.up.chevron.down")
-          .font(.caption.weight(.semibold))
+          .font(AtlasTheme.font(.label, .caption, weight: .semibold))
           .foregroundStyle(AtlasTheme.ink3)
       }
       .padding(.horizontal, 13)
@@ -1172,7 +1148,7 @@ private struct TokensHoldingDetailSheet: View {
           }
         )
       )
-      .font(.body)
+      .font(AtlasTheme.font(.body, .body))
       .tint(AtlasTheme.accent)
       .padding(.horizontal, 16)
       .frame(minHeight: 52)
@@ -1314,7 +1290,7 @@ private struct TokensCustomTokenDetailSheet: View {
           }
         )
       )
-      .font(.body)
+      .font(AtlasTheme.font(.body, .body))
       .tint(AtlasTheme.accent)
       .padding(.horizontal, 16)
       .frame(minHeight: 52)
@@ -1477,12 +1453,12 @@ private struct TokensDetailHeader: View {
         .opacity(isEnabled ? 1 : 0.45)
       VStack(alignment: .leading, spacing: 2) {
         Text(title)
-          .font(.title2.weight(.semibold))
+          .font(AtlasTheme.font(.display, .title2))
           .foregroundStyle(AtlasTheme.ink)
           .monospacedDigit()
           .fixedSize(horizontal: false, vertical: true)
         Text(isEnabled ? subtitle : "\(subtitle) · Paused")
-          .font(.subheadline)
+          .font(AtlasTheme.font(.body, .subheadline))
           .foregroundStyle(AtlasTheme.ink3)
           .fixedSize(horizontal: false, vertical: true)
       }
@@ -1521,7 +1497,7 @@ private struct TokensDetailRow: View {
 
   private var titleText: some View {
     Text(title)
-      .font(.callout)
+      .font(AtlasTheme.font(.body, .callout))
       .foregroundStyle(AtlasTheme.ink3)
   }
 
@@ -1574,7 +1550,7 @@ private struct TokensFormField: View {
           FieldLabel(title)
           if let detail {
             Text(detail)
-              .font(.caption)
+              .font(AtlasTheme.font(.label, .caption))
               .foregroundStyle(AtlasTheme.ink3)
           }
         }
@@ -1620,7 +1596,7 @@ private struct TokensDestructiveButtonStyle: ButtonStyle {
 
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .font(.callout.weight(.semibold))
+      .font(AtlasTheme.font(.body, .callout, weight: .semibold))
       .foregroundStyle(AtlasTheme.loss)
       .padding(.horizontal, 14)
       .background(AtlasTheme.loss.opacity(configuration.isPressed ? 0.16 : 0.08))
@@ -1697,9 +1673,9 @@ private struct TokensSwipeRow<Leading: View, Trailing: View>: View {
     } label: {
       VStack(spacing: 4) {
         Image(systemName: "trash")
-          .font(.body.weight(.semibold))
+          .font(AtlasTheme.font(.body, .body, weight: .semibold))
         Text("Remove")
-          .font(.caption2.weight(.semibold))
+          .font(AtlasTheme.font(.label, .caption2, weight: .semibold))
       }
       .foregroundStyle(.white)
       .frame(width: actionWidth)

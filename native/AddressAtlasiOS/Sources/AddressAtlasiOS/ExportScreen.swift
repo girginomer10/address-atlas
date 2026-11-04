@@ -2,12 +2,12 @@ import AddressAtlasCore
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// iOS port of the macOS `ExportView` and `ExportPreview`: the share-safer
-/// summary first as the one obvious choice, the full identifying reports
-/// behind an explicit danger disclosure, and the read-only preview in a sheet
-/// rendered as rows instead of a `Table`. Every export is generated locally by
-/// the shared `ExportPipeline` and leaves the device only through the Files
-/// picker or the share sheet.
+/// iOS port of the macOS `ExportView` and `ExportPreview`, pushed from
+/// Settings: the share-safer summary first as the one obvious choice, the full
+/// identifying reports behind an explicit warning, and the read-only preview
+/// in a sheet rendered as rows instead of a `Table`. Every export is generated
+/// locally by the shared `ExportPipeline` and leaves the device only through
+/// the Files picker or the share sheet.
 struct ExportScreen: View {
   @EnvironmentObject private var state: AppState
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -42,7 +42,7 @@ struct ExportScreen: View {
   }
 
   var body: some View {
-    IOSPage(title: "Export", subtitle: "Files are generated on this device.") {
+    IOSPage(title: "Export") {
       shareSaferSurface
       fullIdentifyingSurface
     }
@@ -119,22 +119,19 @@ struct ExportScreen: View {
             Image(systemName: "person.crop.circle.badge.checkmark")
               .font(.title3.weight(.semibold))
               .foregroundStyle(AtlasTheme.accent)
-              .frame(width: 44, height: 44)
-              .background(AtlasTheme.accent.opacity(0.12))
-              .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-              .accessibilityHidden(true)
+              .exportTile(fill: AtlasTheme.surface, size: 44)
           }
           VStack(alignment: .leading, spacing: 3) {
             Text("Share-safer summary")
-              .font(.headline.weight(.semibold))
+              .font(AtlasTheme.font(.display, .headline))
               .foregroundStyle(AtlasTheme.ink)
               .accessibilityAddTraits(.isHeader)
             Text("Grouped ranges, no addresses or exact amounts.")
-              .font(.callout)
+              .font(AtlasTheme.font(.body, .callout))
               .foregroundStyle(AtlasTheme.ink2)
               .fixedSize(horizontal: false, vertical: true)
             Text(latestScanLine)
-              .font(.caption)
+              .font(AtlasTheme.font(.label, .caption))
               .foregroundStyle(AtlasTheme.ink3)
               .padding(.top, 2)
           }
@@ -145,18 +142,14 @@ struct ExportScreen: View {
         exportActions(for: key, displayName: displayName, savesAsPrimary: true)
 
         VStack(alignment: .leading, spacing: 10) {
-          Label {
-            Text("Reduced exposure, not anonymous: your mix of assets can still identify you.")
-              .fixedSize(horizontal: false, vertical: true)
-          } icon: {
-            Image(systemName: "eye.trianglebadge.exclamationmark")
-              .foregroundStyle(AtlasTheme.warning)
-          }
-          .font(.footnote)
-          .foregroundStyle(AtlasTheme.ink2)
+          IOSNotice(
+            systemImage: "eye.trianglebadge.exclamationmark",
+            text: "Reduced exposure, not anonymous: your mix of assets can still identify you."
+          )
 
+          // The "not anonymous" notice above already says what the summary
+          // cannot promise; this holds what it leaves out.
           LearnMoreDisclosure("What's left out", systemImage: "list.bullet.rectangle") {
-            Text(ShareSafePortfolioReport.privacyNotice)
             Text(ExportCopy.shareSaferExplanation)
           }
         }
@@ -179,16 +172,14 @@ struct ExportScreen: View {
               Image(systemName: "exclamationmark.triangle.fill")
                 .font(.body.weight(.semibold))
                 .foregroundStyle(AtlasTheme.loss)
-                .frame(width: 36, height: 36)
-                .background(AtlasTheme.loss.opacity(0.10))
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .exportTile(fill: AtlasTheme.surface, size: 36)
             }
             VStack(alignment: .leading, spacing: 2) {
               Text("Full identifying reports")
-                .font(.headline.weight(.semibold))
+                .font(AtlasTheme.font(.display, .headline))
                 .foregroundStyle(AtlasTheme.ink)
               Text("Addresses and exact balances")
-                .font(.callout)
+                .font(AtlasTheme.font(.body, .callout))
                 .foregroundStyle(AtlasTheme.ink3)
             }
             Spacer(minLength: 8)
@@ -212,7 +203,7 @@ struct ExportScreen: View {
           Text(
             "Anyone with these files can see your addresses, labels, and exact balances. They contain no exchange credentials and are not backups."
           )
-          .font(.callout)
+          .font(AtlasTheme.font(.body, .callout))
           .foregroundStyle(AtlasTheme.ink)
           .fixedSize(horizontal: false, vertical: true)
           .accessibilityLabel(
@@ -309,7 +300,7 @@ struct ExportScreen: View {
       return try makePayload()
     } catch WalletLabelDraftError.invalidLabel {
       state.notice = ""
-      state.error = "Wallet labels must be between 1 and 80 characters before exporting."
+      state.error = "A wallet label has to be 1 to 80 characters. Fix it in Sources, then export again."
       return nil
     } catch {
       state.presentUserFacingError(error)
@@ -503,16 +494,15 @@ private struct ExportScreenFormatPicker: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
-      Picker("Format", selection: $selection) {
-        Text("CSV").tag(ExportScreenFormat.csv)
-        Text("JSON").tag(ExportScreenFormat.json)
+      HStack(spacing: 10) {
+        IOSChip("CSV", isSelected: selection == .csv) { selection = .csv }
+        IOSChip("JSON", isSelected: selection == .json) { selection = .json }
+        Spacer(minLength: 0)
       }
-      .pickerStyle(.segmented)
-      .labelsHidden()
-      .frame(minHeight: 36)
+      .accessibilityElement(children: .contain)
       .accessibilityLabel("Format")
       Text(detail)
-        .font(.caption)
+        .font(AtlasTheme.font(.label, .caption))
         .foregroundStyle(AtlasTheme.ink3)
         .fixedSize(horizontal: false, vertical: true)
     }
@@ -537,7 +527,7 @@ private struct ExportScreenActionButton: View {
           HStack(spacing: 8) {
             ProgressView()
               .controlSize(.small)
-              .tint(isPrimary ? AtlasTheme.paper : AtlasTheme.accent)
+              .tint(isPrimary ? AtlasTheme.onAccent : AtlasTheme.accent)
             Text("Preparing…")
           }
         } else {
@@ -578,14 +568,14 @@ private struct ExportScreenPreviewSheet: View {
         VStack(alignment: .leading, spacing: 14) {
           VStack(alignment: .leading, spacing: 4) {
             Text(displayName)
-              .font(.headline)
+              .font(AtlasTheme.font(.display, .headline))
               .foregroundStyle(AtlasTheme.ink)
             Text("The exact file contents. Nothing is saved or shared from here.")
-              .font(.callout)
+              .font(AtlasTheme.font(.body, .callout))
               .foregroundStyle(AtlasTheme.ink2)
               .fixedSize(horizontal: false, vertical: true)
             Text(model.sourceLineCount == 1 ? "1 line" : "\(model.sourceLineCount) lines")
-              .font(.caption)
+              .font(AtlasTheme.font(.label, .caption))
               .foregroundStyle(AtlasTheme.ink3)
               .accessibilityLabel(model.accessibilitySummaryLabel)
           }
@@ -594,12 +584,12 @@ private struct ExportScreenPreviewSheet: View {
             ForEach(model.rows) { row in
               HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text(row.part == 1 ? "\(row.sourceLine)" : "")
-                  .font(.caption2.monospacedDigit())
+                  .font(AtlasTheme.font(.number, .caption2))
                   .foregroundStyle(AtlasTheme.ink3)
                   .frame(minWidth: 24, alignment: .trailing)
                   .accessibilityHidden(true)
                 Text(row.visibleContent)
-                  .font(.caption.monospaced())
+                  .font(AtlasTheme.font(.mono, .caption))
                   .foregroundStyle(AtlasTheme.ink)
                   .textSelection(.enabled)
                   .fixedSize(horizontal: false, vertical: true)
@@ -612,8 +602,14 @@ private struct ExportScreenPreviewSheet: View {
             }
           }
           .padding(12)
-          .background(AtlasTheme.surfaceMuted.opacity(0.5))
-          .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
+          .atlasChrome(
+            fill: AtlasTheme.surface,
+            border: AtlasTheme.outline,
+            level: .control,
+            radius: AtlasRadius.control,
+            borderWidth: AtlasTheme.shape.hasBoldBorders ? AtlasTheme.shape.controlBorderWidth : 1,
+            showsShadow: false
+          )
           .accessibilityElement(children: .contain)
           .accessibilityLabel("Read-only export preview list")
           .accessibilityHint(ExportPreviewAccessibilityModel.navigationHint)
@@ -626,9 +622,7 @@ private struct ExportScreenPreviewSheet: View {
         .frame(maxWidth: .infinity)
       }
       .background(AtlasTheme.canvas)
-      .navigationTitle("Preview")
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbarBackground(AtlasTheme.canvas, for: .navigationBar)
+      .iosTitle("Preview")
       .toolbar {
         ToolbarItem(placement: .confirmationAction) {
           Button("Done") { dismiss() }
@@ -637,5 +631,39 @@ private struct ExportScreenPreviewSheet: View {
     }
     .presentationDetents([.medium, .large])
     .presentationDragIndicator(.visible)
+  }
+}
+
+// MARK: - Icon tile
+
+extension View {
+  /// A square icon tile in the theme's own shape (a circle in the pill
+  /// themes, a rounded or sharp square in the others), outlined where the
+  /// theme outlines its controls.
+  fileprivate func exportTile(fill: Color, size: CGFloat) -> some View {
+    modifier(ExportTileStyle(fill: fill, size: size))
+  }
+}
+
+private struct ExportTileStyle: ViewModifier {
+  var fill: Color
+  var size: CGFloat
+
+  func body(content: Content) -> some View {
+    let shape = AtlasTheme.shape
+    let outline: AnyShape =
+      shape.pillControls
+      ? AnyShape(Circle())
+      : AnyShape(
+        RoundedRectangle(cornerRadius: min(shape.radiusSmall, size * 0.3), style: .continuous))
+    content
+      .frame(width: size, height: size)
+      .background(outline.fill(fill))
+      .overlay {
+        if shape.hasBoldBorders {
+          outline.stroke(AtlasTheme.outline, lineWidth: 1.5)
+        }
+      }
+      .accessibilityHidden(true)
   }
 }

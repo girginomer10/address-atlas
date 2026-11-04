@@ -2,10 +2,11 @@ import AddressAtlasCore
 import SwiftUI
 import UIKit
 
-/// Saved public addresses, list first. Adding happens in a sheet opened from
-/// the toolbar "+", the empty state, or another screen through
-/// `IOSNavigationModel` (`.addWallet`). Tapping a row opens its detail sheet
-/// (rename through the shared label-draft API, copy, networks, delete).
+/// Saved public addresses, one themed card per wallet. Adding happens in a
+/// sheet opened from the Sources "+" menu, the empty state, or another screen
+/// through `IOSNavigationModel` (`.addWallet`). Tapping a card opens its
+/// detail sheet (rename through the shared label-draft API, copy, networks,
+/// remove). The Sources host owns the navigation title and toolbar.
 struct WalletsScreen: View {
   @EnvironmentObject private var state: AppState
   @EnvironmentObject private var navigation: IOSNavigationModel
@@ -23,48 +24,25 @@ struct WalletsScreen: View {
       SourcesPersistentStatusSection()
 
       if wallets.isEmpty {
-        Section {
-          SourcesEmptyState(
-            systemImage: "wallet.pass",
-            title: "No wallets yet",
-            copy: "Add a public address to see its balances.",
-            actionTitle: "Add a wallet",
-            action: openAddSheet
-          )
-        }
-        .listRowBackground(Color.clear)
-        .listRowInsets(EdgeInsets())
+        SourcesEmptyState(
+          systemImage: "wallet.pass",
+          title: "No wallets yet",
+          copy: "Paste a public address to see its balances.",
+          actionTitle: "Add wallet",
+          action: openAddSheet
+        )
+        .sourcesEmptyRow()
       } else {
-        Section {
-          ForEach(wallets) { wallet in
-            walletRow(wallet)
-          }
-        } footer: {
-          Text("Watch-only · encrypted on this device")
-            .font(.footnote)
-            .foregroundStyle(AtlasTheme.ink3)
+        ForEach(wallets) { wallet in
+          walletRow(wallet)
         }
       }
     }
-    .listStyle(.insetGrouped)
-    .scrollContentBackground(.hidden)
-    .background(AtlasTheme.canvas)
+    .sourcesListStyle()
     .animation(
       AtlasMotion.animation(AtlasMotion.standard, reduceMotion: reduceMotion),
       value: wallets.map(\.id)
     )
-    .navigationTitle("Wallets")
-    .navigationBarTitleDisplayMode(.large)
-    .toolbarBackground(AtlasTheme.canvas, for: .navigationBar)
-    .toolbar {
-      ToolbarItem(placement: .primaryAction) {
-        Button(action: openAddSheet) {
-          Image(systemName: "plus")
-        }
-        .accessibilityLabel("Add wallet")
-        .accessibilityHint("Opens a form to paste one or more public addresses.")
-      }
-    }
     .sheet(isPresented: $showsAddSheet) {
       AddWalletSheet()
     }
@@ -84,8 +62,10 @@ struct WalletsScreen: View {
       detailRequest = WalletDetailRequest(walletID: wallet.id, focusesName: false)
     } label: {
       WalletRowLabel(wallet: wallet, name: name)
+        .iosCardSurface()
     }
-    .listRowBackground(AtlasTheme.surface)
+    .buttonStyle(SourcesRowButtonStyle())
+    .iosListRow()
     .accessibilityLabel(
       "\(name), \(WalletNetworkInfo(wallet: wallet).badge), address \(shortAddress)"
     )
@@ -95,7 +75,7 @@ struct WalletsScreen: View {
       Button {
         pendingRemoval = wallet
       } label: {
-        Label("Delete", systemImage: "trash")
+        Label("Remove", systemImage: "trash")
       }
       .tint(AtlasTheme.loss)
       .disabled(state.vaultEditsDisabled)
@@ -116,7 +96,7 @@ struct WalletsScreen: View {
       Button(role: .destructive) {
         pendingRemoval = wallet
       } label: {
-        Label("Delete", systemImage: "trash")
+        Label("Remove", systemImage: "trash")
       }
       .disabled(state.vaultEditsDisabled)
     }
@@ -126,7 +106,7 @@ struct WalletsScreen: View {
       isPresented: removalBinding(for: wallet),
       titleVisibility: .visible
     ) {
-      Button("Remove wallet", role: .destructive) {
+      Button("Remove", role: .destructive) {
         Task { await state.removeWallet(id: wallet.id) }
       }
       Button("Cancel", role: .cancel) {}
@@ -175,15 +155,6 @@ private struct WalletNetworkInfo {
   var friendlyName: String
   var scannedNetworks: [String]
   var isRetired: Bool
-
-  /// Single-character avatar glyph for the network.
-  var glyph: String {
-    switch symbol {
-    case "ETH": "Ξ"
-    case "BTC": "₿"
-    default: String(badge.prefix(1))
-    }
-  }
 
   init(wallet: WalletRecord) {
     self.init(family: wallet.chainKind, address: wallet.address)
@@ -242,33 +213,9 @@ private enum WalletPresentation {
   }
 }
 
-/// Network avatar in the same circle and hue as `TokenMonogram`, so a wallet
-/// shares its color with its native asset elsewhere, with a single glyph.
-private struct WalletNetworkMonogram: View {
-  @Environment(\.colorScheme) private var colorScheme
-  var info: WalletNetworkInfo
-  var size: CGFloat
-
-  var body: some View {
-    let hue = TokenMonogram.hue(for: info.symbol)
-    let foreground =
-      info.isRetired
-      ? AtlasTheme.ink3
-      : Color(hue: hue, saturation: 0.72, brightness: colorScheme == .dark ? 0.92 : 0.62)
-    let background =
-      info.isRetired
-      ? AtlasTheme.ink3.opacity(0.12)
-      : Color(hue: hue, saturation: 0.6, brightness: 0.85)
-        .opacity(colorScheme == .dark ? 0.24 : 0.16)
-    Text(info.glyph)
-      .font(.system(size: size * 0.46, weight: .bold, design: .rounded))
-      .foregroundStyle(foreground)
-      .frame(width: size, height: size)
-      .background(Circle().fill(background))
-      .accessibilityHidden(true)
-  }
-}
-
+/// The card content of one wallet: network mark, name, short address, network
+/// badge. The caller draws the card around it so the whole card is the tap
+/// target.
 private struct WalletRowLabel: View {
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   var wallet: WalletRecord
@@ -277,20 +224,20 @@ private struct WalletRowLabel: View {
   var body: some View {
     let info = WalletNetworkInfo(wallet: wallet)
     HStack(spacing: 12) {
-      // The avatar is decorative; at accessibility sizes its width goes to
-      // the name instead.
+      // The mark is decorative; at accessibility sizes its width goes to the
+      // name instead.
       if !dynamicTypeSize.isAccessibilitySize {
-        WalletNetworkMonogram(info: info, size: 40)
+        TokenMonogram(symbol: info.symbol, size: 40, isPlaceholder: info.isRetired)
       }
       VStack(alignment: .leading, spacing: 3) {
         Text(name)
-          .font(.body.weight(.semibold))
+          .font(AtlasTheme.font(.body, .body, weight: .semibold))
           .foregroundStyle(AtlasTheme.ink)
           .lineLimit(dynamicTypeSize.isAccessibilitySize ? 4 : 1)
         // A short address never breaks across lines; it shrinks a little
         // instead at the largest text sizes.
         Text(WalletPresentation.shortAddress(wallet.address))
-          .font(.subheadline)
+          .font(AtlasTheme.font(.mono, .subheadline))
           .foregroundStyle(AtlasTheme.ink3)
           .lineLimit(1)
           .minimumScaleFactor(0.6)
@@ -304,12 +251,14 @@ private struct WalletRowLabel: View {
           .fixedSize()
       }
       Image(systemName: "chevron.right")
-        .font(.footnote.weight(.semibold))
+        .font(AtlasTheme.font(.body, .footnote, weight: .semibold))
         .foregroundStyle(AtlasTheme.ink3)
         .accessibilityHidden(true)
     }
-    .padding(.vertical, 4)
-    .frame(minHeight: 52)
+    .padding(.horizontal, 14)
+    .padding(.vertical, 12)
+    .frame(minHeight: 64)
+    .frame(maxWidth: .infinity, alignment: .leading)
     .contentShape(Rectangle())
   }
 }
@@ -391,7 +340,7 @@ private struct AddWalletSheet: View {
   }
 
   var body: some View {
-    IOSFormSheet(title: "Add wallet") {
+    SourcesSheet(title: "Add wallet", cancelTitle: "Cancel") {
       VStack(alignment: .leading, spacing: 10) {
         let headerLayout =
           dynamicTypeSize.isAccessibilitySize
@@ -423,8 +372,13 @@ private struct AddWalletSheet: View {
         .accessibilityLabel("Public wallet address")
         .accessibilityHint("Paste one address, or several separated by new lines or commas.")
 
+        Text("Public addresses only. Never a seed phrase.")
+          .font(AtlasTheme.font(.body, .footnote))
+          .foregroundStyle(AtlasTheme.ink3)
+          .fixedSize(horizontal: false, vertical: true)
+
         detectionLine
-          .font(.footnote)
+          .font(AtlasTheme.font(.body, .footnote))
           .fixedSize(horizontal: false, vertical: true)
 
         let chips = WalletPresentation.networkChips(for: newAddresses)
@@ -452,7 +406,7 @@ private struct AddWalletSheet: View {
             if isAdding {
               ProgressView()
                 .controlSize(.small)
-                .tint(AtlasTheme.paper)
+                .tint(AtlasTheme.onAccent)
             }
             Text(addTitle)
           }
@@ -468,17 +422,10 @@ private struct AddWalletSheet: View {
 
         if isBusyElsewhere {
           Text("Available when the current scan or sync finishes.")
-            .font(.footnote)
+            .font(AtlasTheme.font(.body, .footnote))
             .foregroundStyle(AtlasTheme.ink3)
         }
       }
-
-      Label(
-        "Watch-only. Address Atlas can't sign or move funds.",
-        systemImage: "eye"
-      )
-      .font(.footnote)
-      .foregroundStyle(AtlasTheme.ink3)
 
       LearnMoreDisclosure("Supported networks", systemImage: "network") {
         IOSFactRow(
@@ -491,12 +438,6 @@ private struct AddWalletSheet: View {
           title: "Other networks",
           copy:
             "Bitcoin, Solana, TRON, XRP Ledger, and \(ChainRegistry.cosmosChains.map(\.name).joined(separator: ", "))."
-        )
-        IOSFactRow(
-          systemImage: "eye",
-          title: "What's read",
-          copy:
-            "Public balances from network APIs. Seed phrases and private keys are refused, never stored."
         )
       }
     }
@@ -535,23 +476,24 @@ private struct AddWalletSheet: View {
   @ViewBuilder
   private var detectionLine: some View {
     if trimmedInput.isEmpty, clearedSecret {
-      Label(
-        "That looked like a seed phrase or private key, so it was cleared. Only public addresses are accepted.",
-        systemImage: "exclamationmark.shield.fill"
+      IOSNotice(
+        systemImage: "exclamationmark.shield.fill",
+        text: "That looked like a seed phrase or private key, so it was cleared. Paste a public address instead.",
+        tone: .danger
       )
-      .foregroundStyle(AtlasTheme.loss)
     } else if trimmedInput.isEmpty {
-      Text("One per line, or separated by commas.")
+      Text("To add several, put one per line or separate them with commas.")
         .foregroundStyle(AtlasTheme.ink3)
     } else if !inputLooksSafe {
-      Label(
-        "That looks like a seed phrase or private key. Only public addresses are accepted.",
-        systemImage: "exclamationmark.shield.fill"
+      IOSNotice(
+        systemImage: "exclamationmark.shield.fill",
+        text: "That looks like a seed phrase or private key. Paste a public address instead.",
+        tone: .danger
       )
-      .foregroundStyle(AtlasTheme.loss)
     } else if recognized.isEmpty {
       Label(
-        unrecognized.count > 1 ? "No recognized addresses" : "Not a recognized address",
+        unrecognized.count > 1
+          ? "None of these are supported addresses." : "Not a supported address.",
         systemImage: "questionmark.circle"
       )
       .foregroundStyle(AtlasTheme.warning)
@@ -580,8 +522,8 @@ private struct AddWalletSheet: View {
         if !unrecognized.isEmpty {
           Label(
             unrecognized.count == 1
-              ? "1 entry isn't recognized and will stay here"
-              : "\(unrecognized.count) entries aren't recognized and will stay here",
+              ? "1 entry isn't supported and will stay here"
+              : "\(unrecognized.count) entries aren't supported and will stay here",
             systemImage: "exclamationmark.triangle"
           )
           .foregroundStyle(AtlasTheme.warning)
@@ -601,7 +543,8 @@ private struct AddWalletSheet: View {
       // Never put a pasted secret on screen; keep what was already typed.
       clearedSecret = trimmedInput.isEmpty
       if !trimmedInput.isEmpty {
-        state.error = "That looked like a seed phrase or private key, so it wasn't pasted."
+        state.error =
+          "That looked like a seed phrase or private key, so it wasn't pasted. Paste a public address instead."
       }
       return
     }
@@ -669,31 +612,19 @@ private struct WalletDetailSheet: View {
   }
 
   var body: some View {
-    NavigationStack {
-      ScrollView {
+    SourcesSheet(title: "Wallet", cancelTitle: nil) {
+      VStack(alignment: .leading, spacing: 22) {
         if let wallet {
           content(for: wallet)
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 32)
-            .frame(maxWidth: 640, alignment: .leading)
-            .frame(maxWidth: .infinity)
         }
       }
-      .scrollDismissesKeyboard(.interactively)
-      .background(AtlasTheme.canvas)
-      .navigationTitle("Wallet")
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbarBackground(AtlasTheme.canvas, for: .navigationBar)
       .toolbar {
         ToolbarItem(placement: .confirmationAction) {
           FormToolbarConfirmButton(
             title: "Done", isEnabled: !nameIsTooLong, action: commitAndDismiss)
         }
       }
-      .atlasKeyboardDoneButton()
     }
-    .presentationDragIndicator(.visible)
     .onAppear {
       state.error = ""
       if focusesName { nameFocused = true }
@@ -731,156 +662,150 @@ private struct WalletDetailSheet: View {
     let info = WalletNetworkInfo(wallet: wallet)
     let name = state.walletDisplayName(for: wallet)
     let value = latestValue(for: wallet)
-    VStack(alignment: .leading, spacing: 22) {
-      VStack(spacing: 8) {
-        WalletNetworkMonogram(info: info, size: 60)
-        Text(name)
-          .font(.title2.weight(.semibold))
-          .multilineTextAlignment(.center)
-          .lineLimit(3)
-        if let value {
-          Text(money(value.total))
-            .font(.title3.weight(.semibold))
-            .monospacedDigit()
-            .foregroundStyle(AtlasTheme.ink)
-          Text(
-            value.assets == 1
-              ? "1 asset · latest scan" : "\(value.assets) assets · latest scan"
-          )
-          .font(.footnote)
+
+    VStack(spacing: 8) {
+      TokenMonogram(symbol: info.symbol, size: 60, isPlaceholder: info.isRetired)
+      Text(name)
+        .font(AtlasTheme.font(.display, .title2))
+        .foregroundStyle(AtlasTheme.ink)
+        .multilineTextAlignment(.center)
+        .lineLimit(3)
+      if let value {
+        Text(money(value.total))
+          .font(AtlasTheme.font(.number, .title3))
+          .monospacedDigit()
+          .foregroundStyle(AtlasTheme.ink)
+        Text(
+          value.assets == 1
+            ? "1 asset · latest scan" : "\(value.assets) assets · latest scan"
+        )
+        .font(AtlasTheme.font(.body, .footnote))
+        .foregroundStyle(AtlasTheme.ink3)
+      } else {
+        Text("Not in a scan yet")
+          .font(AtlasTheme.font(.body, .footnote))
           .foregroundStyle(AtlasTheme.ink3)
-        } else {
-          Text("Not in a scan yet")
-            .font(.footnote)
-            .foregroundStyle(AtlasTheme.ink3)
-        }
-        Badge(info.badge, color: AtlasTheme.accent)
-          .padding(.top, 2)
       }
-      .frame(maxWidth: .infinity)
-      .accessibilityElement(children: .combine)
+      Badge(info.badge, color: AtlasTheme.accent)
+        .padding(.top, 2)
+    }
+    .frame(maxWidth: .infinity)
+    .accessibilityElement(children: .combine)
 
-      VStack(alignment: .leading, spacing: 8) {
-        HStack(alignment: .firstTextBaseline) {
-          FieldLabel("Name")
-          Spacer(minLength: 8)
-          if draftLength > Self.nameLimit - 15 {
-            Text("\(draftLength)/\(Self.nameLimit)")
-              .font(.caption.monospacedDigit())
-              .foregroundStyle(nameIsTooLong ? AtlasTheme.loss : AtlasTheme.ink3)
-              .accessibilityLabel("\(draftLength) of \(Self.nameLimit) characters")
-          }
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(alignment: .firstTextBaseline) {
+        FieldLabel("Name")
+        Spacer(minLength: 8)
+        if draftLength > Self.nameLimit - 15 {
+          Text("\(draftLength)/\(Self.nameLimit)")
+            .font(AtlasTheme.font(.number, .caption))
+            .foregroundStyle(nameIsTooLong ? AtlasTheme.loss : AtlasTheme.ink3)
+            .accessibilityLabel("\(draftLength) of \(Self.nameLimit) characters")
         }
-        TextField(info.friendlyName, text: nameBinding(for: wallet))
-          .textFieldStyle(AtlasTextFieldStyle())
-          .textInputAutocapitalization(.words)
-          .submitLabel(.done)
-          .focused($nameFocused)
-          .onSubmit {
-            guard !nameIsTooLong else { return }
-            Task { _ = await state.commitWalletLabelDraft(id: wallet.id) }
-          }
-          .overlay {
-            if nameIsTooLong {
-              RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
-                .stroke(AtlasTheme.loss.opacity(0.7), lineWidth: 1.5)
-                .allowsHitTesting(false)
-            }
-          }
-          .accessibilityLabel("Wallet name")
-          .accessibilityHint("Edit the name shown in the app. Leave empty to use the default.")
-          .disabled(state.vaultEditsDisabled)
-        if nameIsTooLong {
-          Label(
-            "Names can be up to \(Self.nameLimit) characters.",
-            systemImage: "exclamationmark.circle.fill"
-          )
-          .font(.footnote)
-          .foregroundStyle(AtlasTheme.loss)
-        }
-        IOSInlineError()
       }
+      TextField(info.friendlyName, text: nameBinding(for: wallet))
+        .textFieldStyle(AtlasTextFieldStyle())
+        .textInputAutocapitalization(.words)
+        .submitLabel(.done)
+        .focused($nameFocused)
+        .onSubmit {
+          guard !nameIsTooLong else { return }
+          Task { _ = await state.commitWalletLabelDraft(id: wallet.id) }
+        }
+        .overlay {
+          if nameIsTooLong {
+            RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
+              .stroke(AtlasTheme.loss, lineWidth: 2)
+              .allowsHitTesting(false)
+          }
+        }
+        .accessibilityLabel("Wallet name")
+        .accessibilityHint("Edit the name shown in the app. Leave empty to use the default.")
+        .disabled(state.vaultEditsDisabled)
+      if nameIsTooLong {
+        Label(
+          "Names can be up to \(Self.nameLimit) characters.",
+          systemImage: "exclamationmark.circle.fill"
+        )
+        .font(AtlasTheme.font(.body, .footnote))
+        .foregroundStyle(AtlasTheme.loss)
+      }
+      IOSInlineError()
+    }
 
-      VStack(alignment: .leading, spacing: 8) {
-        FieldLabel("Address")
+    VStack(alignment: .leading, spacing: 8) {
+      FieldLabel("Address")
+      IOSCard(padding: 12) {
         Text(wallet.address)
-          .font(.callout.monospaced())
+          .font(AtlasTheme.font(.mono, .callout))
           .foregroundStyle(AtlasTheme.ink)
           .textSelection(.enabled)
           .fixedSize(horizontal: false, vertical: true)
           .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(12)
-          .background(AtlasTheme.surface)
-          .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
-          .overlay {
-            RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
-              .stroke(AtlasTheme.ruleSoft, lineWidth: 1)
-          }
-        Button {
-          UIPasteboard.general.string = wallet.address
-          copied = true
-          AtlasAccessibilityAnnouncer.shared.announceEvent("Address copied.", kind: .notice)
-        } label: {
-          Label(
-            copied ? "Copied" : "Copy address",
-            systemImage: copied ? "checkmark" : "doc.on.doc"
-          )
-          .frame(maxWidth: .infinity, minHeight: 44)
-        }
-        .buttonStyle(AtlasSecondaryButtonStyle())
-        .task(id: copied) {
-          guard copied else { return }
-          try? await Task.sleep(for: .seconds(1.6))
-          copied = false
-        }
       }
-
-      VStack(alignment: .leading, spacing: 8) {
-        FieldLabel(info.isRetired ? "Network" : "Networks scanned")
-        if info.isRetired {
-          Text("\(info.badge) is no longer scanned. Remove this wallet if you no longer need it.")
-            .font(.callout)
-            .foregroundStyle(AtlasTheme.warning)
-            .fixedSize(horizontal: false, vertical: true)
-        } else {
-          SourcesFlowLayout(spacing: 6) {
-            ForEach(info.scannedNetworks, id: \.self) { network in
-              Badge(network)
-            }
-          }
-          .accessibilityElement(children: .ignore)
-          .accessibilityLabel("Networks scanned: \(info.scannedNetworks.joined(separator: ", "))")
-        }
-      }
-
-      Button(role: .destructive) {
-        confirmingRemoval = true
+      Button {
+        UIPasteboard.general.string = wallet.address
+        copied = true
+        AtlasAccessibilityAnnouncer.shared.announceEvent("Address copied.", kind: .notice)
       } label: {
-        Label("Remove wallet", systemImage: "trash")
-          .foregroundStyle(AtlasTheme.loss)
-          .frame(maxWidth: .infinity, minHeight: 44)
+        Label(
+          copied ? "Copied" : "Copy address",
+          systemImage: copied ? "checkmark" : "doc.on.doc"
+        )
+        .frame(maxWidth: .infinity, minHeight: 44)
       }
       .buttonStyle(AtlasSecondaryButtonStyle())
-      .disabled(state.vaultEditsDisabled)
-      .accessibilityLabel("Remove \(name)")
-      .accessibilityHint("Asks for confirmation before removing this saved wallet.")
-      .confirmationDialog(
-        "Remove \(name)?",
-        isPresented: $confirmingRemoval,
-        titleVisibility: .visible
-      ) {
-        Button("Remove wallet", role: .destructive) {
-          Task {
-            await state.removeWallet(id: wallet.id)
-            if self.wallet == nil { dismiss() }
+      .task(id: copied) {
+        guard copied else { return }
+        try? await Task.sleep(for: .seconds(1.6))
+        copied = false
+      }
+    }
+
+    VStack(alignment: .leading, spacing: 8) {
+      FieldLabel(info.isRetired ? "Network" : "Networks scanned")
+      if info.isRetired {
+        IOSNotice(
+          systemImage: "exclamationmark.triangle.fill",
+          text: "\(info.badge) is no longer scanned. Remove this wallet if you don't need it."
+        )
+      } else {
+        SourcesFlowLayout(spacing: 6) {
+          ForEach(info.scannedNetworks, id: \.self) { network in
+            Badge(network)
           }
         }
-        Button("Cancel", role: .cancel) {}
-      } message: {
-        Text(
-          "\(WalletPresentation.shortAddress(wallet.address)) is removed from this device. Existing snapshots are unchanged."
-        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Networks scanned: \(info.scannedNetworks.joined(separator: ", "))")
       }
+    }
+
+    Button(role: .destructive) {
+      confirmingRemoval = true
+    } label: {
+      Label("Remove wallet", systemImage: "trash")
+        .frame(maxWidth: .infinity, minHeight: 44)
+    }
+    .buttonStyle(SourcesDestructiveButtonStyle())
+    .disabled(state.vaultEditsDisabled)
+    .accessibilityLabel("Remove \(name)")
+    .accessibilityHint("Asks for confirmation before removing this saved wallet.")
+    .confirmationDialog(
+      "Remove \(name)?",
+      isPresented: $confirmingRemoval,
+      titleVisibility: .visible
+    ) {
+      Button("Remove", role: .destructive) {
+        Task {
+          await state.removeWallet(id: wallet.id)
+          if self.wallet == nil { dismiss() }
+        }
+      }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text(
+        "\(WalletPresentation.shortAddress(wallet.address)) is removed from this device. Existing snapshots are unchanged."
+      )
     }
   }
 
@@ -931,6 +856,8 @@ private struct WalletDetailSheet: View {
   }
 }
 
+// MARK: - Shared source-screen pieces (also used by ExchangesScreen and TokensScreen)
+
 /// Toolbar confirm action that looks disabled when it is. The root view's ink
 /// foreground style otherwise keeps a disabled bar button looking active.
 struct FormToolbarConfirmButton: View {
@@ -939,17 +866,139 @@ struct FormToolbarConfirmButton: View {
   var action: () -> Void
 
   var body: some View {
-    Button(title, action: action)
-      .fontWeight(.semibold)
-      .foregroundStyle(isEnabled ? AtlasTheme.accent : AtlasTheme.ink3.opacity(0.55))
-      .disabled(!isEnabled)
+    Button(action: action) {
+      Text(title)
+        .font(AtlasTheme.font(.body, .body, weight: .semibold))
+    }
+    .foregroundStyle(isEnabled ? AtlasTheme.accent : AtlasTheme.ink3)
+    .disabled(!isEnabled)
   }
 }
 
-// MARK: - Shared source-screen pieces (also used by ExchangesScreen)
+/// A regular-weight toolbar action (Cancel, Done, Edit).
+struct SourcesToolbarButton: View {
+  var title: String
+  var action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      Text(title)
+        .font(AtlasTheme.font(.body, .body))
+    }
+    .foregroundStyle(AtlasTheme.accent)
+  }
+}
+
+/// The sheet every Sources add, detail and edit form lives in: a themed inline
+/// title, a scrolling body on the canvas, and an optional Cancel. Confirm
+/// actions attach through `.toolbar` on the content or the sheet.
+struct SourcesSheet<Content: View>: View {
+  @Environment(\.dismiss) private var dismiss
+  var title: String
+  var cancelTitle: String?
+  var spacing: CGFloat
+  var content: Content
+
+  init(
+    title: String,
+    cancelTitle: String? = "Cancel",
+    spacing: CGFloat = 18,
+    @ViewBuilder content: () -> Content
+  ) {
+    self.title = title
+    self.cancelTitle = cancelTitle
+    self.spacing = spacing
+    self.content = content()
+  }
+
+  var body: some View {
+    NavigationStack {
+      ScrollView {
+        VStack(alignment: .leading, spacing: spacing) {
+          content
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 32)
+        .frame(maxWidth: 640, alignment: .leading)
+        .frame(maxWidth: .infinity)
+      }
+      .scrollDismissesKeyboard(.interactively)
+      .background(AtlasCanvasBackground().ignoresSafeArea())
+      .iosTitle(title)
+      .toolbar {
+        if let cancelTitle {
+          ToolbarItem(placement: .cancellationAction) {
+            SourcesToolbarButton(title: cancelTitle) { dismiss() }
+          }
+        }
+      }
+      .atlasKeyboardDoneButton()
+    }
+    .presentationDragIndicator(.visible)
+  }
+}
+
+/// Row button for the Sources lists: no system highlight, a light dim while
+/// pressed. The card chrome comes from the label.
+struct SourcesRowButtonStyle: ButtonStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .opacity(configuration.isPressed ? 0.8 : 1)
+  }
+}
+
+/// Full-width destructive action: loss text on the theme's soft loss fill,
+/// outlined (and shadowed) the way the theme draws controls.
+struct SourcesDestructiveButtonStyle: ButtonStyle {
+  @Environment(\.isEnabled) private var isEnabled
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  func makeBody(configuration: Configuration) -> some View {
+    let shape = AtlasTheme.shape
+    let pressed = configuration.isPressed && isEnabled
+    configuration.label
+      .font(AtlasTheme.font(.body, .callout, weight: .semibold))
+      .foregroundStyle(AtlasTheme.loss)
+      .padding(.horizontal, 14)
+      .atlasChrome(
+        fill: AtlasTheme.lossSoft,
+        border: shape.hasBoldBorders ? AtlasTheme.outline : AtlasTheme.loss.opacity(0.34),
+        level: .control,
+        radius: shape.pillControls ? 999 : shape.radiusControl,
+        borderWidth: shape.hasBoldBorders ? shape.controlBorderWidth : 1,
+        isPressed: pressed,
+        showsShadow: isEnabled
+      )
+      .contentShape(RoundedRectangle(cornerRadius: shape.radiusControl, style: .continuous))
+      .opacity(isEnabled ? 1 : 0.55)
+      .scaleEffect(pressed && !shape.hasHardShadows ? 0.985 : 1)
+      .animation(
+        AtlasMotion.animation(AtlasMotion.quick, reduceMotion: reduceMotion),
+        value: configuration.isPressed
+      )
+  }
+}
+
+extension View {
+  /// The Sources lists: plain rows on the theme's canvas, each row its own
+  /// card (see `iosListRow`).
+  func sourcesListStyle() -> some View {
+    listStyle(.plain)
+      .scrollContentBackground(.hidden)
+      .background(AtlasCanvasBackground().ignoresSafeArea())
+  }
+
+  /// A full-bleed, chrome-free row for an empty state.
+  func sourcesEmptyRow() -> some View {
+    listRowBackground(Color.clear)
+      .listRowSeparator(.hidden)
+      .listRowInsets(EdgeInsets())
+  }
+}
 
 /// Persistent page status (operator message, required action, update link)
-/// as a list section; transient notices and errors float in the toast.
+/// as a card row; transient notices and errors float in the toast.
 struct SourcesPersistentStatusSection: View {
   @EnvironmentObject private var state: AppState
 
@@ -959,8 +1008,11 @@ struct SourcesPersistentStatusSection: View {
     {
       Section {
         IOSPersistentStatus()
+          .padding(14)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .iosCardSurface()
+          .iosListRow()
       }
-      .listRowBackground(AtlasTheme.surface)
     }
   }
 }
@@ -971,26 +1023,46 @@ struct SourcesEmptyState: View {
   var title: String
   var copy: String
   var actionTitle: String
+  var actionIdentifier: String?
+  var isActionDisabled: Bool
   var action: () -> Void
+
+  init(
+    systemImage: String,
+    title: String,
+    copy: String,
+    actionTitle: String,
+    actionIdentifier: String? = nil,
+    isActionDisabled: Bool = false,
+    action: @escaping () -> Void
+  ) {
+    self.systemImage = systemImage
+    self.title = title
+    self.copy = copy
+    self.actionTitle = actionTitle
+    self.actionIdentifier = actionIdentifier
+    self.isActionDisabled = isActionDisabled
+    self.action = action
+  }
 
   var body: some View {
     VStack(spacing: 14) {
       Image(systemName: systemImage)
-        .font(.system(size: 30, weight: .semibold))
+        .font(.system(size: 26, weight: .semibold))
         .foregroundStyle(AtlasTheme.accent)
-        .frame(width: 72, height: 72)
-        .background(AtlasTheme.accent.opacity(0.10))
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .frame(width: 64, height: 64)
+        .background(AtlasTheme.accentSoft)
+        .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.card, style: .continuous))
         .accessibilityHidden(true)
       VStack(spacing: 6) {
         Text(title)
-          .font(.title3.weight(.semibold))
+          .font(AtlasTheme.font(.display, .title3))
           .foregroundStyle(AtlasTheme.ink)
           .fixedSize(horizontal: false, vertical: true)
           .accessibilityAddTraits(.isHeader)
         Text(copy)
-          .font(.callout)
-          .foregroundStyle(AtlasTheme.ink3)
+          .font(AtlasTheme.font(.body, .callout))
+          .foregroundStyle(AtlasTheme.ink2)
           .fixedSize(horizontal: false, vertical: true)
       }
       .multilineTextAlignment(.center)
@@ -1000,11 +1072,14 @@ struct SourcesEmptyState: View {
           .padding(.horizontal, 8)
       }
       .buttonStyle(AtlasPrimaryButtonStyle())
+      .disabled(isActionDisabled)
+      .accessibilityIdentifier(actionIdentifier ?? "")
       .padding(.top, 4)
     }
+    .frame(maxWidth: 420)
     .frame(maxWidth: .infinity)
     .padding(.horizontal, 24)
-    .padding(.vertical, 48)
+    .padding(.vertical, 40)
   }
 }
 

@@ -3,12 +3,12 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-/// Preferences, recovery kit export and restore, policy links, privacy-safe
-/// diagnostics, and the About block, laid out as grouped iOS settings lists.
-/// iOS port of the macOS `SettingsView`: folder and file panels become the
-/// Files picker, the clipboard is `UIPasteboard`, and the recovery code is
-/// revealed only after the recovery file has actually been saved outside the
-/// app's scratch space.
+/// Theme and preferences, the iCloud and Export entries, the privacy facts,
+/// recovery kit export and restore, policy links, privacy-safe diagnostics and
+/// the About block, laid out as themed cards. iOS port of the macOS
+/// `SettingsView`: folder and file panels become the Files picker, the
+/// clipboard is `UIPasteboard`, and the recovery code is revealed only after
+/// the recovery file has actually been saved outside the app's scratch space.
 struct SettingsScreen: View {
   @EnvironmentObject private var state: AppState
   @EnvironmentObject private var navigation: IOSNavigationModel
@@ -44,7 +44,40 @@ struct SettingsScreen: View {
     .locale(AtlasFormatting.locale)
     .precision(.fractionLength(0...2))
 
-  private static let dustThresholdErrorMessage = "Enter a dollar amount of 0 or more."
+  private static let dustThresholdErrorMessage = "That is not a dollar amount. Enter 0 or more."
+
+  /// `AppState.iCloudStatus` value that means the last iCloud transfer failed.
+  /// Compared by equality: it is a constant owned by AppState (see
+  /// `presentICloudError`), the same one `ICloudScreen` relies on.
+  private static let iCloudNeedsAttentionStatus = "Needs attention"
+
+  /// What the privacy group says, once. Each line is backed by PRIVACY.md and
+  /// the code: read-only scanning, the encrypted vault, exchange credentials,
+  /// the two outside services that see anything, and optional iCloud copies.
+  private static let privacyFacts: [SettingsFact] = [
+    SettingsFact(
+      systemImage: "eye",
+      text:
+        "Address Atlas is read-only. It never asks for a seed phrase or private key and cannot move funds."
+    ),
+    SettingsFact(
+      systemImage: "lock",
+      text: "Your portfolio is encrypted on this device."
+    ),
+    SettingsFact(
+      systemImage: "key",
+      text: "Exchange keys are stored encrypted. Use read-only keys."
+    ),
+    SettingsFact(
+      systemImage: "globe",
+      text:
+        "Blockchain providers see the public addresses you add. Prices come from CoinGecko, which receives only coin identifiers."
+    ),
+    SettingsFact(
+      systemImage: "icloud",
+      text: "iCloud copies are optional and encrypted before they leave this device."
+    ),
+  ]
 
   private var trimmedRestoreCode: String {
     restoreCode.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -57,12 +90,13 @@ struct SettingsScreen: View {
   var body: some View {
     IOSPage(title: "Settings") {
       themeSection
-      portfolioSection
+      preferencesSection
+      dataSection
+      privacySection
       recoverySection
       supportSection
       diagnosticsSection
       aboutSection
-      disclaimer
     }
     .onAppear(perform: syncDustThresholdText)
     .onDisappear {
@@ -123,17 +157,16 @@ struct SettingsScreen: View {
     }
   }
 
-  // MARK: - Portfolio
+  // MARK: - Preferences
 
-  private var portfolioSection: some View {
+  private var preferencesSection: some View {
     SettingsGroup(
-      title: "Portfolio",
-      footer: "Values are in US dollars. Automatic refresh runs every 15 minutes while the app is open."
+      title: "Preferences",
+      footer: "Refreshes every 15 minutes while the app is open. Values are in US dollars."
     ) {
       SettingsToggleRow(
         title: "Automatic refresh",
         systemImage: "arrow.clockwise",
-        tint: AtlasTheme.accent,
         hint: "Refreshes saved sources every 15 minutes while the app is in the foreground and unlocked.",
         isOn: Binding(
           get: { state.document.preferences.autoRefresh },
@@ -141,11 +174,10 @@ struct SettingsScreen: View {
             Task { await state.setAutoRefresh(value) }
           })
       )
-      SettingsDivider()
+      SettingsRule()
       SettingsToggleRow(
         title: "Hide small balances",
         systemImage: "eye.slash",
-        tint: AtlasTheme.ink2,
         hint: "Keeps low-value holdings out of the asset list without deleting them.",
         isOn: Binding(
           get: { state.document.preferences.hideDust },
@@ -154,7 +186,7 @@ struct SettingsScreen: View {
           })
       )
       if state.document.preferences.hideDust {
-        SettingsDivider()
+        SettingsRule()
         dustThresholdRow
           .transition(.opacity)
       }
@@ -163,51 +195,53 @@ struct SettingsScreen: View {
     .animation(animation, value: state.document.preferences.hideDust)
   }
 
+  private var dustThresholdField: some View {
+    HStack(spacing: 8) {
+      Text("$")
+        .font(AtlasTheme.font(.number, .body))
+        .foregroundStyle(AtlasTheme.ink3)
+        .accessibilityHidden(true)
+      TextField("0.00", text: $dustThresholdText)
+        .font(AtlasTheme.font(.number, .body))
+        .textFieldStyle(AtlasTextFieldStyle())
+        .atlasDecimalInput()
+        .multilineTextAlignment(dynamicTypeSize.isAccessibilitySize ? .leading : .trailing)
+        .focused($focusedField, equals: .dustThreshold)
+        .overlay {
+          if dustThresholdError != nil {
+            RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
+              .stroke(AtlasTheme.loss, lineWidth: 2)
+              .accessibilityHidden(true)
+          }
+        }
+        .accessibilityLabel("Hide balances below, in US dollars")
+        .accessibilityHint("Applied when you leave the field.")
+        .accessibilityIdentifier("settings.dustThreshold")
+        .onChange(of: dustThresholdText) { _, _ in
+          if focusedField == .dustThreshold {
+            dustThresholdError = nil
+          }
+        }
+    }
+  }
+
   private var dustThresholdRow: some View {
     VStack(alignment: .leading, spacing: 8) {
-      let field = HStack(spacing: 4) {
-        Text("$")
-          .foregroundStyle(AtlasTheme.ink3)
-          .accessibilityHidden(true)
-        TextField("0.00", text: $dustThresholdText)
-          .atlasDecimalInput()
-          .multilineTextAlignment(dynamicTypeSize.isAccessibilitySize ? .leading : .trailing)
-          .focused($focusedField, equals: .dustThreshold)
-          .accessibilityLabel("Dust threshold in US dollars")
-          .accessibilityHint("Applied when you leave the field.")
-          .accessibilityIdentifier("settings.dustThreshold")
-          .onChange(of: dustThresholdText) { _, _ in
-            if focusedField == .dustThreshold {
-              dustThresholdError = nil
-            }
-          }
-      }
-      .font(.body.monospacedDigit())
-      .padding(.horizontal, 10)
-      .frame(minHeight: 36)
-      .background(AtlasTheme.surfaceMuted.opacity(0.6))
-      .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.small, style: .continuous))
-      .overlay {
-        RoundedRectangle(cornerRadius: AtlasRadius.small, style: .continuous)
-          .stroke(
-            dustThresholdError == nil ? Color.clear : AtlasTheme.loss.opacity(0.6), lineWidth: 1)
-      }
-
       if dynamicTypeSize.isAccessibilitySize {
-        SettingsRowLabel(title: "Hide below", systemImage: "line.3.horizontal.decrease", tint: AtlasTheme.ink2) {
+        SettingsRowLabel(title: "Hide below", systemImage: "line.3.horizontal.decrease") {
           EmptyView()
         }
-        field
+        dustThresholdField
           .padding(.horizontal, 14)
       } else {
-        SettingsRowLabel(title: "Hide below", systemImage: "line.3.horizontal.decrease", tint: AtlasTheme.ink2) {
-          field.frame(maxWidth: 130)
+        SettingsRowLabel(title: "Hide below", systemImage: "line.3.horizontal.decrease") {
+          dustThresholdField.frame(maxWidth: 170)
         }
       }
 
       if let dustThresholdError {
         Label(dustThresholdError, systemImage: "exclamationmark.circle.fill")
-          .font(.footnote)
+          .font(AtlasTheme.font(.body, .footnote))
           .foregroundStyle(AtlasTheme.loss)
           .fixedSize(horizontal: false, vertical: true)
           .padding(.horizontal, 14)
@@ -217,6 +251,64 @@ struct SettingsScreen: View {
       }
     }
     .padding(.bottom, dustThresholdError == nil && !dynamicTypeSize.isAccessibilitySize ? 0 : 12)
+  }
+
+  // MARK: - iCloud and Export
+
+  /// The iCloud row's second line, in plain words. The "Needs attention"
+  /// constant comes from AppState and is compared by equality; everything
+  /// else is read from the saved link, not from status wording.
+  private var iCloudNeedsAttention: Bool {
+    state.iCloudStatus == Self.iCloudNeedsAttentionStatus
+  }
+
+  private var iCloudRowStatus: String {
+    if iCloudNeedsAttention { return "Needs attention" }
+    if let cloud = state.document.iCloudState {
+      return "Last saved \(AtlasFormatting.dateTime(cloud.savedAt))"
+    }
+    return "Not connected"
+  }
+
+  private var dataSection: some View {
+    SettingsGroup {
+      NavigationLink(value: IOSRoute.iCloud) {
+        SettingsRowLabel(
+          title: "iCloud",
+          subtitle: iCloudRowStatus,
+          subtitleColor: iCloudNeedsAttention ? AtlasTheme.warning : AtlasTheme.ink3,
+          systemImage: "icloud",
+          tone: iCloudNeedsAttention ? .warning : .accent
+        ) {
+          SettingsChevron()
+        }
+      }
+      .buttonStyle(SettingsRowButtonStyle())
+      .accessibilityIdentifier("settings.iCloud")
+      SettingsRule()
+      NavigationLink(value: IOSRoute.export) {
+        SettingsRowLabel(
+          title: "Export",
+          subtitle: "CSV or JSON",
+          systemImage: "square.and.arrow.up"
+        ) {
+          SettingsChevron()
+        }
+      }
+      .buttonStyle(SettingsRowButtonStyle())
+      .accessibilityIdentifier("settings.export")
+    }
+  }
+
+  // MARK: - Privacy
+
+  private var privacySection: some View {
+    SettingsGroup(title: "Privacy") {
+      ForEach(Array(Self.privacyFacts.enumerated()), id: \.offset) { index, fact in
+        if index > 0 { SettingsRule() }
+        SettingsFactRow(fact: fact)
+      }
+    }
   }
 
   // MARK: - Recovery kit
@@ -231,9 +323,8 @@ struct SettingsScreen: View {
       } label: {
         SettingsRowLabel(
           title: "Export recovery kit",
-          subtitle: "A key file plus a code shown once.",
           systemImage: "key.fill",
-          tint: AtlasTheme.warning
+          tone: .warning
         ) {
           if isRecoveryExportRunning {
             ProgressView().controlSize(.small)
@@ -255,7 +346,7 @@ struct SettingsScreen: View {
           .padding(.bottom, 14)
       }
 
-      SettingsDivider()
+      SettingsRule()
 
       Button {
         isRestoreFormExpanded.toggle()
@@ -264,15 +355,14 @@ struct SettingsScreen: View {
         }
       } label: {
         SettingsRowLabel(
-          title: "Restore from recovery kit",
-          subtitle: "Use a saved file and its code.",
-          systemImage: "arrow.counterclockwise",
-          tint: AtlasTheme.accent
+          title: "Restore recovery kit",
+          systemImage: "arrow.counterclockwise"
         ) {
           Image(systemName: "chevron.down")
             .font(.footnote.weight(.semibold))
             .foregroundStyle(AtlasTheme.ink3)
             .rotationEffect(.degrees(isRestoreFormExpanded ? 180 : 0))
+            .accessibilityHidden(true)
         }
       }
       .buttonStyle(SettingsRowButtonStyle())
@@ -371,12 +461,12 @@ struct SettingsScreen: View {
       Label {
         VStack(alignment: .leading, spacing: 4) {
           Text("Encryption key restored")
-            .font(.callout.weight(.semibold))
+            .font(AtlasTheme.font(.body, .callout, weight: .semibold))
             .foregroundStyle(AtlasTheme.ink)
           Text(
-            "This device can open its saved portfolio with the kit's key. To bring in a portfolio saved from another device, restore its iCloud copy."
+            "This device can open its saved portfolio again. To bring in a portfolio saved on another device, restore its iCloud copy."
           )
-          .font(.footnote)
+          .font(AtlasTheme.font(.body, .footnote))
           .foregroundStyle(AtlasTheme.ink2)
           .fixedSize(horizontal: false, vertical: true)
         }
@@ -387,7 +477,7 @@ struct SettingsScreen: View {
       .accessibilityElement(children: .combine)
       Button {
         restoreSucceeded = false
-        navigation.open(.iCloud)
+        navigation.openICloud()
       } label: {
         Label("Open iCloud", systemImage: "icloud")
           .settingsControlLabel()
@@ -395,9 +485,7 @@ struct SettingsScreen: View {
       .buttonStyle(AtlasSecondaryButtonStyle())
       .accessibilityHint("Opens the iCloud page, where you can restore a saved copy.")
     }
-    .padding(12)
-    .background(AtlasTheme.gain.opacity(0.08))
-    .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
+    .settingsPanel(.gain)
     .accessibilityIdentifier("settings.restoreSucceeded")
   }
 
@@ -414,7 +502,7 @@ struct SettingsScreen: View {
           Image(systemName: "checkmark.circle.fill")
             .foregroundStyle(AtlasTheme.gain)
         }
-        .font(.footnote.weight(.medium))
+        .font(AtlasTheme.font(.body, .footnote, weight: .medium))
         .foregroundStyle(AtlasTheme.ink2)
       }
       Label {
@@ -423,22 +511,25 @@ struct SettingsScreen: View {
         Image(systemName: "exclamationmark.triangle.fill")
           .foregroundStyle(AtlasTheme.warning)
       }
-      .font(.footnote.weight(.medium))
+      .font(AtlasTheme.font(.body, .footnote, weight: .medium))
       .foregroundStyle(AtlasTheme.ink2)
       .fixedSize(horizontal: false, vertical: true)
 
       Text(revealedRecoveryCode)
-        .font(.callout.monospaced())
+        .font(AtlasTheme.font(.mono, .callout))
         .foregroundStyle(AtlasTheme.ink)
         .privacySensitive()
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(AtlasTheme.warning.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
-        .overlay {
-          RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
-            .stroke(AtlasTheme.warning.opacity(0.3), lineWidth: 1)
-        }
+        .atlasChrome(
+          fill: AtlasTheme.surface,
+          border: AtlasTheme.shape.hasBoldBorders
+            ? AtlasTheme.outline : AtlasTheme.warning.opacity(0.45),
+          level: .control,
+          radius: AtlasRadius.control,
+          borderWidth: AtlasTheme.shape.hasBoldBorders ? AtlasTheme.shape.controlBorderWidth : 1,
+          showsShadow: false
+        )
         .accessibilityLabel("Recovery code")
         .accessibilityValue(revealedRecoveryCode)
         .accessibilityIdentifier("settings.recoveryCode")
@@ -472,6 +563,7 @@ struct SettingsScreen: View {
         .accessibilityHint("Removes the code from the screen. It cannot be shown again.")
       }
     }
+    .settingsPanel(.warning)
     .transition(.opacity)
   }
 
@@ -480,20 +572,20 @@ struct SettingsScreen: View {
   private var supportSection: some View {
     SettingsGroup(title: "Support & legal") {
       SettingsLinkRow(
-        title: "Privacy policy", systemImage: "hand.raised.fill", tint: AtlasTheme.accent,
+        title: "Privacy policy", systemImage: "hand.raised.fill",
         destination: AppState.privacyPolicyURL)
-      SettingsDivider()
+      SettingsRule()
       SettingsLinkRow(
-        title: "Support", systemImage: "questionmark.circle.fill", tint: AtlasTheme.gain,
+        title: "Support", systemImage: "questionmark.circle.fill",
         destination: AppState.supportURL)
-      SettingsDivider()
+      SettingsRule()
       SettingsLinkRow(
-        title: "Terms of use", systemImage: "doc.text.fill", tint: AtlasTheme.ink2,
+        title: "Terms of use", systemImage: "doc.text.fill",
         destination: AppState.termsOfUseURL)
-      SettingsDivider()
+      SettingsRule()
       SettingsLinkRow(
         title: "Data provided by CoinGecko", systemImage: "chart.line.uptrend.xyaxis",
-        tint: AtlasTheme.warning, destination: AppState.coinGeckoAttributionURL)
+        destination: AppState.coinGeckoAttributionURL)
     }
   }
 
@@ -505,9 +597,9 @@ struct SettingsScreen: View {
       VStack(alignment: .leading, spacing: 12) {
         SettingsRowLabel(
           title: "Privacy-safe report",
-          subtitle: "For support. No addresses, amounts, or keys.",
-          systemImage: "stethoscope",
-          tint: AtlasTheme.accent
+          subtitle:
+            "App version, state flags, count ranges and error codes. No addresses, labels, amounts or keys.",
+          systemImage: "stethoscope"
         ) {
           EmptyView()
         }
@@ -539,22 +631,6 @@ struct SettingsScreen: View {
           )
         }
         .padding(.horizontal, 14)
-        LearnMoreDisclosure("What the report contains", systemImage: "checkmark.shield") {
-          IOSFactRow(
-            systemImage: "checkmark.circle",
-            title: "Included",
-            copy: "App and schema versions, coarse state flags, count ranges, and stable failure codes.",
-            tint: AtlasTheme.gain
-          )
-          IOSFactRow(
-            systemImage: "xmark.circle",
-            title: "Never included",
-            copy:
-              "Addresses, labels, amounts, credentials, sessions, URLs, file paths, and raw errors.",
-            tint: AtlasTheme.loss
-          )
-        }
-        .padding(.horizontal, 14)
         .padding(.bottom, 14)
       }
     }
@@ -563,21 +639,25 @@ struct SettingsScreen: View {
   // MARK: - About
 
   private var aboutSection: some View {
-    SettingsGroup(title: "About") {
+    SettingsGroup(
+      title: "About",
+      footer: "Address Atlas does not give investment advice."
+    ) {
       SettingsValueRow(label: "Version", value: state.appVersion) {
         if !state.isAppVersionSupported {
           Badge("Update required", color: AtlasTheme.warning)
         }
       }
-      SettingsDivider(inset: 14)
-      SettingsValueRow(label: "Build", value: SettingsBuildInfo.buildNumber)
-      SettingsDivider(inset: 14)
+      SettingsRule(inset: 14)
+      SettingsValueRow(label: "Build", value: SettingsBuildInfo.buildNumber, isMono: true)
+      SettingsRule(inset: 14)
       SettingsValueRow(
         label: "Source commit",
-        value: SettingsBuildInfo.shortSourceCommit ?? "Unavailable"
+        value: SettingsBuildInfo.shortSourceCommit ?? "Unavailable",
+        isMono: SettingsBuildInfo.shortSourceCommit != nil
       )
       if showsUpdateLink {
-        SettingsDivider(inset: 14)
+        SettingsRule(inset: 14)
         updateLink
       }
     }
@@ -605,7 +685,7 @@ struct SettingsScreen: View {
           .foregroundStyle(AtlasTheme.ink3)
           .accessibilityHidden(true)
       }
-      .font(.body)
+      .font(AtlasTheme.font(.body, .body))
       .padding(.horizontal, 14)
       .frame(minHeight: 48)
       .contentShape(Rectangle())
@@ -613,18 +693,6 @@ struct SettingsScreen: View {
     .buttonStyle(SettingsRowButtonStyle())
     .accessibilityLabel(state.updateActionTitle)
     .accessibilityHint(state.updateActionHint)
-  }
-
-  private var disclaimer: some View {
-    Text(
-      "Address Atlas is read-only analytics. It never stores private keys, signs transactions, trades, or gives investment advice."
-    )
-    .font(.footnote)
-    .foregroundStyle(AtlasTheme.ink3)
-    .multilineTextAlignment(.center)
-    .frame(maxWidth: .infinity)
-    .fixedSize(horizontal: false, vertical: true)
-    .padding(.horizontal, 12)
   }
 
   // MARK: - Preference actions
@@ -753,12 +821,19 @@ struct SettingsScreen: View {
       "Code copied to this device only. It expires in one minute.", kind: .notice)
   }
 
+  /// Words in a restore notice that mean AppState is doing something besides
+  /// confirming the restore (an interrupted upload being finished); such a
+  /// notice stays in the toast.
+  private static let followUpNoticeWords = ["upload", "finishing", "sync"]
+
   private func restoreRecoveryKit(from url: URL) {
     guard !isRecoveryRestoreRunning else { return }
     let code = restoreCode
     let isAccessing = url.startAccessingSecurityScopedResource()
     isRecoveryRestoreRunning = true
     restoreSucceeded = false
+    // A notice left over from earlier must not be read as this restore's result.
+    state.notice = ""
     Task {
       defer {
         if isAccessing {
@@ -767,14 +842,17 @@ struct SettingsScreen: View {
         isRecoveryRestoreRunning = false
       }
       await state.restoreRecoveryKit(from: url, recoveryCode: code)
-      guard state.error.isEmpty, state.notice.hasPrefix("Recovery kit restored") else { return }
+      // Success is judged without AppState's exact wording: no error, and a
+      // notice that says the key was restored.
+      let notice = state.notice.lowercased()
+      guard state.error.isEmpty, notice.contains("restored") else { return }
       // The code has done its job; it doesn't stay on screen.
       restoreCode = ""
       revealsRestoreCode = false
       restoreSucceeded = true
-      // The plain success is explained inline; any follow-up (an
-      // interrupted upload being recovered) stays in the toast.
-      if state.notice == "Recovery kit restored." { state.notice = "" }
+      // A plain confirmation is explained inline; a notice that mentions
+      // another action stays in the toast.
+      if !Self.followUpNoticeWords.contains(where: { notice.contains($0) }) { state.notice = "" }
       AtlasAccessibilityAnnouncer.shared.announceEvent(
         "Encryption key restored on this device.", kind: .notice)
     }
@@ -793,7 +871,7 @@ struct SettingsScreen: View {
 
   private func copyDiagnostics(_ report: String) {
     UIPasteboard.general.string = report
-    state.notice = "Privacy-safe diagnostics copied."
+    state.notice = "Diagnostics copied."
     state.error = ""
   }
 }
@@ -808,17 +886,52 @@ private struct SettingsRecoveryExport {
   var code: String
 }
 
-/// iOS-style grouped section: small header, rounded card of rows, optional
-/// footnote.
+/// One line of the Privacy group.
+private struct SettingsFact {
+  var systemImage: String
+  var text: String
+}
+
+/// Which theme colours a row's icon tile or a panel takes.
+private enum SettingsTone {
+  case accent
+  case neutral
+  case gain
+  case warning
+  case loss
+
+  var ink: Color {
+    switch self {
+    case .accent: AtlasTheme.accent
+    case .neutral: AtlasTheme.ink2
+    case .gain: AtlasTheme.gain
+    case .warning: AtlasTheme.warning
+    case .loss: AtlasTheme.loss
+    }
+  }
+
+  var softFill: Color {
+    switch self {
+    case .accent: AtlasTheme.accentSoft
+    case .neutral: AtlasTheme.surfaceMuted
+    case .gain: AtlasTheme.gainSoft
+    case .warning: AtlasTheme.warningSoft
+    case .loss: AtlasTheme.lossSoft
+    }
+  }
+}
+
+/// A titled themed card of rows, with an optional footnote. The theme grid
+/// passes `framed: false` because it draws its own cards.
 private struct SettingsGroup<Content: View>: View {
-  var title: String
+  var title: String?
   var footer: String?
   /// False for content that draws its own cards (the theme grid).
   var framed = true
   var content: Content
 
   init(
-    title: String,
+    title: String? = nil,
     footer: String? = nil,
     framed: Bool = true,
     @ViewBuilder content: () -> Content
@@ -830,22 +943,16 @@ private struct SettingsGroup<Content: View>: View {
   }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 7) {
-      Text(title)
-        .font(AtlasTheme.font(.label, .footnote, weight: .semibold))
-        .foregroundStyle(AtlasTheme.ink3)
-        .padding(.horizontal, 4)
-        .accessibilityAddTraits(.isHeader)
+    VStack(alignment: .leading, spacing: 8) {
+      if let title {
+        IOSSectionTitle(title)
+      }
       if framed {
-        VStack(alignment: .leading, spacing: 0) {
-          content
+        IOSCard(padding: 0) {
+          VStack(alignment: .leading, spacing: 0) {
+            content
+          }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .atlasChrome(
-          fill: AtlasTheme.surface,
-          border: AtlasTheme.outline,
-          level: .card
-        )
       } else {
         content
       }
@@ -854,30 +961,37 @@ private struct SettingsGroup<Content: View>: View {
           .font(AtlasTheme.font(.body, .footnote))
           .foregroundStyle(AtlasTheme.ink3)
           .padding(.horizontal, 4)
+          // The hard-edged themes draw an offset shadow under the card.
+          .padding(.top, framed ? (AtlasTheme.shape.cardShadowOffset?.height ?? 0) : 0)
           .fixedSize(horizontal: false, vertical: true)
       }
     }
-    .padding(.top, 4)
   }
 }
 
-private struct SettingsDivider: View {
+/// The rule between rows: the theme's ink in the hard-edged themes, a soft
+/// hairline in the others.
+private struct SettingsRule: View {
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   var inset: CGFloat = 56
 
   var body: some View {
-    Divider()
-      .overlay(AtlasTheme.ruleSoft)
+    let bold = AtlasTheme.shape.hasBoldBorders
+    Rectangle()
+      .fill(bold ? AtlasTheme.outline : AtlasTheme.ruleSoft)
+      .frame(height: bold ? 1.5 : 1)
       .padding(.leading, dynamicTypeSize.isAccessibilitySize ? 14 : inset)
+      .accessibilityHidden(true)
   }
 }
 
-/// Row icon tile. Dropped at accessibility text sizes so the title keeps the
-/// full row width.
+/// Row icon tile in the theme's own shape and soft colour. Dropped at
+/// accessibility text sizes so the title keeps the full row width.
 private struct SettingsIcon: View {
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+  @Environment(\.isEnabled) private var isEnabled
   var systemImage: String
-  var tint: Color
+  var tone: SettingsTone
 
   var body: some View {
     if !dynamicTypeSize.isAccessibilitySize {
@@ -886,12 +1000,21 @@ private struct SettingsIcon: View {
   }
 
   private var tile: some View {
-    Image(systemName: systemImage)
+    let shape = AtlasTheme.shape
+    let outline: AnyShape =
+      shape.pillControls
+      ? AnyShape(Circle())
+      : AnyShape(RoundedRectangle(cornerRadius: min(shape.radiusSmall, 10), style: .continuous))
+    return Image(systemName: systemImage)
       .font(.subheadline.weight(.semibold))
-      .foregroundStyle(tint)
-      .frame(width: 30, height: 30)
-      .background(tint.opacity(0.12))
-      .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+      .foregroundStyle(isEnabled ? tone.ink : AtlasTheme.ink3)
+      .frame(width: 32, height: 32)
+      .background(outline.fill(isEnabled ? tone.softFill : AtlasTheme.surfaceMuted))
+      .overlay {
+        if shape.hasBoldBorders {
+          outline.stroke(AtlasTheme.outline, lineWidth: 1.5)
+        }
+      }
       .accessibilityHidden(true)
   }
 }
@@ -912,35 +1035,38 @@ private struct SettingsRowLabel<Trailing: View>: View {
   @Environment(\.isEnabled) private var isEnabled
   var title: String
   var subtitle: String?
+  var subtitleColor: Color
   var systemImage: String
-  var tint: Color
+  var tone: SettingsTone
   var trailing: Trailing
 
   init(
     title: String,
     subtitle: String? = nil,
+    subtitleColor: Color = AtlasTheme.ink3,
     systemImage: String,
-    tint: Color,
+    tone: SettingsTone = .accent,
     @ViewBuilder trailing: () -> Trailing
   ) {
     self.title = title
     self.subtitle = subtitle
+    self.subtitleColor = subtitleColor
     self.systemImage = systemImage
-    self.tint = tint
+    self.tone = tone
     self.trailing = trailing()
   }
 
   var body: some View {
     HStack(spacing: 12) {
-      SettingsIcon(systemImage: systemImage, tint: isEnabled ? tint : AtlasTheme.ink3)
+      SettingsIcon(systemImage: systemImage, tone: tone)
       VStack(alignment: .leading, spacing: 2) {
         Text(title)
-          .font(.body)
+          .font(AtlasTheme.font(.body, .body))
           .foregroundStyle(isEnabled ? AtlasTheme.ink : AtlasTheme.ink3)
         if let subtitle {
           Text(subtitle)
-            .font(.footnote)
-            .foregroundStyle(AtlasTheme.ink3)
+            .font(AtlasTheme.font(.body, .footnote))
+            .foregroundStyle(subtitleColor)
             .fixedSize(horizontal: false, vertical: true)
         }
       }
@@ -955,19 +1081,39 @@ private struct SettingsRowLabel<Trailing: View>: View {
   }
 }
 
+/// One line of the Privacy group: icon tile and a short sentence.
+private struct SettingsFactRow: View {
+  var fact: SettingsFact
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 12) {
+      SettingsIcon(systemImage: fact.systemImage, tone: .accent)
+      Text(fact.text)
+        .font(AtlasTheme.font(.body, .callout))
+        .foregroundStyle(AtlasTheme.ink)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.top, 5)
+      Spacer(minLength: 0)
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 10)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .accessibilityElement(children: .combine)
+  }
+}
+
 private struct SettingsToggleRow: View {
   var title: String
   var systemImage: String
-  var tint: Color
   var hint: String
   @Binding var isOn: Bool
 
   var body: some View {
     Toggle(isOn: $isOn) {
       HStack(spacing: 12) {
-        SettingsIcon(systemImage: systemImage, tint: tint)
+        SettingsIcon(systemImage: systemImage, tone: .accent)
         Text(title)
-          .font(.body)
+          .font(AtlasTheme.font(.body, .body))
           .foregroundStyle(AtlasTheme.ink)
       }
     }
@@ -982,12 +1128,11 @@ private struct SettingsToggleRow: View {
 private struct SettingsLinkRow: View {
   var title: String
   var systemImage: String
-  var tint: Color
   var destination: URL
 
   var body: some View {
     Link(destination: destination) {
-      SettingsRowLabel(title: title, systemImage: systemImage, tint: tint) {
+      SettingsRowLabel(title: title, systemImage: systemImage) {
         SettingsChevron(systemImage: "arrow.up.right")
       }
     }
@@ -999,12 +1144,20 @@ private struct SettingsLinkRow: View {
 private struct SettingsValueRow<Accessory: View>: View {
   var label: String
   var value: String
+  var isMono: Bool
   var accessory: Accessory
 
-  init(label: String, value: String, @ViewBuilder accessory: () -> Accessory) {
+  init(
+    label: String, value: String, isMono: Bool = false, @ViewBuilder accessory: () -> Accessory
+  ) {
     self.label = label
     self.value = value
+    self.isMono = isMono
     self.accessory = accessory()
+  }
+
+  private var valueFont: Font {
+    isMono ? AtlasTheme.font(.mono, .callout) : AtlasTheme.font(.body, .body)
   }
 
   var body: some View {
@@ -1013,18 +1166,18 @@ private struct SettingsValueRow<Accessory: View>: View {
         Text(label).foregroundStyle(AtlasTheme.ink)
         accessory
         Spacer(minLength: 12)
-        Text(value).foregroundStyle(AtlasTheme.ink3).monospacedDigit()
+        Text(value).font(valueFont).foregroundStyle(AtlasTheme.ink3)
       }
       VStack(alignment: .leading, spacing: 2) {
         HStack(spacing: 8) {
           Text(label).foregroundStyle(AtlasTheme.ink)
           accessory
         }
-        Text(value).foregroundStyle(AtlasTheme.ink3).monospacedDigit()
+        Text(value).font(valueFont).foregroundStyle(AtlasTheme.ink3)
       }
       .frame(maxWidth: .infinity, alignment: .leading)
     }
-    .font(.body)
+    .font(AtlasTheme.font(.body, .body))
     .padding(.horizontal, 14)
     .padding(.vertical, 8)
     .frame(minHeight: 48)
@@ -1033,15 +1186,15 @@ private struct SettingsValueRow<Accessory: View>: View {
 }
 
 extension SettingsValueRow where Accessory == EmptyView {
-  init(label: String, value: String) {
-    self.init(label: label, value: value) { EmptyView() }
+  fileprivate init(label: String, value: String, isMono: Bool = false) {
+    self.init(label: label, value: value, isMono: isMono) { EmptyView() }
   }
 }
 
 private struct SettingsRowButtonStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .background(configuration.isPressed ? AtlasTheme.surfaceMuted : Color.clear)
+      .background(configuration.isPressed ? AtlasTheme.accentSoft : Color.clear)
   }
 }
 
@@ -1070,5 +1223,20 @@ extension View {
   /// the touch-target minimum inside the shared button styles.
   fileprivate func settingsControlLabel() -> some View {
     frame(maxWidth: .infinity, minHeight: 44)
+  }
+
+  /// A tinted panel inside a card (the restore result, the revealed code):
+  /// the tone's soft fill, ink-outlined in the hard-edged themes.
+  fileprivate func settingsPanel(_ tone: SettingsTone) -> some View {
+    padding(12)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .atlasChrome(
+        fill: tone.softFill,
+        border: AtlasTheme.shape.hasBoldBorders ? AtlasTheme.outline : tone.ink.opacity(0.32),
+        level: .control,
+        radius: AtlasRadius.control,
+        borderWidth: AtlasTheme.shape.hasBoldBorders ? AtlasTheme.shape.controlBorderWidth : 1,
+        showsShadow: false
+      )
   }
 }

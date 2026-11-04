@@ -3,11 +3,10 @@ import CloudKit
 import SwiftUI
 import UIKit
 
-/// iOS port of the macOS `SyncView`: the same iCloud actions, confirmations,
-/// and safety rules, laid out as a status card, two actions, a collapsed
-/// explanation, and a quiet management section. Transfers happen only on
-/// request, the encryption key never leaves iCloud Keychain, and nothing on
-/// this screen deletes the local portfolio.
+/// iOS port of the macOS `SyncView`, pushed from Settings: a status card, two
+/// transfer actions, a collapsed explanation and a quiet management section.
+/// Transfers happen only on request, the encryption key never leaves iCloud
+/// Keychain, and nothing on this screen deletes the local portfolio.
 struct ICloudScreen: View {
   @EnvironmentObject private var state: AppState
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -26,6 +25,9 @@ struct ICloudScreen: View {
   /// is dismissed.
   @State private var attentionIssue: ICloudAttentionIssue?
 
+  /// `AppState.iCloudStatus` value that means the last transfer failed.
+  /// Compared by equality: it is a constant owned by AppState
+  /// (`presentICloudError`), and `SettingsScreen` relies on the same one.
   private static let needsAttentionStatus = "Needs attention"
 
   /// Mirrors the macOS rule for Save, Restore, and Delete, and also stays off
@@ -42,12 +44,25 @@ struct ICloudScreen: View {
     state.document.exchangeConnections.contains { $0.provider == .kraken }
   }
 
+  /// A save that reached iCloud but could not be recorded on this device.
+  /// AppState words this status with the device name ("Saved to iCloud; not
+  /// recorded on this iPhone"), so it is matched on what it says, not on the
+  /// whole string.
+  private var savedButNotRecorded: Bool {
+    let status = state.iCloudStatus.lowercased()
+    return status.contains("not recorded") || status.contains("receipt failed")
+  }
+
   var body: some View {
-    IOSPage(title: "iCloud", subtitle: "An encrypted copy in your own iCloud.") {
+    IOSPage(title: "iCloud") {
       statusCard
       actionsCard
       if hasKrakenConnection {
-        krakenWarning
+        IOSNotice(
+          systemImage: "exclamationmark.triangle.fill",
+          text:
+            "Kraken keys stay on this device. After restoring elsewhere, add a separate read-only Kraken key there."
+        )
       }
       if showsLegacyMigration {
         migrationSurface
@@ -81,10 +96,10 @@ struct ICloudScreen: View {
       isPresented: $migrationConfirmation,
       titleVisibility: .visible
     ) {
-      Button("Keep local vault and migrate") { finishLegacyMigration() }
+      Button("Finish migration") { finishLegacyMigration() }
       Button("Cancel", role: .cancel) {}
     } message: {
-      Text("Existing server data is not deleted by this action.")
+      Text("Server data is not deleted.")
     }
   }
 
@@ -94,7 +109,7 @@ struct ICloudScreen: View {
     if let activity = state.syncActivity {
       return ICloudStatusPresentation(
         systemImage: "icloud",
-        tint: AtlasTheme.accent,
+        tone: .accent,
         title: ICloudStatusPresentation.progressTitle(for: activity),
         detail: "Keep the app open until this finishes.",
         isWorking: true
@@ -103,7 +118,7 @@ struct ICloudScreen: View {
     if isFinishingMigration || isResettingConnection {
       return ICloudStatusPresentation(
         systemImage: "icloud",
-        tint: AtlasTheme.accent,
+        tone: .accent,
         title: "Working…",
         detail: "Keep the app open until this finishes.",
         isWorking: true
@@ -115,10 +130,10 @@ struct ICloudScreen: View {
     if state.iCloudStatus == Self.needsAttentionStatus {
       return (attentionIssue ?? .generic).presentation
     }
-    if state.iCloudStatus == "Saved remotely; local receipt failed" {
+    if savedButNotRecorded {
       return ICloudStatusPresentation(
         systemImage: "exclamationmark.icloud.fill",
-        tint: AtlasTheme.warning,
+        tone: .warning,
         title: "Saved, but not recorded here",
         detail: "This device couldn’t record the save. Save again to confirm it."
       )
@@ -126,14 +141,14 @@ struct ICloudScreen: View {
     if let cloud = state.document.iCloudState {
       return ICloudStatusPresentation(
         systemImage: "checkmark.icloud.fill",
-        tint: AtlasTheme.gain,
+        tone: .success,
         title: "Linked to iCloud",
         detail: "Last saved \(AtlasFormatting.dateTime(cloud.savedAt))"
       )
     }
     return ICloudStatusPresentation(
       systemImage: "icloud",
-      tint: AtlasTheme.ink3,
+      tone: .neutral,
       title: "Not connected",
       detail: "Save a copy, or restore one saved on another device."
     )
@@ -141,29 +156,28 @@ struct ICloudScreen: View {
 
   private var statusCard: some View {
     let status = status
-    return Surface(padding: 16) {
+    return IOSCard(fill: status.tone == .warning ? AtlasTheme.warningSoft : nil) {
       VStack(alignment: .leading, spacing: 14) {
         iCloudAdaptiveLayout(dynamicTypeSize, spacing: 14).callAsFunction {
           ZStack {
-            Circle().fill(status.tint.opacity(0.12))
             if status.isWorking {
               ProgressView()
                 .controlSize(.regular)
             } else {
               Image(systemName: status.systemImage)
                 .font(.title3.weight(.semibold))
-                .foregroundStyle(status.tint)
+                .foregroundStyle(status.tone.ink)
             }
           }
-          .frame(width: 48, height: 48)
+          .iCloudTile(fill: status.tone == .warning ? AtlasTheme.surface : status.tone.softFill, size: 48)
           .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
           .accessibilityHidden(true)
           VStack(alignment: .leading, spacing: 3) {
             Text(status.title)
-              .font(.headline)
+              .font(AtlasTheme.font(.display, .headline))
               .foregroundStyle(AtlasTheme.ink)
             Text(status.detail)
-              .font(.callout)
+              .font(AtlasTheme.font(.body, .callout))
               .foregroundStyle(AtlasTheme.ink2)
           }
           .fixedSize(horizontal: false, vertical: true)
@@ -188,7 +202,7 @@ struct ICloudScreen: View {
         }
 
         if let cloud = state.document.iCloudState, !status.isWorking {
-          Divider().overlay(AtlasTheme.ruleSoft)
+          ICloudRule()
           VStack(spacing: 6) {
             ICloudScreenStatusRow(label: "Cloud revision", value: cloud.revision)
             ICloudScreenStatusRow(label: "Account ID", value: cloud.account)
@@ -201,90 +215,67 @@ struct ICloudScreen: View {
   // MARK: - Actions
 
   private var actionsCard: some View {
-    VStack(spacing: 0) {
-      Button {
-        Task { await state.saveToICloud() }
-      } label: {
-        ICloudActionRow(
-          title: "Save to iCloud",
-          detail: "Uploads an encrypted copy of this portfolio.",
-          systemImage: "icloud.and.arrow.up",
-          isProminent: true,
-          isActive: state.syncActivity == .uploadingVault
-        )
-      }
-      .accessibilityHint(
-        "Uploads an encrypted copy of this device’s portfolio to your iCloud account."
-      )
-      .accessibilityIdentifier("icloud.save")
-
-      Divider().overlay(AtlasTheme.ruleSoft)
-        .padding(.leading, dynamicTypeSize.isAccessibilitySize ? 14 : 66)
-
-      Button {
-        restoreConfirmation = true
-      } label: {
-        ICloudActionRow(
-          title: "Restore from iCloud",
-          detail: "Replaces this portfolio. A rollback copy is kept.",
-          systemImage: "icloud.and.arrow.down",
-          isActive: state.syncActivity == .downloadingVault
-        )
-      }
-      .accessibilityHint(
-        "Asks for confirmation, then replaces this device’s portfolio with the iCloud copy after saving a local rollback copy."
-      )
-      .accessibilityIdentifier("icloud.restore")
-      .confirmationDialog(
-        "Replace this device’s portfolio with the iCloud copy?",
-        isPresented: $restoreConfirmation,
-        titleVisibility: .visible
-      ) {
-        Button("Restore iCloud copy", role: .destructive) {
-          Task { await state.restoreFromICloud() }
+    IOSCard(padding: 0) {
+      VStack(spacing: 0) {
+        Button {
+          Task { await state.saveToICloud() }
+        } label: {
+          ICloudActionRow(
+            title: "Save to iCloud",
+            detail: "Uploads an encrypted copy of this portfolio.",
+            systemImage: "icloud.and.arrow.up",
+            isProminent: true,
+            isActive: state.syncActivity == .uploadingVault
+          )
         }
-        Button("Cancel", role: .cancel) {}
-      } message: {
-        Text(
-          "A local rollback copy is saved first. Export this portfolio first if you want to keep both."
+        .accessibilityHint(
+          "Uploads an encrypted copy of this device’s portfolio to your iCloud account."
         )
-      }
-    }
-    .buttonStyle(ICloudRowButtonStyle())
-    .disabled(transferControlsDisabled)
-    .iCloudGroupedCard()
-  }
+        .accessibilityIdentifier("icloud.save")
 
-  private var krakenWarning: some View {
-    HStack(alignment: .top, spacing: 12) {
-      Image(systemName: "exclamationmark.triangle.fill")
-        .foregroundStyle(AtlasTheme.warning)
-        .frame(width: 24)
-        .accessibilityHidden(true)
-      VStack(alignment: .leading, spacing: 2) {
-        Text("Kraken stays on this device")
-          .font(.callout.weight(.semibold))
-          .foregroundStyle(AtlasTheme.ink)
-        Text("After restoring elsewhere, add a separate read-only Kraken key there.")
-          .font(.footnote)
-          .foregroundStyle(AtlasTheme.ink2)
-          .fixedSize(horizontal: false, vertical: true)
+        ICloudRule(inset: 66)
+
+        Button {
+          restoreConfirmation = true
+        } label: {
+          ICloudActionRow(
+            title: "Restore from iCloud",
+            detail: "Replaces this portfolio. A rollback copy is kept.",
+            systemImage: "icloud.and.arrow.down",
+            isActive: state.syncActivity == .downloadingVault
+          )
+        }
+        .accessibilityHint(
+          "Asks for confirmation, then replaces this device’s portfolio with the iCloud copy after saving a local rollback copy."
+        )
+        .accessibilityIdentifier("icloud.restore")
+        .confirmationDialog(
+          "Replace this device’s portfolio with the iCloud copy?",
+          isPresented: $restoreConfirmation,
+          titleVisibility: .visible
+        ) {
+          Button("Restore iCloud copy", role: .destructive) {
+            Task { await state.restoreFromICloud() }
+          }
+          Button("Cancel", role: .cancel) {}
+        } message: {
+          Text(
+            "A local rollback copy is saved first. Export this portfolio first if you want to keep both."
+          )
+        }
       }
-      Spacer(minLength: 0)
+      .buttonStyle(ICloudRowButtonStyle())
+      .disabled(transferControlsDisabled)
     }
-    .padding(12)
-    .background(AtlasTheme.warning.opacity(0.08))
-    .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
-    .accessibilityElement(children: .combine)
   }
 
   private var learnMore: some View {
     LearnMoreDisclosure("How iCloud copies work", systemImage: "questionmark.circle") {
       IOSFactRow(
         systemImage: "lock.icloud",
-        title: "Encrypted before upload",
+        title: "Key in iCloud Keychain",
         copy:
-          "The key lives only in iCloud Keychain, never in the cloud record. No Address Atlas server is involved."
+          "The key lives in iCloud Keychain, never in the cloud record. No Address Atlas server is involved."
       )
       IOSFactRow(
         systemImage: "key",
@@ -323,116 +314,112 @@ struct ICloudScreen: View {
   // MARK: - Manage
 
   private var manageSection: some View {
-    VStack(alignment: .leading, spacing: 7) {
-      Text("Manage")
-        .font(.footnote.weight(.semibold))
-        .foregroundStyle(AtlasTheme.ink3)
-        .padding(.horizontal, 4)
-        .accessibilityAddTraits(.isHeader)
-      VStack(spacing: 0) {
-        if state.hasVaultRollbackCheckpoint {
-          Button {
-            rollbackConfirmation = true
+    VStack(alignment: .leading, spacing: 8) {
+      IOSSectionTitle("Manage")
+      IOSCard(padding: 0) {
+        VStack(spacing: 0) {
+          if state.hasVaultRollbackCheckpoint {
+            Button {
+              rollbackConfirmation = true
+            } label: {
+              ICloudManageRow(
+                title: "Restore previous copy",
+                systemImage: "clock.arrow.circlepath",
+                tint: AtlasTheme.accent,
+                progressTitle: "Restoring previous copy",
+                isActive: state.syncActivity == .restoringRollbackCheckpoint
+              )
+            }
+            .disabled(state.vaultEditsDisabled)
+            .accessibilityHint(
+              "Asks for confirmation, then replaces the current local portfolio with the rollback copy saved before the last restore."
+            )
+            .confirmationDialog(
+              "Restore the previous local portfolio?",
+              isPresented: $rollbackConfirmation,
+              titleVisibility: .visible
+            ) {
+              Button("Restore previous copy", role: .destructive) {
+                Task { await state.restoreVaultRollbackCheckpoint() }
+              }
+              Button("Cancel", role: .cancel) {}
+            } message: {
+              Text("This replaces the current local portfolio. The iCloud copy is not changed.")
+            }
+            ICloudRule(inset: 52)
+          }
+
+          if state.document.iCloudState != nil {
+            Button {
+              resetConfirmation = true
+            } label: {
+              ICloudManageRow(
+                title: "Reset connection…",
+                systemImage: "arrow.counterclockwise",
+                tint: AtlasTheme.accent,
+                progressTitle: "Resetting connection",
+                isActive: isResettingConnection
+              )
+            }
+            .disabled(state.vaultEditsDisabled)
+            .accessibilityHint(
+              "Asks for confirmation, then forgets this device’s link to the iCloud copy. Local and cloud copies stay."
+            )
+            .confirmationDialog(
+              "Reset this device’s iCloud connection?",
+              isPresented: $resetConfirmation,
+              titleVisibility: .visible
+            ) {
+              Button("Reset connection") { resetConnection() }
+              Button("Cancel", role: .cancel) {}
+            } message: {
+              Text(
+                "Local and cloud copies stay. The next transfer uses the Apple Account signed in on this device."
+              )
+            }
+            ICloudRule(inset: 52)
+          }
+
+          Button(role: .destructive) {
+            deleteConfirmation = true
           } label: {
             ICloudManageRow(
-              title: "Restore previous local copy",
-              systemImage: "clock.arrow.circlepath",
-              tint: AtlasTheme.accent,
-              progressTitle: "Restoring previous copy",
-              isActive: state.syncActivity == .restoringRollbackCheckpoint
+              title: "Delete iCloud copy…",
+              systemImage: "trash",
+              tint: AtlasTheme.loss,
+              progressTitle: "Deleting iCloud copy",
+              isActive: state.syncActivity == .deletingAccount
             )
           }
-          .disabled(state.vaultEditsDisabled)
+          .disabled(transferControlsDisabled)
           .accessibilityHint(
-            "Asks for confirmation, then replaces the current local portfolio with the rollback copy saved before the last restore."
+            "Asks for confirmation, then removes the copy from your current iCloud account. The local portfolio stays."
           )
+          .accessibilityIdentifier("icloud.delete")
           .confirmationDialog(
-            "Restore the previous local portfolio?",
-            isPresented: $rollbackConfirmation,
+            "Delete the Address Atlas copy in your current iCloud account?",
+            isPresented: $deleteConfirmation,
             titleVisibility: .visible
           ) {
-            Button("Restore previous local copy", role: .destructive) {
-              Task { await state.restoreVaultRollbackCheckpoint() }
+            Button("Delete iCloud copy", role: .destructive) {
+              Task { await state.deleteICloudCopy() }
             }
             Button("Cancel", role: .cancel) {}
           } message: {
-            Text("This replaces the current local portfolio. The iCloud copy is not changed.")
-          }
-          Divider().overlay(AtlasTheme.ruleSoft)
-            .padding(.leading, dynamicTypeSize.isAccessibilitySize ? 14 : 52)
-        }
-
-        if state.document.iCloudState != nil {
-          Button {
-            resetConfirmation = true
-          } label: {
-            ICloudManageRow(
-              title: "Reset iCloud connection…",
-              systemImage: "arrow.counterclockwise",
-              tint: AtlasTheme.accent,
-              progressTitle: "Resetting connection",
-              isActive: isResettingConnection
-            )
-          }
-          .disabled(state.vaultEditsDisabled)
-          .accessibilityHint(
-            "Asks for confirmation, then forgets this device’s link to the iCloud copy. Local and cloud copies stay."
-          )
-          .confirmationDialog(
-            "Reset this device’s iCloud connection?",
-            isPresented: $resetConfirmation,
-            titleVisibility: .visible
-          ) {
-            Button("Reset connection") { resetConnection() }
-            Button("Cancel", role: .cancel) {}
-          } message: {
             Text(
-              "Local and cloud copies stay. The next transfer uses the Apple Account signed in on this device."
-            )
+              "Your local portfolio stays on this device. Other devices keep their local copies too.")
           }
-          Divider().overlay(AtlasTheme.ruleSoft)
-            .padding(.leading, dynamicTypeSize.isAccessibilitySize ? 14 : 52)
         }
-
-        Button(role: .destructive) {
-          deleteConfirmation = true
-        } label: {
-          ICloudManageRow(
-            title: "Delete iCloud copy…",
-            systemImage: "trash",
-            tint: AtlasTheme.loss,
-            progressTitle: "Deleting iCloud copy",
-            isActive: state.syncActivity == .deletingAccount
-          )
-        }
-        .disabled(transferControlsDisabled)
-        .accessibilityHint(
-          "Asks for confirmation, then removes the copy from your current iCloud account. The local portfolio stays."
-        )
-        .accessibilityIdentifier("icloud.delete")
-        .confirmationDialog(
-          "Delete the Address Atlas copy in your current iCloud account?",
-          isPresented: $deleteConfirmation,
-          titleVisibility: .visible
-        ) {
-          Button("Delete iCloud copy", role: .destructive) {
-            Task { await state.deleteICloudCopy() }
-          }
-          Button("Cancel", role: .cancel) {}
-        } message: {
-          Text(
-            "Your local portfolio stays on this device. Other devices keep their local copies too.")
-        }
+        .buttonStyle(ICloudRowButtonStyle())
       }
-      .buttonStyle(ICloudRowButtonStyle())
-      .iCloudGroupedCard()
       Text("Nothing here deletes the portfolio on this device.")
-        .font(.footnote)
+        .font(AtlasTheme.font(.body, .footnote))
         .foregroundStyle(AtlasTheme.ink3)
         .padding(.horizontal, 4)
+        // The hard-edged themes draw an offset shadow under the card.
+        .padding(.top, AtlasTheme.shape.cardShadowOffset?.height ?? 0)
         .fixedSize(horizontal: false, vertical: true)
     }
-    .padding(.top, 6)
   }
 
   private var migrationSurface: some View {
@@ -443,10 +430,11 @@ struct ICloudScreen: View {
             .foregroundStyle(AtlasTheme.warning)
             .accessibilityHidden(true)
           VStack(alignment: .leading, spacing: 2) {
-            Text("Unfinished transfer from the old server")
-              .font(.callout.weight(.semibold))
-            Text("Finish migration to keep this vault and stop it. Server data isn’t deleted.")
-              .font(.footnote)
+            Text("A transfer from the old server did not finish")
+              .font(AtlasTheme.font(.body, .callout, weight: .semibold))
+              .foregroundStyle(AtlasTheme.ink)
+            Text("Finish migration to keep this vault and stop the transfer. Server data is not deleted.")
+              .font(AtlasTheme.font(.body, .footnote))
               .foregroundStyle(AtlasTheme.ink2)
           }
           .fixedSize(horizontal: false, vertical: true)
@@ -459,12 +447,12 @@ struct ICloudScreen: View {
             if isFinishingMigration {
               HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text("Finishing local migration")
+                Text("Finishing migration")
               }
               .accessibilityElement(children: .ignore)
-              .accessibilityLabel("Finishing local migration, in progress")
+              .accessibilityLabel("Finishing migration, in progress")
             } else {
-              Label("Finish local migration…", systemImage: "checkmark.seal")
+              Label("Finish migration…", systemImage: "checkmark.seal")
             }
           }
           .frame(maxWidth: .infinity, minHeight: 44)
@@ -525,9 +513,35 @@ struct ICloudScreen: View {
 
 // MARK: - Status model
 
+/// Which theme colours a status or an icon tile takes.
+private enum ICloudTone: Equatable {
+  case accent
+  case neutral
+  case success
+  case warning
+
+  var ink: Color {
+    switch self {
+    case .accent: AtlasTheme.accent
+    case .neutral: AtlasTheme.ink2
+    case .success: AtlasTheme.gain
+    case .warning: AtlasTheme.warning
+    }
+  }
+
+  var softFill: Color {
+    switch self {
+    case .accent: AtlasTheme.accentSoft
+    case .neutral: AtlasTheme.surfaceMuted
+    case .success: AtlasTheme.gainSoft
+    case .warning: AtlasTheme.warningSoft
+    }
+  }
+}
+
 private struct ICloudStatusPresentation {
   var systemImage: String
-  var tint: Color
+  var tone: ICloudTone
   var title: String
   var detail: String
   var isWorking = false
@@ -579,14 +593,14 @@ private enum ICloudAvailability: Equatable {
     case .notConfigured:
       ICloudStatusPresentation(
         systemImage: "icloud.slash",
-        tint: AtlasTheme.ink3,
+        tone: .neutral,
         title: "iCloud isn’t available in this build",
         detail: "Use the App Store or TestFlight version of Address Atlas."
       )
     case .noAccount:
       ICloudStatusPresentation(
         systemImage: "person.crop.circle.badge.exclamationmark",
-        tint: AtlasTheme.warning,
+        tone: .warning,
         title: "Sign in to iCloud",
         detail: "Sign in with your Apple Account in Settings, then come back.",
         opensSettings: true
@@ -594,14 +608,14 @@ private enum ICloudAvailability: Equatable {
     case .restricted:
       ICloudStatusPresentation(
         systemImage: "icloud.slash",
-        tint: AtlasTheme.warning,
+        tone: .warning,
         title: "iCloud is restricted",
         detail: "Screen Time or a device profile blocks iCloud on this device."
       )
     case .temporarilyUnavailable:
       ICloudStatusPresentation(
         systemImage: "exclamationmark.icloud",
-        tint: AtlasTheme.warning,
+        tone: .warning,
         title: "iCloud is temporarily unavailable",
         detail: "Check Apple Account › iCloud in Settings, then try again.",
         opensSettings: true
@@ -618,6 +632,10 @@ private enum ICloudAvailability: Equatable {
 private enum ICloudAttentionIssue: Equatable {
   case unavailable, accountChanged, conflict, missing, missingKey, malformed, keychain, generic
 
+  /// Matches the message AppState put in `error` against
+  /// `ICloudVaultError.errorDescription`. Both sides come from the same enum,
+  /// so rewording a message there keeps this working; it only relies on
+  /// `presentICloudError` still passing that description through unchanged.
   init(message: String) {
     let known: [(ICloudVaultError, ICloudAttentionIssue)] = [
       (.unavailable, .unavailable), (.accountChanged, .accountChanged),
@@ -628,43 +646,42 @@ private enum ICloudAttentionIssue: Equatable {
   }
 
   var presentation: ICloudStatusPresentation {
-    let warning = AtlasTheme.warning
     let icon = "exclamationmark.icloud.fill"
     return switch self {
     case .unavailable:
       ICloudStatusPresentation(
-        systemImage: "person.crop.circle.badge.exclamationmark", tint: warning,
+        systemImage: "person.crop.circle.badge.exclamationmark", tone: .warning,
         title: "Sign in to iCloud",
         detail: "Sign in with your Apple Account in Settings, then try again.",
         opensSettings: true)
     case .accountChanged:
       ICloudStatusPresentation(
-        systemImage: icon, tint: warning, title: "Different Apple Account",
+        systemImage: icon, tone: .warning, title: "Different Apple Account",
         detail: "Nothing was replaced. Switch back, or reset the connection below.")
     case .conflict:
       ICloudStatusPresentation(
-        systemImage: icon, tint: warning, title: "Newer copy in iCloud",
+        systemImage: icon, tone: .warning, title: "Newer copy in iCloud",
         detail: "Another device saved since. Restore first, then save again.")
     case .missing:
       ICloudStatusPresentation(
-        systemImage: "icloud.slash", tint: warning, title: "No iCloud copy yet",
+        systemImage: "icloud.slash", tone: .warning, title: "No iCloud copy yet",
         detail: "Save from the device that has your portfolio first.")
     case .missingKey:
       ICloudStatusPresentation(
-        systemImage: "key.icloud", tint: warning, title: "Waiting for the encryption key",
+        systemImage: "key.icloud", tone: .warning, title: "Waiting for the encryption key",
         detail: "Turn on Passwords & Keychain on both devices, then try again.",
         opensSettings: true)
     case .malformed:
       ICloudStatusPresentation(
-        systemImage: icon, tint: warning, title: "iCloud copy couldn’t be verified",
+        systemImage: icon, tone: .warning, title: "iCloud copy couldn’t be verified",
         detail: "Your local portfolio wasn’t replaced.")
     case .keychain:
       ICloudStatusPresentation(
-        systemImage: "key.icloud", tint: warning, title: "Keychain couldn’t be read",
+        systemImage: "key.icloud", tone: .warning, title: "Keychain couldn’t be read",
         detail: "Unlock this device and try again.")
     case .generic:
       ICloudStatusPresentation(
-        systemImage: icon, tint: warning, title: "Last transfer didn’t finish",
+        systemImage: icon, tone: .warning, title: "Last transfer didn’t finish",
         detail: "Check your connection and iCloud storage, then try again.")
     }
   }
@@ -680,11 +697,11 @@ private struct ICloudScreenStatusRow: View {
   var body: some View {
     HStack(alignment: .firstTextBaseline, spacing: 12) {
       Text(label)
-        .font(.footnote)
+        .font(AtlasTheme.font(.body, .footnote))
         .foregroundStyle(AtlasTheme.ink3)
       Spacer(minLength: 8)
       Text(value)
-        .font(.caption.monospaced())
+        .font(AtlasTheme.font(.mono, .caption))
         .foregroundStyle(AtlasTheme.ink2)
         .lineLimit(1)
         .truncationMode(.middle)
@@ -704,34 +721,38 @@ private struct ICloudActionRow: View {
   var isProminent = false
   var isActive: Bool
 
+  private var tileFill: Color {
+    guard isEnabled else { return AtlasTheme.surfaceMuted }
+    return isProminent ? AtlasTheme.accent : AtlasTheme.accentSoft
+  }
+
+  private var glyphInk: Color {
+    guard isEnabled else { return AtlasTheme.ink3 }
+    return isProminent ? AtlasTheme.onAccent : AtlasTheme.accent
+  }
+
   var body: some View {
     iCloudAdaptiveLayout(dynamicTypeSize, spacing: 14).callAsFunction {
       ZStack {
-        RoundedRectangle(cornerRadius: 11, style: .continuous)
-          .fill(
-            isProminent && isEnabled
-              ? AtlasTheme.accent : AtlasTheme.accent.opacity(isEnabled ? 0.12 : 0.06))
         if isActive {
           ProgressView()
             .controlSize(.small)
-            .tint(isProminent ? AtlasTheme.paper : AtlasTheme.accent)
+            .tint(glyphInk)
         } else {
           Image(systemName: systemImage)
             .font(.body.weight(.semibold))
-            .foregroundStyle(
-              isProminent && isEnabled
-                ? AtlasTheme.paper : (isEnabled ? AtlasTheme.accent : AtlasTheme.ink3))
+            .foregroundStyle(glyphInk)
         }
       }
-      .frame(width: 38, height: 38)
+      .iCloudTile(fill: tileFill, size: 38)
       .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
       .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 2) {
         Text(title)
-          .font(.body.weight(.semibold))
+          .font(AtlasTheme.font(.body, .body, weight: .semibold))
           .foregroundStyle(isEnabled ? AtlasTheme.ink : AtlasTheme.ink3)
         Text(detail)
-          .font(.footnote)
+          .font(AtlasTheme.font(.body, .footnote))
           .foregroundStyle(AtlasTheme.ink3)
           .fixedSize(horizontal: false, vertical: true)
       }
@@ -771,7 +792,7 @@ private struct ICloudManageRow: View {
           .accessibilityHidden(true)
       }
       Text(isActive ? progressTitle : title)
-        .font(.body)
+        .font(AtlasTheme.font(.body, .body))
       Spacer(minLength: 0)
     }
     .foregroundStyle(isEnabled ? tint : AtlasTheme.ink3)
@@ -780,6 +801,22 @@ private struct ICloudManageRow: View {
     .contentShape(Rectangle())
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(isActive ? "\(progressTitle), in progress" : title)
+  }
+}
+
+/// The rule between rows: the theme's ink in the hard-edged themes, a soft
+/// hairline in the others. `inset` is where the row's text starts.
+private struct ICloudRule: View {
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+  var inset: CGFloat?
+
+  var body: some View {
+    let bold = AtlasTheme.shape.hasBoldBorders
+    Rectangle()
+      .fill(bold ? AtlasTheme.outline : AtlasTheme.ruleSoft)
+      .frame(height: bold ? 1.5 : 1)
+      .padding(.leading, inset.map { dynamicTypeSize.isAccessibilitySize ? 14 : $0 } ?? 0)
+      .accessibilityHidden(true)
   }
 }
 
@@ -794,18 +831,37 @@ private func iCloudAdaptiveLayout(_ size: DynamicTypeSize, spacing: CGFloat) -> 
 private struct ICloudRowButtonStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .background(configuration.isPressed ? AtlasTheme.surfaceMuted : Color.clear)
+      .background(configuration.isPressed ? AtlasTheme.accentSoft : Color.clear)
   }
 }
 
 extension View {
-  /// Grouped list card: surface fill, card radius, hairline border.
-  fileprivate func iCloudGroupedCard() -> some View {
-    background(AtlasTheme.surface)
-      .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.card, style: .continuous))
+  /// A square icon tile in the theme's own shape (a circle in the pill
+  /// themes, a rounded or sharp square in the others), outlined where the
+  /// theme outlines its controls.
+  fileprivate func iCloudTile(fill: Color, size: CGFloat) -> some View {
+    modifier(ICloudTileStyle(fill: fill, size: size))
+  }
+}
+
+private struct ICloudTileStyle: ViewModifier {
+  var fill: Color
+  var size: CGFloat
+
+  func body(content: Content) -> some View {
+    let shape = AtlasTheme.shape
+    let outline: AnyShape =
+      shape.pillControls
+      ? AnyShape(Circle())
+      : AnyShape(
+        RoundedRectangle(cornerRadius: min(shape.radiusSmall, size * 0.3), style: .continuous))
+    content
+      .frame(width: size, height: size)
+      .background(outline.fill(fill))
       .overlay {
-        RoundedRectangle(cornerRadius: AtlasRadius.card, style: .continuous)
-          .stroke(AtlasTheme.ruleSoft, lineWidth: 1)
+        if shape.hasBoldBorders {
+          outline.stroke(AtlasTheme.outline, lineWidth: 1.5)
+        }
       }
   }
 }
