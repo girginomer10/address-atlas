@@ -40,6 +40,12 @@ credential setup feel less trustworthy than the underlying security model.
 - Visual regression fixtures use synthetic encrypted test data only and cover
   empty, populated, compact, light, and dark states without touching a real vault.
 
+> Update 2026-11-04: the Mac shell, section list and page layouts described
+> below were replaced by `2026-11-04-mac-navigation-and-screens.md` (seven
+> sections, no sidebar privacy card, no page subtitles, privacy explained once
+> in Settings). The rules about calm literal copy, saved items before creation
+> forms, Reduce Motion, minimum widths and synthetic fixtures still apply.
+
 ## Consequences
 
 - New native screens should compose the shared typography, surface, radius,
