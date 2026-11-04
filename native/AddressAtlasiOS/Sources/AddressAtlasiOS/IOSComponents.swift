@@ -223,6 +223,7 @@ extension TrackedAsset {
     case .issued: "Issued asset"
     case .exchange: atlasIOSIsManual ? "Manual holding" : "Exchange balance"
     case .staked: "Staked"
+    case .unbonding: "Unbonding"
     case .rewards: "Staking rewards"
     }
   }

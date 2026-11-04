@@ -2,19 +2,68 @@ import Foundation
 
 @testable import AddressAtlasCore
 
+/// Answers the Solana stake-account lookups (`getProgramAccounts` on the Stake
+/// program and `getEpochInfo`) as "this address has no stake accounts". Like
+/// the network-identity proofs, they are a precondition of every Solana scan
+/// rather than the subject of most Solana tests. The answer is stamped with the
+/// slot the request asks for (`minContextSlot`), so it never disturbs a test's
+/// own snapshot-slot choreography. Tests of stake handling opt out and answer
+/// these requests themselves.
+func emptySolanaStakeAccountResponse(for request: URLRequest) -> (Data, HTTPURLResponse)? {
+  guard let body = request.httpBody, !body.isEmpty,
+    let text = String(data: body, encoding: .utf8),
+    text.contains("getProgramAccounts") || text.contains("getEpochInfo"),
+    let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+    let method = json["method"] as? String,
+    let id = json["id"] as? Int,
+    let params = json["params"] as? [Any]
+  else { return nil }
+  let config = params.compactMap { $0 as? [String: Any] }.last
+  let slot = (config?["minContextSlot"] as? NSNumber)?.uint64Value ?? 123
+  switch method {
+  case "getProgramAccounts":
+    guard params.first as? String == "Stake11111111111111111111111111111111111111" else {
+      return nil
+    }
+    return (
+      Data(
+        "{\"jsonrpc\":\"2.0\",\"id\":\(id),\"result\":{\"context\":{\"slot\":\(slot)},\"value\":[]}}"
+          .utf8),
+      httpResponse(for: request)
+    )
+  case "getEpochInfo":
+    return (
+      Data(
+        "{\"jsonrpc\":\"2.0\",\"id\":\(id),\"result\":{\"absoluteSlot\":\(slot),\"epoch\":700,\"slotIndex\":1,\"slotsInEpoch\":432000}}"
+          .utf8),
+      httpResponse(for: request)
+    )
+  default:
+    return nil
+  }
+}
+
 struct StubHTTPClient: HTTPClient, @unchecked Sendable {
   let automaticallyServesNetworkIdentity: Bool
+  let automaticallyServesEmptySolanaStakeAccounts: Bool
   let handler: (URLRequest) throws -> (Data, HTTPURLResponse)
 
   init(
     automaticallyServesNetworkIdentity: Bool = true,
+    automaticallyServesEmptySolanaStakeAccounts: Bool = true,
     handler: @escaping (URLRequest) throws -> (Data, HTTPURLResponse)
   ) {
     self.automaticallyServesNetworkIdentity = automaticallyServesNetworkIdentity
+    self.automaticallyServesEmptySolanaStakeAccounts = automaticallyServesEmptySolanaStakeAccounts
     self.handler = handler
   }
 
   func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    if automaticallyServesEmptySolanaStakeAccounts,
+      let response = emptySolanaStakeAccountResponse(for: request)
+    {
+      return response
+    }
     if automaticallyServesNetworkIdentity {
       let body = request.httpBody.map { String(decoding: $0, as: UTF8.self) } ?? ""
       if body.contains("\"eth_chainId\"") {

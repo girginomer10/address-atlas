@@ -325,10 +325,45 @@ final class ExporterTests: XCTestCase {
 
     XCTAssertEqual(
       lines[0],
-      "wallet_or_exchange,address,chain,symbol,name,amount,price_usd,value_usd,pricing_status,source"
+      "wallet_or_exchange,address,chain,symbol,name,amount,price_usd,value_usd,pricing_status,source,unlocks_at"
     )
-    XCTAssertTrue(lines[1].contains(",1,,,unpriced,native"))
-    XCTAssertTrue(lines[2].contains(",1,0,0,priced,native"))
+    XCTAssertTrue(lines[1].hasSuffix(",1,,,unpriced,native,"))
+    XCTAssertTrue(lines[2].hasSuffix(",1,0,0,priced,native,"))
+  }
+
+  func testCSVWritesTheUnlockTimeOfUnbondingHoldingsInTheTrailingColumn() throws {
+    let address = "cosmos1qqqtduhx4t2xvgcxrqfmrz0heq00vlvjqhuz93nwt6d2y0quqlqqxxec22"
+    func holding(id: String, source: AssetSource, unlocksAt: Date?) -> TrackedAsset {
+      TrackedAsset(
+        id: id,
+        address: address,
+        chainId: "cosmoshub",
+        chainName: "Cosmos Hub",
+        family: .cosmos,
+        symbol: "ATOM",
+        name: "Cosmos Hub Unbonding",
+        amount: 2,
+        priceUsd: 5,
+        valueUsd: 10,
+        source: source,
+        walletLabel: "Keplr",
+        unlocksAt: unlocksAt
+      )
+    }
+    let rows = try AddressAtlasExporter.csv(
+      for: [
+        holding(
+          id: "unbonding-dated", source: .unbonding,
+          unlocksAt: Date(timeIntervalSince1970: 1_800_000_000)),
+        holding(id: "unbonding-undated", source: .unbonding, unlocksAt: nil),
+        holding(id: "staked", source: .staked, unlocksAt: nil),
+      ]
+    ).split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+
+    XCTAssertEqual(rows.count, 4)
+    XCTAssertTrue(rows[1].hasSuffix(",priced,unbonding,2027-01-15T08:00:00Z"), rows[1])
+    XCTAssertTrue(rows[2].hasSuffix(",priced,unbonding,"), rows[2])
+    XCTAssertTrue(rows[3].hasSuffix(",priced,staked,"), rows[3])
   }
 
   func testCSVIncludesTheWalletAddressAndLabelsManualHoldingsAsManual() throws {
@@ -372,8 +407,8 @@ final class ExporterTests: XCTestCase {
     XCTAssertEqual(lines.count, 4)
     XCTAssertTrue(lines[1].hasPrefix("Ethereum wallet,\(walletAddress),Ethereum,TEST,"))
     XCTAssertTrue(lines[2].hasPrefix("Binance,,Binance,BTC,BTC,0.5,60000,30000,"))
-    XCTAssertTrue(lines[2].hasSuffix(",priced,exchange"))
-    XCTAssertEqual(lines[3], "Cold storage,,Manual,ETH,Ether,1.5,666.6666667,1000,priced,manual")
+    XCTAssertTrue(lines[2].hasSuffix(",priced,exchange,"))
+    XCTAssertEqual(lines[3], "Cold storage,,Manual,ETH,Ether,1.5,666.6666667,1000,priced,manual,")
   }
 
   func testCSVWritesPlainDecimalsWithoutExponentsOrFloatingPointTails() throws {

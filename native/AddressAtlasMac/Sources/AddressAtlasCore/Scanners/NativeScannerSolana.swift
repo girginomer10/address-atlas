@@ -6,6 +6,75 @@ extension NativeScanner {
     "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
   ]
   private static let maxSolanaSnapshotAttempts = 3
+  private static let solanaStakeProgram = "Stake11111111111111111111111111111111111111"
+  /// Every stake account is exactly 200 bytes. Filtering by size lets the RPC
+  /// skip the memcmp scan over unrelated accounts.
+  private static let solanaStakeAccountSize: UInt64 = 200
+  private static let solanaStakeNotDeactivating = UInt64.max
+
+  /// Which authority field of a stake account the memcmp filter matches. The
+  /// Stake program lays an account out as: 4-byte state tag, 8-byte rent
+  /// reserve, then the staker pubkey at byte 12 and the withdrawer at byte 44.
+  enum SolanaStakeAuthority: Sendable {
+    case staker
+    case withdrawer
+
+    var memcmpOffset: UInt64 {
+      switch self {
+      case .staker: 12
+      case .withdrawer: 44
+      }
+    }
+
+    var requestID: Int {
+      switch self {
+      case .staker: 4
+      case .withdrawer: 5
+      }
+    }
+  }
+
+  /// Warning for the one failure that matters to the balance: the lookup of
+  /// accounts the address can withdraw. Public RPC providers commonly reject
+  /// or rate-limit `getProgramAccounts`, so say so instead of implying the
+  /// address has no stake.
+  static let solanaStakeUnavailableWarning =
+    "Solana stake accounts couldn't be read, so staked and unbonding SOL may be missing. Some public RPC endpoints reject or rate-limit this lookup."
+
+  /// How a stake account is counted. Everything is a function of the account's
+  /// delegation epochs and the current epoch; see `solanaStakeState`.
+  enum SolanaStakeState: Equatable, Sendable {
+    case activating
+    case active
+    case deactivating
+    /// Never delegated, or fully cooled down and still sitting in the account.
+    case inactive
+  }
+
+  struct SolanaParsedStakeAccount: Equatable, Sendable {
+    var publicKey: String
+    var lamports: UInt64
+    var staker: String
+    var withdrawer: String
+    /// Both nil for an initialized account that was never delegated.
+    var activationEpoch: UInt64?
+    var deactivationEpoch: UInt64?
+  }
+
+  struct SolanaStakeSummary: Equatable, Sendable {
+    /// Active, activating, and inactive-but-unwithdrawn lamports.
+    var stakedLamports: UInt64 = 0
+    /// Lamports of accounts that are deactivating.
+    var unbondingLamports: UInt64 = 0
+    var warnings: [String] = []
+  }
+
+  private struct SolanaFetchedStakeOutcome: Sendable {
+    var contextSlot: UInt64
+    var authority: SolanaStakeAuthority
+    var accounts: [SolanaParsedStakeAccount] = []
+    var invalidAccountCount = 0
+  }
 
   private struct ExactParsedSplAccount: Equatable, Sendable {
     var accountPublicKey: String
@@ -61,16 +130,19 @@ extension NativeScanner {
   private enum SolanaSnapshotComponent: Hashable, Sendable {
     case native
     case tokenProgram(String)
+    case stakeAccounts(SolanaStakeAuthority)
   }
 
   private enum SolanaSnapshotPayload: Sendable {
     case native(SolanaNativeSnapshot)
     case tokenProgram(SolanaFetchedProgramOutcome)
+    case stakeAccounts(SolanaFetchedStakeOutcome)
 
     var contextSlot: UInt64 {
       switch self {
       case .native(let snapshot): snapshot.contextSlot
       case .tokenProgram(let outcome): outcome.contextSlot
+      case .stakeAccounts(let outcome): outcome.contextSlot
       }
     }
   }
@@ -85,6 +157,9 @@ extension NativeScanner {
   private struct SolanaCoherentSnapshot: Sendable {
     var native: SolanaNativeSnapshot?
     var programOutcomes: [SolanaFetchedProgramOutcome]
+    var stakeOutcomes: [SolanaFetchedStakeOutcome] = []
+    /// The one slot every included component was read at.
+    var contextSlot: UInt64?
     var warnings: [String]
   }
 
@@ -128,15 +203,17 @@ extension NativeScanner {
     } catch {
       try throwIfCancellation(error)
       warnings.append("Native SOL balance could not be read: \(error.localizedDescription)")
-      if !tokens.isEmpty {
-        do {
-          snapshotFloor = try await fetchSolanaConfirmedSlot(rpc: rpc)
-        } catch {
-          try throwIfCancellation(error)
-          warnings.append(
-            "Solana token balances were skipped because the network didn't return a consistent snapshot: \(error.localizedDescription)"
-          )
-        }
+      // Token and stake-account reads still need one agreed slot to be
+      // trustworthy, so fall back to a validated confirmed slot.
+      do {
+        snapshotFloor = try await fetchSolanaConfirmedSlot(rpc: rpc)
+      } catch {
+        try throwIfCancellation(error)
+        warnings.append(
+          tokens.isEmpty
+            ? "Solana stake-account balances were skipped because the network didn't return a consistent snapshot: \(error.localizedDescription)"
+            : "Solana token and stake-account balances were skipped because the network didn't return a consistent snapshot: \(error.localizedDescription)"
+        )
       }
     }
 
@@ -148,6 +225,7 @@ extension NativeScanner {
       rpc: rpc,
       owner: address,
       programs: tokens.isEmpty ? [] : Self.solanaTokenPrograms,
+      stakeAuthorities: [.staker, .withdrawer],
       minimumSlot: snapshotFloor,
       initialNative: initialNative
     )
@@ -162,6 +240,16 @@ extension NativeScanner {
           prices: prices
         ))
     }
+
+    let stake = try await solanaStakeResult(
+      snapshot: snapshot,
+      rpc: rpc,
+      owner: address,
+      chain: chain,
+      prices: prices
+    )
+    assets.append(contentsOf: stake.assets)
+    warnings.append(contentsOf: stake.warnings)
 
     let splScan = Self.makeSolanaTokenBalanceScan(
       outcomes: snapshot.programOutcomes,
@@ -362,16 +450,175 @@ extension NativeScanner {
     )
   }
 
+  /// One `getProgramAccounts` page of stake accounts whose staker or
+  /// withdrawer is `owner`. `withContext` returns the slot the node answered
+  /// at, so stake accounts take part in the same coherent-snapshot rule as the
+  /// native balance and token accounts: moving SOL into a stake account between
+  /// two reads can then never be counted twice or not at all.
+  private func fetchSolanaStakeSnapshot(
+    rpc: URL,
+    owner: String,
+    authority: SolanaStakeAuthority,
+    minimumSlot: UInt64?
+  ) async throws -> SolanaFetchedStakeOutcome {
+    var requestConfig: [String: RPCValue] = [
+      "encoding": .string("jsonParsed"),
+      "commitment": .string("confirmed"),
+      "withContext": .bool(true),
+      "filters": .array([
+        .object(["dataSize": .unsignedInteger(Self.solanaStakeAccountSize)]),
+        .object([
+          "memcmp": .object([
+            "offset": .unsignedInteger(authority.memcmpOffset),
+            "bytes": .string(owner),
+          ])
+        ]),
+      ]),
+    ]
+    if let minimumSlot {
+      requestConfig["minContextSlot"] = .unsignedInteger(minimumSlot)
+    }
+    let response = try await http.post(
+      rpc,
+      body: JSONRPCRequest(
+        id: authority.requestID,
+        method: "getProgramAccounts",
+        params: [.string(Self.solanaStakeProgram), .object(requestConfig)]
+      ),
+      as: SolanaStakeAccountsResponse.self
+    )
+    guard response.jsonrpc == "2.0", response.id == authority.requestID else {
+      throw Self.messageError(
+        domain: "SolanaStake", message: "Stake account lookup returned a mismatched response.")
+    }
+    if let error = response.error {
+      throw Self.rpcError(
+        domain: "SolanaStake", error: error, fallback: "Stake account lookup failed.")
+    }
+    guard let result = response.result, let contextSlot = result.context?.slot else {
+      throw Self.messageError(
+        domain: "SolanaStake", message: "Stake account lookup returned an empty result.")
+    }
+    if let minimumSlot, contextSlot < minimumSlot {
+      throw Self.messageError(
+        domain: "SolanaStake",
+        message: "Stake account lookup returned data older than the bound snapshot slot.")
+    }
+    let parsed = Self.parseSolanaStakeAccounts(result.value, owner: owner, authority: authority)
+    return SolanaFetchedStakeOutcome(
+      contextSlot: contextSlot,
+      authority: authority,
+      accounts: parsed.accounts,
+      invalidAccountCount: parsed.invalidAccountCount
+    )
+  }
+
+  /// The epoch decides whether delegated stake is still earning, cooling
+  /// down, or finished cooling down. `minContextSlot` keeps the answer from
+  /// predating the snapshot the accounts were read at.
+  private func fetchSolanaCurrentEpoch(rpc: URL, minimumSlot: UInt64?) async throws -> UInt64 {
+    var requestConfig: [String: RPCValue] = ["commitment": .string("confirmed")]
+    if let minimumSlot {
+      requestConfig["minContextSlot"] = .unsignedInteger(minimumSlot)
+    }
+    let response = try await http.post(
+      rpc,
+      body: JSONRPCRequest(id: 6, method: "getEpochInfo", params: [.object(requestConfig)]),
+      as: SolanaEpochInfoResponse.self
+    )
+    guard response.jsonrpc == "2.0", response.id == 6 else {
+      throw Self.messageError(
+        domain: "SolanaStake", message: "Epoch lookup returned a mismatched response.")
+    }
+    if let error = response.error {
+      throw Self.rpcError(domain: "SolanaStake", error: error, fallback: "Epoch lookup failed.")
+    }
+    guard let epoch = response.result?.epoch else {
+      throw Self.messageError(
+        domain: "SolanaStake", message: "Epoch lookup returned an empty result.")
+    }
+    return epoch
+  }
+
+  /// Turns the coherent snapshot's stake outcomes into holdings.
+  ///
+  /// Counting rules:
+  /// - Only accounts the address can *withdraw* are its funds. Accounts where
+  ///   it is merely the staker (a delegation manager acting for someone else)
+  ///   are never counted; they are reported in one warning.
+  /// - An account's whole lamport balance is counted, rent reserve and
+  ///   compounded rewards included, because that is what a withdrawal pays out.
+  /// - If the epoch cannot be read, every account is counted as staked with a
+  ///   warning: the total stays right and only the state label is uncertain.
+  private func solanaStakeResult(
+    snapshot: SolanaCoherentSnapshot,
+    rpc: URL,
+    owner: String,
+    chain: ChainConfig,
+    prices: [String: PricePoint]
+  ) async throws -> NativeScanResult {
+    // No withdrawer outcome means the lookup failed or the snapshot never
+    // converged; either way a warning has already been recorded.
+    guard snapshot.stakeOutcomes.contains(where: { $0.authority == .withdrawer }) else {
+      return NativeScanResult()
+    }
+    var warnings: [String] = []
+    let invalidCount = snapshot.stakeOutcomes.reduce(0) { $0 + $1.invalidAccountCount }
+    if invalidCount > 0 {
+      warnings.append(
+        "Some Solana stake accounts returned invalid data; staked balances may be incomplete.")
+    }
+    let merged = Self.mergeSolanaStakeAccounts(snapshot.stakeOutcomes.flatMap(\.accounts))
+    warnings.append(contentsOf: merged.warnings)
+    guard !merged.accounts.isEmpty else {
+      return NativeScanResult(warnings: warnings)
+    }
+
+    var currentEpoch: UInt64?
+    if merged.accounts.contains(where: { $0.withdrawer == owner }) {
+      do {
+        currentEpoch = try await fetchSolanaCurrentEpoch(
+          rpc: rpc, minimumSlot: snapshot.contextSlot)
+      } catch {
+        try throwIfCancellation(error)
+      }
+    }
+    let summary = Self.summarizeSolanaStake(
+      merged.accounts, owner: owner, currentEpoch: currentEpoch)
+    warnings.append(contentsOf: summary.warnings)
+
+    let scale = pow(10, Double(chain.decimals))
+    var assets = assetIfPositive(
+      amount: Double(summary.stakedLamports) / scale,
+      address: owner,
+      chain: chain,
+      prices: prices,
+      name: "\(chain.name) Staked",
+      source: .staked
+    )
+    assets += assetIfPositive(
+      amount: Double(summary.unbondingLamports) / scale,
+      address: owner,
+      chain: chain,
+      prices: prices,
+      name: "\(chain.name) Unbonding",
+      source: .unbonding
+    )
+    return NativeScanResult(assets: assets, warnings: warnings)
+  }
+
   private func fetchCoherentSolanaSnapshot(
     rpc: URL,
     owner: String,
     programs: [String],
+    stakeAuthorities: [SolanaStakeAuthority] = [],
     minimumSlot: UInt64?,
     initialNative: SolanaNativeSnapshot?
   ) async throws -> SolanaCoherentSnapshot {
     let components =
       (initialNative == nil ? [] : [SolanaSnapshotComponent.native])
       + programs.map(SolanaSnapshotComponent.tokenProgram)
+      + stakeAuthorities.map(SolanaSnapshotComponent.stakeAccounts)
     var activeComponents = Set(components)
     var payloads: [SolanaSnapshotComponent: SolanaSnapshotPayload] = [:]
     var attempts: [SolanaSnapshotComponent: Int] = [:]
@@ -426,11 +673,15 @@ extension NativeScanner {
             payload = .tokenProgram(
               try await fetchSolanaProgramSnapshot(
                 rpc: rpc, owner: owner, program: program, minimumSlot: targetSlot))
+          case .stakeAccounts(let authority):
+            payload = .stakeAccounts(
+              try await fetchSolanaStakeSnapshot(
+                rpc: rpc, owner: owner, authority: authority, minimumSlot: targetSlot))
           }
           return SolanaComponentFetch(component: component, payload: payload)
         } catch {
           try throwIfCancellation(error)
-          let warning: String
+          let warning: String?
           switch component {
           case .native:
             warning =
@@ -438,6 +689,13 @@ extension NativeScanner {
           case .tokenProgram(let program):
             warning =
               "\(Self.solanaProgramLabel(program)) balances couldn't be read; some Solana tokens may be missing."
+          case .stakeAccounts(.withdrawer):
+            // The withdrawer lookup is the one that finds the address's own
+            // stake. Losing the staker lookup only loses an informational
+            // count, so it does not warn a second time.
+            warning = Self.solanaStakeUnavailableWarning
+          case .stakeAccounts(.staker):
+            warning = nil
           }
           return SolanaComponentFetch(
             component: component,
@@ -482,7 +740,18 @@ extension NativeScanner {
       )
     }
 
-    let scope = initialNative == nil ? "Solana token balances" : "SOL and Solana token balances"
+    var scopeParts: [String] = []
+    if initialNative != nil { scopeParts.append("SOL") }
+    if !stakeAuthorities.isEmpty { scopeParts.append("stake-account") }
+    scopeParts.append("Solana token")
+    let scope: String
+    if scopeParts.count == 1 {
+      scope = "Solana token balances"
+    } else if scopeParts.count == 2 {
+      scope = "\(scopeParts[0]) and \(scopeParts[1]) balances"
+    } else {
+      scope = "\(scopeParts.dropLast().joined(separator: ", ")), and \(scopeParts[scopeParts.count - 1]) balances"
+    }
     warnings.append(
       "\(scope) were skipped because the network didn't return a consistent snapshot after \(Self.maxSolanaSnapshotAttempts) tries."
     )
@@ -498,6 +767,7 @@ extension NativeScanner {
     guard failure.code == -32016 else { return false }
     return failure.domain == "AddressAtlas.Solana"
       || failure.domain == "AddressAtlas.SolanaTokenAccounts"
+      || failure.domain == "AddressAtlas.SolanaStake"
   }
 
   private static func isCoherentSolanaSnapshot(
@@ -518,16 +788,21 @@ extension NativeScanner {
   ) -> SolanaCoherentSnapshot {
     var native: SolanaNativeSnapshot?
     var programOutcomes: [SolanaFetchedProgramOutcome] = []
+    var stakeOutcomes: [SolanaFetchedStakeOutcome] = []
     for component in components where activeComponents.contains(component) {
       switch payloads[component] {
       case .native(let snapshot): native = snapshot
       case .tokenProgram(let outcome): programOutcomes.append(outcome)
+      case .stakeAccounts(let outcome): stakeOutcomes.append(outcome)
       case nil: continue
       }
     }
     return SolanaCoherentSnapshot(
       native: native,
       programOutcomes: programOutcomes,
+      stakeOutcomes: stakeOutcomes,
+      // Coherent means every included payload shares this one slot.
+      contextSlot: components.compactMap { payloads[$0]?.contextSlot }.first,
       warnings: warnings
     )
   }
@@ -772,6 +1047,192 @@ extension NativeScanner {
       )
     }
     return result
+  }
+
+  /// Validates every returned stake account against what was asked for: the
+  /// Stake program owns it, it has a usable parsed layout, and the requested
+  /// authority field really is `owner`. Anything else is counted and reported,
+  /// never silently used.
+  static func parseSolanaStakeAccounts(
+    _ accounts: [SolanaStakeAccount],
+    owner: String,
+    authority: SolanaStakeAuthority
+  ) -> (accounts: [SolanaParsedStakeAccount], invalidAccountCount: Int) {
+    var parsedAccounts: [SolanaParsedStakeAccount] = []
+    var invalidAccountCount = 0
+    for account in accounts {
+      guard
+        let publicKey = account.pubkey.flatMap({
+          AddressDetection.canonicalAddress($0, family: .solana)
+        }),
+        let rpcAccount = account.account,
+        rpcAccount.owner == solanaStakeProgram,
+        let lamports = rpcAccount.lamports,
+        let parsed = rpcAccount.data?.parsed,
+        let info = parsed.info,
+        let staker = info.meta?.staker.flatMap({
+          AddressDetection.canonicalAddress($0, family: .solana)
+        }),
+        let withdrawer = info.meta?.withdrawer.flatMap({
+          AddressDetection.canonicalAddress($0, family: .solana)
+        }),
+        (authority == .staker ? staker : withdrawer) == owner
+      else {
+        invalidAccountCount += 1
+        continue
+      }
+      var activationEpoch: UInt64?
+      var deactivationEpoch: UInt64?
+      switch parsed.type {
+      case "delegated":
+        guard let activation = info.stake?.activationEpoch,
+          let deactivation = info.stake?.deactivationEpoch
+        else {
+          invalidAccountCount += 1
+          continue
+        }
+        activationEpoch = activation
+        deactivationEpoch = deactivation
+      case "initialized":
+        break
+      default:
+        invalidAccountCount += 1
+        continue
+      }
+      parsedAccounts.append(
+        SolanaParsedStakeAccount(
+          publicKey: publicKey,
+          lamports: lamports,
+          staker: staker,
+          withdrawer: withdrawer,
+          activationEpoch: activationEpoch,
+          deactivationEpoch: deactivationEpoch
+        ))
+    }
+    return (parsedAccounts, invalidAccountCount)
+  }
+
+  /// Unions the staker-filtered and withdrawer-filtered results by public key.
+  /// An account that names the same address in both roles (the usual case)
+  /// legitimately appears in both, so identical repeats are silent. Differing
+  /// records for one key cannot both be right and are dropped with a warning.
+  static func mergeSolanaStakeAccounts(
+    _ accounts: [SolanaParsedStakeAccount]
+  ) -> (accounts: [SolanaParsedStakeAccount], warnings: [String]) {
+    var byPublicKey: [String: SolanaParsedStakeAccount] = [:]
+    var conflicting = Set<String>()
+    for account in accounts {
+      guard !conflicting.contains(account.publicKey) else { continue }
+      if let existing = byPublicKey[account.publicKey] {
+        if existing != account {
+          byPublicKey.removeValue(forKey: account.publicKey)
+          conflicting.insert(account.publicKey)
+        }
+      } else {
+        byPublicKey[account.publicKey] = account
+      }
+    }
+    var warnings: [String] = []
+    if !conflicting.isEmpty {
+      warnings.append(
+        conflicting.count == 1
+          ? "Solana returned conflicting data for one stake account; every version was skipped."
+          : "Solana returned conflicting data for \(conflicting.count) stake accounts; every version was skipped."
+      )
+    }
+    return (byPublicKey.keys.sorted().compactMap { byPublicKey[$0] }, warnings)
+  }
+
+  /// Where a stake account is in its life, from its delegation epochs alone.
+  ///
+  /// - never delegated, or deactivated in an earlier epoch: `inactive`
+  /// - deactivation requested this epoch (or later): `deactivating`
+  /// - delegated in an earlier epoch and not deactivated: `active`
+  /// - delegated this epoch: `activating`
+  ///
+  /// Cooldown is capped network-wide per epoch, so in a rare busy epoch a
+  /// deactivated account can still be partly cooling down after the epoch
+  /// ends; it is then labelled inactive slightly early. The balance counted is
+  /// the same either way.
+  static func solanaStakeState(
+    _ account: SolanaParsedStakeAccount,
+    currentEpoch: UInt64
+  ) -> SolanaStakeState {
+    guard let activation = account.activationEpoch,
+      let deactivation = account.deactivationEpoch
+    else { return .inactive }
+    if deactivation == solanaStakeNotDeactivating {
+      // Bootstrap stake carries the max epoch as its activation: always active.
+      if activation == UInt64.max { return .active }
+      return currentEpoch > activation ? .active : .activating
+    }
+    return currentEpoch <= deactivation ? .deactivating : .inactive
+  }
+
+  /// Splits the address's stake accounts into the two holdings it reports.
+  ///
+  /// - Only accounts the address can withdraw are counted (see
+  ///   `solanaStakeResult`).
+  /// - Active and activating accounts are `staked`.
+  /// - Deactivating accounts are `unbonding`. Solana publishes no completion
+  ///   timestamp (cooldown ends at an epoch boundary that depends on
+  ///   network-wide limits), so no unlock time is attached rather than a guess.
+  /// - Inactive accounts (cooled down, SOL still inside the stake account until
+  ///   the owner withdraws) are counted as `staked` and a warning says so.
+  ///   They are the owner's money and must be in the total; the other states
+  ///   fit worse (`liquid` would imply it is spendable, which it is not until
+  ///   a withdraw transaction, and the native holding is a different balance).
+  /// - With no epoch, every owned account is `staked`, with a warning.
+  static func summarizeSolanaStake(
+    _ accounts: [SolanaParsedStakeAccount],
+    owner: String,
+    currentEpoch: UInt64?
+  ) -> SolanaStakeSummary {
+    var summary = SolanaStakeSummary()
+    var inactiveCount = 0
+    var notOwnedCount = 0
+    var ownedCount = 0
+    var overflowed = false
+    for account in accounts.sorted(by: { $0.publicKey < $1.publicKey }) {
+      guard account.withdrawer == owner else {
+        if account.staker == owner { notOwnedCount += 1 }
+        continue
+      }
+      ownedCount += 1
+      let state = currentEpoch.map { solanaStakeState(account, currentEpoch: $0) }
+      if state == .deactivating {
+        let sum = summary.unbondingLamports.addingReportingOverflow(account.lamports)
+        if sum.overflow { overflowed = true } else { summary.unbondingLamports = sum.partialValue }
+      } else {
+        if state == .inactive { inactiveCount += 1 }
+        let sum = summary.stakedLamports.addingReportingOverflow(account.lamports)
+        if sum.overflow { overflowed = true } else { summary.stakedLamports = sum.partialValue }
+      }
+    }
+    if notOwnedCount > 0 {
+      summary.warnings.append(
+        notOwnedCount == 1
+          ? "One Solana stake account is managed by this address but can only be withdrawn by another; it wasn't counted."
+          : "\(notOwnedCount) Solana stake accounts are managed by this address but can only be withdrawn by another; they weren't counted."
+      )
+    }
+    if inactiveCount > 0 {
+      summary.warnings.append(
+        inactiveCount == 1
+          ? "One Solana stake account has finished deactivating but hasn't been withdrawn; its SOL is counted as staked until it is."
+          : "\(inactiveCount) Solana stake accounts have finished deactivating but haven't been withdrawn; their SOL is counted as staked until it is."
+      )
+    }
+    if currentEpoch == nil, ownedCount > 0 {
+      summary.warnings.append(
+        "Solana's current epoch couldn't be read, so every stake account is counted as staked; some may be unbonding or inactive."
+      )
+    }
+    if overflowed {
+      summary.warnings.append(
+        "Solana stake balances exceeded the supported numeric range; the remainder was skipped.")
+    }
+    return summary
   }
 
   private static func solanaRawAmount(_ value: String) -> UInt64? {

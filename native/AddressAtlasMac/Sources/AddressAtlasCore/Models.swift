@@ -17,8 +17,15 @@ public enum AssetSource: String, Codable, Sendable {
   case trc20
   case issued
   case exchange
+  /// Native coin delegated to a validator: Cosmos delegations, and Solana stake
+  /// accounts that are active, activating, or inactive but not yet withdrawn.
   case staked
   case rewards
+  /// Native coin that has left staking but is not yet spendable: Cosmos
+  /// unbonding delegations and Solana stake accounts in cooldown. Added after
+  /// the first schema-v2 vaults shipped, so older vaults never contain it. The
+  /// raw value is the persisted spelling and must not change.
+  case unbonding
 }
 
 public enum ScanStatus: String, Codable, Sendable {
@@ -490,6 +497,13 @@ public struct TrackedAsset: Codable, Identifiable, Hashable, Sendable {
   public var walletLabel: String?
   public var exchangeId: UUID?
   public var exchangeProvider: ExchangeProvider?
+  /// When an `.unbonding` holding becomes spendable. Cosmos reports the exact
+  /// completion time of the entries behind the holding; Solana exposes no
+  /// timestamp, so it stays nil there. Nil for every other source and for
+  /// vaults written before the field existed: an absent key decodes to nil and
+  /// a nil value is not encoded, so those vaults re-encode byte for byte.
+  /// Scanners emit whole-second values like every other persisted date.
+  public var unlocksAt: Date?
 
   public init(
     id: String,
@@ -510,7 +524,8 @@ public struct TrackedAsset: Codable, Identifiable, Hashable, Sendable {
     status: ScanStatus = .ok,
     walletLabel: String? = nil,
     exchangeId: UUID? = nil,
-    exchangeProvider: ExchangeProvider? = nil
+    exchangeProvider: ExchangeProvider? = nil,
+    unlocksAt: Date? = nil
   ) {
     self.id = id
     self.address = address
@@ -536,6 +551,7 @@ public struct TrackedAsset: Codable, Identifiable, Hashable, Sendable {
     self.walletLabel = walletLabel
     self.exchangeId = exchangeId
     self.exchangeProvider = exchangeProvider
+    self.unlocksAt = unlocksAt
   }
 
   /// Exact, locale-independent amount used by exports and exchange UI. Legacy
@@ -587,6 +603,7 @@ public struct TrackedAsset: Codable, Identifiable, Hashable, Sendable {
     case walletLabel
     case exchangeId
     case exchangeProvider
+    case unlocksAt
   }
 
   public init(from decoder: Decoder) throws {
@@ -618,6 +635,9 @@ public struct TrackedAsset: Codable, Identifiable, Hashable, Sendable {
       ExchangeProvider.self,
       forKey: .exchangeProvider
     )
+    // unlocksAt was added without a vault schema bump: absence is the legacy
+    // case and means "no known unlock time".
+    unlocksAt = try container.decodeIfPresent(Date.self, forKey: .unlocksAt)
     let encodedExactAmount = try container.decodeIfPresent(String.self, forKey: .exactAmount)
     if source == .exchange {
       if let encodedExactAmount {
@@ -674,6 +694,7 @@ public struct TrackedAsset: Codable, Identifiable, Hashable, Sendable {
     try container.encodeIfPresent(walletLabel, forKey: .walletLabel)
     try container.encodeIfPresent(exchangeId, forKey: .exchangeId)
     try container.encodeIfPresent(exchangeProvider, forKey: .exchangeProvider)
+    try container.encodeIfPresent(unlocksAt, forKey: .unlocksAt)
   }
 }
 

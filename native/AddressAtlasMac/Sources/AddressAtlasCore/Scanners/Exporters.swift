@@ -266,7 +266,9 @@ public enum AddressAtlasExporter {
   /// Full identifying holdings report. `address` (the public wallet address;
   /// blank for exchange and manual holdings) follows the readable wallet or
   /// exchange name. Numbers use plain, locale-independent decimal notation
-  /// without exponents or binary floating-point tails.
+  /// without exponents or binary floating-point tails. `unlocks_at` is the
+  /// last column, so older consumers that read by position keep working: an
+  /// ISO-8601 UTC time for an unbonding holding that has one, blank otherwise.
   public static func csv(for assets: [TrackedAsset]) throws -> String {
     try VaultDocumentSemanticValidator.validateAssets(assets)
     let header = [
@@ -280,7 +282,9 @@ public enum AddressAtlasExporter {
       "value_usd",
       "pricing_status",
       "source",
+      "unlocks_at",
     ].joined(separator: ",")
+    let unlockFormatter = ISO8601DateFormatter()
     let rows = assets.map { asset in
       let source = exportSource(for: asset)
       return [
@@ -294,6 +298,7 @@ public enum AddressAtlasExporter {
         asset.pricingStatus == .priced ? ExportDecimal.value(asset.valueUsd) : "",
         asset.pricingStatus.rawValue,
         csvEscape(source.label),
+        asset.unlocksAt.map(unlockFormatter.string(from:)) ?? "",
       ].joined(separator: ",")
     }
     return ([header] + rows).joined(separator: "\n")
