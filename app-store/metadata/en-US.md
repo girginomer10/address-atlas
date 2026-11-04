@@ -6,39 +6,38 @@ Address Atlas
 
 ## Subtitle
 
-Private crypto portfolio map
+Read-only crypto portfolio
 
 ## Promotional text
 
-See public-wallet and read-only exchange balances in one encrypted, local-first Mac workspace—without seed phrases, signing, custody, or trading.
+See wallet and exchange balances in one place. Address Atlas is read-only: no seed phrases, no signing, no trading. Your data stays on your Mac.
 
 ## Description
 
-Address Atlas is a private, read-only portfolio workspace built for macOS.
+Address Atlas is a read-only crypto portfolio for Mac. Your data stays on your Mac.
 
-Bring public wallet addresses and supported read-only exchange connections into one clear view. Address Atlas scans balances directly from network and exchange providers, adds USD reference prices, and stores the resulting portfolio inside an encrypted local vault.
+Add public wallet addresses and supported exchange API keys. Address Atlas reads balances directly from chain and exchange providers, adds USD reference prices, and saves the portfolio on your Mac, encrypted.
 
-PRIVATE BY DESIGN
-
-• Your vault is encrypted on the Mac.
-• The vault key is protected by macOS Keychain.
-• Seed phrases, wallet private keys, and signing material never enter the app.
-• Optionally save an encrypted copy to your own iCloud account and restore on another Mac with iCloud Keychain enabled.
-• No separate Address Atlas account or backup server is required. iCloud transfers are manual.
-
-READ-ONLY PORTFOLIO TOOLS
+WHAT YOU CAN DO
 
 • Track supported Bitcoin, EVM, Solana, XRP, TRON, and Cosmos-family addresses.
-• Connect supported exchanges with balance/read-only API credentials.
+• Connect supported exchanges with balance-only (read-only) API keys.
 • Review assets, custom tokens, snapshots, price status, and source warnings.
-• Export share-safer summaries or explicitly disclosed full reports.
-• Create a recovery kit and keep its file separate from the one-time recovery code.
+• Export share-safer summaries, or full reports after an explicit warning.
+• Create a recovery kit. Keep its file apart from the one-time recovery code.
 
-HONEST BOUNDARIES
+PRIVACY
 
-Address Atlas does not create wallets, hold funds, sign or execute transactions, route orders, operate an exchange, mine cryptocurrency, offer rewards, or provide personalized investment advice. Balances and reference prices can be delayed, incomplete, or unavailable. Always verify important information with the underlying network or provider.
+• Your portfolio is encrypted on your Mac, and its key is protected by macOS Keychain.
+• Seed phrases, wallet private keys, and signing material never enter the app.
+• Balance lookups go straight to public chain, price, and exchange providers. They can see the addresses and requests.
+• Optionally save an encrypted copy to your own iCloud account and restore it on another Mac with iCloud Keychain turned on. iCloud transfers are manual. There is no Address Atlas account or backup server.
 
-Address Atlas is open source. Terms, support, privacy details, provider boundaries, and security reporting are available from the product page and inside Settings.
+LIMITS
+
+Address Atlas does not create wallets, hold funds, sign or send transactions, route orders, run an exchange, mine cryptocurrency, offer rewards, or give personal investment advice. Balances and prices can be delayed, incomplete, or missing. Check anything important with the network or provider.
+
+Address Atlas is open source. Terms, support, privacy, and security reporting are on the product page and in Settings.
 
 ## Keywords
 
@@ -57,4 +56,4 @@ crypto,portfolio,wallet,bitcoin,ethereum,balances,privacy,tracker,read-only,macO
 
 ## Release notes
 
-Initial Mac App Store release with encrypted local portfolio storage, public-wallet and supported read-only exchange scanning, snapshots, privacy-aware exports, recovery tools, accessibility support, and optional encrypted iCloud copies.
+First Mac App Store release. Encrypted local portfolio, scans of public wallets and supported read-only exchange accounts, snapshots, share-safer exports, recovery kit, accessibility support, and optional encrypted iCloud copies.
