@@ -154,7 +154,7 @@ final class ApplicationTerminationTests: XCTestCase {
     XCTAssertFalse(delegateReply)
     XCTAssertFalse(state.isTerminationInProgress)
     XCTAssertEqual(state.walletLabelDrafts[wallet.id], "Family Treasury")
-    XCTAssertTrue(state.error.contains("could not save the wallet label before quitting"))
+    XCTAssertTrue(state.error.contains("couldn't save the wallet name before quitting"))
     XCTAssertEqual(try competingStore.load().wallets[0].label, "Treasury")
   }
 
@@ -256,7 +256,7 @@ final class ApplicationTerminationTests: XCTestCase {
     XCTAssertFalse(state.isPersisting)
     XCTAssertFalse(state.isTerminationInProgress)
     XCTAssertEqual(state.walletLabelDrafts[wallet.id], "Family Treasury")
-    XCTAssertTrue(state.error.contains("could not finish the active local save before quitting"))
+    XCTAssertTrue(state.error.contains("couldn't finish saving before quitting"))
     XCTAssertEqual(try competingStore.load().wallets[0].label, "Treasury")
   }
 
@@ -318,7 +318,7 @@ final class ApplicationTerminationTests: XCTestCase {
     XCTAssertEqual(state.pendingSyncPersistence?.document, pendingCandidate)
     XCTAssertEqual(state.pendingSyncPersistence?.projectedSyncVersion, 9)
     XCTAssertEqual(state.pendingSyncPersistence?.saveExactly, true)
-    XCTAssertTrue(state.error.contains("could not save the pending sync state before quitting"))
+    XCTAssertTrue(state.error.contains("couldn't save the last sync result before quitting"))
     let verifier = try EncryptedSQLiteVaultStore(
       path: fixture.database,
       vaultKey: fixture.vaultKey
@@ -342,7 +342,7 @@ final class ApplicationTerminationTests: XCTestCase {
     XCTAssertTrue(state.syncPersistencePending)
     XCTAssertNil(state.pendingSyncPersistence)
     XCTAssertNil(state.pendingVaultUpload)
-    XCTAssertTrue(state.error.contains("pending sync state cannot be saved safely"))
+    XCTAssertTrue(state.error.contains("can't save the unfinished sync step safely"))
   }
 
   func testTerminationCancelsUntilLifecycleOwnedExportFinishes() async {

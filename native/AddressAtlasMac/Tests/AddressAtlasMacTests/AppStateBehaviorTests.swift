@@ -142,7 +142,7 @@ final class AppStateBehaviorTests: XCTestCase {
     XCTAssertTrue(localSaveGuidance?.contains("retry the save") == true)
 
     state.pendingVaultUploadHasRemoteConflict = true
-    XCTAssertTrue(state.persistentOperationGuidance?.contains("conflicts with the server copy") == true)
+    XCTAssertTrue(state.persistentOperationGuidance?.contains("conflicts with the copy on the server") == true)
 
     state.pendingVaultUploadHasRemoteConflict = false
     state.syncPersistencePending = false
@@ -153,7 +153,7 @@ final class AppStateBehaviorTests: XCTestCase {
 
     state.document.syncState.accountDeletionIdempotencyKey = nil
     state.document.syncState.remoteOutcomeUncertain = true
-    XCTAssertTrue(state.persistentOperationGuidance?.contains("unclear whether the last upload") == true)
+    XCTAssertTrue(state.persistentOperationGuidance?.contains("last upload may not have reached the server") == true)
     state.clearTransientMessagesForNavigation()
     XCTAssertTrue(state.persistentOperationGuidance?.contains("Open Sync to check") == true)
 
@@ -842,7 +842,7 @@ final class AppStateBehaviorTests: XCTestCase {
     XCTAssertTrue(state.document.customTokens.isEmpty)
     XCTAssertEqual(
       state.error,
-      "CoinGecko ID may contain lowercase letters, numbers, and hyphens only."
+      "The CoinGecko ID can only use lowercase letters, numbers and hyphens."
     )
   }
 

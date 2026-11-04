@@ -91,7 +91,7 @@ extension AppState {
             )
           }
           endpointPolicyWarning =
-            "Couldn't check the sync server's latest settings; this scan used the ones confirmed earlier in this session."
+            "Couldn't check the sync server's latest settings. This scan used the settings confirmed earlier."
         }
       }
       // A transport failure may fall back to an already trusted policy, but a
@@ -165,7 +165,7 @@ extension AppState {
       let invalidHoldingCount = holdingCountBeforeValidation - scan.holdings.count
       if invalidHoldingCount > 0 {
         scan.warnings.append(
-          "Skipped \(invalidHoldingCount) holding\(invalidHoldingCount == 1 ? "" : "s") with an invalid amount or value."
+          "\(invalidHoldingCount) holding\(invalidHoldingCount == 1 ? " has" : "s have") an invalid amount or value, so \(invalidHoldingCount == 1 ? "it's" : "they're") left out of the total."
         )
       }
       guard let totalUsd = AppState.validatedPortfolioTotal(scan.holdings) else {
@@ -184,8 +184,8 @@ extension AppState {
       }) {
         let successNotice =
           scan.warnings.isEmpty
-          ? "Snapshot saved."
-          : "Snapshot saved with \(scan.warnings.count) warning\(scan.warnings.count == 1 ? "" : "s")."
+          ? "Scan finished."
+          : "Scan finished with \(scan.warnings.count) warning\(scan.warnings.count == 1 ? "" : "s")."
         notice = successNotice + pruningNoticeSuffix(lastSaveRemovedScanRunCount)
       }
     } catch is CancellationError {

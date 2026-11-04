@@ -7,9 +7,9 @@ import UniformTypeIdentifiers
 
 enum ExportCopy {
   static let shareSaferExplanation =
-    "It omits addresses, labels, symbols, names, record IDs, URLs, notes, history, timestamps, settings, credentials, sessions, and exact amounts, prices, and values. The latest holdings are grouped only by closed source categories and coarse ranges."
+    "It leaves out addresses, wallet and asset names, symbols, record IDs, URLs, notes, history, timestamps, settings, API keys, sessions, and exact amounts, prices and values. Latest holdings are grouped only by fixed source categories and rough ranges."
   static let fullIdentifyingExplanation =
-    "Full exports are credential-free but identifying. CSV includes the latest addresses, labels, asset names, and exact balances. JSON also includes portfolio records, settings, timestamps, and scan history. They omit exchange credentials and sync authentication, and they are not backups."
+    "Full exports identify you. CSV has your latest addresses, wallet names, asset names and exact balances. JSON also has portfolio records, settings, timestamps and scan history. Neither has exchange API keys or sync sign-ins, and neither is a backup."
   static let fullIdentifyingConfirmationTitle = "Export a report that identifies you?"
   static let fullIdentifyingConfirmationMessage =
     "Anyone with this file can see your wallet addresses, names, and exact balances. It has no exchange keys and isn't a backup."
@@ -163,15 +163,15 @@ struct ExportPreviewAccessibilityModel: Equatable, Sendable {
   var spokenSummary: String {
     if didOmitContent {
       return
-        "Read-only export preview. Showing the first \(rows.count) navigable rows from \(sourceLineCount) lines. Save the report to inspect all content."
+        "Read-only export preview. Showing the first \(rows.count) rows of \(sourceLineCount) lines. Save the report to see all of it."
     }
-    return "Read-only export preview. \(sourceLineCount) lines in \(rows.count) navigable rows."
+    return "Read-only export preview. \(sourceLineCount) lines in \(rows.count) rows."
   }
 
   var accessibilitySummaryLabel: String { "Preview summary: \(spokenSummary)" }
 
   static let navigationHint =
-    "Navigate the table by row. Long source lines are split into numbered parts."
+    "Move through the table by row. Long lines are split into numbered parts."
 
   private static func boundedUTF8Chunks(_ text: String) -> [String] {
     guard !text.isEmpty else { return [""] }

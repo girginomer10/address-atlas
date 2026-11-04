@@ -56,7 +56,7 @@ extension AppState {
     guard state.remoteOutcomeUncertain else { return "\(state.latestRemoteVersion)" }
     return state.latestRemoteVersion > 0
       ? "Unknown (last confirmed \(state.latestRemoteVersion))"
-      : "Unknown (no confirmed remote version)"
+      : "Unknown (no confirmed server version)"
   }
 
   static func lastConfirmedSyncStatus(_ state: SyncState) -> String {

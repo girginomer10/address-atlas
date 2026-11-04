@@ -71,24 +71,24 @@ extension AppState {
   func saveSyncSettings(serverURL: String) async -> Bool {
     guard canMutateVault() else { return false }
     guard !syncPersistencePending else {
-      error = "Save the pending sync state locally before changing sync servers."
+      error = "Save the last sync result before changing sync servers."
       return false
     }
     guard let canonicalURL = AppState.validatedSyncURL(serverURL) else {
-      error = "Sync server URL must use https (http is allowed only for localhost)."
+      error = "The sync server address must start with https. Only localhost can use http."
       return false
     }
     let canonical = canonicalURL.absoluteString
     let serverChanged = document.syncState.serverURL != canonical
     guard !serverChanged || document.syncState.accountId == nil else {
       error =
-        "Disconnect the current sync account explicitly before changing its server. The existing account and remote baseline were kept."
+        "Disconnect the current sync account before changing its server. The existing account and server copy were kept."
       return false
     }
     guard await mutateDocument({ $0.syncState.changeServer(to: canonical) }) else { return false }
     if serverChanged {
       endpointConfig = .bundled
-      endpointConfigStatus = "Bundled endpoints"
+      endpointConfigStatus = "Built-in server settings"
       acceptedEndpointConfigServerURL = nil
       setEndpointConfigTrustDurabilityDegraded(false)
     }
@@ -104,11 +104,11 @@ extension AppState {
       endpointConfigRefreshRequest?.task.cancel()
       endpointConfigRefreshRequest = nil
       endpointConfig = .bundled
-      endpointConfigStatus = "Bundled endpoints"
+      endpointConfigStatus = "Built-in server settings"
       acceptedEndpointConfigServerURL = nil
       setEndpointConfigTrustDurabilityDegraded(false)
       if !silent {
-        notice = "Using bundled endpoints."
+        notice = "Using built-in server settings."
       }
       return false
     }
@@ -120,7 +120,7 @@ extension AppState {
       // without going through saveSyncSettings. Never carry one authority's
       // endpoint policy into another authority's refresh.
       endpointConfig = .bundled
-      endpointConfigStatus = "Bundled endpoints"
+      endpointConfigStatus = "Built-in server settings"
       acceptedEndpointConfigServerURL = nil
       setEndpointConfigTrustDurabilityDegraded(false)
     }
@@ -185,18 +185,18 @@ extension AppState {
       acceptedEndpointConfigServerURL = serverURL
       setEndpointConfigTrustDurabilityDegraded(!trusted.trustOutcome.isDurable)
       if !isAppVersionSupported {
-        endpointConfigStatus = acceptedEndpointStatus("Remote v\(config.configVersion)")
+        endpointConfigStatus = acceptedEndpointStatus("Server settings v\(config.configVersion)")
         if !silent {
           self.error =
             "This app version is no longer supported. Update Address Atlas to keep syncing."
         }
       } else {
-        endpointConfigStatus = acceptedEndpointStatus("Remote v\(config.configVersion)")
+        endpointConfigStatus = acceptedEndpointStatus("Server settings v\(config.configVersion)")
         if !silent {
           notice =
             trusted.trustOutcome.isDurable
-            ? "Endpoint config refreshed."
-            : "Endpoint config was applied, but its crash-durability check failed. Sync and sign-in remain blocked until a refresh succeeds."
+            ? "Server settings updated."
+            : "Server settings updated, but this \(PlatformCopy.deviceNoun) couldn't confirm they were saved. Sync and sign-in stay blocked until a refresh works."
         }
       }
       return true
@@ -216,21 +216,21 @@ extension AppState {
         acceptedEndpointConfigServerURL == serverURL
       {
         endpointConfigStatus = acceptedEndpointStatus(
-          "Remote v\(endpointConfig.configVersion) (stale v\(received) rejected)"
+          "Server settings v\(endpointConfig.configVersion) (older v\(received) ignored)"
         )
       } else if case EndpointConfigTrustStoreError.equivocation = error,
         acceptedEndpointConfigServerURL == serverURL
       {
         endpointConfigStatus = acceptedEndpointStatus(
-          "Remote v\(endpointConfig.configVersion) (conflicting refresh rejected)"
+          "Server settings v\(endpointConfig.configVersion) (conflicting update ignored)"
         )
       } else if acceptedEndpointConfigServerURL == serverURL {
         endpointConfigStatus = acceptedEndpointStatus(
-          "Remote v\(endpointConfig.configVersion) (refresh unavailable)"
+          "Server settings v\(endpointConfig.configVersion) (couldn't refresh)"
         )
       } else {
         endpointConfig = .bundled
-        endpointConfigStatus = "Bundled endpoints (remote unavailable)"
+        endpointConfigStatus = "Built-in server settings (couldn't refresh)"
         acceptedEndpointConfigServerURL = nil
         setEndpointConfigTrustDurabilityDegraded(false)
       }

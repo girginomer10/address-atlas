@@ -44,7 +44,7 @@ extension AppStateNetworkBoundaryTests {
 
     XCTAssertTrue(http.requests.isEmpty)
     XCTAssertTrue(state.endpointConfigTrustDurabilityDegraded)
-    XCTAssertTrue(state.error.contains("not crash-durable"))
+    XCTAssertTrue(state.error.contains("couldn't confirm they were saved"))
     XCTAssertNil(state.pendingVaultUpload)
   }
 

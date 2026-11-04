@@ -294,14 +294,14 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertTrue(relaunched.document.syncState.remoteOutcomeUncertain)
     XCTAssertTrue(relaunched.hasUnsyncedLocalChanges)
     XCTAssertTrue(
-      relaunched.persistentOperationGuidance?.contains("unclear whether the last upload") == true)
+      relaunched.persistentOperationGuidance?.contains("last upload may not have reached the server") == true)
     relaunched.notice = "Transient"
     relaunched.clearTransientMessagesForNavigation()
     XCTAssertTrue(relaunched.persistentOperationGuidance?.contains("Open Sync to check") == true)
     let requestCountBeforeBlockedDownload = http.requests.count
 
     await relaunched.downloadEncryptedVault(expectedServerURL: expectedServerURL)
-    XCTAssertTrue(relaunched.error.contains("last upload outcome is unknown"))
+    XCTAssertTrue(relaunched.error.contains("unclear whether the last upload reached the server"))
     XCTAssertEqual(http.requests.count, requestCountBeforeBlockedDownload)
 
     await relaunched.downloadEncryptedVault(

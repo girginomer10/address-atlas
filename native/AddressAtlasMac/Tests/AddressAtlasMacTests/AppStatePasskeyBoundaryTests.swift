@@ -38,7 +38,7 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertTrue(state.document.syncState.sessionToken.isEmpty)
     XCTAssertEqual(state.endpointConfig, .bundled)
     XCTAssertFalse(state.endpointConfigTrustDurabilityDegraded)
-    XCTAssertTrue(state.error.contains("crash-durability check failed"))
+    XCTAssertTrue(state.error.contains("couldn't confirm they were saved"))
     XCTAssertTrue(state.error.contains("account and passkey may already exist"))
     XCTAssertTrue(state.error.contains("choose Sign in"))
     XCTAssertFalse(state.error.contains("Create passkey account again before"))
@@ -94,7 +94,7 @@ extension AppStateNetworkBoundaryTests {
     await state.signInWithPasskey(serverURL: "https://sync.example")
 
     XCTAssertEqual(state.document.syncState.sessionToken, oldSession)
-    XCTAssertTrue(state.error.contains("previous local binding was kept"))
+    XCTAssertTrue(state.error.contains("previous sync connection was kept"))
     XCTAssertTrue(state.error.contains("choose Sign in again"))
     XCTAssertFalse(state.error.contains("account and passkey may already exist"))
     let verifier = try EncryptedSQLiteVaultStore(
@@ -124,7 +124,7 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertNil(state.document.syncState.accountId)
     XCTAssertTrue(state.document.syncState.sessionToken.isEmpty)
     XCTAssertEqual(state.endpointConfig, .bundled)
-    XCTAssertEqual(state.endpointConfigStatus, "Bundled endpoints")
+    XCTAssertEqual(state.endpointConfigStatus, "Built-in server settings")
     XCTAssertNil(state.acceptedEndpointConfigServerURL)
   }
 
@@ -213,7 +213,7 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertNil(state.document.syncState.accountId)
     XCTAssertTrue(state.error.contains("no longer supported"))
     XCTAssertEqual(state.endpointConfig, .bundled)
-    XCTAssertEqual(state.endpointConfigStatus, "Bundled endpoints")
+    XCTAssertEqual(state.endpointConfigStatus, "Built-in server settings")
     XCTAssertNil(state.acceptedEndpointConfigServerURL)
   }
 
@@ -243,7 +243,7 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertEqual(authenticator.callCount, 0)
     XCTAssertNil(state.document.syncState.accountId)
     XCTAssertTrue(state.document.syncState.sessionToken.isEmpty)
-    XCTAssertTrue(state.error.contains("compatibility policy could not be verified"))
+    XCTAssertTrue(state.error.contains("couldn't verify that this version works with the sync server"))
   }
 
   func testConnectedAccountRejectsImplicitPasskeyServerSwitchBeforeAuthentication() async throws {
@@ -276,17 +276,17 @@ extension AppStateNetworkBoundaryTests {
       passkeyAuthenticator: authenticator
     )
     state.endpointConfig = existingConfig
-    state.endpointConfigStatus = "Remote v12"
+    state.endpointConfigStatus = "Server settings v12"
     state.acceptedEndpointConfigServerURL = existingServer
 
     await state.signInWithPasskey(serverURL: "https://candidate.example")
 
     XCTAssertEqual(authenticator.callCount, 0)
-    XCTAssertTrue(state.error.contains("Disconnect it explicitly"))
+    XCTAssertTrue(state.error.contains("Disconnect it before switching"))
     XCTAssertEqual(state.document.syncState.serverURL, existingServer.absoluteString)
     XCTAssertEqual(state.document.syncState.sessionToken, existingSession)
     XCTAssertEqual(state.endpointConfig, existingConfig)
-    XCTAssertEqual(state.endpointConfigStatus, "Remote v12")
+    XCTAssertEqual(state.endpointConfigStatus, "Server settings v12")
     XCTAssertEqual(state.acceptedEndpointConfigServerURL, existingServer)
     XCTAssertEqual(state.operatorMessage, "Existing authority")
   }
@@ -403,13 +403,13 @@ extension AppStateNetworkBoundaryTests {
       passkeyAuthenticator: CancelledPasskeyAuthenticator()
     )
     state.endpointConfig = existingConfig
-    state.endpointConfigStatus = "Remote v14"
+    state.endpointConfigStatus = "Server settings v14"
     state.acceptedEndpointConfigServerURL = server
 
     await state.signInWithPasskey(serverURL: server.absoluteString)
 
     XCTAssertEqual(state.endpointConfig, existingConfig)
-    XCTAssertEqual(state.endpointConfigStatus, "Remote v14")
+    XCTAssertEqual(state.endpointConfigStatus, "Server settings v14")
     XCTAssertEqual(state.acceptedEndpointConfigServerURL, server)
   }
 
@@ -446,7 +446,7 @@ extension AppStateNetworkBoundaryTests {
     XCTAssertEqual(state.document.syncState.accountId, accountId)
     XCTAssertEqual(state.document.syncState.sessionToken, sessionToken)
     XCTAssertEqual(state.endpointConfig.configVersion, 9)
-    XCTAssertEqual(state.endpointConfigStatus, "Remote v9")
+    XCTAssertEqual(state.endpointConfigStatus, "Server settings v9")
     XCTAssertEqual(
       state.acceptedEndpointConfigServerURL,
       URL(string: "https://sync.example")

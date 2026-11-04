@@ -190,11 +190,11 @@ extension AppState {
   ) async -> Bool {
     guard canMutateVault() else { return false }
     guard document.exchangeConnections.count < Self.maximumExchangeConnections else {
-      error = "A vault can contain at most \(Self.maximumExchangeConnections) exchange connections."
+      error = "You can save at most \(Self.maximumExchangeConnections) exchange connections."
       return false
     }
     guard let vaultKey else {
-      error = "Vault must be unlocked before saving exchange credentials."
+      error = "Unlock Address Atlas before saving exchange API keys."
       return false
     }
     let normalizedCredentials = ExchangeCredentials(
@@ -211,7 +211,7 @@ extension AppState {
       normalizedCredentials.secret.utf8.count <= 32_768,
       passphraseIsValid
     else {
-      error = "API key and secret are required and must be within supported size limits."
+      error = "Enter the API key and secret. Check that neither is empty or too long."
       return false
     }
     if let issue = Self.exchangeCredentialSigningIssue(
@@ -226,11 +226,11 @@ extension AppState {
       maximumCharacters: VaultTextLimits.exchangeLabelCharacters,
       maximumUTF8Bytes: VaultTextLimits.exchangeLabelUTF8Bytes
     ) else {
-      error = "Exchange labels must be 80 characters or fewer."
+      error = "Exchange names must be 80 characters or fewer."
       return false
     }
     guard !isValidatingExchangeCredentials else {
-      notice = "An exchange credential check is already running."
+      notice = "An exchange key check is already running."
       return false
     }
     isValidatingExchangeCredentials = true
@@ -262,7 +262,7 @@ extension AppState {
             try self.krakenDeviceIdentifier()
           )
         else {
-          error = "Kraken's protected device identity is invalid. No credentials were saved."
+          error = "This \(PlatformCopy.deviceNoun)'s Kraken device identity is invalid. No API keys were saved."
           return false
         }
         krakenDeviceIdentifier = normalizedIdentifier
@@ -294,7 +294,7 @@ extension AppState {
       if saved,
         case .manualVerificationRequired(_, let guidance) = scope
       {
-        notice = "Saved encrypted. \(guidance)"
+        notice = "\(provider.label) key saved. \(guidance)"
       }
       return saved
     } catch {
@@ -320,7 +320,7 @@ extension AppState {
       return false
     }
     guard let vaultKey else {
-      error = "Vault must be unlocked before saving exchange credentials."
+      error = "Unlock Address Atlas before saving exchange API keys."
       return false
     }
     let provider = existing.provider
@@ -338,7 +338,7 @@ extension AppState {
       normalizedCredentials.secret.utf8.count <= 32_768,
       passphraseIsValid
     else {
-      error = "API key and secret are required and must be within supported size limits."
+      error = "Enter the API key and secret. Check that neither is empty or too long."
       return false
     }
     if let issue = Self.exchangeCredentialSigningIssue(
@@ -348,7 +348,7 @@ extension AppState {
       return false
     }
     guard !isValidatingExchangeCredentials else {
-      notice = "An exchange credential check is already running."
+      notice = "An exchange key check is already running."
       return false
     }
     isValidatingExchangeCredentials = true
@@ -378,7 +378,7 @@ extension AppState {
             try self.krakenDeviceIdentifier()
           )
         else {
-          error = "Kraken's protected device identity is invalid. The saved keys were not changed."
+          error = "This \(PlatformCopy.deviceNoun)'s Kraken device identity is invalid. The saved API keys weren't changed."
           return false
         }
         krakenDeviceIdentifier = normalizedIdentifier
@@ -445,7 +445,7 @@ extension AppState {
       maximumCharacters: VaultTextLimits.exchangeLabelCharacters,
       maximumUTF8Bytes: VaultTextLimits.exchangeLabelUTF8Bytes
     ) else {
-      error = "Exchange labels must be 80 characters or fewer."
+      error = "Exchange names must be 80 characters or fewer."
       return false
     }
     let resolved =
@@ -472,10 +472,10 @@ extension AppState {
     // Restore can never resurrect a credential the UI said was removed.
     guard await saveAndDiscardRollbackCheckpoint(candidate) else { return }
     notice = candidate.syncState.pendingExchangeCredentialCleanup
-      ? "Exchange credentials were removed from this \(PlatformCopy.deviceNoun), including its earlier local copy. Your last uploaded encrypted copy may still contain them until you save a new one."
-      : "Exchange credentials were removed from this \(PlatformCopy.deviceNoun), including its earlier local copy."
+      ? "Exchange API keys were removed from this \(PlatformCopy.deviceNoun), including from its backup copy. Your last uploaded encrypted copy may still contain them until you save a new one."
+      : "Exchange API keys were removed from this \(PlatformCopy.deviceNoun), including from its backup copy."
     if candidate.iCloudState != nil {
-      notice += " Save the updated portfolio to iCloud or delete its iCloud copy to remove the old encrypted credentials there too."
+      notice += " Save the updated portfolio to iCloud or delete its iCloud copy to remove the old API keys there too."
     }
   }
 
