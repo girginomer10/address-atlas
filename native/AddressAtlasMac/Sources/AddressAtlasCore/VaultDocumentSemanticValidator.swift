@@ -74,6 +74,9 @@ public struct VaultDocumentSemanticError: Error, Equatable, LocalizedError, Send
 /// proves who produced bytes; it does not prove that their decoded graph is
 /// bounded, non-ambiguous, finite, or safe for later business logic.
 public enum VaultDocumentSemanticValidator {
+  /// 9999-12-31T23:59:59Z, the last second with a four-digit year.
+  static let latestRepresentableUnlockTimestamp: TimeInterval = 253_402_300_799
+
   public static func validate(
     _ document: VaultDocument,
     context: VaultDocumentValidationContext = .local
@@ -353,6 +356,19 @@ public enum VaultDocumentSemanticValidator {
         )
       }
       if let change = asset.change24h { try finite(change, "\(item).change24h") }
+      if let unlocksAt = asset.unlocksAt {
+        // Only an unbonding holding has an unlock time. The range keeps the
+        // value inside what the ISO-8601 encoder and decoder round-trip
+        // (four-digit years), so a hostile provider date cannot make a saved
+        // vault unreadable.
+        try require(asset.source == .unbonding, "\(item).unlocksAt")
+        try require(
+          unlocksAt.timeIntervalSince1970.isFinite
+            && (0...Self.latestRepresentableUnlockTimestamp).contains(
+              unlocksAt.timeIntervalSince1970),
+          "\(item).unlocksAt"
+        )
+      }
       try require(
         asset.explorerUrl.isEmpty || isSafeCanonicalWebURL(asset.explorerUrl),
         "\(item).explorerUrl"
@@ -422,7 +438,14 @@ public enum VaultDocumentSemanticValidator {
           asset.family == .xrp && asset.exchangeId == nil && asset.exchangeProvider == nil,
           "\(item).family"
         )
-      case .staked, .rewards:
+      case .staked, .unbonding:
+        // Cosmos delegations and unbonding entries, and Solana stake accounts.
+        try require(
+          (asset.family == .cosmos || asset.family == .solana)
+            && asset.exchangeId == nil && asset.exchangeProvider == nil,
+          "\(item).family"
+        )
+      case .rewards:
         try require(
           asset.family == .cosmos && asset.exchangeId == nil && asset.exchangeProvider == nil,
           "\(item).family"
