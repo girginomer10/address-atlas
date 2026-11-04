@@ -27,7 +27,7 @@ final class ScannerWorkflowTests: XCTestCase {
     XCTAssertEqual(holding.valueUsd, 0)
     XCTAssertNil(holding.change24h)
     XCTAssertEqual(result.totalUsd, 0)
-    XCTAssertTrue(result.warnings.contains { $0.contains("is too large to show") })
+    XCTAssertTrue(result.warnings.contains { $0.contains("is too large to calculate") })
     XCTAssertNoThrow(try JSONEncoder.addressAtlas.encode(result))
   }
 
@@ -87,7 +87,7 @@ final class ScannerWorkflowTests: XCTestCase {
 
     XCTAssertFalse(result.holdings.contains { $0.symbol == "USDC" })
     XCTAssertTrue(
-      result.warnings.contains { $0.contains("invalid parsed data") },
+      result.warnings.contains { $0.contains("token accounts had data Address Atlas couldn't read") },
       "Expected invalid SPL data warning, got: \(result.warnings)"
     )
     XCTAssertTrue(result.totalUsd.isFinite)
@@ -142,12 +142,12 @@ final class ScannerWorkflowTests: XCTestCase {
     XCTAssertEqual(requests.snapshot().count, 1)
     XCTAssertTrue(
       result.warnings.contains(where: {
-        $0.contains("Stargaze has shut down") && $0.contains("was kept but not scanned")
+        $0.contains("Stargaze has shut down") && $0.contains("still saved but isn't scanned")
       }))
     XCTAssertTrue(
       result.warnings.contains(where: {
-        $0.contains("references retired Stargaze")
-          && $0.contains("saved record was kept but not scanned")
+        $0.contains("is on Stargaze, which has shut down")
+          && $0.contains("still saved but isn't scanned")
       }))
   }
 
@@ -194,7 +194,7 @@ final class ScannerWorkflowTests: XCTestCase {
       }))
     XCTAssertTrue(
       result.warnings.contains(where: {
-        $0.contains("rate-limiting requests") && $0.contains("Token balances were skipped")
+        $0.contains("limiting requests") && $0.contains("Token balances are missing")
       }))
   }
 
@@ -246,7 +246,7 @@ final class ScannerWorkflowTests: XCTestCase {
       }))
     XCTAssertTrue(
       result.warnings.contains(where: {
-        $0.contains("temporarily unavailable") && $0.contains("Token balances were skipped")
+        $0.contains("temporarily unavailable") && $0.contains("Token balances are missing")
       }))
   }
 
@@ -285,9 +285,9 @@ final class ScannerWorkflowTests: XCTestCase {
 
     XCTAssertFalse(result.holdings.contains(where: { $0.symbol == "USDC" }))
     XCTAssertTrue(
-      result.warnings.contains(where: { $0.contains("Native SOL") && $0.contains("invalid") }))
+      result.warnings.contains(where: { $0.contains("SOL balance is missing") && $0.contains("couldn't read") }))
     XCTAssertTrue(
-      result.warnings.contains(where: { $0.contains("USDC") && $0.contains("invalid") }))
+      result.warnings.contains(where: { $0.contains("USDC") && $0.contains("couldn't read") }))
   }
 
   func testNegativeBitcoinProviderStatisticsProduceVisibleWarning() async throws {
@@ -305,7 +305,7 @@ final class ScannerWorkflowTests: XCTestCase {
     let result = try await scanner.scan(addresses: "1BoatSLRHtKNngkdXEeobR76b53LETtpyT")
 
     XCTAssertFalse(result.holdings.contains(where: { $0.symbol == "BTC" }))
-    XCTAssertTrue(result.warnings.contains(where: { $0.contains("invalid statistics") }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("balance details Address Atlas couldn't read") }))
   }
 
   func testBitcoinRejectsBalanceForDifferentEchoedAddress() async throws {
@@ -360,7 +360,7 @@ final class ScannerWorkflowTests: XCTestCase {
 
     XCTAssertFalse(result.holdings.contains(where: { $0.symbol == "ATOM" }))
     XCTAssertTrue(
-      result.warnings.contains(where: { $0.contains("Liquid balance could not be read") }))
+      result.warnings.contains(where: { $0.contains("Couldn't read the available balance") }))
   }
 
   func testConcurrentCosmosJobsShareOneVerifiedSnapshotAnchor() async throws {
@@ -542,7 +542,7 @@ final class ScannerWorkflowTests: XCTestCase {
     )
 
     XCTAssertEqual(requests.snapshot().count, 2)
-    XCTAssertTrue(result.warnings.contains(where: { $0.contains("repeated key") }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("repeated a page marker") }))
   }
 
   func testCosmosRequiresAndPinsOneResponseHeightAcrossParts() async throws {
@@ -590,11 +590,11 @@ final class ScannerWorkflowTests: XCTestCase {
 
     XCTAssertEqual(result.holdings.first(where: { $0.source == .native })?.amount, 1)
     XCTAssertFalse(result.holdings.contains(where: { $0.source == .staked }))
-    XCTAssertTrue(result.warnings.contains(where: { $0.contains("Delegations could not be read") }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("Couldn't read delegations") }))
     // The unbonding request shares the staking route above, so it too sees the
     // answer from the wrong height and reports its own failure.
     XCTAssertTrue(
-      result.warnings.contains(where: { $0.contains("Unbonding delegations could not be read") }))
+      result.warnings.contains(where: { $0.contains("Couldn't read unbonding delegations") }))
     // latest block, balances, delegations, rewards, unbonding delegations
     XCTAssertEqual(requests.snapshot().count, 5)
   }
@@ -633,7 +633,7 @@ final class ScannerWorkflowTests: XCTestCase {
 
     XCTAssertTrue(result.holdings.isEmpty)
     XCTAssertEqual(requests.snapshot().count, 2)
-    XCTAssertTrue(result.warnings.contains(where: { $0.contains("consistent snapshot from the network") }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("consistent set of balances from the network") }))
   }
 
   func testCosmosAcceptsGrpcMetadataHeightAndPinsEveryFallbackPart() async throws {
@@ -682,8 +682,8 @@ final class ScannerWorkflowTests: XCTestCase {
     XCTAssertEqual(result.holdings.first(where: { $0.source == .native })?.amount, 1)
     // latest block, balances, delegations, rewards, unbonding delegations
     XCTAssertEqual(requests.snapshot().count, 5)
-    XCTAssertFalse(result.warnings.contains(where: { $0.contains("consistent snapshot from the network") }))
-    XCTAssertFalse(result.warnings.contains(where: { $0.contains("could not be read") }))
+    XCTAssertFalse(result.warnings.contains(where: { $0.contains("consistent set of balances from the network") }))
+    XCTAssertFalse(result.warnings.contains(where: { $0.contains("Couldn't read") }))
   }
 
   func testCosmosSkipsBoundPartsThatOmitBothHeightHeaders() async throws {
@@ -718,8 +718,8 @@ final class ScannerWorkflowTests: XCTestCase {
     XCTAssertEqual(result.holdings.first(where: { $0.source == .native })?.amount, 1)
     XCTAssertFalse(result.holdings.contains(where: { $0.source == .staked }))
     XCTAssertFalse(result.holdings.contains(where: { $0.source == .rewards }))
-    XCTAssertTrue(result.warnings.contains(where: { $0.contains("Delegations could not be read") }))
-    XCTAssertTrue(result.warnings.contains(where: { $0.contains("Rewards could not be read") }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("Couldn't read delegations") }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("Couldn't read rewards") }))
   }
 
   func testCosmosRejectsLatestBlockFromTheWrongNetwork() async throws {
@@ -744,7 +744,7 @@ final class ScannerWorkflowTests: XCTestCase {
 
     XCTAssertTrue(result.holdings.isEmpty)
     XCTAssertEqual(requests.snapshot().count, 1)
-    XCTAssertTrue(result.warnings.contains(where: { $0.contains("consistent snapshot from the network") }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("consistent set of balances from the network") }))
   }
 
   func testCosmosDelegationPaginationDeduplicatesAndRejectsConflicts() async throws {
@@ -799,9 +799,9 @@ final class ScannerWorkflowTests: XCTestCase {
     let result = try await scanner.scan(addresses: address)
 
     XCTAssertEqual(result.holdings.first(where: { $0.source == .staked })?.amount, 1)
-    XCTAssertTrue(result.warnings.contains(where: { $0.contains("identical delegation") }))
-    XCTAssertTrue(result.warnings.contains(where: { $0.contains("conflicting delegation") }))
-    XCTAssertTrue(result.warnings.contains(where: { $0.contains("validator identity") }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("same delegation twice") }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("conflicting data for") }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("no valid validator") }))
   }
 
   func testCosmosRewardRecordsDeduplicateOrQuarantineByDenomination() async throws {
@@ -812,14 +812,14 @@ final class ScannerWorkflowTests: XCTestCase {
         [{"denom":"uatom","amount":"1000000"},{"denom":"uatom","amount":"1000000"}]
         """,
         1,
-        "Cosmos repeated one identical reward-balance record; the duplicate was skipped."
+        "The server listed the same reward twice. It was counted once."
       ),
       (
         """
         [{"denom":"uatom","amount":"1000000"},{"denom":"uatom","amount":"2000000"}]
         """,
         nil,
-        "Cosmos returned conflicting reward-balance records for 1 denomination(s); every conflicting version was skipped."
+        "The server sent conflicting rewards for one coin, so that reward is left out of this scan. Scan again later."
       ),
     ]
 
@@ -861,7 +861,7 @@ final class ScannerWorkflowTests: XCTestCase {
         result.warnings.contains(where: { $0.contains(scenario.expectedWarning) }),
         "Expected \(scenario.expectedWarning), got \(result.warnings)"
       )
-      XCTAssertEqual(result.warnings.filter { $0.contains("reward-balance record") }.count, 1)
+      XCTAssertEqual(result.warnings.filter { $0.contains("same reward twice") || $0.contains("conflicting rewards") }.count, 1)
       XCTAssertFalse(
         result.warnings.contains(where: { $0.contains(CosmosScanPart.rewards.failureWarning) }))
     }
@@ -876,14 +876,14 @@ final class ScannerWorkflowTests: XCTestCase {
         [{"\(contract)":"1250000"},{"\(contract)":"1250000"}]
         """,
         1.25,
-        "TRON repeated one identical TRC-20 contract balance record; the duplicate was skipped to avoid double-counting."
+        "The server listed the same TRC-20 balance twice. It was counted once."
       ),
       (
         """
         [{"\(contract)":"1250000"},{"\(contract)":"2500000"}]
         """,
         nil,
-        "TRON returned conflicting TRC-20 balance records for USDT; every conflicting version was skipped."
+        "The server sent conflicting TRC-20 balances for USDT, so those balances are left out of this scan. Scan again later."
       ),
     ]
 
@@ -929,9 +929,9 @@ final class ScannerWorkflowTests: XCTestCase {
 
     XCTAssertFalse(result.holdings.contains(where: { $0.symbol == "USDT" }))
     XCTAssertTrue(
-      result.warnings.contains(where: { $0.contains("Native TRX") && $0.contains("invalid") }))
+      result.warnings.contains(where: { $0.contains("TRX balance") && $0.contains("couldn't read") }))
     XCTAssertTrue(
-      result.warnings.contains(where: { $0.contains("USDT") && $0.contains("invalid") }))
+      result.warnings.contains(where: { $0.contains("USDT") && $0.contains("couldn't read") }))
   }
 
   func testTronScanPublishesFragmentBasedExplorerURL() async throws {
@@ -958,14 +958,14 @@ final class ScannerWorkflowTests: XCTestCase {
   func testTronRejectsFailureWrongAccountAndMultipleRows() async throws {
     let requestedAddress = "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7"
     let scenarios: [(json: String, expectedWarning: String)] = [
-      (#"{"success":false,"data":[]}"#, "did not report success"),
+      (#"{"success":false,"data":[]}"#, "didn't confirm the TRON account lookup"),
       (
         #"{"success":true,"data":[{"address":"410000000000000000000000000000000000000000","balance":1000000}]}"#,
-        "different account"
+        "different TRON account"
       ),
       (
         #"{"success":true,"data":[{"address":"4174472e7d35395a6b5add427eecb7f4b62ad2b071","balance":1000000},{"address":"4174472e7d35395a6b5add427eecb7f4b62ad2b071","balance":1000000}]}"#,
-        "multiple account records"
+        "several records for one TRON account"
       ),
     ]
 
@@ -1004,7 +1004,7 @@ final class ScannerWorkflowTests: XCTestCase {
     XCTAssertEqual(result.holdings.first?.amount, 1.5)
     XCTAssertEqual(result.holdings.first?.priceUsd, 0)
     XCTAssertTrue(
-      result.warnings.contains(where: { $0.contains("Prices are temporarily unavailable") }))
+      result.warnings.contains(where: { $0.contains("Prices are unavailable right now") }))
   }
 
   func testXrpAccountInfoAndTrustLinePaginationStayPinnedToOneValidatedLedger() async throws {
@@ -1115,7 +1115,7 @@ final class ScannerWorkflowTests: XCTestCase {
     XCTAssertEqual(result.holdings.map(\.symbol), ["BTC"])
     XCTAssertTrue(
       result.warnings.contains(where: {
-        $0.contains("overall scan") && $0.contains("completed results")
+        $0.contains("The scan stopped after") && $0.contains("were kept")
       }))
   }
 
@@ -1197,7 +1197,7 @@ final class ScannerWorkflowTests: XCTestCase {
     XCTAssertEqual(result.connections[0].credentialScopeAssurance, .verifiedReadOnly)
     XCTAssertEqual(result.connections[1].status, .empty)
     XCTAssertNil(result.connections[1].credentialScopeAssurance)
-    XCTAssertTrue(result.warnings.contains(where: { $0.contains("overall exchange scan") }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("The exchange scan stopped after") }))
   }
 
   func testBoundedMapPreservesOrderAndConcurrencyLimit() async throws {
@@ -1230,7 +1230,7 @@ final class ScannerWorkflowTests: XCTestCase {
     let hugeDeadlineResult = try await hugeDeadlineScanner.scan(
       addresses: "1BoatSLRHtKNngkdXEeobR76b53LETtpyT"
     )
-    XCTAssertTrue(hugeDeadlineResult.warnings.contains { $0.contains("overall scan reached") })
+    XCTAssertTrue(hugeDeadlineResult.warnings.contains { $0.contains("The scan stopped after") })
 
     do {
       _ = try await withWorkflowTimeout(seconds: 0.02) {

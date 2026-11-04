@@ -77,19 +77,19 @@ public enum PendingVaultUploadError: Error, Equatable, LocalizedError, Sendable 
   public var errorDescription: String? {
     switch self {
     case .invalidOperation:
-      "The saved upload recovery record is invalid. The local vault was not changed."
+      "The record of the unfinished upload isn't valid. Your saved portfolio wasn't changed."
     case .operationAlreadyPending:
-      "Another encrypted vault upload is already pending recovery."
+      "Another upload is already waiting for recovery."
     case .operationMissing:
-      "The pending upload recovery record is missing. The local vault was not changed."
+      "The record of the unfinished upload is missing. Your saved portfolio wasn't changed."
     case .operationMismatch:
-      "The pending upload recovery record changed unexpectedly. The local vault was not changed."
+      "The record of the unfinished upload changed unexpectedly. Your saved portfolio wasn't changed."
     case .quarantinedOperation:
-      "The encrypted upload recovery record is damaged and has been quarantined. The primary local vault remains available read-only."
+      "The record of the unfinished upload is damaged and was set aside. Your saved portfolio is still available, but read-only."
     case .localDocumentChanged:
-      "The local vault changed while an upload was pending. Recovery stopped without overwriting it."
+      "Your portfolio changed while an upload was unfinished. Recovery stopped, and nothing was overwritten."
     case .remoteConflict:
-      "The remote vault diverged while an upload was pending. Recovery stopped without overwriting either vault."
+      "The copy on the sync server changed while an upload was unfinished. Recovery stopped, and neither copy was overwritten."
     }
   }
 }

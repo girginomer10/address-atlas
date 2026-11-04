@@ -42,15 +42,15 @@ public enum VaultSyncCodecError: Error, Equatable, LocalizedError {
   public var errorDescription: String? {
     switch self {
     case .invalidAccount:
-      "Sync account identity is missing or invalid. Sign in again."
+      "The sync account is missing or isn't valid. Sign in again."
     case .invalidVersion:
-      "Sync snapshot version is invalid."
+      "The synced copy has an invalid version number. Try syncing again."
     case .invalidSnapshot:
-      "Sync snapshot failed integrity validation."
+      "The synced copy didn't pass its integrity check, so it wasn't used."
     case .accountMismatch:
-      "Sync snapshot belongs to a different account."
+      "The synced copy belongs to a different sync account. Check which account you're signed in to."
     case .legacyMetadataMismatch:
-      "Legacy sync snapshot metadata is inconsistent and cannot be migrated safely."
+      "The synced copy from an older version of Address Atlas is inconsistent and can't be upgraded safely."
     }
   }
 }
@@ -67,7 +67,7 @@ public struct VaultSyncSnapshotTooLargeError: Error, Equatable, LocalizedError, 
   }
 
   public var errorDescription: String? {
-    "Encrypted sync snapshot is too large (\(actualByteCount) bytes; maximum \(maximumByteCount)). Remove older scan history or reduce vault data before syncing."
+    "Your portfolio is too large to sync (\(actualByteCount) bytes, limit \(maximumByteCount)). Remove older snapshots or other data, then sync again."
   }
 }
 
@@ -519,7 +519,7 @@ public actor ZeroKnowledgeSyncClient {
       throw Self.error(statusCode: response.statusCode, data: data)
     }
     guard data.count <= Self.maximumWireSnapshotByteCount else {
-      throw SyncClientError.requestFailed(413, "Sync snapshot response is too large.")
+      throw SyncClientError.requestFailed(413, "The synced copy from the server is too large to download.")
     }
     return try JSONDecoder.addressAtlas.decode(RemoteVaultSnapshot.self, from: data)
   }
@@ -535,7 +535,7 @@ public actor ZeroKnowledgeSyncClient {
     }
     let body = try JSONEncoder.addressAtlas.encode(snapshot)
     guard body.count <= Self.maximumWireSnapshotByteCount else {
-      throw SyncClientError.requestFailed(413, "Sync snapshot is too large.")
+      throw SyncClientError.requestFailed(413, "Your portfolio is too large to sync. Remove older snapshots or other data, then sync again.")
     }
     request.httpBody = body
     let (data, response) = try await http.data(for: request)
@@ -557,7 +557,7 @@ public actor ZeroKnowledgeSyncClient {
   /// configuration or user-provided text.
   public func deleteAccount(idempotencyKey: String) async throws {
     guard AccountDeletionIdempotencyKey.normalized(idempotencyKey) != nil else {
-      throw SyncClientError.requestFailed(400, "Account deletion operation is invalid.")
+      throw SyncClientError.requestFailed(400, "The account deletion request isn't valid. Try again.")
     }
     try await performLifecycleDelete(
       path: "account",
@@ -574,7 +574,7 @@ public actor ZeroKnowledgeSyncClient {
     requiresBearer: Bool = true
   ) async throws {
     guard !requiresBearer || bearerToken != nil else {
-      throw SyncClientError.authenticationRequired("Authentication required.")
+      throw SyncClientError.authenticationRequired("Sign in to your sync account, then try again.")
     }
     var request = URLRequest(url: baseURL.appending(path: path))
     request.timeoutInterval = 30
@@ -600,7 +600,7 @@ public actor ZeroKnowledgeSyncClient {
       ),
       acknowledgement.ok
     else {
-      throw SyncClientError.requestFailed(502, "Sync server returned an invalid response.")
+      throw SyncClientError.requestFailed(502, "The sync server sent a response Address Atlas couldn't read. Try again later.")
     }
   }
 

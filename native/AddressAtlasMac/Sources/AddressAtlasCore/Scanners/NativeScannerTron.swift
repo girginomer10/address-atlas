@@ -12,7 +12,7 @@ extension NativeScanner {
     struct BlockNumberRequest: Encodable { var num: Int }
     struct GenesisBlockResponse: Decodable { var blockID: String? }
     guard case .tronGenesisBlockID(let expectedGenesisBlockID) = chain.networkIdentity else {
-      throw Self.messageError(domain: "TRON", message: "TRON network identity is missing.")
+      throw Self.messageError(domain: "TRON", message: "Couldn't confirm the TRON network, so balances are missing from this scan. Check the server settings in Settings.")
     }
     let proofCache = networkIdentityProofs ?? ChainNetworkValueCache<Void>()
     try await proofCache.prove(
@@ -27,19 +27,19 @@ extension NativeScanner {
       )
       guard genesis.blockID == expectedGenesisBlockID else {
         throw Self.messageError(
-          domain: "TRON", message: "TRON endpoint returned the wrong network identity.")
+          domain: "TRON", message: "The server isn't on the TRON network, so balances are missing from this scan. Check the server settings in Settings.")
       }
     }
     let url = rest.appending(path: "v1/accounts/\(address)")
     let response = try await http.get(url, as: TronAccountResponse.self)
     guard response.success == true else {
       throw Self.messageError(
-        domain: "TRON", message: "TRON account lookup did not report success.")
+        domain: "TRON", message: "The server didn't confirm the TRON account lookup, so balances are missing from this scan. Scan again later.")
     }
     let accounts = response.data ?? []
     guard accounts.count <= 1 else {
       throw Self.messageError(
-        domain: "TRON", message: "TRON account lookup returned multiple account records.")
+        domain: "TRON", message: "The server sent several records for one TRON account, so balances are missing from this scan. Scan again later.")
     }
     let account = accounts.first
     if let account {
@@ -47,7 +47,7 @@ extension NativeScanner {
         account.address?.lowercased() == expectedAddress
       else {
         throw Self.messageError(
-          domain: "TRON", message: "TRON account lookup returned a different account.")
+          domain: "TRON", message: "The server's reply was for a different TRON account, so balances are missing from this scan. Scan again later.")
       }
     }
     let rawNativeBalance = account?.balance ?? 0
@@ -62,7 +62,7 @@ extension NativeScanner {
       )
     } else {
       warnings.append(
-        "Native TRX balance returned an invalid amount; TRC-20 balances may still be available.")
+        "The server sent a TRX balance Address Atlas couldn't read, so it's missing from this scan. TRC-20 token balances may still be included.")
     }
 
     let tokenScan = Self.parseTronTrc20BalanceResult(account?.trc20 ?? [], tokens: tokens)
@@ -74,7 +74,7 @@ extension NativeScanner {
       })
     if !tokenScan.invalidSymbols.isEmpty {
       warnings.append(
-        "TRC-20 token balance data was invalid for \(Self.formattedSymbols(tokenScan.invalidSymbols)); balances may be incomplete."
+        "Address Atlas couldn't read the TRC-20 balance data for \(Self.formattedSymbols(tokenScan.invalidSymbols)), so those balances may be missing from this scan."
       )
     }
     warnings.append(contentsOf: tokenScan.warnings)
@@ -122,13 +122,13 @@ extension NativeScanner {
     if identicalDuplicateCount > 0 {
       result.warnings.append(
         identicalDuplicateCount == 1
-          ? "TRON repeated one identical TRC-20 contract balance record; the duplicate was skipped to avoid double-counting."
-          : "TRON repeated \(identicalDuplicateCount) identical TRC-20 contract balance records; the duplicates were skipped to avoid double-counting."
+          ? "The server listed the same TRC-20 balance twice. It was counted once."
+          : "The server listed \(identicalDuplicateCount) TRC-20 balances more than once. Each was counted once."
       )
     }
     if !conflictingSymbols.isEmpty {
       result.warnings.append(
-        "TRON returned conflicting TRC-20 balance records for \(Self.formattedSymbols(conflictingSymbols)); every conflicting version was skipped."
+        "The server sent conflicting TRC-20 balances for \(Self.formattedSymbols(conflictingSymbols)), so those balances are left out of this scan. Scan again later."
       )
     }
     return result

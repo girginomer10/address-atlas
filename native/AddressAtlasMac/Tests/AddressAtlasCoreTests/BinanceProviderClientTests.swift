@@ -33,7 +33,7 @@ final class BinanceProviderClientTests: XCTestCase {
 
     XCTAssertEqual(balance.total, ["ETH": 3])
     XCTAssertEqual(balance.free, ["ETH": 3])
-    XCTAssertTrue(balance.warnings.contains { $0.contains("2 account balance record") })
+    XCTAssertTrue(balance.warnings.contains { $0.contains("2 Binance balances") })
     XCTAssertFalse(balance.warnings.joined().contains(oversizedSymbol))
     XCTAssertFalse(balance.warnings.joined().contains("\n"))
   }
@@ -65,8 +65,8 @@ final class BinanceProviderClientTests: XCTestCase {
     XCTAssertTrue(balance.total.isEmpty)
     XCTAssertTrue(balance.free.isEmpty)
     XCTAssertEqual(balance.warnings.count, 2)
-    XCTAssertTrue(balance.warnings.contains { $0.contains("5000 account balance record") })
-    XCTAssertTrue(balance.warnings.contains { $0.contains("ETH") && $0.contains("numeric range") })
+    XCTAssertTrue(balance.warnings.contains { $0.contains("5000 Binance balances") })
+    XCTAssertTrue(balance.warnings.contains { $0.contains("ETH") && $0.contains("larger than Address Atlas can add up") })
     XCTAssertTrue(
       balance.warnings.allSatisfy {
         $0.unicodeScalars.count <= ScanWarningPolicy.maximumScalarCount
@@ -92,7 +92,7 @@ final class BinanceProviderClientTests: XCTestCase {
 
     XCTAssertEqual(balance.total, ["BTC": 3, "ETH": 3])
     XCTAssertEqual(balance.free, ["BTC": 1, "ETH": 3])
-    XCTAssertTrue(balance.warnings.contains(where: { $0.contains("one identical") }))
+    XCTAssertTrue(balance.warnings.contains(where: { $0.contains("same balance twice") }))
   }
 
   func testBinanceRejectsEveryConflictingCanonicalBalanceVersion() async throws {

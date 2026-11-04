@@ -164,13 +164,13 @@ public struct NativeExchangeBalanceClient: Sendable {
       return .manualVerificationRequired(
         provider: .coinbase,
         guidance:
-          "Coinbase key scope could not be verified automatically. Confirm the CDP key is restricted to view/read access before saving."
+          "Address Atlas can't check this Coinbase key's permissions. Make sure the CDP key is limited to view (read) access."
       )
     case .kraken:
       return .manualVerificationRequired(
         provider: .kraken,
         guidance:
-          "Kraken key scope could not be verified automatically. Confirm only Query Funds permission is enabled and use this key on one \(PlatformCopy.deviceNoun) only."
+          "Address Atlas can't check this Kraken key's permissions. Make sure only Query Funds is turned on, and use this key on one \(PlatformCopy.deviceNoun) only."
       )
     }
   }
@@ -279,29 +279,33 @@ public struct NativeExchangeBalanceClient: Sendable {
     }
     if invalidSymbolCount > 0 {
       warnings.append(
-        "Binance returned \(invalidSymbolCount) account balance record(s) with an invalid asset code; they were skipped."
+        invalidSymbolCount == 1
+          ? "1 Binance balance has an invalid asset code, so it's left out of this scan."
+          : "\(invalidSymbolCount) Binance balances have an invalid asset code, so they're left out of this scan."
       )
     }
     if invalidAmountCount > 0 {
       warnings.append(
-        "Binance returned \(invalidAmountCount) account balance record(s) with invalid numeric amounts; they were skipped."
+        invalidAmountCount == 1
+          ? "1 Binance balance has an invalid amount, so it's left out of this scan."
+          : "\(invalidAmountCount) Binance balances have an invalid amount, so they're left out of this scan."
       )
     }
     if identicalDuplicateCount > 0 {
       warnings.append(
         identicalDuplicateCount == 1
-          ? "Binance repeated one identical account balance record; the duplicate was skipped."
-          : "Binance repeated \(identicalDuplicateCount) identical account balance records; the duplicates were skipped."
+          ? "Binance listed the same balance twice. It was counted once."
+          : "Binance listed \(identicalDuplicateCount) balances more than once. Each was counted once."
       )
     }
     if !conflictingSymbols.isEmpty {
       warnings.append(
-        "Binance returned conflicting balance records for \(ExchangeBalanceNormalizer.formattedSymbols(Array(conflictingSymbols))); every conflicting version was skipped."
+        "Binance sent conflicting balances for \(ExchangeBalanceNormalizer.formattedSymbols(Array(conflictingSymbols))), so those balances are left out of this scan. Scan again later."
       )
     }
     if !accumulator.overflowedSymbols.isEmpty {
       warnings.append(
-        "Binance balances exceeded the supported numeric range for \(ExchangeBalanceNormalizer.formattedSymbols(Array(accumulator.overflowedSymbols))); those assets were skipped."
+        "The Binance balances of \(ExchangeBalanceNormalizer.formattedSymbols(Array(accumulator.overflowedSymbols))) are larger than Address Atlas can add up, so they're left out of this scan."
       )
     }
     return ExchangeBalance(
@@ -315,7 +319,7 @@ public struct NativeExchangeBalanceClient: Sendable {
     -> ExchangeBalance
   {
     guard let host = Self.jwtHost(coinbaseBaseURL) else {
-      throw ExchangeClientError.invalidResponse("Coinbase endpoint has no host.")
+      throw ExchangeClientError.invalidResponse("The Coinbase server address isn't valid. Check the server settings in Settings.")
     }
     var accumulator = ExchangeBalanceAccumulator()
     var warnings: [String] = []
@@ -350,7 +354,7 @@ public struct NativeExchangeBalanceClient: Sendable {
         try throwIfCancellation(error)
         guard page > 1 else { throw error }
         warnings.append(
-          "Later Coinbase account pages could not be read; balances from completed pages were kept."
+          "Couldn't read later pages of Coinbase accounts, so some balances may be missing from this scan. Scan again later."
         )
         break
       }
@@ -382,7 +386,7 @@ public struct NativeExchangeBalanceClient: Sendable {
       let next = response.cursor?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
       guard !next.isEmpty, seenCursors.insert(next).inserted else {
         warnings.append(
-          "Coinbase returned a missing or repeated pagination cursor; balances from completed pages were kept."
+          "Coinbase sent a missing or repeated page marker, so later accounts may be missing from this scan. Scan again later."
         )
         break
       }
@@ -424,32 +428,42 @@ public struct NativeExchangeBalanceClient: Sendable {
     }
     if invalidAccountIdentifierCount > 0 {
       warnings.append(
-        "Coinbase returned \(invalidAccountIdentifierCount) account record(s) with a missing or malformed UUID; they were skipped to avoid corrupting totals."
+        invalidAccountIdentifierCount == 1
+          ? "1 Coinbase account has a missing or invalid ID, so it's left out of this scan."
+          : "\(invalidAccountIdentifierCount) Coinbase accounts have a missing or invalid ID, so they're left out of this scan."
       )
     }
     if exactDuplicateAccountRecordCount > 0 {
       warnings.append(
-        "Coinbase repeated \(exactDuplicateAccountRecordCount) identical account record(s) in paginated results; duplicates were skipped to avoid double-counting."
+        exactDuplicateAccountRecordCount == 1
+          ? "Coinbase listed one account twice. It was counted once."
+          : "Coinbase listed \(exactDuplicateAccountRecordCount) accounts more than once. Each was counted once."
       )
     }
     if !conflictingAccountIdentifiers.isEmpty {
       warnings.append(
-        "Coinbase returned conflicting data for \(conflictingAccountIdentifiers.count) repeated account UUID(s); every version of those accounts was skipped to keep totals deterministic."
+        conflictingAccountIdentifiers.count == 1
+          ? "Coinbase sent conflicting data for one account, so it's left out of this scan. Scan again later."
+          : "Coinbase sent conflicting data for \(conflictingAccountIdentifiers.count) accounts, so they're left out of this scan. Scan again later."
       )
     }
     if invalidSymbolCount > 0 {
       warnings.append(
-        "Coinbase returned \(invalidSymbolCount) account record(s) with an invalid asset code; they were skipped."
+        invalidSymbolCount == 1
+          ? "1 Coinbase account has an invalid asset code, so it's left out of this scan."
+          : "\(invalidSymbolCount) Coinbase accounts have an invalid asset code, so they're left out of this scan."
       )
     }
     if invalidAmountCount > 0 {
       warnings.append(
-        "Coinbase returned \(invalidAmountCount) account record(s) with invalid numeric amounts; they were skipped."
+        invalidAmountCount == 1
+          ? "1 Coinbase account has an invalid amount, so it's left out of this scan."
+          : "\(invalidAmountCount) Coinbase accounts have an invalid amount, so they're left out of this scan."
       )
     }
     if !accumulator.overflowedSymbols.isEmpty {
       warnings.append(
-        "Coinbase balances exceeded the supported numeric range for \(ExchangeBalanceNormalizer.formattedSymbols(Array(accumulator.overflowedSymbols))); those assets were skipped."
+        "The Coinbase balances of \(ExchangeBalanceNormalizer.formattedSymbols(Array(accumulator.overflowedSymbols))) are larger than Address Atlas can add up, so they're left out of this scan."
       )
     }
     return ExchangeBalance(
@@ -492,7 +506,7 @@ public struct NativeExchangeBalanceClient: Sendable {
     }
     guard let rawBalances = response.result else {
       throw ExchangeClientError.invalidResponse(
-        "Kraken balance response was missing its result object.")
+        "Kraken's reply didn't include a balance list.")
     }
 
     var warnings: [String] = []
@@ -502,7 +516,7 @@ public struct NativeExchangeBalanceClient: Sendable {
     } catch {
       try throwIfCancellation(error)
       aliases = [:]
-      warnings.append("Kraken asset metadata was unavailable; legacy symbol fallbacks were used.")
+      warnings.append("Couldn't load Kraken's asset list, so some coins may use older symbols.")
     }
 
     var accumulator = ExchangeBalanceAccumulator()
@@ -537,17 +551,21 @@ public struct NativeExchangeBalanceClient: Sendable {
     }
     if invalidSymbolCount > 0 {
       warnings.append(
-        "Kraken returned \(invalidSymbolCount) balance record(s) with an invalid asset code; they were skipped."
+        invalidSymbolCount == 1
+          ? "1 Kraken balance has an invalid asset code, so it's left out of this scan."
+          : "\(invalidSymbolCount) Kraken balances have an invalid asset code, so they're left out of this scan."
       )
     }
     if invalidAmountCount > 0 {
       warnings.append(
-        "Kraken returned \(invalidAmountCount) balance record(s) with invalid numeric amounts; they were skipped."
+        invalidAmountCount == 1
+          ? "1 Kraken balance has an invalid amount, so it's left out of this scan."
+          : "\(invalidAmountCount) Kraken balances have an invalid amount, so they're left out of this scan."
       )
     }
     if !accumulator.overflowedSymbols.isEmpty {
       warnings.append(
-        "Kraken balances exceeded the supported numeric range for \(ExchangeBalanceNormalizer.formattedSymbols(Array(accumulator.overflowedSymbols))); those assets were skipped."
+        "The Kraken balances of \(ExchangeBalanceNormalizer.formattedSymbols(Array(accumulator.overflowedSymbols))) are larger than Address Atlas can add up, so they're left out of this scan."
       )
     }
     return ExchangeBalance(

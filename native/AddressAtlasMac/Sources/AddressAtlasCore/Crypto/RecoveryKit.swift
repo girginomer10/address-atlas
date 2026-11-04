@@ -12,15 +12,15 @@ public enum RecoveryKitError: Error, Equatable, LocalizedError {
   public var errorDescription: String? {
     switch self {
     case .invalidCode:
-      "Recovery code is invalid."
+      "That recovery code isn't valid. Check it and try again."
     case .invalidDocument:
-      "Recovery file is invalid."
+      "That recovery file isn't valid. Choose the recovery file Address Atlas saved."
     case .fileTooLarge:
-      "Recovery file is too large."
+      "That file is too large to be a recovery file. Choose the recovery file Address Atlas saved."
     case .checksumMismatch:
-      "Recovery file checksum does not match."
+      "The recovery file is damaged or was changed. Use the original file."
     case .invalidVaultKey:
-      "This recovery file doesn't contain a valid encryption key."
+      "That recovery file doesn't contain a usable encryption key."
     }
   }
 }

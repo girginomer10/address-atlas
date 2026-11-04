@@ -34,7 +34,7 @@ public enum PriceClientError: Error, Equatable, LocalizedError, Sendable {
   public var errorDescription: String? {
     switch self {
     case .requestFailed(let message):
-      return "Price lookup failed: \(message)"
+      return "Couldn't get prices. \(message)"
     }
   }
 }
@@ -46,9 +46,9 @@ public enum FiatRateError: Error, Equatable, LocalizedError, Sendable {
   public var errorDescription: String? {
     switch self {
     case .invalidEndpoint:
-      return "The CoinGecko exchange-rate endpoint is invalid."
+      return "The CoinGecko exchange-rate server address isn't valid. Check the server settings in Settings."
     case .invalidResponse:
-      return "CoinGecko returned invalid BTC-relative fiat rates."
+      return "CoinGecko sent exchange rates Address Atlas couldn't use."
     }
   }
 }
@@ -76,7 +76,7 @@ public struct CoinGeckoPriceClient: PriceProviding {
       do {
         let response: [String: PricePoint] = try await withWorkflowTimeout(seconds: 20) {
           guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
-            throw PriceClientError.requestFailed("The CoinGecko price endpoint is invalid.")
+            throw PriceClientError.requestFailed("The CoinGecko price server address isn't valid. Check the server settings in Settings.")
           }
           components.queryItems = [
             URLQueryItem(name: "ids", value: batch.joined(separator: ",")),
@@ -84,7 +84,7 @@ public struct CoinGeckoPriceClient: PriceProviding {
             URLQueryItem(name: "include_24hr_change", value: "true")
           ]
           guard let url = components.url else {
-            throw PriceClientError.requestFailed("The CoinGecko price endpoint is invalid.")
+            throw PriceClientError.requestFailed("The CoinGecko price server address isn't valid. Check the server settings in Settings.")
           }
           return try await http.get(url, as: [String: PricePoint].self)
         }

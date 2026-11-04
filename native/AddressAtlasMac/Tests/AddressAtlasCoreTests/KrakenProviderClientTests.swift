@@ -37,7 +37,7 @@ final class KrakenProviderClientTests: XCTestCase {
     XCTAssertNil(balance.exactTotal["BTC"])
     XCTAssertNil(balance.total["BTC"])
     XCTAssertEqual(balance.exactTotal["ETH"]?.canonicalString, "2")
-    XCTAssertTrue(balance.warnings.contains { $0.contains("invalid numeric amounts") })
+    XCTAssertTrue(balance.warnings.contains { $0.contains("invalid amount") })
   }
 
   func testKrakenRejectsInvalidBalanceCodesAndMetadataAliasesButPreservesKnownSuffixes()
@@ -80,10 +80,10 @@ final class KrakenProviderClientTests: XCTestCase {
     )
 
     XCTAssertEqual(balance.total, ["ETH": 3])
-    XCTAssertTrue(balance.warnings.contains { $0.contains("metadata was unavailable") })
+    XCTAssertTrue(balance.warnings.contains { $0.contains("asset list") })
     XCTAssertTrue(
       balance.warnings.contains {
-        $0.contains("2 balance record") && $0.contains("invalid asset code")
+        $0.contains("2 Kraken balances") && $0.contains("invalid asset code")
       })
     XCTAssertFalse(balance.warnings.joined().contains(oversizedSymbol))
     XCTAssertFalse(balance.warnings.joined().contains("\n"))
@@ -173,7 +173,7 @@ final class KrakenProviderClientTests: XCTestCase {
     XCTAssertEqual(balance.total, ["FOO": 1])
     XCTAssertNil(balance.total["BTC"])
     XCTAssertNil(balance.total["DOGE"])
-    XCTAssertTrue(balance.warnings.contains { $0.contains("metadata was unavailable") })
+    XCTAssertTrue(balance.warnings.contains { $0.contains("asset list") })
     XCTAssertEqual(
       Set(requests.snapshot().compactMap { $0.url?.path }),
       ["/0/private/Balance", "/0/public/Assets"]

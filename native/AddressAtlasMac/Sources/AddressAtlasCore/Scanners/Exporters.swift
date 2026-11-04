@@ -126,7 +126,7 @@ public struct ShareSafePortfolioGroup: Codable, Equatable, Sendable {
 /// this DTO.
 public struct ShareSafePortfolioReport: Codable, Equatable, Sendable {
   public static let privacyNotice =
-    "This share-safer summary reduces direct exposure, but portfolio composition may still re-identify you. It is not anonymous."
+    "This share-safer summary reduces direct exposure, but your mix of holdings may still identify you. It is not anonymous."
 
   public let exportFormatVersion: Int
   public let privacyNotice: String

@@ -102,26 +102,26 @@ public enum ExchangeClientError: Error, Equatable, LocalizedError, Sendable {
     case .invalidResponse(let message):
       return "The exchange sent an unexpected response: \(message)"
     case .paginationLimit(let provider, let pages):
-      return "\(provider) returned more than \(pages) pages of accounts, so the rest were skipped."
+      return "\(provider) has more than \(pages) pages of accounts, so the rest are missing from this scan."
     case .legacyKrakenCredentialRequiresMigration:
       return
-        "This Kraken connection predates device-safe nonces. Remove it, then add a new read-only Kraken API key created only for this \(PlatformCopy.deviceNoun). Use a different Kraken API key on every device."
+        "This Kraken connection was added before each device needed its own key. Remove it, then add a new read-only Kraken API key made only for this \(PlatformCopy.deviceNoun). Use a different Kraken API key on every device."
     case .krakenCredentialBelongsToAnotherDevice:
       return
-        "This Kraken connection belongs to another \(PlatformCopy.deviceNoun). Add a separate read-only Kraken API key for this \(PlatformCopy.deviceNoun); never reuse one Kraken API key across devices."
+        "This Kraken connection belongs to another \(PlatformCopy.deviceNoun). Add a separate read-only Kraken API key for this \(PlatformCopy.deviceNoun). Never use the same Kraken API key on more than one device."
     case .duplicateKrakenCredential:
       return
-        "The same Kraken API key appears in more than one saved connection. Remove every duplicate, then add exactly one read-only Kraken API key created only for this \(PlatformCopy.deviceNoun). Use a different Kraken API key on every device."
+        "The same Kraken API key is saved in more than one connection. Remove the duplicates, then add one read-only Kraken API key made only for this \(PlatformCopy.deviceNoun). Use a different Kraken API key on every device."
     case .duplicateCredential(let provider):
       return
-        "The same \(provider.label) API key appears in more than one saved connection. Remove every duplicate so this exchange account is scanned exactly once."
+        "The same \(provider.label) API key is saved in more than one connection. Remove the duplicates so this exchange account is scanned only once."
     case .unsafeCredentialScope(let provider, let permissions):
       let summary = permissions.sorted().joined(separator: ", ")
       return
-        "\(provider.label) refused this API key because dangerous permissions are enabled (\(summary)). Create a new balance/read-only key with trading, transfers, margin, futures, options, and withdrawals disabled."
+        "Address Atlas can't use this \(provider.label) API key because it has dangerous permissions turned on (\(summary)). Create a new read-only key with trading, transfers, margin, futures, options and withdrawals turned off."
     case .missingReadPermission(let provider):
       return
-        "\(provider.label) did not confirm balance/read permission for this API key. No credentials were saved."
+        "\(provider.label) didn't confirm that this API key can read balances. No API key was saved."
     }
   }
 
@@ -219,13 +219,13 @@ public struct NativeExchangeScanner: Sendable {
               connection: job.connection,
               warnings: [
                 ProviderErrorSanitizer.sanitize(
-                  "\(job.connection.label): skipped on this \(PlatformCopy.deviceNoun) because this Kraken key belongs to another \(PlatformCopy.deviceNoun)."
+                  "\(job.connection.label): Not scanned on this \(PlatformCopy.deviceNoun), because this Kraken key belongs to another \(PlatformCopy.deviceNoun). Its balances aren't in this scan."
                 )
               ]
             )
           } catch {
             try throwIfCancellation(error)
-            let safeError = ProviderErrorSanitizer.sanitize(error.localizedDescription)
+            let safeError = ProviderErrorSanitizer.sanitize(ProviderErrorSanitizer.description(of: error))
             var failed = job.connection
             if failed.provider == .binance {
               // Binance permissions are mutable outside Address Atlas. Any
@@ -252,7 +252,7 @@ public struct NativeExchangeScanner: Sendable {
       let skipped = max(0, jobs.count - completed.count)
       let deadline = WorkflowTimeoutError(seconds: workflowDeadline).displaySeconds
       globalWarnings.append(
-        "The overall exchange scan reached its \(deadline)-second time limit; \(skipped) exchanges were skipped and completed results were kept."
+        "The exchange scan stopped after \(deadline) seconds. \(skipped == 1 ? "1 exchange wasn't scanned, so its balances are missing" : "\(skipped) exchanges weren't scanned, so their balances are missing"). Results from the others were kept. Scan again later."
       )
     } catch {
       try throwIfCancellation(error)
@@ -269,7 +269,7 @@ public struct NativeExchangeScanner: Sendable {
       }
       return ExchangeConnectionOutcome(
         connection: unfinished,
-        warnings: ["\(job.connection.label): skipped because the scan ran out of time."]
+        warnings: ["\(job.connection.label): Didn't finish before the scan ran out of time, so its balances are missing from this scan. Scan again later."]
       )
     }
 

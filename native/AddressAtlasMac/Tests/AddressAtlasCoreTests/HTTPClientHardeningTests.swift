@@ -13,7 +13,7 @@ final class JSONHTTPClientHardeningTests: XCTestCase {
     let bounded = ScanWarningPolicy.bounded(warnings)
 
     XCTAssertEqual(bounded.count, ScanWarningPolicy.maximumCount)
-    XCTAssertTrue(bounded.last?.contains("additional unique scan warnings were omitted") == true)
+    XCTAssertTrue(bounded.last?.contains("more warnings aren't shown") == true)
     XCTAssertTrue(
       bounded.allSatisfy {
         $0.unicodeScalars.count <= ScanWarningPolicy.maximumScalarCount
@@ -241,11 +241,11 @@ final class JSONHTTPClientHardeningTests: XCTestCase {
       ProviderErrorSanitizer.sanitize(
         "The operation couldn't be completed. (AddressAtlasCore.KeychainVaultKeyStoreError error 0.)"
       ),
-      "Provider request failed."
+      "The request to the server failed."
     )
     XCTAssertEqual(
       ProviderErrorSanitizer.sanitize("Request failed in NSURLErrorDomain code -1009"),
-      "Provider request failed."
+      "The request to the server failed."
     )
   }
 }

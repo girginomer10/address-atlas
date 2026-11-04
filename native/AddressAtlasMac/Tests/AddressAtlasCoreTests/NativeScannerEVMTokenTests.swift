@@ -93,7 +93,7 @@ extension NativeScannerTokenTests {
             )
             return false
           } catch {
-            return error.localizedDescription.contains("wrong network identity")
+            return error.localizedDescription.contains("isn't on the expected network")
           }
         }
       }
@@ -202,7 +202,7 @@ extension NativeScannerTokenTests {
         address: address, chain: ethereum, tokens: [], prices: [:])
       XCTFail("Expected the first workflow's wrong-network proof to fail")
     } catch {
-      XCTAssertTrue(error.localizedDescription.contains("wrong network identity"))
+      XCTAssertTrue(error.localizedDescription.contains("isn't on the expected network"))
     }
     _ = try await scanner.scanEVM(
       address: address, chain: ethereum, tokens: [], prices: [:])
@@ -484,9 +484,9 @@ extension NativeScannerTokenTests {
     XCTAssertEqual(
       result.warnings,
       [
-        "The EVM RPC repeated one identical token response; the duplicate was skipped.",
-        "The EVM RPC returned conflicting responses for one token request; every conflicting version was skipped.",
-        "Couldn't check the balance of TWO; some tokens may be missing.",
+        "The server sent the same token balance twice. It was counted once.",
+        "The server sent conflicting balances for one token, so that balance is left out of this scan. Scan again later.",
+        "Couldn't check the balance of TWO, so those tokens may be missing from this scan. Scan again later.",
       ]
     )
   }
@@ -584,7 +584,7 @@ extension NativeScannerTokenTests {
       )
       XCTFail("Expected mismatched JSON-RPC identity to fail.")
     } catch {
-      XCTAssertTrue(error.localizedDescription.contains("mismatched JSON-RPC"))
+      XCTAssertTrue(error.localizedDescription.contains("didn't match the request"))
     }
     XCTAssertEqual(recorder.snapshot().count, 1)
   }
@@ -617,8 +617,8 @@ extension NativeScannerTokenTests {
       XCTAssertEqual(
         result.warnings,
         [
-          "The EVM RPC returned conflicting responses for one token request; every conflicting version was skipped.",
-          "Couldn't check the balance of ONE; some tokens may be missing.",
+          "The server sent conflicting balances for one token, so that balance is left out of this scan. Scan again later.",
+          "Couldn't check the balance of ONE, so those tokens may be missing from this scan. Scan again later.",
         ]
       )
     }
@@ -734,7 +734,7 @@ extension NativeScannerTokenTests {
 
     XCTAssertTrue(result.assets.isEmpty)
     XCTAssertEqual(recorder.snapshot().count, 1)
-    XCTAssertTrue(result.warnings.contains { $0.contains("Token balances were skipped because the network provider") })
+    XCTAssertTrue(result.warnings.contains { $0.contains("Token balances are missing from this scan because the server") })
   }
 
   func testHttpStatusEvmBatchFailuresDoNotAmplifyIntoIndividualCalls() async throws {
@@ -771,7 +771,7 @@ extension NativeScannerTokenTests {
       XCTAssertTrue(result.assets.isEmpty, "status \(statusCode)")
       XCTAssertEqual(recorder.snapshot().count, statusCode == 501 ? 2 : 1)
       XCTAssertTrue(
-        result.warnings.contains { $0.contains("Token balances were skipped because the network provider") },
+        result.warnings.contains { $0.contains("Token balances are missing from this scan because the server") },
         "status \(statusCode)"
       )
     }
@@ -807,8 +807,8 @@ extension NativeScannerTokenTests {
     XCTAssertEqual(
       Array(result.warnings.prefix(2)),
       [
-        "The EVM RPC repeated 2 identical token responses; the duplicates were skipped.",
-        "The EVM RPC returned conflicting responses for 2 token requests; every conflicting version was skipped.",
+        "The server sent 2 token balances more than once. Each was counted once.",
+        "The server sent conflicting balances for 2 tokens, so those balances are left out of this scan. Scan again later.",
       ]
     )
   }

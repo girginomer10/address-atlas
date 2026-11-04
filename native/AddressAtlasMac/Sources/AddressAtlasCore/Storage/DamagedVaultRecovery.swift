@@ -15,21 +15,21 @@ public enum DamagedVaultRecoveryError: Error, Equatable, LocalizedError, Sendabl
   public var errorDescription: String? {
     switch self {
     case .unsafeVaultPath:
-      "The damaged vault path is not a single app-owned regular file. Nothing was changed."
+      "The damaged portfolio file isn't a single file owned by Address Atlas. Nothing was changed."
     case .vaultInUse:
-      "Another Address Atlas process still has the local vault open. Close it before quarantining the damaged vault; nothing was changed."
+      "Another copy of Address Atlas still has your saved portfolio open. Close it and try again. Nothing was changed."
     case .sourceChanged:
-      "The damaged vault files changed during recovery. Nothing was replaced; close other Address Atlas processes and try again."
+      "The damaged files changed during recovery. Nothing was replaced. Close any other copy of Address Atlas and try again."
     case .quarantineCreationFailed:
-      "Address Atlas could not create a private quarantine folder. The damaged vault was not replaced."
+      "Address Atlas couldn't create a private folder to set the damaged files aside. Nothing was replaced."
     case .quarantineCopyFailed:
-      "The damaged vault could not be copied completely into quarantine. The original files were left in place."
+      "The damaged files couldn't be fully copied aside. The originals were left in place."
     case .quarantineDurabilityUnavailable:
-      "The quarantine copy could not be proven crash-durable. The original vault was left in place."
+      "Address Atlas couldn't confirm the copy of the damaged files reached storage. The originals were left in place."
     case .cleanVaultCreationFailed:
-      "The damaged vault is preserved in quarantine, but a clean local vault could not be prepared. Try again after fixing available storage."
+      "The damaged files were set aside and kept, but a new empty portfolio couldn't be created. Check that there's free storage space, then try again."
     case .cleanVaultPublicationFailed:
-      "The damaged vault is preserved in quarantine, but the clean local vault could not be activated safely. Restart Address Atlas and try again."
+      "The damaged files were set aside and kept, but the new empty portfolio couldn't be opened. Restart Address Atlas and try again."
     }
   }
 }

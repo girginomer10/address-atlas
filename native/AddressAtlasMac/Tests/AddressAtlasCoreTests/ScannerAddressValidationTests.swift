@@ -153,7 +153,7 @@ final class ScannerAddressValidationTests: XCTestCase {
     XCTAssertEqual(registries.warnings.count, 5)
     XCTAssertTrue(
       registries.warnings.contains(where: {
-        $0.contains("BADID") && $0.contains("CoinGecko pricing was disabled")
+        $0.contains("BADID") && $0.contains("CoinGecko pricing is turned off")
       }))
     XCTAssertTrue(AddressDetection.isValidCustomTokenAddress(valid.address, family: .evm))
     XCTAssertEqual(AddressDetection.canonicalAddress(valid.address, family: .evm), added?.address)

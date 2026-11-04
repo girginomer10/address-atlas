@@ -12,17 +12,17 @@ public enum AtomicFilePublicationError: Error, Equatable, LocalizedError, Sendab
   public var errorDescription: String? {
     switch self {
     case .unsafeDestination:
-      "The selected destination is not a safe, app-owned file location. Choose another folder."
+      "That location isn't safe for the recovery file. Choose another folder."
     case .temporaryFileCreationFailed:
-      "Address Atlas could not create an owner-only temporary recovery file at that location."
+      "Address Atlas couldn't create a private temporary file in that folder. Choose another folder."
     case .writeFailed:
-      "The recovery file could not be written completely. No recovery code was revealed."
+      "The recovery file couldn't be written in full, so no recovery code was shown. Try again."
     case .durabilityUnavailable:
-      "The recovery file could not be proven crash-durable. No recovery code was revealed."
+      "Address Atlas couldn't confirm the recovery file reached storage, so no recovery code was shown. Try again."
     case .publishFailed:
-      "The recovery file could not be published atomically. No recovery code was revealed."
+      "The recovery file couldn't be saved to that folder, so no recovery code was shown. Try again."
     case .publishedFileVerificationFailed:
-      "The published recovery file changed unexpectedly. No recovery code was revealed."
+      "The saved recovery file changed unexpectedly, so no recovery code was shown. Try again."
     }
   }
 }

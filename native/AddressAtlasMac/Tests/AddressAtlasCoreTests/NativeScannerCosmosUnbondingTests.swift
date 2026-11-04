@@ -144,7 +144,7 @@ final class NativeScannerCosmosUnbondingTests: XCTestCase {
     XCTAssertEqual(
       parsed.warnings,
       [
-        "Cosmos reported 11 unbonding entries without a usable completion time; they are counted without an unlock date."
+        "11 unbonding entries have no usable completion time. They're counted, but without an unlock date."
       ])
   }
 
@@ -192,7 +192,7 @@ final class NativeScannerCosmosUnbondingTests: XCTestCase {
     XCTAssertEqual(parsed.buckets.dropLast().map(\.amount), Array(repeating: 1, count: cap - 1))
     XCTAssertEqual(parsed.buckets.map(\.amount).reduce(0, +), Double(cap + 5), accuracy: 1e-9)
     XCTAssertEqual(parsed.warnings.count, 1)
-    XCTAssertTrue(parsed.warnings[0].contains("more than \(cap) distinct completion times"))
+    XCTAssertTrue(parsed.warnings[0].contains("more than \(cap) different completion times"))
   }
 
   func testCompletionTimeParserAcceptsOnlyStrictUTCRFC3339() {
@@ -327,7 +327,7 @@ final class NativeScannerCosmosUnbondingTests: XCTestCase {
     }
     let repeatedResult = try await cosmosScanner(http: repeated).scan(addresses: cosmosAddress)
     XCTAssertTrue(
-      repeatedResult.warnings.contains { $0.contains("Cosmos unbonding pagination returned a repeated key") })
+      repeatedResult.warnings.contains { $0.contains("repeated a page marker while listing unbonding entries") })
 
     let counter = ScannerRequestLog()
     let endless = cosmosStub(requests: counter) { request in
@@ -350,7 +350,7 @@ final class NativeScannerCosmosUnbondingTests: XCTestCase {
       .scan(addresses: cosmosAddress)
     XCTAssertTrue(
       limited.warnings.contains {
-        $0.contains("Cosmos unbonding pagination reached the 3-page safety limit")
+        $0.contains("stopped after 3 pages of unbonding entries")
       })
     XCTAssertEqual(limited.holdings.filter { $0.source == .unbonding }.map(\.amount), [3])
     XCTAssertEqual(
@@ -383,7 +383,7 @@ final class NativeScannerCosmosUnbondingTests: XCTestCase {
     XCTAssertEqual(result.holdings.filter { $0.source == .unbonding }.map(\.amount), [1])
     XCTAssertTrue(
       result.warnings.contains {
-        $0.contains("Later Cosmos unbonding pages could not be read")
+        $0.contains("Couldn't read later pages of unbonding entries")
       })
   }
 
@@ -458,14 +458,14 @@ final class NativeScannerCosmosUnbondingTests: XCTestCase {
     // the other delegator's record are dropped, never guessed at.
     XCTAssertEqual(result.holdings.filter { $0.source == .unbonding }.map(\.amount), [1])
     XCTAssertTrue(
-      result.warnings.contains { $0.contains("repeated one identical unbonding record") })
+      result.warnings.contains { $0.contains("listed the same unbonding entry twice") })
     XCTAssertTrue(
       result.warnings.contains {
-        $0.contains("conflicting unbonding records for 1 validator(s)")
+        $0.contains("conflicting data for one validator")
       })
     XCTAssertTrue(
       result.warnings.contains {
-        $0.contains("1 unbonding record(s) without the requested delegator")
+        $0.contains("One unbonding entry doesn't belong to this wallet")
       })
   }
 
@@ -491,7 +491,7 @@ final class NativeScannerCosmosUnbondingTests: XCTestCase {
     XCTAssertEqual(
       unbonding.last?.id, "\(cosmosAddress)-cosmoshub-ATOM-unbonding-undated")
     XCTAssertTrue(
-      result.warnings.contains { $0.contains("one unbonding entry without a usable completion time") })
+      result.warnings.contains { $0.contains("One unbonding entry has no usable completion time") })
     XCTAssertNoThrow(try VaultDocumentSemanticValidator.validateAssets(result.holdings))
   }
 

@@ -136,7 +136,7 @@ extension NativeScannerTokenTests {
       )
       XCTFail("Expected wrong Solana cluster rejection")
     } catch {
-      XCTAssertTrue(error.localizedDescription.contains("wrong network identity"))
+      XCTAssertTrue(error.localizedDescription.contains("isn't on the Solana network"))
     }
   }
 
@@ -202,7 +202,7 @@ extension NativeScannerTokenTests {
       XCTAssertTrue(result.assets.isEmpty, "raw value: \(rawValue)")
       XCTAssertTrue(
         result.warnings.contains {
-          $0.contains("Native SOL balance could not be read") && $0.contains("invalid data")
+          $0.contains("SOL balance is missing from this scan") && $0.contains("couldn't read")
         },
         "raw value: \(rawValue)"
       )
@@ -330,7 +330,7 @@ extension NativeScannerTokenTests {
 
     XCTAssertEqual(result.holdings.first(where: { $0.symbol == "SOL" })?.amount, 2)
     XCTAssertEqual(result.holdings.first(where: { $0.symbol == "USDC" })?.amount, 1)
-    XCTAssertFalse(result.warnings.contains(where: { $0.contains("consistent snapshot after") }))
+    XCTAssertFalse(result.warnings.contains(where: { $0.contains("consistent data after") }))
 
     let requestSnapshot = requests.snapshot()
     XCTAssertEqual(
@@ -402,7 +402,7 @@ extension NativeScannerTokenTests {
     XCTAssertTrue(result.holdings.isEmpty)
     XCTAssertTrue(
       result.warnings.contains(where: {
-        $0.contains("consistent snapshot after 3 tries")
+        $0.contains("consistent data after 3 tries")
       }))
     XCTAssertEqual(requests.snapshot().count, 7)
   }
@@ -554,7 +554,7 @@ extension NativeScannerTokenTests {
     XCTAssertEqual(result.holdings.first(where: { $0.symbol == "SOL" })?.amount, 1)
     XCTAssertEqual(result.holdings.first(where: { $0.symbol == "USDC" })?.amount, 1)
     XCTAssertTrue(result.warnings.contains(where: { $0.contains("Token-2022") }))
-    XCTAssertFalse(result.warnings.contains(where: { $0.contains("consistent snapshot after") }))
+    XCTAssertFalse(result.warnings.contains(where: { $0.contains("consistent data after") }))
   }
 
   func testSolanaSnapshotCancellationPropagatesWithoutConvergenceRetries() async throws {
@@ -656,8 +656,8 @@ extension NativeScannerTokenTests {
     XCTAssertEqual(
       result.warnings,
       [
-        "Solana repeated one identical token account record; the duplicate was skipped to avoid double-counting.",
-        "Solana returned conflicting data for one repeated token account; every version was skipped.",
+        "Solana listed the same token account twice. It was counted once.",
+        "Solana sent conflicting data for one token account, so it's left out of this scan. Scan again later.",
       ]
     )
   }
@@ -704,8 +704,8 @@ extension NativeScannerTokenTests {
     XCTAssertEqual(
       result.warnings,
       [
-        "Solana repeated 2 identical token account records; the duplicates were skipped to avoid double-counting.",
-        "Solana returned conflicting data for 2 repeated token accounts; every version was skipped.",
+        "Solana listed 2 token accounts more than once. Each was counted once.",
+        "Solana sent conflicting data for 2 token accounts, so they're left out of this scan. Scan again later.",
       ]
     )
 
@@ -723,7 +723,7 @@ extension NativeScannerTokenTests {
     XCTAssertEqual(
       tainted.warnings,
       [
-        "Solana discarded 2 token accounts because malformed duplicates used the same public keys."
+        "2 Solana token accounts were left out because other records used the same addresses with invalid data."
       ]
     )
   }
@@ -829,9 +829,9 @@ extension NativeScannerTokenTests {
         )
         XCTAssertEqual(
           result.warnings.first,
-          "Solana discarded one token account because a malformed duplicate used the same public key."
+          "One Solana token account was left out because another record used the same address with invalid data."
         )
-        XCTAssertTrue(result.warnings.contains { $0.contains("invalid parsed data") })
+        XCTAssertTrue(result.warnings.contains { $0.contains("token accounts had data Address Atlas couldn't read") })
       }
     }
   }
@@ -872,7 +872,7 @@ extension NativeScannerTokenTests {
     XCTAssertEqual(
       result.warnings,
       [
-        "Solana returned conflicting data for one repeated token account; every version was skipped."
+        "Solana sent conflicting data for one token account, so it's left out of this scan. Scan again later."
       ]
     )
   }
@@ -921,7 +921,7 @@ extension NativeScannerTokenTests {
       )
 
       XCTAssertTrue(result.balances.isEmpty)
-      XCTAssertTrue(result.warnings.contains { $0.contains("inconsistent on-chain decimals") })
+      XCTAssertTrue(result.warnings.contains { $0.contains("reported different decimals") })
       warningSnapshots.append(result.warnings)
     }
 
@@ -972,7 +972,7 @@ extension NativeScannerTokenTests {
       )
 
       XCTAssertTrue(result.balances.isEmpty)
-      XCTAssertTrue(result.warnings.contains { $0.contains("supported numeric range") })
+      XCTAssertTrue(result.warnings.contains { $0.contains("larger than Address Atlas can add up") })
       warningSnapshots.append(result.warnings)
     }
 
@@ -1072,7 +1072,7 @@ extension NativeScannerTokenTests {
         XCTAssertTrue(result.balances.isEmpty)
         XCTAssertEqual(
           result.warnings.first,
-          "Solana discarded one token account because a malformed duplicate used the same public key."
+          "One Solana token account was left out because another record used the same address with invalid data."
         )
       }
     }
@@ -1116,7 +1116,7 @@ extension NativeScannerTokenTests {
     XCTAssertEqual(
       result.warnings,
       [
-        "Solana returned conflicting data for one repeated token account; every version was skipped."
+        "Solana sent conflicting data for one token account, so it's left out of this scan. Scan again later."
       ]
     )
   }
@@ -1157,7 +1157,7 @@ extension NativeScannerTokenTests {
     XCTAssertTrue(result.balances.isEmpty)
     XCTAssertEqual(
       result.warnings,
-      ["Some SPL token accounts returned invalid parsed data; balances may be incomplete."]
+      ["Some Solana token accounts had data Address Atlas couldn't read, so token balances may be incomplete."]
     )
   }
 
@@ -1188,11 +1188,11 @@ extension NativeScannerTokenTests {
     XCTAssertEqual(result.holdings.first?.valueUsd, 10)
     XCTAssertTrue(
       result.warnings.contains { warning in
-        warning.contains("Solana") && warning.contains("SPL Token balances couldn't be read")
+        warning.contains("Solana") && warning.contains("Couldn't read SPL Token balances")
       })
     XCTAssertTrue(
       result.warnings.contains { warning in
-        warning.contains("Solana") && warning.contains("Token-2022 balances couldn't be read")
+        warning.contains("Solana") && warning.contains("Couldn't read Token-2022 balances")
       })
   }
 
@@ -1257,7 +1257,7 @@ extension NativeScannerTokenTests {
         .sorted(),
       [123, 124]
     )
-    XCTAssertFalse(result.warnings.contains(where: { $0.contains("didn't return a consistent snapshot:") }))
+    XCTAssertFalse(result.warnings.contains(where: { $0.contains("didn't return consistent data:") }))
   }
 
   func testSolanaRejectsMismatchedSlotFallbackBeforeTokenReads() async throws {
@@ -1292,7 +1292,7 @@ extension NativeScannerTokenTests {
 
     XCTAssertTrue(result.holdings.isEmpty)
     XCTAssertEqual(requests.snapshot().count, 2)
-    XCTAssertTrue(result.warnings.contains(where: { $0.contains("didn't return a consistent snapshot:") }))
+    XCTAssertTrue(result.warnings.contains(where: { $0.contains("didn't return consistent data:") }))
   }
 
 }

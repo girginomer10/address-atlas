@@ -40,15 +40,15 @@ public enum EndpointConfigTrustStoreError: Error, Equatable, LocalizedError {
   public var errorDescription: String? {
     switch self {
     case .invalidOrigin:
-      "The sync server origin is invalid. Endpoint policy was not applied."
+      "The sync server address isn't valid, so the server settings weren't updated."
     case .invalidStore:
-      "The saved endpoint-policy trust record is damaged. Endpoint policy was not applied."
+      "The saved record used to verify server settings is damaged, so the server settings weren't updated."
     case .rollback:
-      "The sync server returned an older endpoint policy. The previously verified policy was kept."
+      "The sync server sent older server settings. Address Atlas kept the settings it had already verified."
     case .equivocation:
-      "The sync server changed endpoint policy without advancing its version. The previously verified policy was kept."
+      "The sync server changed its server settings without updating their version. Address Atlas kept the settings it had already verified."
     case .unavailable:
-      "The endpoint-policy trust record could not be saved securely. Endpoint policy was not applied."
+      "The record used to verify server settings couldn't be saved securely, so the server settings weren't updated."
     }
   }
 }

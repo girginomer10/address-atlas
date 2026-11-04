@@ -22,30 +22,30 @@ public enum EncryptedSQLiteVaultStoreError: Error, Equatable, LocalizedError {
     switch self {
     case .openFailed:
       return
-        "The encrypted local vault could not be opened safely. Verify that the app's data folder is available and try again."
+        "Your saved portfolio couldn't be opened safely. Check that the app's data folder is available, then try again."
     case .prepareFailed, .stepFailed, .bindFailed:
       return
-        "The encrypted local vault storage operation failed safely. No unconfirmed changes were applied."
+        "Address Atlas couldn't finish working with your saved portfolio. Nothing unconfirmed was saved. Try again."
     case .filePermissionsFailed:
       return
-        "The local vault's owner-only file protection could not be verified. Address Atlas did not open or modify the unsafe path."
+        "Address Atlas couldn't confirm that only your account can access your saved portfolio file, so it didn't open or change it."
     case .durabilityUnavailable:
       return
-        "The local vault could not prove crash-durable storage. Address Atlas stopped before accepting sensitive state."
+        "Address Atlas couldn't confirm that saved data reaches storage, so it stopped before saving anything."
     case .missingDocument:
-      return "The requested encrypted local vault or rollback checkpoint is no longer available."
+      return "The saved portfolio or backup copy Address Atlas looked for is no longer available."
     case .invalidRow:
       return
-        "The encrypted local vault contains invalid or oversized data. Address Atlas stopped before loading it into memory."
+        "Your saved portfolio contains invalid or oversized data, so Address Atlas didn't load it."
     case .staleDocument:
       return
-        "The local vault changed in another Address Atlas process. Reopen the app before saving again."
+        "Your portfolio changed in another Address Atlas window. Reopen the app before saving again."
     case .pendingUploadExists:
-      return "Another encrypted vault upload is already pending recovery."
+      return "Another upload is already waiting for recovery."
     case .pendingUploadMissing, .pendingUploadMismatch:
-      return "The encrypted upload recovery record changed unexpectedly."
+      return "The record of the unfinished upload changed unexpectedly."
     case .primaryDocumentIsReadable:
-      return "The primary encrypted vault is readable and must not be replaced by damage recovery."
+      return "Your saved portfolio can still be read, so damage recovery won't replace it."
     }
   }
 }

@@ -143,7 +143,7 @@ final class ExchangeScannerCredentialSafetyTests: XCTestCase {
     XCTAssertEqual(result.connections.map(\.status), [.failed, .failed])
     XCTAssertTrue(
       result.connections.allSatisfy {
-        $0.lastError?.contains("more than one saved connection") == true
+        $0.lastError?.contains("more than one connection") == true
       })
   }
 
@@ -192,7 +192,7 @@ final class ExchangeScannerCredentialSafetyTests: XCTestCase {
     XCTAssertEqual(result.connections.map(\.status), [.failed, .failed])
     XCTAssertTrue(
       result.connections.allSatisfy {
-        $0.lastError?.contains("more than one saved connection") == true
+        $0.lastError?.contains("more than one connection") == true
       })
   }
 
@@ -246,7 +246,7 @@ final class ExchangeScannerCredentialSafetyTests: XCTestCase {
     XCTAssertEqual(result.connections.map(\.status), [.failed, .failed, .failed])
     XCTAssertTrue(
       result.connections.allSatisfy {
-        $0.lastError?.contains("more than one saved connection") == true
+        $0.lastError?.contains("more than one connection") == true
       })
   }
 
@@ -337,7 +337,7 @@ final class ExchangeScannerCredentialSafetyTests: XCTestCase {
     )
     XCTAssertTrue(
       result.warnings.contains {
-        $0.contains("Foreign Kraken") && $0.contains("skipped on this Mac")
+        $0.contains("Foreign Kraken") && $0.contains("Not scanned on this Mac")
       })
   }
 
