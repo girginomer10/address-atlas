@@ -25,10 +25,8 @@ struct ICloudScreen: View {
   /// is dismissed.
   @State private var attentionIssue: ICloudAttentionIssue?
 
-  /// `AppState.iCloudStatus` value that means the last transfer failed.
-  /// Compared by equality: it is a constant owned by AppState
-  /// (`presentICloudError`), and `SettingsScreen` relies on the same one.
-  private static let needsAttentionStatus = "Needs attention"
+  /// The last transfer failed (`AppState.iCloudStatusKind`).
+  private var needsAttention: Bool { state.iCloudStatusKind == .needsAttention }
 
   /// Mirrors the macOS rule for Save, Restore, and Delete, and also stays off
   /// while iCloud is known to be unusable (the service would refuse anyway).
@@ -45,13 +43,7 @@ struct ICloudScreen: View {
   }
 
   /// A save that reached iCloud but could not be recorded on this device.
-  /// AppState words this status with the device name ("Saved to iCloud; not
-  /// recorded on this iPhone"), so it is matched on what it says, not on the
-  /// whole string.
-  private var savedButNotRecorded: Bool {
-    let status = state.iCloudStatus.lowercased()
-    return status.contains("not recorded") || status.contains("receipt failed")
-  }
+  private var savedButNotRecorded: Bool { state.iCloudStatusKind == .savedNotRecorded }
 
   var body: some View {
     IOSPage(title: "iCloud") {
@@ -84,8 +76,8 @@ struct ICloudScreen: View {
     .onChange(of: state.error) { _, error in
       captureAttentionIssue(error)
     }
-    .onChange(of: state.iCloudStatus) { _, status in
-      if status == Self.needsAttentionStatus {
+    .onChange(of: state.iCloudStatusKind) { _, status in
+      if status == .needsAttention {
         captureAttentionIssue(state.error)
       } else {
         attentionIssue = nil
@@ -127,7 +119,7 @@ struct ICloudScreen: View {
     if let unavailable = availability.presentation {
       return unavailable
     }
-    if state.iCloudStatus == Self.needsAttentionStatus {
+    if needsAttention {
       return (attentionIssue ?? .generic).presentation
     }
     if savedButNotRecorded {
@@ -485,7 +477,7 @@ struct ICloudScreen: View {
   }
 
   private func captureAttentionIssue(_ error: String) {
-    guard state.iCloudStatus == Self.needsAttentionStatus, !error.isEmpty else { return }
+    guard needsAttention, !error.isEmpty else { return }
     attentionIssue = ICloudAttentionIssue(message: error)
     if attentionIssue == .unavailable {
       Task { await refreshAvailability() }

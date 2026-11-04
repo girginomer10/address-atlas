@@ -550,17 +550,15 @@ enum IOSToastTone: Equatable {
   case warning
   case error
 
-  /// Cancellations and "already running" are information, not success; a
-  /// snapshot saved with warnings is a warning.
-  static func forNotice(_ notice: String) -> IOSToastTone {
-    let lowered = notice.lowercased()
-    if lowered.contains("warning") { return .warning }
-    if lowered.contains("cancelled") || lowered.contains("canceled")
-      || lowered.contains("already running")
-    {
-      return .neutral
+  /// The tone AppState posted with the notice (`AppState.postNotice`):
+  /// cancellations and "already running" are information, not success, and a
+  /// scan finished with warnings is a warning.
+  init(_ tone: NoticeTone) {
+    switch tone {
+    case .success: self = .success
+    case .neutral: self = .neutral
+    case .warning: self = .warning
     }
-    return .success
   }
 
   var color: Color {
@@ -622,8 +620,9 @@ struct IOSSaveFingerprint: Equatable {
   }
 }
 
-/// What one local save changed, in the words the toast shows instead of the
-/// generic "Saved locally.".
+/// What one local save changed, in the words the toast shows. An ordinary
+/// save posts no notice of its own, so the toast names the change from the
+/// document itself.
 struct IOSSaveSummary: Equatable {
   /// Nil when the control that changed already shows the result (a switch,
   /// a filter), so a confirmation would only be noise.
@@ -717,11 +716,13 @@ struct IOSSaveSummary: Equatable {
 /// `state.error` (stays until tapped, replaced, or cleared by navigation).
 /// It also posts the VoiceOver announcement the inline status line used to.
 ///
-/// The shared state layer reports every local save as "Saved locally."; the
-/// toast names what was saved instead ("Wallet added.", "Name saved.") and
-/// stays quiet for switches and filters whose control already shows the
-/// change. Right after the first source is saved, before any snapshot
-/// exists, it offers the first scan.
+/// An ordinary local save posts no notice (`AppState.save` leaves `notice`
+/// empty, or holds only the pruning sentence), so the toast names what was
+/// saved from the document ("Wallet added.", "Name saved.") and stays quiet
+/// for switches and filters whose control already shows the change. A notice
+/// a screen or AppState posts wins over that summary. Its tone is the
+/// `AppState.noticeTone` posted with it. Right after the first source is
+/// saved, before any snapshot exists, it offers the first scan.
 struct IOSStatusToast: View {
   @EnvironmentObject private var state: AppState
   @EnvironmentObject private var navigation: IOSNavigationModel
@@ -735,7 +736,6 @@ struct IOSStatusToast: View {
 
   static let noticeDuration: Duration = .seconds(4)
   static let actionNoticeDuration: Duration = .seconds(8)
-  static let genericSaveNotice = "Saved locally."
   /// A save summary only explains a notice posted right after it.
   private static let summaryWindow: TimeInterval = 2
 
@@ -745,8 +745,10 @@ struct IOSStatusToast: View {
   }
 
   private struct ResolvedNotice: Equatable {
+    /// `AppState.notice` when this was resolved; empty for a save summary.
     var raw: String
     var text: String?
+    var tone: IOSToastTone
     var offersFirstScan: Bool
     var token = UUID()
   }
@@ -765,8 +767,7 @@ struct IOSStatusToast: View {
       return Display(text: state.error, tone: .error, offersFirstScan: false)
     }
     guard let resolved, resolved.raw == state.notice, let text = resolved.text else { return nil }
-    return Display(
-      text: text, tone: IOSToastTone.forNotice(text), offersFirstScan: resolved.offersFirstScan)
+    return Display(text: text, tone: resolved.tone, offersFirstScan: resolved.offersFirstScan)
   }
 
   var body: some View {
@@ -795,8 +796,9 @@ struct IOSStatusToast: View {
       resolve()
     }
     .onChange(of: state.notice) { _, _ in resolve() }
+    .onChange(of: state.noticeTone) { _, _ in resolve() }
     .task(id: resolved) {
-      guard let resolved, !resolved.raw.isEmpty else { return }
+      guard let resolved else { return }
       // A save and its notice can arrive in either order; wait a beat so
       // only the final wording is announced.
       do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
@@ -805,7 +807,7 @@ struct IOSStatusToast: View {
       }
       let duration = resolved.offersFirstScan ? Self.actionNoticeDuration : Self.noticeDuration
       do { try await Task.sleep(for: duration) } catch { return }
-      if state.notice == resolved.raw { state.notice = "" }
+      clearNotice()
     }
     .onChange(of: state.error) { _, error in
       AtlasAccessibilityAnnouncer.shared.announceEvent(error, kind: .error)
@@ -814,33 +816,57 @@ struct IOSStatusToast: View {
 
   private func resolve() {
     let notice = state.notice
-    guard !notice.isEmpty else {
-      resolved = nil
-      return
-    }
     var summary: IOSSaveSummary?
     if let recentSave, Date().timeIntervalSince(recentSave.at) < Self.summaryWindow {
       summary = recentSave.summary
     }
-    var text: String? = notice
-    if notice.hasPrefix(Self.genericSaveNotice), let summary {
-      // Keep any extra sentence the save appended (such as pruned snapshots).
-      let suffix = notice.dropFirst(Self.genericSaveNotice.count)
-        .trimmingCharacters(in: .whitespaces)
-      if let message = summary.message {
-        text = suffix.isEmpty ? message : "\(message) \(suffix)"
-      } else {
-        text = suffix.isEmpty ? nil : suffix
-      }
+    let text: String?
+    var tone = IOSToastTone(state.noticeTone)
+    if notice.isEmpty {
+      // An ordinary save posts nothing; name what it changed.
+      text = summary?.message
+      tone = .success
+    } else if let message = summary?.message, notice == savePruningNotice {
+      // The save also pruned history: say both.
+      text = "\(message) \(notice)"
+    } else {
+      text = notice
     }
     let offers =
       offersFirstScan && (summary?.addedSource ?? false) && state.document.scanRuns.isEmpty
       && state.hasScanSources && !state.scanning
-    resolved = ResolvedNotice(raw: notice, text: text, offersFirstScan: offers)
+    guard text != nil else {
+      resolved = nil
+      return
+    }
+    // The notice and its tone each trigger this; keep the timers running when
+    // nothing visible changed.
+    if let resolved, resolved.raw == notice, resolved.text == text, resolved.tone == tone,
+      resolved.offersFirstScan == offers
+    {
+      return
+    }
+    resolved = ResolvedNotice(
+      raw: notice, text: text, tone: tone, offersFirstScan: offers)
+  }
+
+  /// The sentence `AppState.save` leaves in `notice` when the save pruned old
+  /// snapshots; empty when it pruned nothing.
+  private var savePruningNotice: String {
+    state.pruningNoticeSuffix(state.lastSaveRemovedScanRunCount)
+      .trimmingCharacters(in: .whitespaces)
+  }
+
+  /// Removes the message from the screen and from `AppState`, and forgets the
+  /// save it was explaining.
+  private func clearNotice() {
+    state.notice = ""
+    resolved = nil
+    recentSave = nil
   }
 
   private func dismiss(_ display: Display) {
-    if display.tone == .error { state.error = "" } else { state.notice = "" }
+    if display.tone == .error { state.error = "" } else { clearNotice() }
   }
 
   private func capsule(_ display: Display) -> some View {
@@ -877,7 +903,7 @@ struct IOSStatusToast: View {
 
       if display.offersFirstScan {
         Button {
-          state.notice = ""
+          clearNotice()
           navigation.open(.portfolio, then: .runFirstScan)
         } label: {
           Text("Scan")

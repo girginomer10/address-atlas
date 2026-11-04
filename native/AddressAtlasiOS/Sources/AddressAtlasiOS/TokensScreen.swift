@@ -19,7 +19,7 @@ struct TokensScreen: View {
   @State private var detail: TokensDetailSelection?
 
   var body: some View {
-    IOSPage(title: "Tokens") {
+    IOSPage(title: list == .holdings ? "Holdings" : "Tokens") {
       switch list {
       case .holdings:
         TokensManualHoldingList(
@@ -177,7 +177,7 @@ private struct TokensListFooter: View {
 
   var body: some View {
     Text(text)
-      .font(AtlasTheme.font(.label, .caption))
+      .font(AtlasTheme.font(.label, .caption, figuresIn: text))
       .foregroundStyle(AtlasTheme.ink3)
       .frame(maxWidth: .infinity, alignment: .leading)
       .padding(.horizontal, 4)
@@ -192,7 +192,7 @@ private struct TokensManualHoldingList: View {
   var onSelect: (UUID) -> Void
 
   private var holdings: [ManualHoldingRecord] { state.document.manualHoldings }
-  private var enabledCount: Int { holdings.filter(\.enabled).count }
+  private var pausedCount: Int { holdings.filter { !$0.enabled }.count }
   private var includedValue: Double {
     holdings.filter(\.enabled).reduce(0) { $0 + $1.valueUsd }
   }
@@ -201,8 +201,8 @@ private struct TokensManualHoldingList: View {
     if holdings.isEmpty {
       TokensEmptyState(
         systemImage: "pencil.and.list.clipboard",
-        title: "No manual holdings",
-        copy: "Record balances that can't be scanned, like an exchange you don't connect.",
+        title: "No manual holdings yet",
+        copy: "Type in a balance the app can't scan, like coins on an exchange you haven't connected.",
         actionTitle: "Add holding",
         actionIdentifier: "tokens-empty-add-holding",
         action: onAdd
@@ -210,11 +210,11 @@ private struct TokensManualHoldingList: View {
     } else {
       VStack(alignment: .leading, spacing: 10) {
         VStack(alignment: .leading, spacing: 2) {
-          Text("Included value")
+          Text("In your total")
             .font(AtlasTheme.font(.body, .subheadline))
             .foregroundStyle(AtlasTheme.ink3)
           Text(money(includedValue))
-            .font(AtlasTheme.font(.display, .title2))
+            .font(AtlasTheme.font(.number, .title2, weight: .semibold))
             .monospacedDigit()
             .foregroundStyle(AtlasTheme.ink)
         }
@@ -234,7 +234,8 @@ private struct TokensManualHoldingList: View {
 
         TokensListFooter(
           text:
-            "\(enabledCount) included · \(holdings.count) of \(AppState.maximumManualHoldings)"
+            "\(holdings.count) of \(AppState.maximumManualHoldings) holdings"
+            + (pausedCount > 0 ? ". \(pausedCount) paused." : "")
         )
       }
     }
@@ -316,7 +317,7 @@ private struct TokensManualHoldingRow: View {
       )
       .labelsHidden()
       .frame(minHeight: 44)
-      .accessibilityLabel("Include \(identity) in snapshots")
+      .accessibilityLabel("Count \(identity) in your total")
     }
     .contextMenu {
       Button {
@@ -340,7 +341,7 @@ private struct TokensManualHoldingRow: View {
       }
       Button("Cancel", role: .cancel) {}
     } message: {
-      Text("It is removed from this device and left out of future snapshots.")
+      Text("It's removed from this device and left out of future scans. Saved snapshots are unchanged.")
     }
     .disabled(state.vaultEditsDisabled)
   }
@@ -354,14 +355,14 @@ private struct TokensCustomTokenList: View {
   var onSelect: (UUID) -> Void
 
   private var tokens: [CustomTokenRecord] { state.document.customTokens }
-  private var enabledCount: Int { tokens.filter(\.enabled).count }
+  private var pausedCount: Int { tokens.filter { !$0.enabled }.count }
 
   var body: some View {
     if tokens.isEmpty {
       TokensEmptyState(
         systemImage: "tag",
-        title: "No custom tokens",
-        copy: "Add a contract or mint the built-in token list doesn't cover.",
+        title: "No custom tokens yet",
+        copy: "Add a token the built-in list is missing. You'll need its contract or mint address.",
         actionTitle: "Add token",
         actionIdentifier: "tokens-empty-add-token",
         action: onAdd
@@ -379,7 +380,9 @@ private struct TokensCustomTokenList: View {
           }
         }
         TokensListFooter(
-          text: "\(enabledCount) enabled · \(tokens.count) of \(AppState.maximumCustomTokens)"
+          text:
+            "\(tokens.count) of \(AppState.maximumCustomTokens) custom tokens"
+            + (pausedCount > 0 ? ". \(pausedCount) paused." : "")
         )
       }
     }
@@ -435,7 +438,7 @@ private struct TokensCustomTokenRow: View {
         "\(token.symbol), \(token.name), \(networkName)\(isEnabled ? "" : ", paused")")
     } trailing: {
       Toggle(
-        "Enable \(token.symbol)",
+        "Include \(token.symbol)",
         isOn: Binding(
           get: { isEnabled },
           set: { newValue in
@@ -478,7 +481,7 @@ private struct TokensCustomTokenRow: View {
       }
       Button("Cancel", role: .cancel) {}
     } message: {
-      Text("Scans stop looking for this token on this device.")
+      Text("Scans stop looking for it. Saved snapshots are unchanged.")
     }
     .disabled(state.vaultEditsDisabled)
   }
@@ -540,7 +543,7 @@ private struct TokensAddHoldingSheet: View {
     TokensFormContainer(title: isEditing ? "Edit holding" : "Add holding", embedded: embedded) {
       Text(
         isEditing
-          ? "Changes apply from your next snapshot." : "Included in your next snapshot.")
+          ? "Changes count from your next scan." : "Counted from your next scan.")
         .font(AtlasTheme.font(.body, .callout))
         .foregroundStyle(AtlasTheme.ink2)
 
@@ -589,7 +592,7 @@ private struct TokensAddHoldingSheet: View {
 
       if isAtLimit {
         Text(
-          "Limit reached: \(AppState.maximumManualHoldings) of \(AppState.maximumManualHoldings) holdings. Remove one first."
+          "You've reached the limit of \(AppState.maximumManualHoldings) holdings. Remove one to add another."
         )
         .font(AtlasTheme.font(.body, .callout))
         .foregroundStyle(AtlasTheme.warning)
@@ -614,8 +617,9 @@ private struct TokensAddHoldingSheet: View {
       .accessibilityIdentifier(isEditing ? "manual-holding-save" : "manual-holding-add")
 
       if !isEditing {
-        Text("\(holdings.count) of \(AppState.maximumManualHoldings) holdings used")
-          .font(AtlasTheme.font(.label, .caption))
+        let used = "\(holdings.count) of \(AppState.maximumManualHoldings) holdings"
+        Text(used)
+          .font(AtlasTheme.font(.label, .caption, figuresIn: used))
           .foregroundStyle(AtlasTheme.ink3)
           .frame(maxWidth: .infinity)
       }
@@ -859,7 +863,7 @@ private struct TokensAddCustomTokenSheet: View {
           .accessibilityIdentifier("custom-token-address-problem")
       } else {
         Label(
-          "The address decides what is scanned. Copy it from a trusted source.",
+          "The address decides which token is scanned. Copy it from the issuer's site or a block explorer.",
           systemImage: "checkmark.shield"
         )
         .font(AtlasTheme.font(.label, .caption))
@@ -884,7 +888,7 @@ private struct TokensAddCustomTokenSheet: View {
     VStack(alignment: .leading, spacing: 6) {
       TokensFormField(title: "Name", placeholder: "USD Coin", kind: .name, text: $name)
       if hasStartedInput, name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        Text("Required. Use the token's full name, like USD Coin.")
+        Text("Enter the token's full name, like USD Coin.")
           .font(AtlasTheme.font(.label, .caption))
           .foregroundStyle(AtlasTheme.ink3)
           .accessibilityIdentifier("custom-token-name-hint")
@@ -912,13 +916,13 @@ private struct TokensAddCustomTokenSheet: View {
 
     LearnMoreDisclosure("Why the address matters", systemImage: "info.circle") {
       Text(
-        "A misleading symbol or name can't change which on-chain token is scanned; only the contract or mint address does. Confirm it on the issuer's site or a block explorer."
+        "Only the contract or mint address decides which token is scanned. Anyone can copy a symbol or name, so check the address on the issuer's site or a block explorer."
       )
       Text(
-        "Common tokens such as USDC and USDT on major networks are built in already. Add only tokens the built-in list doesn't cover."
+        "Common tokens like USDC and USDT are already built in. Add only tokens that aren't."
       )
       Text(
-        "Without a CoinGecko ID or a manual price, the token's balance is shown as unpriced."
+        "Without a CoinGecko ID or a USD price, the token has no price and is left out of your total."
       )
     }
   }
@@ -927,7 +931,7 @@ private struct TokensAddCustomTokenSheet: View {
   private var footer: some View {
     if isAtLimit {
       Text(
-        "Limit reached: \(AppState.maximumCustomTokens) of \(AppState.maximumCustomTokens) custom tokens. Remove one first."
+        "You've reached the limit of \(AppState.maximumCustomTokens) custom tokens. Remove one to add another."
       )
       .font(AtlasTheme.font(.body, .callout))
       .foregroundStyle(AtlasTheme.warning)
@@ -961,8 +965,9 @@ private struct TokensAddCustomTokenSheet: View {
     .accessibilityIdentifier(isEditing ? "custom-token-save" : "custom-token-add")
 
     if !isEditing {
-      Text("\(tokens.count) of \(AppState.maximumCustomTokens) custom tokens used")
-        .font(AtlasTheme.font(.label, .caption))
+      let used = "\(tokens.count) of \(AppState.maximumCustomTokens) custom tokens"
+      Text(used)
+        .font(AtlasTheme.font(.label, .caption, figuresIn: used))
         .foregroundStyle(AtlasTheme.ink3)
         .frame(maxWidth: .infinity)
     }
@@ -978,7 +983,7 @@ private struct TokensAddCustomTokenSheet: View {
           .font(AtlasTheme.font(.body, .callout, weight: .semibold))
           .foregroundStyle(AtlasTheme.ink)
         Text(
-          "Scans already include \(token.name) on \(selectedNetworkNameForNotice). A custom copy would be ignored, so there's nothing to add."
+          "Scans already include \(token.name) on \(selectedNetworkNameForNotice), so a custom copy would be ignored."
         )
         .font(AtlasTheme.font(.body, .callout))
         .foregroundStyle(AtlasTheme.ink2)
@@ -1066,8 +1071,8 @@ private struct TokensAddCustomTokenSheet: View {
         if state.error.isEmpty {
           state.notice =
             isEditing
-            ? "\(addedSymbol) updated. Changes apply from the next scan."
-            : "\(addedSymbol) added. It's included in the next scan."
+            ? "\(addedSymbol) updated. Changes count from your next scan."
+            : "\(addedSymbol) added. Your next scan looks for it."
         }
         dismiss()
       }
@@ -1112,6 +1117,7 @@ private struct TokensHoldingDetailSheet: View {
     TokensDetailHeader(
       symbol: holding.symbol,
       title: money(holding.valueUsd),
+      titleIsFigure: true,
       subtitle: "\(TokensCopy.amount(holding.amount)) \(holding.symbol)",
       isEnabled: isEnabled
     )
@@ -1136,7 +1142,7 @@ private struct TokensHoldingDetailSheet: View {
 
     Surface(padding: 0) {
       Toggle(
-        "Include in snapshots",
+        "Count in your total",
         isOn: Binding(
           get: { isEnabled },
           set: { newValue in
@@ -1197,7 +1203,7 @@ private struct TokensHoldingDetailSheet: View {
       }
       Button("Cancel", role: .cancel) {}
     } message: {
-      Text("It is removed from this device and left out of future snapshots.")
+      Text("It's removed from this device and left out of future scans. Saved snapshots are unchanged.")
     }
   }
 }
@@ -1231,9 +1237,9 @@ private struct TokensCustomTokenDetailSheet: View {
   }
 
   private func priceSource(_ token: CustomTokenRecord) -> String {
-    if let price = token.priceUsd { return "\(money(price)) (manual)" }
+    if let price = token.priceUsd { return "\(money(price)), set by you" }
     if let id = token.coinGeckoId, !id.isEmpty { return "CoinGecko · \(id)" }
-    return "Not priced"
+    return "No price"
   }
 
   @ViewBuilder
@@ -1253,7 +1259,7 @@ private struct TokensCustomTokenDetailSheet: View {
       InfoCallout(
         title: "\(builtIn.symbol) is built in",
         copy:
-          "Scans use the built-in \(builtIn.name) on \(network), so this copy has no effect. You can remove it.",
+          "Scans use the built-in \(builtIn.name) on \(network), so this copy does nothing. You can remove it.",
         tone: .warning
       )
     }
@@ -1351,7 +1357,7 @@ private struct TokensCustomTokenDetailSheet: View {
       }
       Button("Cancel", role: .cancel) {}
     } message: {
-      Text("Scans stop looking for this token on this device.")
+      Text("Scans stop looking for it. Saved snapshots are unchanged.")
     }
   }
 }
@@ -1444,6 +1450,9 @@ private struct TokensDetailScaffold<Content: View>: View {
 private struct TokensDetailHeader: View {
   var symbol: String
   var title: String
+  /// The title is an amount of money: drawn in the theme's number face, because
+  /// the display face of some themes (Pixelify Sans) draws a five like an S.
+  var titleIsFigure = false
   var subtitle: String
   var isEnabled: Bool
 
@@ -1453,7 +1462,7 @@ private struct TokensDetailHeader: View {
         .opacity(isEnabled ? 1 : 0.45)
       VStack(alignment: .leading, spacing: 2) {
         Text(title)
-          .font(AtlasTheme.font(.display, .title2))
+          .font(AtlasTheme.font(titleIsFigure ? .number : .display, .title2))
           .foregroundStyle(AtlasTheme.ink)
           .monospacedDigit()
           .fixedSize(horizontal: false, vertical: true)

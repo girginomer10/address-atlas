@@ -32,7 +32,7 @@ extension AppState {
       return
     }
     guard beginSyncActivity(.revokingSession) else {
-      notice = "A sync is already running."
+      postNotice("A sync is already running.", tone: .neutral)
       return
     }
     defer { finishSyncActivity(.revokingSession) }
@@ -81,7 +81,7 @@ extension AppState {
       return
     }
     guard beginSyncActivity(.deletingAccount) else {
-      notice = "A sync is already running."
+      postNotice("A sync is already running.", tone: .neutral)
       return
     }
     defer { finishSyncActivity(.deletingAccount) }
@@ -258,12 +258,12 @@ extension AppState {
       return
     }
     guard !syncing else {
-      notice = "A sync is already running."
+      postNotice("A sync is already running.", tone: .neutral)
       return
     }
     let activity: SyncActivity = mode == .register ? .creatingPasskeyAccount : .signingIn
     guard beginSyncActivity(activity) else {
-      notice = "A sync is already running."
+      postNotice("A sync is already running.", tone: .neutral)
       return
     }
     defer { finishSyncActivity(activity) }
@@ -399,7 +399,7 @@ extension AppState {
       return
     }
     guard beginSyncActivity(.disconnectingAccount) else {
-      notice = "A sync is already running."
+      postNotice("A sync is already running.", tone: .neutral)
       return
     }
     defer { finishSyncActivity(.disconnectingAccount) }
@@ -454,7 +454,7 @@ extension AppState {
       return
     }
     guard beginSyncActivity(.disconnectingAccount) else {
-      notice = "A sync is already running."
+      postNotice("A sync is already running.", tone: .neutral)
       return
     }
     defer { finishSyncActivity(.disconnectingAccount) }
@@ -506,7 +506,7 @@ extension AppState {
       return
     }
     guard !syncing else {
-      notice = "A sync is already running."
+      postNotice("A sync is already running.", tone: .neutral)
       return
     }
 
@@ -516,7 +516,7 @@ extension AppState {
     let priorEndpointConfigTrustDurabilityDegraded =
       endpointConfigTrustDurabilityDegraded
     guard beginSyncActivity(.signingIn) else {
-      notice = "A sync is already running."
+      postNotice("A sync is already running.", tone: .neutral)
       return
     }
     defer { finishSyncActivity(.signingIn) }

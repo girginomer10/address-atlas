@@ -26,7 +26,7 @@ extension AppState {
       return
     }
     guard scanTask == nil, !scanning else {
-      notice = "A scan is already running."
+      postNotice("A scan is already running.", tone: .neutral)
       return
     }
     scanTask = Task { [weak self] in
@@ -47,7 +47,7 @@ extension AppState {
       return
     }
     guard !scanning else {
-      notice = "A scan is already running."
+      postNotice("A scan is already running.", tone: .neutral)
       return
     }
     guard !syncing else {
@@ -186,10 +186,12 @@ extension AppState {
           scan.warnings.isEmpty
           ? "Scan finished."
           : "Scan finished with \(scan.warnings.count) warning\(scan.warnings.count == 1 ? "" : "s")."
-        notice = successNotice + pruningNoticeSuffix(lastSaveRemovedScanRunCount)
+        postNotice(
+          successNotice + pruningNoticeSuffix(lastSaveRemovedScanRunCount),
+          tone: scan.warnings.isEmpty ? .success : .warning)
       }
     } catch is CancellationError {
-      notice = "Scan cancelled."
+      postNotice("Scan cancelled.", tone: .neutral)
     } catch {
       recordDiagnosticFailure(.scanFailed)
       presentUserFacingError(error)

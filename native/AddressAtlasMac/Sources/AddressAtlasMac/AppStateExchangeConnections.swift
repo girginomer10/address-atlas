@@ -230,7 +230,7 @@ extension AppState {
       return false
     }
     guard !isValidatingExchangeCredentials else {
-      notice = "An exchange key check is already running."
+      postNotice("An exchange key check is already running.", tone: .neutral)
       return false
     }
     isValidatingExchangeCredentials = true
@@ -348,7 +348,7 @@ extension AppState {
       return false
     }
     guard !isValidatingExchangeCredentials else {
-      notice = "An exchange key check is already running."
+      postNotice("An exchange key check is already running.", tone: .neutral)
       return false
     }
     isValidatingExchangeCredentials = true
