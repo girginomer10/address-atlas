@@ -77,7 +77,9 @@ struct TabShell: View {
     }
     .safeAreaInset(edge: .bottom, spacing: 0) {
       IOSTabBar(selection: navigation.selectedSection, select: select)
-        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+        // Like the system bar, the labels stop growing early; a wide theme
+        // face (Pixel) would otherwise truncate every label.
+        .dynamicTypeSize(...DynamicTypeSize.xLarge)
     }
     .ignoresSafeArea(.keyboard, edges: .bottom)
   }

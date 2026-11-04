@@ -39,7 +39,8 @@ struct HistoryScreen: View {
               grouping: .asset, density: .compact,
               onSelect: { selection in
                 state.handleChartSelection(selection, navigation: navigation)
-              })
+              }),
+            proportionOverride: 1.55
           )
           .iosListRow()
           .accessibilityIdentifier("history-chart")

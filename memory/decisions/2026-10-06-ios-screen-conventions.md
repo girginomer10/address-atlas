@@ -3,7 +3,7 @@ title: iOS screens are list-first with sheets, toasts, and a first-run walkthrou
 date: 2026-10-06
 status: active
 tags: [decision, ios, swiftui, ux, onboarding, design-system]
-related_files: [native/AddressAtlasiOS/Sources/AddressAtlasiOS/IOSComponents.swift, native/AddressAtlasiOS/Sources/AddressAtlasiOS/RootView.swift, native/AddressAtlasiOS/Sources/AddressAtlasiOS/MainShell.swift, native/AddressAtlasiOS/Sources/AddressAtlasiOS/OnboardingScreen.swift, docs/IOS-POLISH-2026-10-06.md]
+related_files: [native/AddressAtlasiOS/Sources/AddressAtlasiOS/IOSComponents.swift, native/AddressAtlasiOS/Sources/AddressAtlasiOS/RootView.swift, native/AddressAtlasiOS/Sources/AddressAtlasiOS/MainShell.swift, native/AddressAtlasiOS/Sources/AddressAtlasiOS/OnboardingScreen.swift, docs/IOS-POLISH-2026-10-06.md, native/AddressAtlasiOS/Sources/AddressAtlasiOS/IOSTheme.swift, native/AddressAtlasiOS/Sources/AddressAtlasiOS/SourcesScreen.swift, native/AddressAtlasiOS/Sources/AddressAtlasiOS/AtlasSection.swift, native/AddressAtlasiOS/Sources/AddressAtlasiOS/DemoFixture.swift]
 ---
 
 ## Context
@@ -61,3 +61,33 @@ items, no first run, status lines at the top of pages far from the action.
 - Exchange credentials are format-checked before saving and can be replaced in
   place (`replaceExchangeCredentials`); manual holdings and custom tokens are
   edited with `updateManualHolding` / `updateCustomToken`.
+
+## Update 2026-11-04 (phase 3 redesign: five tabs, themed screens)
+
+- Information architecture: Portfolio, Assets, Sources, History, Settings
+  (`AtlasSection`). The nine sections, the "More" list and the "Private by
+  design" row are gone. Wallets, exchanges, manual holdings and custom tokens
+  are one Sources tab (`SourcesScreen`: chip switcher, one "+" menu); iCloud
+  and Export are pushed from Settings; a coin and a saved scan are pushed
+  routes. Assets lists coins (`CoinSummary`), not holdings; the holding detail
+  sheet is reached from a coin's page.
+- Navigation: `IOSNavigationModel` no longer has `openRequest`; it owns
+  `selectedSection` and one route stack per section (`paths`, `IOSRoute`), so a
+  chart tap, a toast or another tab can open a coin (`openCoin`), narrow Assets
+  (`openAssets(filter:)`) or open a scan (`openSnapshot`). `pendingAction` and
+  `consume(_:)` still carry "open this add sheet"; `SourcesScreen` follows the
+  action to the list that owns the sheet.
+- Chrome: the shell draws the tab bar (`IOSTabBar`) and screens set an inline
+  themed title (`iosTitle`), because the system tab bar and large titles take
+  no theme font or shape and do not follow a live theme change. Cards, chips,
+  notices and empty states come from `IOSTheme.swift` and read the theme
+  tokens; do not reintroduce system `.insetGrouped` look-alikes or
+  `.font(.callout)` (use `AtlasTheme.font(role, style)`).
+- Copy: no subtitles, eyebrows or slogans; privacy is explained once, in
+  Settings; the walkthrough is one page; warnings sit next to the data they
+  affect. Code must not match AppState notice wording beyond the substrings
+  "warning", "cancelled", "already running", "restored" and the iCloud status
+  "Needs attention".
+- Screenshots and review use the Debug-only `-AtlasDemoFixture` (see
+  `DemoFixture.swift` and `docs/handoff/2026-11-04-redesign-phase3e-ios-screens.md`);
+  after a change, grep a Release binary for `AtlasDemo`/`DemoFixture`.

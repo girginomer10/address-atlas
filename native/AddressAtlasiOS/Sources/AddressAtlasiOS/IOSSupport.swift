@@ -208,7 +208,7 @@ final class NetworkReachability: ObservableObject {
   }
 
   static let offlineMessage =
-    "This device is offline. Connect to a network before scanning; nothing was changed."
+    "You're offline. Connect to a network to scan."
 }
 
 // MARK: - Shared state, iOS lifecycle

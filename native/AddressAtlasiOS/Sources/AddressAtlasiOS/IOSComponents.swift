@@ -880,16 +880,10 @@ struct IOSStatusToast: View {
           state.notice = ""
           navigation.open(.portfolio, then: .runFirstScan)
         } label: {
-          Text("Scan now")
-            .font(AtlasTheme.font(.body, .callout, weight: .semibold))
-            .foregroundStyle(AtlasTheme.onAccent)
-            .padding(.horizontal, 14)
+          Text("Scan")
             .frame(minHeight: 36)
-            .background(Capsule().fill(AtlasTheme.accent))
-            .frame(minHeight: 44)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(AtlasPrimaryButtonStyle())
         .fixedSize()
         .accessibilityHint("Opens Portfolio and reads the balances of your saved sources.")
         .accessibilityIdentifier("toast-first-scan")

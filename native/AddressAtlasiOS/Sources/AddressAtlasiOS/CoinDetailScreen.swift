@@ -148,10 +148,16 @@ struct CoinDetailScreen: View {
   private func priceLine(_ summary: CoinSummary, hero: IOSHeroStyle) -> some View {
     if let price = summary.priceUsd {
       let change = holdings.first(where: { $0.change24h != nil })?.change24h
-      HStack(spacing: 8) {
+      let layout =
+        dynamicTypeSize.isAccessibilitySize
+        ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
+        : AnyLayout(HStackLayout(spacing: 8))
+      layout {
         Text("Price \(IOSNumber.price(price))")
           .font(AtlasTheme.font(.number, .subheadline))
           .foregroundStyle(hero.secondaryInk)
+          .lineLimit(1)
+          .minimumScaleFactor(0.7)
         if let change, change.isFinite {
           Text("\(AtlasPercent.signedChange(change / 100)) today")
             .font(AtlasTheme.font(.number, .subheadline, weight: .semibold))

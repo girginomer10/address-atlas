@@ -374,6 +374,7 @@ private struct PortfolioHero: View {
 
 private struct PortfolioChangeLine: View {
   @Environment(\.atlasTheme) private var tokens
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   var change: PortfolioChange
   var hero: IOSHeroStyle
 
@@ -428,10 +429,16 @@ private struct PortfolioChangeLine: View {
             .font(AtlasTheme.font(.body, .subheadline))
             .foregroundStyle(hero.secondaryInk)
         } else {
-          HStack(spacing: 8) {
+          let layout =
+            dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
+            : AnyLayout(HStackLayout(spacing: 8))
+          layout {
             Text(percentText.map { "\(amountText) · \($0)" } ?? amountText)
               .font(AtlasTheme.font(.number, .subheadline, weight: .bold))
               .foregroundStyle(color)
+              .lineLimit(1)
+              .minimumScaleFactor(0.6)
               .padding(.horizontal, hero.isTinted ? 10 : 0)
               .padding(.vertical, hero.isTinted ? 4 : 0)
               .background {

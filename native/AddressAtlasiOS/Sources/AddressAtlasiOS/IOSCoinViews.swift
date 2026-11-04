@@ -114,6 +114,9 @@ struct IOSChartCard: View {
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   var visualization: PortfolioVisualization
   var input: PortfolioChartInput
+  /// Width over height, when a screen wants a shorter or taller chart than
+  /// the view's usual proportion.
+  var proportionOverride: CGFloat?
 
   /// Views that list every slice beside the graphic run out of height on a
   /// phone at full density; their compact form keeps the names and shares.
@@ -126,6 +129,7 @@ struct IOSChartCard: View {
 
   /// Width over height.
   private var proportion: CGFloat {
+    if let proportionOverride { return proportionOverride }
     let base: CGFloat =
       switch visualization {
       case .map, .atlasMap, .bubbles: 1.0

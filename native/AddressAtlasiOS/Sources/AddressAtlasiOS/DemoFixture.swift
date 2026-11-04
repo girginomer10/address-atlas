@@ -14,6 +14,7 @@
 //   -AtlasDemoSegment wallets|exchanges|holdings|tokens        Sources list
 //   -AtlasDemoAction addWallet|connectExchange|addManualHolding|addCustomToken
 //   -AtlasDemoSliceFilter network:ethereum|state:staked        Assets filter
+//   -AtlasDemoUnlock error|damaged|quarantine   with -AtlasDemoFixture empty: show the unlock screen in that state
 //   -AtlasDemoScrollY 700             scroll the page by that many points (iOS 18+ simulators)
 // Theme and appearance use the normal preference keys, for example
 // `-display.theme.v1 candy -display.appearanceMode.v1 dark`.
@@ -130,6 +131,10 @@
         default: break
         }
       }
+    }
+
+    static var unlockPreviewMode: String? {
+      UserDefaults.standard.string(forKey: "AtlasDemoUnlock")
     }
 
     static var scrollY: CGFloat {
@@ -400,6 +405,30 @@
       var body: some View {
         content.scrollPosition($position)
       }
+    }
+  }
+
+  /// The unlock screen with the shared state set into one of its recovery
+  /// states, for screenshots only.
+  struct DemoUnlockPreview: View {
+    @EnvironmentObject private var state: AppState
+    var mode: String
+
+    var body: some View {
+      UnlockScreen()
+        .task {
+          switch mode {
+          case "error":
+            state.error = "The encryption key for this device isn't available in Keychain."
+          case "damaged":
+            state.damagedVaultRecoveryAvailability = .validatedRollbackCheckpoint
+            state.error = "Your saved portfolio on this device is damaged, but an earlier copy was checked and is intact."
+          case "quarantine":
+            state.damagedVaultRecoveryAvailability = .quarantineOnly
+            state.error = "Your saved portfolio on this device is damaged and no earlier copy is available."
+          default: break
+          }
+        }
     }
   }
 #endif

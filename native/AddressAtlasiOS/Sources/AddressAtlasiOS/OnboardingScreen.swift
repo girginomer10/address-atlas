@@ -17,16 +17,20 @@ struct OnboardingScreen: View {
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
   var body: some View {
-    // DEBUGHARNESS-BEGIN
-    if let mode = UserDefaults.standard.string(forKey: "AtlasDemoUnlock") {
-      OnboardingUnlockHarness(mode: mode)
-    } else {
+    #if DEBUG
+      // Debug builds only: `-AtlasDemoUnlock error|damaged|quarantine` shows
+      // the unlock screen in that state (see DemoFixture.swift).
+      if let mode = DemoFixture.unlockPreviewMode {
+        DemoUnlockPreview(mode: mode)
+      } else {
+        realBody
+      }
+    #else
       realBody
-    }
+    #endif
   }
 
   @ViewBuilder private var realBody: some View {
-    // DEBUGHARNESS-END
     GeometryReader { proxy in
       ScrollView {
         VStack(spacing: 20) {
@@ -43,9 +47,6 @@ struct OnboardingScreen: View {
         .frame(maxWidth: .infinity, minHeight: proxy.size.height)
       }
       .scrollBounceBehavior(.basedOnSize)
-      // DEBUGHARNESS-BEGIN
-      .defaultScrollAnchor(UserDefaults.standard.bool(forKey: "AtlasDemoScrollBottom") ? .bottom : nil)
-      // DEBUGHARNESS-END
     }
     .background(AtlasCanvasBackground().ignoresSafeArea())
     .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -263,26 +264,3 @@ private struct OnboardingBarBackground: View {
       .ignoresSafeArea(edges: .bottom)
   }
 }
-
-// DEBUGHARNESS-BEGIN
-private struct OnboardingUnlockHarness: View {
-  @EnvironmentObject private var state: AppState
-  var mode: String
-  var body: some View {
-    UnlockScreen()
-      .task {
-        switch mode {
-        case "error":
-          state.error = "The encryption key for this device isn't available in Keychain."
-        case "damaged":
-          state.damagedVaultRecoveryAvailability = .validatedRollbackCheckpoint
-          state.error = "Your saved portfolio on this device is damaged, but an earlier copy was checked and is intact. Restore the earlier copy, or set the damaged data aside and start fresh. Nothing has been deleted."
-        case "quarantine":
-          state.damagedVaultRecoveryAvailability = .quarantineOnly
-          state.error = "Your saved portfolio on this device is damaged and no earlier copy is available."
-        default: break
-        }
-      }
-  }
-}
-// DEBUGHARNESS-END
