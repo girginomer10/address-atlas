@@ -89,6 +89,7 @@
 		DBED59B6074E3E0D7124E6EB /* ChartKitTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4E62E9262392CE6B2ED782B /* ChartKitTheme.swift */; };
 		F18C802C2F567A1A90851E4D /* CalendarChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1698FCEE8F427DDD67431B71 /* CalendarChartView.swift */; };
 		F2315D8BFCDBA09AD747B969 /* AppStateValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 181AA1E44268FF2873AFFCB4 /* AppStateValidation.swift */; };
+		F27494771C4998451E8C6706 /* AppStateCharts.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6FB152490C1606077FD362E /* AppStateCharts.swift */; };
 		F2CD5036EB5EE660BDF5501F /* PowerDiagramTreemap.swift in Sources */ = {isa = PBXBuildFile; fileRef = F04C152CC22B660608D36F9D /* PowerDiagramTreemap.swift */; };
 		F471F2EDAC93E2628A950D9A /* CoinStateStripModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DB1EA28025B2F75FF1BFB78 /* CoinStateStripModel.swift */; };
 		F5F6156AFEB2709FB304F4F4 /* AppStateEndpointConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A4CE78ED4D7AF0170ED4CFD /* AppStateEndpointConfiguration.swift */; };
@@ -175,6 +176,7 @@
 		D38FF3D35B71472E47CDDBE6 /* AtlasThemeCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AtlasThemeCatalog.swift; sourceTree = "<group>"; };
 		D3FE2888AB7E4FA0A1465760 /* MainShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainShell.swift; sourceTree = "<group>"; };
 		D581C732D0BA6109E966EA7E /* GridChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GridChartView.swift; sourceTree = "<group>"; };
+		D6FB152490C1606077FD362E /* AppStateCharts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateCharts.swift; sourceTree = "<group>"; };
 		DD9FB11E654FCC8900DE663E /* SankeyLayoutEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SankeyLayoutEngine.swift; sourceTree = "<group>"; };
 		DE56FC9A41FAD9556228BD4B /* AddressAtlasiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AddressAtlasiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E4C43B692B10AD943CC995C2 /* AppStateICloud.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateICloud.swift; sourceTree = "<group>"; };
@@ -361,6 +363,7 @@
 				D1B221DA0E90E59F3EC7A71B /* Charts */,
 				AC93E4A10CF81A60F0D50C66 /* AppState.swift */,
 				C04752AA39E3937CDF9A758E /* AppStateAccountLifecycle.swift */,
+				D6FB152490C1606077FD362E /* AppStateCharts.swift */,
 				533EC174E4E518D135EF3EFD /* AppStateDiagnostics.swift */,
 				7A4CE78ED4D7AF0170ED4CFD /* AppStateEndpointConfiguration.swift */,
 				8B7C9BE5A425C44D1BBF6F3B /* AppStateExchangeConnections.swift */,
@@ -477,6 +480,7 @@
 				C033BF470FB1F25697EAB870 /* AddressAtlasiOSApp.swift in Sources */,
 				80AFD4B2F3823A2D681F67FF /* AppState.swift in Sources */,
 				BA61E8F000D5B50FF1AC7139 /* AppStateAccountLifecycle.swift in Sources */,
+				F27494771C4998451E8C6706 /* AppStateCharts.swift in Sources */,
 				2E98CDB2ED71CDDF3C581679 /* AppStateDiagnostics.swift in Sources */,
 				F5F6156AFEB2709FB304F4F4 /* AppStateEndpointConfiguration.swift in Sources */,
 				3CF2DDA060EAA7232F5304E0 /* AppStateExchangeConnections.swift in Sources */,
