@@ -8,6 +8,8 @@ Static HTML mockups that define the redesign. Open them in a browser.
 
 Implementation (phase 1): the six themes are in `native/AddressAtlasMac/Sources/AddressAtlasMac/AtlasThemeCatalog.swift` and are chosen under Settings > Theme on Mac and iOS. Screenshots of the result, with synthetic or empty data, are in `screenshots/phase1/`.
 
+Implementation (phase 2, part C1): `MapChartView`, `RingChartView`, `StripChartView`, `GridChartView`, `BubblesChartView`, `RingsInRingsChartView` and `ListChartView` live in `native/AddressAtlasMac/Sources/AddressAtlasMac/Charts/` with their shared `ChartKit*` files. `screenshots/phase2/` holds a review set rendered from a synthetic portfolio; `ATLAS_WRITE_SCREENSHOTS=1 swift test --filter ChartKitRenderTests` rewrites it (`=all` writes every theme, size and grouping).
+
 Copy rules: say what a thing is or does, once, in as few words as possible. No slogans, no eyebrow labels, no subtitle under every title, each privacy fact stated once where it matters. Errors say what happened, then what to do.
 
 Data in the mockups is synthetic.
