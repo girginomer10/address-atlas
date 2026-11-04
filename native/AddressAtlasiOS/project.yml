@@ -52,6 +52,9 @@ targets:
           - ExchangeSyncViews.swift
           - ICloudSyncView.swift
           - PrivacySafeDiagnosticsView.swift
+          # Mac-only screens (navigation model, Portfolio, Assets, History,
+          # coin detail); the iOS screens live in Sources/AddressAtlasiOS.
+          - MacScreens
           # Shipped as a folder resource below; SwiftPM bundles the same
           # directory for the Mac app.
           - Fonts

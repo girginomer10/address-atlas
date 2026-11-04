@@ -1,30 +1,27 @@
 import AppKit
 import SwiftUI
 
+/// Copies a report for support that leaves out portfolio content.
 struct PrivacySafeDiagnosticsControls: View {
   @EnvironmentObject private var state: AppState
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 16) {
-      PanelHeader(
-        title: "Privacy-safe diagnostics",
-        subtitle: "Useful support context without portfolio content",
-        systemImage: "stethoscope"
+    VStack(alignment: .leading, spacing: 14) {
+      MacHeading("Diagnostics")
+      Text(
+        "Copies app and schema versions, state flags, count ranges and failure codes. It leaves out addresses, names, amounts, credentials, URLs, file paths and raw errors."
       )
-      InfoCallout(
-        title: "Designed to exclude sensitive data",
-        copy:
-          "Includes app and schema versions, coarse state flags, count ranges, and stable failure codes. Excludes addresses, labels, amounts, credentials, sessions, URLs, file paths, and raw errors.",
-        tone: .success
-      )
+      .font(AtlasTheme.font(.body, .callout))
+      .foregroundStyle(AtlasTheme.ink2)
+      .fixedSize(horizontal: false, vertical: true)
       Button {
         copyDiagnostics()
       } label: {
         Label("Copy diagnostics", systemImage: "doc.on.doc")
       }
-      .buttonStyle(AtlasSecondaryButtonStyle())
+      .buttonStyle(MacSecondaryButtonStyle())
       .accessibilityHint(
-        "Copies a bounded technical report that excludes portfolio content and identifiers."
+        "Copies a short technical report that leaves out portfolio content and identifiers."
       )
     }
   }
@@ -34,11 +31,11 @@ struct PrivacySafeDiagnosticsControls: View {
     let pasteboard = NSPasteboard.general
     pasteboard.clearContents()
     if pasteboard.setString(report, forType: .string) {
-      state.notice = "Privacy-safe diagnostics copied."
+      state.notice = "Diagnostics copied."
       state.error = ""
     } else {
       state.notice = ""
-      state.error = "Diagnostics could not be copied. No vault data was placed on the clipboard."
+      state.error = "Diagnostics couldn\u{2019}t be copied. Nothing from your vault was placed on the clipboard."
     }
   }
 }

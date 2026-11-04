@@ -3,6 +3,8 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+// MARK: - Exchanges
+
 struct ExchangesView: View {
   @EnvironmentObject private var state: AppState
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -19,95 +21,35 @@ struct ExchangesView: View {
   }
 
   var body: some View {
-    Page(
-      eyebrow: "Secure connections",
-      title: "Exchanges",
-      subtitle:
-        "Bring exchange balances into your portfolio without enabling trading or withdrawals.",
-      statTitle: "Connections",
-      statValue: "\(state.document.exchangeConnections.count)"
-    ) {
-      if !state.document.exchangeConnections.isEmpty {
-        savedConnections
-      }
-
-      connectionSetup
-
+    MacPage("Exchanges") {
       if state.document.exchangeConnections.isEmpty {
-        savedConnections
-      }
-    }
-  }
-
-  @ViewBuilder
-  private var connectionSetup: some View {
-    if state.document.exchangeConnections.isEmpty {
-      ViewThatFits(in: .horizontal) {
-        HStack(alignment: .top, spacing: 18) {
-          credentialCard
-          connectionGuide
-            .frame(width: 300)
-        }
-        VStack(alignment: .leading, spacing: 18) {
-          credentialCard
-          connectionGuide
+        MacEmptyState(
+          "No exchanges yet",
+          copy: "Connect a read-only API key to include exchange balances in your scans.",
+          systemImage: "building.columns")
+      } else {
+        MacRowList(state.document.exchangeConnections) { connection in
+          ExchangeRow(connection: connection)
         }
       }
-    } else {
       credentialCard
-    }
-  }
-
-  private var savedConnections: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      SectionHeader(
-        title: "Saved connections",
-        meta: "\(state.document.exchangeConnections.count) encrypted on this Mac"
-      )
-      Surface(padding: 0) {
-        if state.document.exchangeConnections.isEmpty {
-          EmptyState(
-            title: "No exchange connections", systemImage: "building.columns",
-            copy: "Connect a read-only API key to include exchange balances in your next scan."
-          )
-          .padding(18)
-        } else {
-          VStack(spacing: 0) {
-            ForEach(state.document.exchangeConnections) { connection in
-              ExchangeRow(connection: connection)
-              if connection.id != state.document.exchangeConnections.last?.id {
-                Divider().overlay(AtlasTheme.ruleSoft)
-              }
-            }
-          }
-        }
-      }
     }
   }
 
   private var credentialCard: some View {
     Surface {
       VStack(alignment: .leading, spacing: 20) {
-        PanelHeader(
-          title: "Connect an exchange",
-          subtitle: "Credentials are sealed locally before they are saved",
-          systemImage: "building.columns.fill"
-        )
+        MacHeading("Connect an exchange")
 
         VStack(alignment: .leading, spacing: 8) {
-          FieldLabel("Provider")
-          Picker("Provider", selection: $provider) {
-            ForEach(ExchangeProvider.allCases, id: \.self) { item in
-              Text(item.label).tag(item)
-            }
-          }
-          .pickerStyle(.segmented)
-          .labelsHidden()
-          .accessibilityLabel("Exchange provider")
+          FieldLabel("Exchange")
+          MacChipPicker(
+            label: "Exchange", options: ExchangeProvider.allCases, selection: $provider,
+            title: { $0.label })
         }
 
         VStack(alignment: .leading, spacing: 8) {
-          FieldLabel("Connection name", detail: "Optional")
+          FieldLabel("Name", detail: "Optional")
           TextField(provider.connectionPlaceholder, text: $label)
             .textFieldStyle(AtlasTextFieldStyle())
             .accessibilityLabel("Connection name")
@@ -142,64 +84,16 @@ struct ExchangesView: View {
           } label: {
             Label("Add connection", systemImage: "lock.fill")
           }
-          .buttonStyle(AtlasPrimaryButtonStyle())
+          .buttonStyle(MacPrimaryButtonStyle())
           .disabled(!hasRequiredCredentialInput)
 
-          Label("Encrypted before storage", systemImage: "checkmark.shield.fill")
-            .font(.caption)
+          Text("Keys are encrypted on this Mac before they\u{2019}re saved.")
+            .font(AtlasTheme.font(.label, .caption))
             .foregroundStyle(AtlasTheme.ink3)
         }
       }
     }
     .disabled(state.vaultEditsDisabled)
-  }
-
-  private var connectionGuide: some View {
-    Surface(style: .accent) {
-      VStack(alignment: .leading, spacing: 18) {
-        PanelHeader(
-          title: "Read-only by default",
-          subtitle: "Your exchange account remains under your control",
-          systemImage: "shield.lefthalf.filled"
-        )
-
-        VStack(alignment: .leading, spacing: 14) {
-          ConnectionStep(
-            number: 1,
-            title: "Create a restricted key",
-            copy: "Enable balance or query access only."
-          )
-          ConnectionStep(
-            number: 2,
-            title: "Store it in the local vault",
-            copy: "A dedicated encryption key protects credentials."
-          )
-          ConnectionStep(
-            number: 3,
-            title: "Refresh when you choose",
-            copy: "Requests go directly from this Mac to the exchange."
-          )
-        }
-
-        Button {
-          if state.scanning {
-            state.cancelScan()
-          } else {
-            state.startScan()
-          }
-        } label: {
-          if state.scanning {
-            Label("Cancel scan", systemImage: "xmark.circle")
-          } else {
-            Label("Scan all sources", systemImage: "arrow.clockwise")
-          }
-        }
-        .buttonStyle(AtlasPrimaryButtonStyle())
-        .disabled(
-          !state.scanning
-            && (state.syncing || state.syncPersistencePending || !state.hasScanSources))
-      }
-    }
   }
 
   private func saveConnection() {
@@ -249,7 +143,7 @@ extension ExchangeProvider {
 
   fileprivate var apiKeyPlaceholder: String {
     switch self {
-    case .coinbase: "organizations/…/apiKeys/…"
+    case .coinbase: "organizations/\u{2026}/apiKeys/\u{2026}"
     case .binance, .kraken: "Paste API key"
     }
   }
@@ -317,8 +211,8 @@ private struct ExchangePermissionGuide: View {
 
   private var title: String {
     switch provider {
-    case .binance: "Permissions checked before saving"
-    case .coinbase: "Confirm view-only access in Coinbase"
+    case .binance: "Permissions are checked before saving"
+    case .coinbase: "Create a view-only key in Coinbase"
     case .kraken: "Enable Query Funds only"
     }
   }
@@ -326,37 +220,12 @@ private struct ExchangePermissionGuide: View {
   private var copy: String {
     switch provider {
     case .coinbase:
-      "Address Atlas accepts a CDP key name and ES256 private key. Scope cannot be verified automatically, so keep trading and transfer permissions off. Escaped \\n line breaks are accepted."
+      "Use a CDP key name and its ES256 private key. Address Atlas can\u{2019}t check the key\u{2019}s scope, so keep trading and transfer permissions off. Escaped \\n line breaks are accepted."
     case .kraken:
-      "Use a different key for every Mac. Keep trading, deposits, withdrawals, and account changes disabled; Kraken scope cannot be verified automatically."
+      "Use a different key on each Mac, with trading, deposits, withdrawals and account changes off. Address Atlas can\u{2019}t check Kraken scope."
     case .binance:
-      "Trading, transfer, margin, futures, options, and withdrawal permissions are refused automatically. Only balance and read access is accepted."
+      "Keys with trading, transfer, margin, futures, options or withdrawal permissions are refused. Only balance and read access is accepted."
     }
-  }
-}
-
-private struct ConnectionStep: View {
-  var number: Int
-  var title: String
-  var copy: String
-
-  var body: some View {
-    HStack(alignment: .top, spacing: 11) {
-      Text("\(number)")
-        .font(.caption.monospacedDigit().weight(.bold))
-        .foregroundStyle(AtlasTheme.accent)
-        .frame(width: 24, height: 24)
-        .background(AtlasTheme.accent.opacity(0.12))
-        .clipShape(Circle())
-      VStack(alignment: .leading, spacing: 2) {
-        Text(title)
-          .font(.callout.weight(.semibold))
-        Text(copy)
-          .font(.caption)
-          .foregroundStyle(AtlasTheme.ink3)
-      }
-    }
-    .accessibilityElement(children: .combine)
   }
 }
 
@@ -391,41 +260,40 @@ struct ExchangeRow: View {
       Image(systemName: connection.provider.systemImage)
         .font(.body.weight(.semibold))
         .foregroundStyle(AtlasTheme.accent)
-        .frame(width: 40, height: 40)
-        .background(AtlasTheme.accent.opacity(0.10))
-        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .frame(width: 38, height: 38)
+        .background(AtlasTheme.accentSoft)
+        .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.small, style: .continuous))
+        .accessibilityHidden(true)
 
-      VStack(alignment: .leading, spacing: 5) {
+      VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: 8) {
           Text(connection.label)
-            .font(.body.weight(.semibold))
+            .font(AtlasTheme.font(.body, .body, weight: .semibold))
           Text(connection.provider.label)
-            .font(.caption)
+            .font(AtlasTheme.font(.label, .caption))
             .foregroundStyle(AtlasTheme.ink3)
         }
         if connection.lastError?.isEmpty == false || hasInvalidKrakenBinding {
           Text(
             connection.lastError?.isEmpty == false
               ? connection.lastError ?? ""
-              : "Legacy Kraken key: add a new per-device read-only key before scanning."
+              : "Legacy Kraken key: add a new read-only key for this Mac before scanning."
           )
-          .font(.callout)
+          .font(AtlasTheme.font(.body, .callout))
           .foregroundStyle(AtlasTheme.loss)
           .lineLimit(2)
         } else if let lastSync = connection.lastSyncAt {
-          Text(
-            "Last refreshed \(AtlasFormatting.dateTime(lastSync))"
-          )
-          .font(.caption)
-          .foregroundStyle(AtlasTheme.ink3)
+          Text("Last read \(AtlasFormatting.dateTime(lastSync))")
+            .font(AtlasTheme.font(.label, .caption))
+            .foregroundStyle(AtlasTheme.ink3)
         } else {
-          Text("Ready for the next portfolio scan")
-            .font(.caption)
+          Text("Not scanned yet")
+            .font(AtlasTheme.font(.label, .caption))
             .foregroundStyle(AtlasTheme.ink3)
         }
       }
       Spacer()
-      Badge(
+      MacBadge(
         connection.credentialScopeAssurance == .verifiedReadOnly
           ? "Read-only verified"
           : "Confirm scope",
@@ -433,7 +301,7 @@ struct ExchangeRow: View {
           ? AtlasTheme.gain
           : AtlasTheme.warning
       )
-      Badge(statusLabel, color: statusColor)
+      MacBadge(statusLabel, color: statusColor)
       Button(role: .destructive) {
         confirmingRemoval = true
       } label: {
@@ -444,9 +312,9 @@ struct ExchangeRow: View {
         "Remove exchange connection \(AtlasAccessibility.exchangeIdentity(connection))"
       )
     }
-    .padding(.horizontal, 18)
+    .padding(.horizontal, 16)
     .padding(.vertical, 12)
-    .frame(minHeight: 72)
+    .frame(minHeight: 68)
     .confirmationDialog(
       "Remove \(AtlasAccessibility.exchangeIdentity(connection))?",
       isPresented: $confirmingRemoval,
@@ -458,37 +326,14 @@ struct ExchangeRow: View {
       Button("Cancel", role: .cancel) {}
     } message: {
       Text(
-        "The encrypted API credentials will be removed from this Mac, including its earlier local copy. An older encrypted copy you uploaded may still contain them until you save a new one."
+        "The encrypted API credentials are removed from this Mac, including its earlier local copy. An older encrypted copy you uploaded may still contain them until you save a new one."
       )
     }
     .disabled(state.vaultEditsDisabled)
   }
 }
 
-private struct SyncActionLabel: View {
-  var idleTitle: String
-  var systemImage: String?
-  var activity: SyncActivity
-  var activeActivity: SyncActivity?
-
-  @ViewBuilder
-  var body: some View {
-    if activeActivity == activity {
-      HStack(spacing: 8) {
-        ProgressView()
-          .controlSize(.small)
-        Text(activity.progressTitle)
-      }
-      .accessibilityElement(children: .ignore)
-      .accessibilityLabel(activity.accessibilityLabel)
-    } else if let systemImage {
-      Label(idleTitle, systemImage: systemImage)
-    } else {
-      Text(idleTitle)
-    }
-  }
-}
-
+// MARK: - Export
 
 struct ExportView: View {
   static let shareSaferExplanation = ExportCopy.shareSaferExplanation
@@ -499,23 +344,12 @@ struct ExportView: View {
   @State private var showFullIdentifyingExports = false
 
   var body: some View {
-    Page(
-      eyebrow: "Controlled sharing",
-      title: "Export",
-      subtitle:
-        "Choose the minimum detail your recipient needs. Every export is generated locally on this Mac.",
-      statTitle: "Latest assets",
-      statValue: "\(state.latestScan?.holdings.count ?? 0)"
-    ) {
+    MacPage("Export") {
       Surface(style: .accent) {
-        VStack(alignment: .leading, spacing: 18) {
-          PanelHeader(
-            title: "Share-safer summary",
-            subtitle: "Recommended for intentional sharing · not anonymous",
-            systemImage: "person.crop.circle.badge.checkmark"
-          )
+        VStack(alignment: .leading, spacing: 16) {
+          MacHeading("Share-safer summary")
           InfoCallout(
-            title: "Reduced exposure—not anonymous",
+            title: "Safer to share, not anonymous",
             copy: "\(ShareSafePortfolioReport.privacyNotice) \(Self.shareSaferExplanation)",
             tone: .info
           )
@@ -525,25 +359,25 @@ struct ExportView: View {
             } label: {
               Label("Save CSV", systemImage: "arrow.down.doc")
             }
-            .buttonStyle(AtlasPrimaryButtonStyle())
+            .buttonStyle(MacPrimaryButtonStyle())
             Button {
               generatePreview(for: .shareSafeCSV(state.document))
             } label: {
               Label("Preview CSV", systemImage: "eye")
             }
-            .buttonStyle(AtlasSecondaryButtonStyle())
+            .buttonStyle(MacSecondaryButtonStyle())
             Button {
               save(.shareSafeJSON(state.document))
             } label: {
               Label("Save JSON", systemImage: "arrow.down.doc")
             }
-            .buttonStyle(AtlasSecondaryButtonStyle())
+            .buttonStyle(MacSecondaryButtonStyle())
             Button {
               generatePreview(for: .shareSafeJSON(state.document))
             } label: {
               Label("Preview JSON", systemImage: "eye")
             }
-            .buttonStyle(AtlasSecondaryButtonStyle())
+            .buttonStyle(MacSecondaryButtonStyle())
           }
           .disabled(state.isExportOperationInProgress)
           if state.isExportOperationInProgress {
@@ -558,39 +392,39 @@ struct ExportView: View {
         DisclosureGroup(isExpanded: $showFullIdentifyingExports) {
           VStack(alignment: .leading, spacing: 14) {
             InfoCallout(
-              title: "This report can identify your portfolio",
+              title: "These reports identify you",
               copy: Self.fullIdentifyingExplanation,
               tone: .danger
             )
             AdaptiveStack {
-              Button("Preview full identifying CSV") {
+              Button("Preview identifying CSV") {
                 guard let payload = csvPayloadIncludingDrafts() else { return }
                 generatePreview(for: payload)
               }
-              .buttonStyle(AtlasSecondaryButtonStyle())
-              Button("Save full identifying CSV") {
+              .buttonStyle(MacSecondaryButtonStyle())
+              Button("Save identifying CSV") {
                 guard let payload = csvPayloadIncludingDrafts() else { return }
                 save(payload)
               }
-              .buttonStyle(AtlasSecondaryButtonStyle())
-              Button("Preview full identifying JSON") {
+              .buttonStyle(MacSecondaryButtonStyle())
+              Button("Preview identifying JSON") {
                 guard let payload = jsonPayloadIncludingDrafts() else { return }
                 generatePreview(for: payload)
               }
-              .buttonStyle(AtlasSecondaryButtonStyle())
-              Button("Save full identifying JSON") {
+              .buttonStyle(MacSecondaryButtonStyle())
+              Button("Save identifying JSON") {
                 guard let payload = jsonPayloadIncludingDrafts() else { return }
                 save(payload)
               }
-              .buttonStyle(AtlasSecondaryButtonStyle())
+              .buttonStyle(MacSecondaryButtonStyle())
             }
             .disabled(state.isExportOperationInProgress)
           }
           .padding(.top, 12)
         } label: {
           PanelHeader(
-            title: "Full identifying reports",
-            subtitle: "Addresses, balances, and portfolio details are disclosed",
+            title: "Full reports",
+            subtitle: "Show your addresses and exact balances",
             systemImage: "exclamationmark.triangle.fill",
             tint: AtlasTheme.loss
           )
@@ -636,7 +470,7 @@ struct ExportView: View {
       return try makePayload()
     } catch WalletLabelDraftError.invalidLabel {
       state.notice = ""
-      state.error = "Wallet labels must be between 1 and 80 characters before exporting."
+      state.error = "Wallet names must be 1 to 80 characters before you export."
       return nil
     } catch {
       state.presentUserFacingError(error)
@@ -681,7 +515,7 @@ struct ExportPreview: View {
 
   var displayedText: String {
     exportedPreview.isEmpty
-      ? "Preview the recommended share-safer summary here. It reduces direct exposure, but portfolio composition can still identify you; it is not anonymous."
+      ? "Preview a report to see exactly what it contains before you save it. The share-safer summary lowers exposure but isn\u{2019}t anonymous."
       : exportedPreview
   }
 
@@ -694,13 +528,9 @@ struct ExportPreview: View {
 
     Surface {
       VStack(alignment: .leading, spacing: 10) {
-        PanelHeader(
-          title: "Read-only preview",
-          subtitle: "Inspect the exact report before saving",
-          systemImage: "doc.text.magnifyingglass"
-        )
+        MacHeading("Preview")
         Text(model.spokenSummary)
-          .font(.caption)
+          .font(AtlasTheme.font(.label, .caption))
           .foregroundStyle(AtlasTheme.ink2)
           .accessibilityLabel(model.accessibilitySummaryLabel)
         Table(model.rows) {
@@ -728,192 +558,156 @@ struct ExportPreview: View {
   }
 }
 
+// MARK: - Settings
+
 struct SettingsView: View {
   @EnvironmentObject private var state: AppState
   @State private var recoveryCode = ""
   @State private var restoreCode = ""
 
   var body: some View {
-    Page(
-      eyebrow: "Preferences and recovery",
-      title: "Settings",
-      subtitle:
-        "Control refresh behavior, portfolio display, recovery, and privacy-safe support tools.",
-      statTitle: "Currency",
-      statValue: "USD"
-    ) {
+    MacPage("Settings") {
       Surface {
         AtlasThemeSection()
       }
 
-      Surface {
-        VStack(alignment: .leading, spacing: 20) {
-          PanelHeader(
-            title: "Portfolio preferences",
-            subtitle: "Stored inside your encrypted local vault",
-            systemImage: "slider.horizontal.3"
-          )
-          PreferenceToggleRow(
-            title: "Automatic refresh",
-            copy: "Refresh saved sources every 15 minutes while the app is open and unlocked.",
-            systemImage: "arrow.clockwise",
-            isOn: Binding(
-              get: {
-                state.document.preferences.autoRefresh
-              },
-              set: {
-                let value = $0
-                Task { await state.setAutoRefresh(value) }
-              })
-          )
-          Divider().overlay(AtlasTheme.ruleSoft)
-          PreferenceToggleRow(
-            title: "Hide small balances",
-            copy: "Keep low-value holdings out of the main asset list without deleting them.",
-            systemImage: "line.3.horizontal.decrease.circle",
-            isOn: Binding(
-              get: {
-                state.document.preferences.hideDust
-              },
-              set: {
-                let value = $0
-                Task { await state.setHideDust(value) }
-              })
-          )
-          Divider().overlay(AtlasTheme.ruleSoft)
-          AdaptiveStack(horizontalSpacing: 14, verticalSpacing: 14) {
-            VStack(alignment: .leading, spacing: 7) {
-              FieldLabel("Small-balance threshold", detail: "USD")
-              TextField(
-                "0.00",
-                value: Binding(
-                  get: {
-                    state.document.preferences.dustThreshold
-                  },
-                  set: {
-                    let value = $0
-                    Task { await state.setDustThreshold(value) }
-                  }), format: .number
-              )
-              .textFieldStyle(AtlasTextFieldStyle())
-              .accessibilityLabel("Dust threshold in US dollars")
-            }
-            VStack(alignment: .leading, spacing: 7) {
-              FieldLabel("Display currency")
-              HStack {
-                Text("USD")
-                  .font(.callout.weight(.semibold))
-                Spacer()
-                Badge("Current")
-              }
-              .padding(.horizontal, 13)
-              .frame(minHeight: 42)
-              .background(AtlasTheme.surfaceMuted.opacity(0.44))
-              .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
-              .overlay {
-                RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
-                  .stroke(AtlasTheme.ruleSoft, lineWidth: 1)
-              }
-            }
-          }
-        }
-      }
-      .disabled(state.vaultEditsDisabled)
+      portfolioSection
 
-      Surface {
-        VStack(alignment: .leading, spacing: 16) {
-          PanelHeader(
-            title: "Privacy and support",
-            subtitle: "Review data boundaries, get help, or inspect the price-data source",
-            systemImage: "hand.raised.fill"
-          )
-          AdaptiveStack {
-            Link(destination: AppState.privacyPolicyURL) {
-              Label("Privacy policy", systemImage: "lock.doc")
-            }
-            .buttonStyle(AtlasSecondaryButtonStyle())
-            Link(destination: AppState.supportURL) {
-              Label("Support", systemImage: "questionmark.circle")
-            }
-            .buttonStyle(AtlasSecondaryButtonStyle())
-            Link(destination: AppState.termsOfUseURL) {
-              Label("Terms of use", systemImage: "doc.text")
-            }
-            .buttonStyle(AtlasSecondaryButtonStyle())
-            Link(destination: AppState.coinGeckoAttributionURL) {
-              Label("Data provided by CoinGecko", systemImage: "chart.line.uptrend.xyaxis")
-            }
-            .buttonStyle(AtlasSecondaryButtonStyle())
-          }
-          Text(
-            "Address Atlas is read-only analytics software. It never creates wallets, stores private keys, signs transactions, executes trades, or provides personalized investment advice."
-          )
-          .font(.caption)
-          .foregroundStyle(AtlasTheme.ink2)
-          .lineSpacing(2)
-        }
-      }
+      SyncView()
 
-      Surface(style: .warning) {
-        VStack(alignment: .leading, spacing: 16) {
-          PanelHeader(
-            title: "Recovery kit",
-            subtitle: "A recovery file and separately stored code restore this Mac's encryption key",
-            systemImage: "key.fill",
-            tint: AtlasTheme.warning
-          )
-          AdaptiveStack {
-            Button {
-              exportRecoveryKit()
-            } label: {
-              Label("Export recovery kit", systemImage: "arrow.down.doc")
-            }
-            .buttonStyle(AtlasPrimaryButtonStyle())
-            VStack(alignment: .leading, spacing: 8) {
-              FieldLabel("Recovery code")
-              SecureField("Enter recovery code", text: $restoreCode)
-                .textFieldStyle(AtlasTextFieldStyle())
-                .accessibilityLabel("Recovery code for restore")
-            }
-            Button {
-              restoreRecoveryKit()
-            } label: {
-              Label("Choose recovery file", systemImage: "folder")
-            }
-            .buttonStyle(AtlasSecondaryButtonStyle())
-            .disabled(
-              state.vaultEditsDisabled
-                || restoreCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            )
-          }
-          if !recoveryCode.isEmpty {
-            InfoCallout(
-              title: "Store this code separately from the recovery file",
-              copy: recoveryCode,
-              tone: .warning
-            )
-            VStack(alignment: .leading, spacing: 6) {
-              FieldLabel("Recovery code", detail: "Selectable")
-              Text(recoveryCode)
-                .font(.callout.monospaced())
-                .textSelection(.enabled)
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(AtlasTheme.surface)
-                .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
-                .overlay {
-                  RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
-                    .stroke(AtlasTheme.ruleSoft, lineWidth: 1)
-                }
-            }
-          }
-        }
-      }
+      MacPrivacySection()
+
+      recoverySection
 
       Surface(style: .subtle) {
         PrivacySafeDiagnosticsControls()
       }
     }
+  }
+
+  // MARK: Portfolio
+
+  private var portfolioSection: some View {
+    Surface {
+      VStack(alignment: .leading, spacing: 18) {
+        MacHeading("Portfolio")
+        PreferenceToggleRow(
+          title: "Refresh every 15 minutes",
+          copy: "While Address Atlas is open and unlocked.",
+          systemImage: "arrow.clockwise",
+          isOn: Binding(
+            get: {
+              state.document.preferences.autoRefresh
+            },
+            set: {
+              let value = $0
+              Task { await state.setAutoRefresh(value) }
+            })
+        )
+        Divider().overlay(AtlasTheme.ruleSoft)
+        PreferenceToggleRow(
+          title: "Hide small balances",
+          copy: "Keeps them out of lists and charts. The total still counts them.",
+          systemImage: "line.3.horizontal.decrease.circle",
+          isOn: Binding(
+            get: {
+              state.document.preferences.hideDust
+            },
+            set: {
+              let value = $0
+              Task { await state.setHideDust(value) }
+            })
+        )
+        VStack(alignment: .leading, spacing: 7) {
+          FieldLabel("Small balance limit", detail: "USD")
+          TextField(
+            "0.00",
+            value: Binding(
+              get: {
+                state.document.preferences.dustThreshold
+              },
+              set: {
+                let value = $0
+                Task { await state.setDustThreshold(value) }
+              }), format: .number
+          )
+          .textFieldStyle(AtlasTextFieldStyle())
+          .frame(maxWidth: 240)
+          .accessibilityLabel("Small balance limit in US dollars")
+        }
+      }
+    }
+    .disabled(state.vaultEditsDisabled)
+  }
+
+  // MARK: Recovery
+
+  private var recoverySection: some View {
+    Surface(style: .warning) {
+      VStack(alignment: .leading, spacing: 16) {
+        MacHeading("Recovery kit")
+        Text(
+          "A recovery file and a code you keep apart from it can restore this Mac\u{2019}s encryption key."
+        )
+        .font(AtlasTheme.font(.body, .callout))
+        .foregroundStyle(AtlasTheme.ink2)
+        Button {
+          exportRecoveryKit()
+        } label: {
+          Label("Export recovery kit", systemImage: "arrow.down.doc")
+        }
+        .buttonStyle(MacPrimaryButtonStyle())
+        VStack(alignment: .leading, spacing: 8) {
+          FieldLabel("Restore from a recovery file")
+          ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 12) {
+              restoreCodeField
+              restoreFileButton
+            }
+            VStack(alignment: .leading, spacing: 10) {
+              restoreCodeField
+              restoreFileButton
+            }
+          }
+        }
+        if !recoveryCode.isEmpty {
+          VStack(alignment: .leading, spacing: 8) {
+            Text("Store this code apart from the recovery file")
+              .font(AtlasTheme.font(.body, .callout, weight: .semibold))
+            Text(recoveryCode)
+              .font(AtlasTheme.font(.mono, .callout))
+              .textSelection(.enabled)
+              .padding(14)
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .background(AtlasTheme.surface)
+              .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous))
+              .overlay {
+                RoundedRectangle(cornerRadius: AtlasRadius.control, style: .continuous)
+                  .stroke(AtlasTheme.outline, lineWidth: 1)
+              }
+          }
+        }
+      }
+    }
+  }
+
+  private var restoreCodeField: some View {
+    SecureField("Recovery code", text: $restoreCode)
+      .textFieldStyle(AtlasTextFieldStyle())
+      .accessibilityLabel("Recovery code for restore")
+  }
+
+  private var restoreFileButton: some View {
+    Button {
+      restoreRecoveryKit()
+    } label: {
+      Label("Choose recovery file", systemImage: "folder")
+    }
+    .buttonStyle(MacSecondaryButtonStyle())
+    .disabled(
+      state.vaultEditsDisabled
+        || restoreCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    )
   }
 
   private func exportRecoveryKit() {
@@ -936,7 +730,7 @@ struct SettingsView: View {
         let filename = "address-atlas-\(Self.recoveryExportTimestamp()).atlas-recovery"
         let destination = directory.appending(path: filename)
         guard !FileManager.default.fileExists(atPath: destination.path) else {
-          state.error = "A recovery file with this timestamp already exists. Wait one second and retry."
+          state.error = "A recovery file with this timestamp already exists. Wait a second and try again."
           return
         }
         recoveryCode = try state.exportRecoveryKit(to: destination)
@@ -975,6 +769,63 @@ struct SettingsView: View {
   }
 }
 
+/// What stays on this Mac, what leaves it, and what is never asked for: the one
+/// place the app explains privacy. Each fact is stated once, here.
+struct MacPrivacySection: View {
+  var body: some View {
+    Surface {
+      VStack(alignment: .leading, spacing: 16) {
+        MacHeading("Privacy")
+        VStack(alignment: .leading, spacing: 12) {
+          fact(
+            "Stays on this Mac",
+            "Your wallets, balances, scan history and exchange keys, encrypted with a key in Keychain."
+          )
+          fact(
+            "Goes to providers",
+            "Public wallet addresses go to blockchain data providers and price lookups go to CoinGecko. Exchange requests go straight to the exchange. These services can see your IP address."
+          )
+          fact(
+            "Never asked for",
+            "Private keys or seed phrases. Address Atlas is read-only and can\u{2019}t sign or move funds."
+          )
+        }
+        AdaptiveStack {
+          Link(destination: AppState.privacyPolicyURL) {
+            Label("Privacy policy", systemImage: "lock.doc")
+          }
+          .buttonStyle(MacSecondaryButtonStyle())
+          Link(destination: AppState.termsOfUseURL) {
+            Label("Terms of use", systemImage: "doc.text")
+          }
+          .buttonStyle(MacSecondaryButtonStyle())
+          Link(destination: AppState.supportURL) {
+            Label("Support", systemImage: "questionmark.circle")
+          }
+          .buttonStyle(MacSecondaryButtonStyle())
+          Link(destination: AppState.coinGeckoAttributionURL) {
+            Label("Prices by CoinGecko", systemImage: "chart.line.uptrend.xyaxis")
+          }
+          .buttonStyle(MacSecondaryButtonStyle())
+        }
+      }
+    }
+  }
+
+  private func fact(_ title: String, _ copy: String) -> some View {
+    VStack(alignment: .leading, spacing: 3) {
+      Text(title)
+        .font(AtlasTheme.font(.body, .callout, weight: .semibold))
+        .foregroundStyle(AtlasTheme.ink)
+      Text(copy)
+        .font(AtlasTheme.font(.body, .callout))
+        .foregroundStyle(AtlasTheme.ink2)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+    .accessibilityElement(children: .combine)
+  }
+}
+
 private struct PreferenceToggleRow: View {
   var title: String
   var copy: String
@@ -986,15 +837,15 @@ private struct PreferenceToggleRow: View {
       Image(systemName: systemImage)
         .font(.body.weight(.semibold))
         .foregroundStyle(AtlasTheme.accent)
-        .frame(width: 38, height: 38)
-        .background(AtlasTheme.accent.opacity(0.10))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .frame(width: 36, height: 36)
+        .background(AtlasTheme.accentSoft)
+        .clipShape(RoundedRectangle(cornerRadius: AtlasRadius.small, style: .continuous))
         .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 3) {
         Text(title)
-          .font(.callout.weight(.semibold))
+          .font(AtlasTheme.font(.body, .callout, weight: .semibold))
         Text(copy)
-          .font(.caption)
+          .font(AtlasTheme.font(.label, .caption))
           .foregroundStyle(AtlasTheme.ink3)
       }
       .accessibilityHidden(true)

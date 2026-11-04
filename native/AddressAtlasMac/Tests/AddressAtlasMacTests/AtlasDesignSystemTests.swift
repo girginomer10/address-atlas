@@ -26,7 +26,7 @@ final class AtlasDesignSystemTests: XCTestCase {
       context: "locked launch"
     )
     assertValidLayout(
-      MainView().environmentObject(unlockedState),
+      MainView().environmentObject(unlockedState).environmentObject(isolatedPreferences()),
       size: NSSize(width: 900, height: 600),
       context: "unlocked launch"
     )
@@ -51,18 +51,15 @@ final class AtlasDesignSystemTests: XCTestCase {
     )
     let preferences = isolatedPreferences()
     let screens: [(String, AnyView)] = [
-      ("portfolio", AnyView(PortfolioView().environmentObject(state))),
-      ("wallets", AnyView(WalletsView().environmentObject(state))),
-      ("assets", AnyView(AssetsView().environmentObject(state))),
-      ("tokens", AnyView(TokenAllowlistView().environmentObject(state))),
-      ("snapshots", AnyView(SnapshotsView().environmentObject(state))),
-      ("exchanges", AnyView(ExchangesView().environmentObject(state))),
-      ("sync", AnyView(SyncView().environmentObject(state))),
-      ("export", AnyView(ExportView().environmentObject(state))),
-      (
-        "settings",
-        AnyView(SettingsView().environmentObject(state).environmentObject(preferences))
-      ),
+      ("portfolio", macScreen(PortfolioView(), state, preferences)),
+      ("wallets", macScreen(WalletsView(), state, preferences)),
+      ("assets", macScreen(AssetsView(), state, preferences)),
+      ("tokens", macScreen(TokenAllowlistView(), state, preferences)),
+      ("history", macScreen(HistoryView(), state, preferences)),
+      ("exchanges", macScreen(ExchangesView(), state, preferences)),
+      ("icloud", macScreen(SyncView(), state, preferences)),
+      ("export", macScreen(ExportView(), state, preferences)),
+      ("settings", macScreen(SettingsView(), state, preferences)),
     ]
 
     for (name, screen) in screens {
@@ -74,12 +71,13 @@ final class AtlasDesignSystemTests: XCTestCase {
     }
 
     let populatedScreens: [(String, AnyView)] = [
-      ("portfolio-populated", AnyView(PortfolioView().environmentObject(populatedState))),
-      ("wallets-populated", AnyView(WalletsView().environmentObject(populatedState))),
-      ("assets-populated", AnyView(AssetsView().environmentObject(populatedState))),
-      ("tokens-populated", AnyView(TokenAllowlistView().environmentObject(populatedState))),
-      ("snapshots-populated", AnyView(SnapshotsView().environmentObject(populatedState))),
-      ("exchanges-populated", AnyView(ExchangesView().environmentObject(populatedState))),
+      ("portfolio-populated", macScreen(PortfolioView(), populatedState, preferences)),
+      ("coin-populated", macScreen(CoinDetailView(coinKey: "ETH"), populatedState, preferences)),
+      ("wallets-populated", macScreen(WalletsView(), populatedState, preferences)),
+      ("assets-populated", macScreen(AssetsView(), populatedState, preferences)),
+      ("tokens-populated", macScreen(TokenAllowlistView(), populatedState, preferences)),
+      ("history-populated", macScreen(HistoryView(), populatedState, preferences)),
+      ("exchanges-populated", macScreen(ExchangesView(), populatedState, preferences)),
     ]
     for (name, screen) in populatedScreens {
       assertValidLayout(
@@ -139,6 +137,7 @@ final class AtlasDesignSystemTests: XCTestCase {
       renderedPNG(
         MainView()
           .environmentObject(state)
+          .environmentObject(preferences)
           .preferredColorScheme(.dark),
         size: NSSize(width: 1_200, height: 800),
         appearanceName: .darkAqua
@@ -151,6 +150,7 @@ final class AtlasDesignSystemTests: XCTestCase {
       renderedPNG(
         MainView()
           .environmentObject(state)
+          .environmentObject(preferences)
           .preferredColorScheme(.light),
         size: NSSize(width: 1_200, height: 800),
         appearanceName: .aqua
@@ -241,8 +241,8 @@ final class AtlasDesignSystemTests: XCTestCase {
       ("01-portfolio.jpg", .portfolio),
       ("02-wallets.jpg", .wallets),
       ("03-assets.jpg", .assets),
-      ("04-snapshots.jpg", .snapshots),
-      ("05-sync.jpg", .sync),
+      ("04-snapshots.jpg", .history),
+      ("05-sync.jpg", .settings),
     ]
     let requestedScreens = screens.filter { $0.0 == requestedFilename }
     XCTAssertEqual(requestedScreens.count, 1)
@@ -258,7 +258,7 @@ final class AtlasDesignSystemTests: XCTestCase {
     )
     _ = try store.load()
     var screenshotDocument = try populatedDocument(vaultKey: vaultKey)
-    if section == .sync {
+    if section == .settings {
       screenshotDocument.syncState = SyncState()
     }
     let state = AppState(
@@ -277,6 +277,7 @@ final class AtlasDesignSystemTests: XCTestCase {
       renderedJPEG(
         MainView(initialSection: section)
           .environmentObject(state)
+          .environmentObject(isolatedPreferences())
           .environment(\.locale, Locale(identifier: "en_US"))
           .preferredColorScheme(.dark)
           .transaction {
@@ -325,6 +326,19 @@ final class AtlasDesignSystemTests: XCTestCase {
     XCTAssertEqual(
       announcements.map(\.message),
       ["Status: Vault saved.", "Status: Vault saved.", "Status: Vault saved."]
+    )
+  }
+
+  /// A screen with the environment the unlocked window gives it.
+  @MainActor
+  private func macScreen<Screen: View>(
+    _ screen: Screen, _ state: AppState, _ preferences: AtlasDisplayPreferences
+  ) -> AnyView {
+    AnyView(
+      screen
+        .environmentObject(state)
+        .environmentObject(preferences)
+        .environmentObject(MacNavigationModel())
     )
   }
 

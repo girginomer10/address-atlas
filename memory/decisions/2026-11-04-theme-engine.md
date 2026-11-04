@@ -56,6 +56,8 @@ synthetic fixtures still apply.
 - Adding a file under `Sources/AddressAtlasMac` needs `./generate-project.sh`.
 - Screens still use system `.font(.callout)` etc. in places; only the shared
   primitives, page headers and a few iOS pieces use themed fonts. Migrating
-  screens to `AtlasTheme.font(...)`/chart tokens is the next phase.
+  screens to `AtlasTheme.font(...)`/chart tokens is the next phase. (Done for
+  the Mac in phase 3, see `2026-11-04-mac-navigation-and-screens.md`; the Mac
+  screens also avoid the shared pill button styles, see the pill gotcha note.)
 - Hard-edged themes draw offset shadows behind cards; do not clip a card's
   parent tightly or the shadow is cut.

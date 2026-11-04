@@ -53,10 +53,12 @@ struct AddressAtlasMacApp: App {
   /// Theme, light/dark choice and portfolio view preferences. Not sensitive,
   /// so they live in UserDefaults rather than the encrypted vault.
   @StateObject private var displayPreferences = AtlasDisplayPreferences()
+  /// The open section, shared with the menu commands.
+  @StateObject private var navigation = MacNavigationModel()
 
   var body: some Scene {
     Window("Address Atlas", id: "main") {
-      RootView()
+      RootView(navigation: navigation)
         .environmentObject(appDelegate.state)
         .environmentObject(displayPreferences)
         .atlasThemeRoot(displayPreferences)
@@ -66,7 +68,7 @@ struct AddressAtlasMacApp: App {
     }
     .windowStyle(.hiddenTitleBar)
     .commands {
-      CommandGroup(replacing: .newItem) {}
+      AtlasCommands(state: appDelegate.state, navigation: navigation)
     }
 
     Settings {
@@ -80,8 +82,48 @@ struct AddressAtlasMacApp: App {
   }
 }
 
+/// Menu commands: ⌘N adds a wallet, ⌘F finds an asset, ⌘R scans, ⌘1 to ⌘7 open
+/// the sections. They only act while the vault is unlocked.
+struct AtlasCommands: Commands {
+  @ObservedObject var state: AppState
+  @ObservedObject var navigation: MacNavigationModel
+
+  var body: some Commands {
+    CommandGroup(replacing: .newItem) {
+      Button("Add Wallet") { navigate { navigation.requestAddWallet() } }
+        .keyboardShortcut("n", modifiers: .command)
+        .disabled(!state.isUnlocked)
+    }
+    CommandGroup(after: .textEditing) {
+      Button("Find Asset") { navigate { navigation.requestFind() } }
+        .keyboardShortcut("f", modifiers: .command)
+        .disabled(!state.isUnlocked)
+    }
+    CommandMenu("Portfolio") {
+      Button(state.scanning ? "Cancel Scan" : "Scan") { MacScanAction.perform(state) }
+        .keyboardShortcut("r", modifiers: .command)
+        .disabled(!state.isUnlocked || !MacScanAction.isAvailable(state))
+    }
+    CommandMenu("Go") {
+      ForEach(MainView.Section.allCases) { section in
+        Button(section.title) { navigate { navigation.go(section) } }
+          .keyboardShortcut(
+            KeyEquivalent(Character("\(section.shortcutDigit)")), modifiers: .command
+          )
+          .disabled(!state.isUnlocked)
+      }
+    }
+  }
+
+  private func navigate(_ action: () -> Void) {
+    state.clearTransientMessagesForNavigation()
+    action()
+  }
+}
+
 struct RootView: View {
   @EnvironmentObject private var state: AppState
+  var navigation: MacNavigationModel
 
   private var autoRefreshTaskID: String {
     "\(state.isUnlocked)-\(state.document.preferences.autoRefresh)"
@@ -94,7 +136,7 @@ struct RootView: View {
   var body: some View {
     Group {
       if state.isUnlocked {
-        MainView()
+        MainView(navigation: navigation)
       } else {
         UnlockView()
       }
@@ -128,85 +170,62 @@ struct UnlockView: View {
   @EnvironmentObject private var state: AppState
   @State private var restoreCode = ""
   @State private var confirmsDamagedVaultQuarantine = false
-  @ScaledMetric(relativeTo: .largeTitle) private var titleSize: CGFloat = 48
 
   var body: some View {
     ZStack {
-      LinearGradient(
-        colors: [AtlasTheme.canvas, AtlasTheme.surfaceMuted.opacity(0.28)],
-        startPoint: .topLeading,
-        endPoint: .bottomTrailing
-      )
-      HStack(spacing: 0) {
-        ScrollView {
-          VStack(alignment: .leading, spacing: 24) {
-            BrandLockup()
+      AtlasCanvasBackground()
+      ScrollView {
+        VStack(alignment: .leading, spacing: 20) {
+          MacBrand()
+            .padding(.bottom, 4)
 
-            VStack(alignment: .leading, spacing: 14) {
-              Label("Local-first portfolio security", systemImage: "lock.shield.fill")
-                .font(.callout.weight(.semibold))
-                .foregroundStyle(AtlasTheme.accent)
-              Text("Your portfolio,\nprivate by default.")
-                .font(.system(size: titleSize, weight: .bold, design: .rounded))
-                .tracking(-1.2)
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
-              Text(
-                "Your encryption key stays in macOS Keychain. Portfolio data, exchange credentials, and scan history are encrypted before storage, including the optional iCloud copy."
-              )
-              .font(.body)
-              .foregroundStyle(AtlasTheme.ink2)
-              .lineSpacing(3)
-              .frame(maxWidth: 620, alignment: .leading)
-            }
+          unlockCard
 
-            unlockCard
-
-            if let recovery = state.damagedVaultRecoveryAvailability {
-              damagedVaultCard(recovery)
-            }
-
-            recoveryCard
-
-            Surface(style: .subtle) {
-              PrivacySafeDiagnosticsControls()
-            }
-
-            StatusLine()
+          if let recovery = state.damagedVaultRecoveryAvailability {
+            damagedVaultCard(recovery)
           }
-          .padding(36)
-          .frame(maxWidth: 760, minHeight: 600, alignment: .leading)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
 
-        trustPanel
+          recoveryCard
+
+          Surface(style: .subtle) {
+            PrivacySafeDiagnosticsControls()
+          }
+
+          StatusLine()
+        }
+        .padding(36)
+        .frame(maxWidth: 600, alignment: .leading)
+        .frame(maxWidth: .infinity)
       }
     }
     .frame(minWidth: 800, minHeight: 560)
     .confirmationDialog(
-      "Preserve damaged vault and start clean?",
+      "Save the damaged vault and start clean?",
       isPresented: $confirmsDamagedVaultQuarantine,
       titleVisibility: .visible
     ) {
-      Button("Preserve in quarantine and start clean", role: .destructive) {
+      Button("Save aside and start clean", role: .destructive) {
         Task { await state.quarantineDamagedVaultAndStartClean() }
       }
       Button("Cancel", role: .cancel) {}
     } message: {
       Text(
-        "Address Atlas will first verify a crash-durable private copy of vault.sqlite and every present SQLite sidecar. Only then will it activate an empty local vault using the same Keychain key. Nothing will be downloaded automatically."
+        "Address Atlas first checks that a durable private copy of vault.sqlite and its sidecar files exists. Then it starts an empty local vault with the same Keychain key. Nothing is downloaded automatically."
       )
     }
   }
 
   private var unlockCard: some View {
     Surface(style: .accent) {
-      AdaptiveStack(horizontalSpacing: 18) {
-        PanelHeader(
-          title: "Encrypted local vault",
-          subtitle: "Protected by a random 256-bit key in Keychain",
-          systemImage: "lock.fill"
-        )
+      VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 4) {
+          Text("Vault locked")
+            .font(AtlasTheme.font(.display, .title2, weight: .bold))
+            .accessibilityAddTraits(.isHeader)
+          Text("Your portfolio is encrypted. The key is in Keychain.")
+            .font(AtlasTheme.font(.body, .callout))
+            .foregroundStyle(AtlasTheme.ink2)
+        }
         Button {
           Task { await state.unlock() }
         } label: {
@@ -214,13 +233,14 @@ struct UnlockView: View {
             HStack(spacing: 8) {
               ProgressView()
                 .controlSize(.small)
-              Text("Unlocking…")
+              Text("Unlocking\u{2026}")
             }
           } else {
-            Label("Unlock vault", systemImage: "lock.open.fill")
+            Label("Unlock", systemImage: "lock.open.fill")
           }
         }
-        .buttonStyle(AtlasPrimaryButtonStyle())
+        .buttonStyle(MacPrimaryButtonStyle())
+        .keyboardShortcut(.defaultAction)
         .disabled(state.isUnlocking)
       }
     }
@@ -230,25 +250,29 @@ struct UnlockView: View {
   private func damagedVaultCard(_ recovery: DamagedVaultRecoveryAvailability) -> some View {
     Surface(style: .warning) {
       VStack(alignment: .leading, spacing: 14) {
-        PanelHeader(
-          title: "Local vault needs attention",
-          subtitle: recovery == .validatedRollbackCheckpoint
-            ? "A verified encrypted restore point is available"
-            : "The damaged database can be preserved before starting clean",
-          systemImage: "exclamationmark.shield.fill",
-          tint: AtlasTheme.warning
-        )
+        VStack(alignment: .leading, spacing: 4) {
+          Text("The local vault needs attention")
+            .font(AtlasTheme.font(.display, .headline, weight: .bold))
+            .accessibilityAddTraits(.isHeader)
+          Text(
+            recovery == .validatedRollbackCheckpoint
+              ? "A verified, encrypted restore point is available."
+              : "You can save the damaged database aside and start clean."
+          )
+          .font(AtlasTheme.font(.body, .callout))
+          .foregroundStyle(AtlasTheme.ink2)
+        }
         if recovery == .validatedRollbackCheckpoint {
           Button("Restore the earlier copy") {
             Task { await state.recoverDamagedVaultFromRollbackCheckpoint() }
           }
-          .buttonStyle(AtlasPrimaryButtonStyle())
+          .buttonStyle(MacPrimaryButtonStyle())
           .disabled(state.isUnlocking)
         }
-        Button("Preserve damaged vault and start clean", role: .destructive) {
+        Button("Save damaged vault and start clean", role: .destructive) {
           confirmsDamagedVaultQuarantine = true
         }
-        .buttonStyle(AtlasSecondaryButtonStyle())
+        .buttonStyle(MacSecondaryButtonStyle())
         .disabled(state.isUnlocking)
       }
     }
@@ -256,12 +280,15 @@ struct UnlockView: View {
 
   private var recoveryCard: some View {
     Surface {
-      VStack(alignment: .leading, spacing: 16) {
-        PanelHeader(
-          title: "Restore Keychain access",
-          subtitle: "Use your recovery file and separately stored code",
-          systemImage: "key.fill"
-        )
+      VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 4) {
+          Text("Restore Keychain access")
+            .font(AtlasTheme.font(.display, .headline, weight: .bold))
+            .accessibilityAddTraits(.isHeader)
+          Text("Use your recovery file and the code you stored apart from it.")
+            .font(AtlasTheme.font(.body, .callout))
+            .foregroundStyle(AtlasTheme.ink2)
+        }
         AdaptiveStack(horizontalSpacing: 12) {
           SecureField("Recovery code", text: $restoreCode)
             .textFieldStyle(AtlasTextFieldStyle())
@@ -269,64 +296,15 @@ struct UnlockView: View {
           Button("Choose recovery file") {
             restoreRecoveryKit()
           }
-          .buttonStyle(AtlasSecondaryButtonStyle())
+          .buttonStyle(MacSecondaryButtonStyle())
           .disabled(
             state.isUnlocking
               || restoreCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
-        Text("The recovery file is verified before anything in Keychain is changed.")
-          .font(.caption)
+        Text("The file is checked before anything in Keychain changes.")
+          .font(AtlasTheme.font(.label, .caption))
           .foregroundStyle(AtlasTheme.ink3)
       }
-    }
-  }
-
-  private var trustPanel: some View {
-    VStack(alignment: .leading, spacing: 28) {
-      Badge("Zero custody", color: AtlasTheme.gain)
-      VStack(alignment: .leading, spacing: 10) {
-        Text("Everything you track.\nNothing to hand over.")
-          .font(.title.weight(.bold))
-          .tracking(-0.5)
-        Text("Address Atlas is a read-only portfolio map built around local ownership.")
-          .font(.callout)
-          .foregroundStyle(AtlasTheme.ink2)
-          .lineSpacing(3)
-      }
-      VStack(alignment: .leading, spacing: 20) {
-        UnlockFeature(
-          title: "No signing",
-          copy: "Only public wallet addresses are scanned",
-          systemImage: "signature"
-        )
-        UnlockFeature(
-          title: "No custody",
-          copy: "Private keys and seed phrases never enter the app",
-          systemImage: "hand.raised.fill"
-        )
-        UnlockFeature(
-          title: "Optional iCloud copy",
-          copy: "Encrypted before it reaches iCloud",
-          systemImage: "icloud.and.arrow.up.fill"
-        )
-      }
-      Spacer(minLength: 0)
-      Label("Designed for macOS", systemImage: "apple.logo")
-        .font(.caption.weight(.medium))
-        .foregroundStyle(AtlasTheme.ink3)
-    }
-    .padding(36)
-    .frame(width: 330)
-    .frame(maxHeight: .infinity, alignment: .topLeading)
-    .background(
-      LinearGradient(
-        colors: [AtlasTheme.accent.opacity(0.11), AtlasTheme.gain.opacity(0.055)],
-        startPoint: .topLeading,
-        endPoint: .bottomTrailing
-      )
-    )
-    .overlay(alignment: .leading) {
-      Rectangle().fill(AtlasTheme.ruleSoft).frame(width: 1)
     }
   }
 
@@ -346,31 +324,5 @@ struct UnlockView: View {
         await state.restoreRecoveryKit(from: url, recoveryCode: restoreCode)
       }
     }
-  }
-}
-
-private struct UnlockFeature: View {
-  var title: String
-  var copy: String
-  var systemImage: String
-
-  var body: some View {
-    HStack(alignment: .top, spacing: 12) {
-      Image(systemName: systemImage)
-        .font(.body.weight(.semibold))
-        .foregroundStyle(AtlasTheme.accent)
-        .frame(width: 36, height: 36)
-        .background(AtlasTheme.accent.opacity(0.10))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-      VStack(alignment: .leading, spacing: 3) {
-        Text(title)
-          .font(.callout.weight(.semibold))
-        Text(copy)
-          .font(.caption)
-          .foregroundStyle(AtlasTheme.ink3)
-          .lineSpacing(2)
-      }
-    }
-    .accessibilityElement(children: .combine)
   }
 }
