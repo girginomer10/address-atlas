@@ -1726,7 +1726,9 @@ exec "${process.execPath}" "$@"
     expect(privatePreflights).toHaveLength(2);
     expect(schemaIndex).toBeLessThan(privatePreflights[0]!);
     expect(privatePreflights[1]).toBeLessThan(deployIndex);
-  });
+    // The full shell pipeline runs two private preflights; use the same bounded
+    // integration budget as the other deployment lifecycle scenarios above.
+  }, 15_000);
 
   it("refuses to start or back up a stopped Postgres container mounted to a different volume", () => {
     const dockerLog = join(temporaryDirectory, "docker.log");

@@ -404,7 +404,9 @@ final class ExporterTests: XCTestCase {
     XCTAssertEqual(ExportDecimal.amount(1.465_109_424_750_436), "1.46510942475044")
     XCTAssertEqual(ExportDecimal.value(291.351_611_011_517_04), "291.351611")
     XCTAssertEqual(ExportDecimal.value(0), "0")
-    XCTAssertEqual(ExportDecimal.amount(12_345_678_901_234_567_890), "12345678901234600000")
+    // This case intentionally rounds a large integer to Double before formatting.
+    let largeInteger: UInt64 = 12_345_678_901_234_567_890
+    XCTAssertEqual(ExportDecimal.amount(Double(largeInteger)), "12345678901234600000")
   }
 
   func testShareSafeCSVStatesThePrivacyNoticeOnceAndStaysRectangular() throws {

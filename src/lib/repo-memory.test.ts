@@ -131,6 +131,7 @@ describe("repo semantic memory tooling", () => {
     expect(doctor.status, doctor.stderr).toBe(0);
     const health = JSON.parse(doctor.stdout) as {
       healthy: boolean;
+      repo_id: string;
       database: string;
       notes_indexed: number;
       security_warnings: string[];
@@ -155,7 +156,8 @@ describe("repo semantic memory tooling", () => {
       repo_id: string;
       results: Array<{ source: string }>;
     };
-    expect(results.repo_id).toMatch(/^address-atlas-/);
+    expect(results.repo_id).toBe(health.repo_id);
+    expect(results.repo_id).toMatch(/^[a-z0-9._-]+-[a-f0-9]{12}$/);
     expect(results.results.map((result) => result.source)).toContain(
       "memory/decisions/repo-semantic-memory.md"
     );

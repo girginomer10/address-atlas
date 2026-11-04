@@ -22,6 +22,32 @@ Address Atlas is a local-first, read-only portfolio tracker for public wallet ad
 > [!IMPORTANT]
 > Address Atlas is currently a **preview**. Source builds are available; see the [release checkpoint](app-store/README.md#release-checkpoint--october-6-2026) for the separate macOS and iOS TestFlight states. There is no signed and notarized public direct download yet. Treat every result as portfolio visibility—not accounting-grade proof or financial advice. Physical-device acceptance and Mac-to-iPhone iCloud restore remain unverified.
 
+## Try it with a public wallet
+
+The quickest way to try the app today is a local Mac build. You need **macOS 14 or newer, full Xcode installed and opened once, and an internet connection**. This walkthrough uses a public Bitcoin address; no account, exchange API key, Node.js, Docker, or iCloud setup is needed.
+
+1. Check that Xcode is selected: `xcodebuild -version` should print the Xcode version. If it reports Command Line Tools instead, select Xcode in **Xcode → Settings → Locations → Command Line Tools**, then retry.
+2. In Terminal, build and open the app:
+
+   ```bash
+   git clone https://github.com/girginomer10/address-atlas.git
+   cd address-atlas/native/AddressAtlasMac
+   ./check-toolchain.sh
+   ./build-mac-app.sh
+   open "dist/Address Atlas.app"
+   ```
+
+3. Open **Wallets**, paste the example address below, and choose **Add wallet**:
+
+   ```text
+   1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa
+   ```
+
+4. Open **Portfolio** and choose **Scan all sources** in **Refresh portfolio**. When it finishes, open **Assets** and search for **BTC**. You should see a Bitcoin holding; balances and USD prices change with live provider data. If a provider is unavailable, the app shows a warning—retry the scan later.
+5. Close and reopen the app to check that the saved wallet and snapshot remain. You can remove the example wallet from **Wallets** afterward; saved snapshots can be removed separately in **Snapshots**.
+
+The app queries public blockchain and price providers directly. This is a local preview build with ad-hoc signing; public signed downloads and a browser demo are not available yet. For an iPhone simulator walkthrough, see [Run the iOS app](#run-the-ios-app).
+
 ## Why Address Atlas
 
 - **One map, more signal.** See native assets, registered tokens, exchange balances, Cosmos delegations, and rewards together.
@@ -103,14 +129,24 @@ Local builds use hardened runtime and ad-hoc signing by default. They are not pu
 
 Requirements: full Xcode selected with `xcode-select` (Command Line Tools alone cannot build iOS apps; CI uses Xcode 26.5) and an iOS 17 or newer simulator. The generated Xcode project is committed, so `xcodegen` is only needed after editing `native/AddressAtlasiOS/project.yml`.
 
+From an existing clone, open the committed project:
+
 ```bash
 cd "$(git rev-parse --show-toplevel)"
-npm run native:ios:build      # simulator build, Xcode ad-hoc signed so the Keychain works
-npm run native:ios:run        # build, then install and launch on the booted simulator
-npm run native:ios:generate   # only after editing project.yml; commit the regenerated project
+open native/AddressAtlasiOS/AddressAtlasiOS.xcodeproj
 ```
 
-Alternatively, open `native/AddressAtlasiOS/AddressAtlasiOS.xcodeproj` in Xcode and run the `AddressAtlasiOS` scheme on a simulator. The separate iOS App Store Connect record now exists; current build and distribution evidence is in the [release checkpoint](app-store/README.md#release-checkpoint--october-6-2026). Physical-device acceptance remains unverified. See the [iOS app guide](native/AddressAtlasiOS/README.md) for versioning, signing, entitlements, and the shared-source layout.
+In Xcode, select the **AddressAtlasiOS** scheme, choose an **iPhone simulator** as the run destination, and press **Run**. Install an iOS simulator runtime in Xcode Settings if no simulator is available. After onboarding, add the public Bitcoin address from the walkthrough above, open **Portfolio**, and tap **Scan now**. The app's local wallet and scan flows work without signing in to iCloud.
+
+If you prefer Terminal, open Simulator and boot one iPhone before running:
+
+```bash
+./native/AddressAtlasiOS/build-ios-app.sh --simulator --install-booted
+```
+
+This builds, installs, and launches on the booted simulator with the ad-hoc signature needed for local Keychain access. Use `--unsigned` only for a compile check; unsigned builds cannot unlock the local vault. Node.js is not required for either native walkthrough. The equivalent `npm run native:ios:*` shortcuts remain available for contributors.
+
+The separate iOS App Store Connect record now exists; current build and distribution evidence is in the [release checkpoint](app-store/README.md#release-checkpoint--october-6-2026). Physical-device acceptance remains unverified. See the [iOS app guide](native/AddressAtlasiOS/README.md) for versioning, signing, entitlements, and the shared-source layout.
 
 ## Run optional encrypted sync
 

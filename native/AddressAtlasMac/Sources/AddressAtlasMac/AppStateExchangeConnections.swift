@@ -44,7 +44,7 @@ extension AppState {
         return ExchangeCredentialFormatIssue(
           field: .secret,
           message:
-            "Paste the whole ES256 private key, from -----BEGIN EC PRIVATE KEY----- to the END line."
+            "Paste the whole ES256 private key, including its BEGIN and END lines."
         )
       }
       return nil
