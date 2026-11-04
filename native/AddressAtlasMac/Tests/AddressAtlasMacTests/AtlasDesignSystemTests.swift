@@ -383,7 +383,7 @@ final class AtlasDesignSystemTests: XCTestCase {
       totalUsd: 8_000,
       inputCount: 2,
       holdings: [ether, unpricedToken],
-      warnings: ["A price source was temporarily unavailable for one token."]
+      warnings: ["NEW on Base has no USD price, so it's left out of the total."]
     )
     var document = VaultDocument(
       wallets: [

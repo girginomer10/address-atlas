@@ -30,18 +30,25 @@ The old Prisma/SQLite web portfolio and ccxt runtime no longer exist. Do not rei
   user-facing copy ("Mac" on macOS, "device" on iOS). Shared strings must
   use it instead of hard-coding a platform noun.
 - `native/AddressAtlasiOS/Sources/AddressAtlasiOS`: the iOS entry point
-  (`AddressAtlasiOSApp.swift`, `RootView.swift`, `MainShell.swift` with a tab
-  shell on iPhone and `NavigationSplitView` on iPad), the Unlock/recovery
-  screen, one screen per section (Portfolio, Wallets, Assets, Tokens,
-  Snapshots, Exchanges, iCloud, Export, Settings), and `IOSSupport.swift`.
+  (`AddressAtlasiOSApp.swift`, `RootView.swift`), `AtlasSection.swift` (five
+  sections: Portfolio, Assets, Sources, History, Settings), `MainShell.swift`
+  (a themed tab bar on iPhone, `NavigationSplitView` on iPad, and the pushed
+  routes for a coin, a saved scan, iCloud, and Export), the Unlock/recovery
+  and onboarding screens, one screen per section (Sources hosts the wallets,
+  exchanges, manual holdings, and custom tokens lists), the Debug-only
+  `DemoFixture.swift` (see `native/AddressAtlasiOS/README.md`), and
+  `IOSSupport.swift`.
   The target compiles `AddressAtlasCore` and, straight from
   `native/AddressAtlasMac/Sources/AddressAtlasMac`, every `AppState*.swift`
   file plus `UserFacingErrors.swift`, `ICloudVaultService.swift`,
   `PasskeyWebAuthenticator.swift`, `AtlasDesignSystem.swift`,
-  `AtlasFormatting.swift`, and `ExportPipeline.swift`. The macOS-only files
+  `AtlasFormatting.swift`, `ExportPipeline.swift`, the theme engine
+  (`AtlasTheme*.swift`, `AtlasDisplayPreferences.swift`, `AtlasFonts.swift`),
+  and the `Charts/` folder. The macOS-only files
   `AddressAtlasApp.swift`, `AppShellViews.swift`, `PortfolioViews.swift`,
   `PortfolioComponents.swift`, `ExchangeSyncViews.swift`,
-  `ICloudSyncView.swift`, and `PrivacySafeDiagnosticsView.swift` are
+  `ICloudSyncView.swift`, and `PrivacySafeDiagnosticsView.swift`, and the
+  `MacScreens/` folder, are
   excluded in `native/AddressAtlasiOS/project.yml`. Any other file added to
   that directory is shared by default: guard platform code with
   `#if canImport(AppKit)` or `#if os(macOS)` rather than adding a new

@@ -35,7 +35,9 @@ Rendered from a synthetic portfolio.
 | --- | --- |
 | <img src="docs/design/screenshots/phase2/flow-candy-light-full.png" alt="Flow view in the Candy brutal theme: wallets and exchanges on the left, coins in the middle, liquid, on exchange, staked, unbonding, and rewards on the right" width="100%"> | <img src="docs/design/screenshots/phase2/ring-heatmap-dark-full.png" alt="Ring view in the Heatmap theme, dark: a donut of five assets with a legend" width="100%"> |
 
-<!-- TODO(phase3): add iPhone screenshots (docs/design/screenshots/phase3/ios/) once the iOS screens are rebuilt -->
+| Portfolio on iPhone, Candy brutal | Coin detail on iPhone, Chain colours | History on iPhone, Heatmap (dark) |
+| --- | --- | --- |
+| <img src="docs/design/screenshots/phase3/ios/portfolio-candy-light.png" alt="Portfolio on iPhone in the Candy brutal theme: total value, change since the last scan, a note that MEME on Base has no price, the view switcher, and a map of BTC and ETH" width="100%"> | <img src="docs/design/screenshots/phase3/ios/coin-ATOM-chainColors-light.png" alt="ATOM detail on iPhone in the Chain colours theme: liquid, staked, unbonding and rewards, and a timeline for 24.79 ATOM unbonding until Nov 16" width="100%"> | <img src="docs/design/screenshots/phase3/ios/history-heatmap-dark.png" alt="History on iPhone in the Heatmap theme, dark: portfolio value over time stacked by coin, and the list of saved scans" width="100%"> |
 
 ## What you get
 
@@ -123,8 +125,8 @@ You need macOS 14 or newer, full Xcode installed and opened once, and an interne
    1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa
    ```
 
-4. Open **Portfolio** and choose **Scan all sources**. When it finishes, open **Assets** and search for **BTC**. You should see a Bitcoin holding. Balances and prices change with live provider data. If a provider is unavailable, the app shows a warning; scan again later.
-5. Close and reopen the app. The wallet and snapshot should still be there. You can remove the wallet in **Wallets** and the snapshot in **Snapshots**.
+4. Open **Portfolio** and choose **Scan**. When it finishes, open **Assets** and search for **BTC**. You should see a Bitcoin holding. Balances and prices change with live provider data. If a provider is unavailable, the app shows a warning; scan again later.
+5. Close and reopen the app. The wallet and snapshot should still be there. You can remove the wallet in **Wallets** and the snapshot in **History**.
 
 This is a local build with an ad-hoc signature. For iPhone, see [Build and run](#build-and-run).
 
@@ -188,7 +190,7 @@ Open the project, select the **AddressAtlasiOS** scheme and an iPhone simulator,
 open native/AddressAtlasiOS/AddressAtlasiOS.xcodeproj
 ```
 
-After onboarding, add the example address above, open **Portfolio**, and tap **Scan now**. Wallets and scans work without iCloud.
+Add the example address above from the first screen or from **Sources** (the **+** button), open **Portfolio**, and tap **Scan**. Wallets and scans work without iCloud.
 
 From Terminal, boot a simulator first, then:
 
