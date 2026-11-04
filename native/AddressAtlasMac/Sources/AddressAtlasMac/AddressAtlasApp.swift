@@ -200,17 +200,17 @@ struct UnlockView: View {
     }
     .frame(minWidth: 800, minHeight: 560)
     .confirmationDialog(
-      "Save the damaged vault and start clean?",
+      "Set aside the damaged data and start fresh?",
       isPresented: $confirmsDamagedVaultQuarantine,
       titleVisibility: .visible
     ) {
-      Button("Save aside and start clean", role: .destructive) {
+      Button("Set aside and start fresh", role: .destructive) {
         Task { await state.quarantineDamagedVaultAndStartClean() }
       }
       Button("Cancel", role: .cancel) {}
     } message: {
       Text(
-        "Address Atlas first checks that a durable private copy of vault.sqlite and its sidecar files exists. Then it starts an empty local vault with the same Keychain key. Nothing is downloaded automatically."
+        "Address Atlas first copies the damaged files to a private folder on this Mac and checks the copy. The files stay in that folder. Then it opens an empty portfolio using the same Keychain key. Nothing is downloaded automatically."
       )
     }
   }
@@ -219,7 +219,7 @@ struct UnlockView: View {
     Surface(style: .accent) {
       VStack(alignment: .leading, spacing: 16) {
         VStack(alignment: .leading, spacing: 4) {
-          Text("Vault locked")
+          Text("Portfolio locked")
             .font(AtlasTheme.font(.display, .title2, weight: .bold))
             .accessibilityAddTraits(.isHeader)
           Text("Your portfolio is encrypted. The key is in Keychain.")
@@ -251,13 +251,13 @@ struct UnlockView: View {
     Surface(style: .warning) {
       VStack(alignment: .leading, spacing: 14) {
         VStack(alignment: .leading, spacing: 4) {
-          Text("The local vault needs attention")
+          Text("Your saved portfolio is damaged")
             .font(AtlasTheme.font(.display, .headline, weight: .bold))
             .accessibilityAddTraits(.isHeader)
           Text(
             recovery == .validatedRollbackCheckpoint
-              ? "A verified, encrypted restore point is available."
-              : "You can save the damaged database aside and start clean."
+              ? "An earlier copy passed its checks. Restore it, or set the damaged data aside and start fresh."
+              : "No earlier copy is available. Set the damaged data aside and start fresh, then restore a copy you saved elsewhere."
           )
           .font(AtlasTheme.font(.body, .callout))
           .foregroundStyle(AtlasTheme.ink2)
@@ -269,7 +269,7 @@ struct UnlockView: View {
           .buttonStyle(MacPrimaryButtonStyle())
           .disabled(state.isUnlocking)
         }
-        Button("Save damaged vault and start clean", role: .destructive) {
+        Button("Set aside and start fresh", role: .destructive) {
           confirmsDamagedVaultQuarantine = true
         }
         .buttonStyle(MacSecondaryButtonStyle())

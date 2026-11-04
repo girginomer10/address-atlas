@@ -13,7 +13,7 @@ enum ICloudVaultError: LocalizedError {
     case .conflict: "The iCloud copy changed on another device. Restore it before saving again. Export local changes first if you need to keep both versions."
     case .missing: "No Address Atlas copy was found in this iCloud account."
     case .missingKey: "The encryption key has not arrived through iCloud Keychain. Enable Passwords & Keychain on both devices and try again. The existing iCloud copy will not be overwritten."
-    case .malformed: "The iCloud copy could not be verified. Your local vault has not been replaced."
+    case .malformed: "The iCloud copy couldn't be verified. Your saved portfolio wasn't replaced."
     case .keychain: "iCloud Keychain could not safely save or read the encryption key. Try again after unlocking this \(PlatformCopy.deviceNoun)."
     }
   }

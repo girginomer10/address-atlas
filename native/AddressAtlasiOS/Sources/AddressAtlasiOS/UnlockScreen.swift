@@ -3,11 +3,11 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-/// The locked-vault screen: retry unlock, recover a damaged local vault,
+/// The locked screen: retry unlock, recover a damaged saved portfolio,
 /// restore Keychain access from a recovery kit, and share privacy-safe
 /// diagnostics. `RootView` already calls `state.unlock()` on appear, so the
 /// first attempt shows a calm launch splash; the recovery page only appears
-/// when that attempt did not open the vault, and its unlock button is the
+/// when that attempt did not open the portfolio, and its unlock button is the
 /// retry path.
 ///
 /// Keeps the macOS `UnlockView` confirmations and safety rules; the copy is
@@ -68,17 +68,17 @@ struct UnlockScreen: View {
         if !state.isUnlocking { firstAttemptFinished = true }
       }
       .confirmationDialog(
-        "Set aside the damaged vault and start clean?",
+        "Set aside the damaged data and start fresh?",
         isPresented: $confirmsDamagedVaultQuarantine,
         titleVisibility: .visible
       ) {
-        Button("Set aside and start clean", role: .destructive) {
+        Button("Set aside and start fresh", role: .destructive) {
           Task { await state.quarantineDamagedVaultAndStartClean() }
         }
         Button("Cancel", role: .cancel) {}
       } message: {
         Text(
-          "The damaged vault is copied to a private folder, and the copy is checked first. Only then does an empty vault open, with the same Keychain key. Nothing is downloaded."
+          "The damaged files are copied to a private folder on this device and kept. The copy is checked first. Only then does an empty portfolio open, using the same Keychain key. Nothing is downloaded."
         )
       }
       .fileImporter(
@@ -129,7 +129,7 @@ struct UnlockScreen: View {
       return "The saved portfolio on this \(PlatformCopy.deviceNoun) is damaged."
     }
     if !state.error.isEmpty {
-      return "The vault didn't open. Try again, or restore from a recovery kit."
+      return "Your portfolio didn't open. Try again, or restore from a recovery kit."
     }
     return "The portfolio is encrypted with a key in this \(PlatformCopy.deviceNoun)'s Keychain."
   }
@@ -137,7 +137,7 @@ struct UnlockScreen: View {
   private var header: some View {
     VStack(spacing: 14) {
       UnlockBrandTile(size: 72)
-      Text("Vault locked")
+      Text("Portfolio locked")
         .font(AtlasTheme.font(.display, size: 32, relativeTo: .largeTitle, weight: .bold))
         .tracking(AtlasTheme.tracking(.display, size: 32))
         .foregroundStyle(AtlasTheme.ink)
@@ -171,7 +171,7 @@ struct UnlockScreen: View {
     }
     .buttonStyle(AtlasPrimaryButtonStyle())
     .disabled(state.isUnlocking)
-    .accessibilityHint("Opens the vault with the key in this device's Keychain.")
+    .accessibilityHint("Opens your portfolio with the key in this device's Keychain.")
     .accessibilityIdentifier("unlock-button")
   }
 
@@ -182,10 +182,10 @@ struct UnlockScreen: View {
     Surface(padding: 16, style: .warning) {
       VStack(alignment: .leading, spacing: 14) {
         UnlockCardHeader(
-          title: "Local vault is damaged",
+          title: "Saved portfolio is damaged",
           subtitle: recovery == .validatedRollbackCheckpoint
-            ? "An earlier copy passed its checks. Restore it, or set the damaged vault aside and start clean."
-            : "No earlier copy is available. Set the damaged vault aside and start clean, then restore a copy you saved elsewhere.",
+            ? "An earlier copy passed its checks. Restore it, or set the damaged data aside and start fresh."
+            : "No earlier copy is available. Set the damaged data aside and start fresh, then restore a copy you saved elsewhere.",
           systemImage: "exclamationmark.shield.fill",
           tint: AtlasTheme.warning,
           soft: AtlasTheme.warningSoft
@@ -200,18 +200,18 @@ struct UnlockScreen: View {
           .buttonStyle(AtlasPrimaryButtonStyle())
           .disabled(state.isUnlocking)
           .accessibilityHint(
-            "Replaces the damaged vault with the earlier copy that passed its checks. Nothing is downloaded."
+            "Replaces the damaged data with the earlier copy that passed its checks. Nothing is downloaded."
           )
         }
         Button(role: .destructive) {
           confirmsDamagedVaultQuarantine = true
         } label: {
-          Text("Set aside and start clean")
+          Text("Set aside and start fresh")
             .modifier(UnlockScreenFullWidthLabel())
         }
         .buttonStyle(AtlasSecondaryButtonStyle())
         .disabled(state.isUnlocking)
-        .accessibilityHint("Asks you to confirm before the damaged vault is set aside.")
+        .accessibilityHint("Asks you to confirm before the damaged data is set aside.")
       }
     }
   }
@@ -307,7 +307,7 @@ struct UnlockScreen: View {
     let report = state.privacySafeDiagnosticsReport()
     return VStack(alignment: .leading, spacing: 10) {
       Text(
-        "App versions, state flags and failure codes only. No addresses, labels, amounts, credentials, URLs or file paths."
+        "App versions, state flags and failure codes only. No addresses, names, amounts, keys, URLs or file paths."
       )
       .fixedSize(horizontal: false, vertical: true)
       AdaptiveStack(horizontalSpacing: 10, verticalSpacing: 10) {

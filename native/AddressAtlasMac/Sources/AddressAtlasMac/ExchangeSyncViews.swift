@@ -277,7 +277,7 @@ struct ExchangeRow: View {
           Text(
             connection.lastError?.isEmpty == false
               ? connection.lastError ?? ""
-              : "Legacy Kraken key: add a new read-only key for this Mac before scanning."
+              : "This Kraken key was saved before keys were tied to one device. Add a new read-only key made for this Mac before scanning."
           )
           .font(AtlasTheme.font(.body, .callout))
           .foregroundStyle(AtlasTheme.loss)
@@ -326,7 +326,7 @@ struct ExchangeRow: View {
       Button("Cancel", role: .cancel) {}
     } message: {
       Text(
-        "The encrypted API credentials are removed from this Mac, including its earlier local copy. An older encrypted copy you uploaded may still contain them until you save a new one."
+        "The encrypted API keys are removed from this Mac, including its earlier local copy. An older encrypted copy you uploaded may still contain them until you save a new one."
       )
     }
     .disabled(state.vaultEditsDisabled)

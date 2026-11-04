@@ -305,7 +305,7 @@ struct AssetDetailSheet: View {
       if !asset.address.isEmpty,
         asset.address.caseInsensitiveCompare(asset.atlasNetworkLabel) != .orderedSame
       {
-        AssetDetailRow(title: "Label", value: asset.address)
+        AssetDetailRow(title: "Name", value: asset.address)
       }
     } else {
       if let label = asset.walletLabel, !label.isEmpty {

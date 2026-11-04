@@ -84,14 +84,14 @@ struct ICloudScreen: View {
       }
     }
     .confirmationDialog(
-      "Stop the old server transfer and keep the local vault?",
+      "Stop the old server upload and keep your portfolio on this device?",
       isPresented: $migrationConfirmation,
       titleVisibility: .visible
     ) {
-      Button("Finish migration") { finishLegacyMigration() }
+      Button("Stop upload") { finishLegacyMigration() }
       Button("Cancel", role: .cancel) {}
     } message: {
-      Text("Server data is not deleted.")
+      Text("Data already on the old server isn’t deleted.")
     }
   }
 
@@ -232,13 +232,13 @@ struct ICloudScreen: View {
         } label: {
           ICloudActionRow(
             title: "Restore from iCloud",
-            detail: "Replaces this portfolio. A rollback copy is kept.",
+            detail: "Replaces this portfolio. A backup copy is kept.",
             systemImage: "icloud.and.arrow.down",
             isActive: state.syncActivity == .downloadingVault
           )
         }
         .accessibilityHint(
-          "Asks for confirmation, then replaces this device’s portfolio with the iCloud copy after saving a local rollback copy."
+          "Asks for confirmation, then replaces this device’s portfolio with the iCloud copy after saving a backup copy on this device."
         )
         .accessibilityIdentifier("icloud.restore")
         .confirmationDialog(
@@ -252,7 +252,7 @@ struct ICloudScreen: View {
           Button("Cancel", role: .cancel) {}
         } message: {
           Text(
-            "A local rollback copy is saved first. Export this portfolio first if you want to keep both."
+            "A backup copy is saved on this device first. Export this portfolio first if you want to keep both."
           )
         }
       }
@@ -267,7 +267,7 @@ struct ICloudScreen: View {
         systemImage: "lock.icloud",
         title: "Key in iCloud Keychain",
         copy:
-          "The key lives in iCloud Keychain, never in the cloud record. No Address Atlas server is involved."
+          "The key lives in iCloud Keychain, not with the copy. No Address Atlas server is involved."
       )
       IOSFactRow(
         systemImage: "key",
@@ -285,7 +285,7 @@ struct ICloudScreen: View {
         systemImage: "checkmark.shield",
         title: "Never overwritten silently",
         copy:
-          "Restore keeps a local rollback copy. Newer changes from another device stop a save until you restore them."
+          "Restore keeps a backup copy on this device. Newer changes from another device stop a save until you restore them."
       )
       if !hasKrakenConnection {
         IOSFactRow(
@@ -298,7 +298,7 @@ struct ICloudScreen: View {
       IOSFactRow(
         systemImage: "internaldrive",
         title: "Uses your iCloud storage",
-        copy: "The copy counts toward your Apple Account quota. Transfers happen only when you tap."
+        copy: "The copy counts toward your iCloud storage. Transfers happen only when you tap."
       )
     }
   }
@@ -315,28 +315,28 @@ struct ICloudScreen: View {
               rollbackConfirmation = true
             } label: {
               ICloudManageRow(
-                title: "Restore previous copy",
+                title: "Restore earlier copy",
                 systemImage: "clock.arrow.circlepath",
                 tint: AtlasTheme.accent,
-                progressTitle: "Restoring previous copy",
+                progressTitle: "Restoring earlier copy",
                 isActive: state.syncActivity == .restoringRollbackCheckpoint
               )
             }
             .disabled(state.vaultEditsDisabled)
             .accessibilityHint(
-              "Asks for confirmation, then replaces the current local portfolio with the rollback copy saved before the last restore."
+              "Asks for confirmation, then replaces the current portfolio on this device with the backup copy saved before the last restore."
             )
             .confirmationDialog(
-              "Restore the previous local portfolio?",
+              "Replace this portfolio with the earlier copy?",
               isPresented: $rollbackConfirmation,
               titleVisibility: .visible
             ) {
-              Button("Restore previous copy", role: .destructive) {
+              Button("Restore earlier copy", role: .destructive) {
                 Task { await state.restoreVaultRollbackCheckpoint() }
               }
               Button("Cancel", role: .cancel) {}
             } message: {
-              Text("This replaces the current local portfolio. The iCloud copy is not changed.")
+              Text("This replaces the current portfolio on this device. The iCloud copy isn’t changed.")
             }
             ICloudRule(inset: 52)
           }
@@ -422,10 +422,10 @@ struct ICloudScreen: View {
             .foregroundStyle(AtlasTheme.warning)
             .accessibilityHidden(true)
           VStack(alignment: .leading, spacing: 2) {
-            Text("A transfer from the old server did not finish")
+            Text("An upload to the old sync server didn’t finish")
               .font(AtlasTheme.font(.body, .callout, weight: .semibold))
               .foregroundStyle(AtlasTheme.ink)
-            Text("Finish migration to keep this vault and stop the transfer. Server data is not deleted.")
+            Text("Stop it to keep your portfolio as it is on this device. Data already on the old server isn’t deleted.")
               .font(AtlasTheme.font(.body, .footnote))
               .foregroundStyle(AtlasTheme.ink2)
           }
@@ -439,12 +439,12 @@ struct ICloudScreen: View {
             if isFinishingMigration {
               HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text("Finishing migration")
+                Text("Stopping upload")
               }
               .accessibilityElement(children: .ignore)
-              .accessibilityLabel("Finishing migration, in progress")
+              .accessibilityLabel("Stopping upload, in progress")
             } else {
-              Label("Finish migration…", systemImage: "checkmark.seal")
+              Label("Stop the upload…", systemImage: "checkmark.seal")
             }
           }
           .frame(maxWidth: .infinity, minHeight: 44)
@@ -452,7 +452,7 @@ struct ICloudScreen: View {
         .buttonStyle(AtlasSecondaryButtonStyle())
         .disabled(state.syncing || state.scanning || state.isPersisting)
         .accessibilityHint(
-          "Asks for confirmation, then keeps the local vault and stops the old transfer.")
+          "Asks for confirmation, then stops the old upload. Your portfolio on this device stays as it is.")
       }
     }
   }
@@ -545,7 +545,7 @@ private struct ICloudStatusPresentation {
     case .uploadingVault: "Saving to iCloud…"
     case .downloadingVault: "Restoring from iCloud…"
     case .deletingAccount: "Deleting iCloud copy…"
-    case .restoringRollbackCheckpoint: "Restoring previous copy…"
+    case .restoringRollbackCheckpoint: "Restoring earlier copy…"
     default: activity.progressTitle
     }
   }
