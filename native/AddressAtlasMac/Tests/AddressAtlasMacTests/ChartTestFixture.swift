@@ -7,15 +7,17 @@ import Foundation
 /// placeholder addresses, round-ish amounts, and made-up prices.
 ///
 /// Forty-two days (24 Sep to 4 Nov 2026) with a scan on most days and two scans
-/// on some, 36 runs in all:
+/// on some, 38 runs in all:
 ///
-///   - prices drift and wobble per coin, deterministically;
+///   - prices drift and wobble per coin, deterministically; LINK overtakes
+///     ATOM and DOGE overtakes ARB between day 20 and day 41;
 ///   - on day 20 a second EVM wallet ("Savings") is added, so the scans before
 ///     and after it do not read the same sources;
 ///   - on day 27 ATOM is unstaked: 24.79 ATOM moves from staked to unbonding,
 ///     unlocking on 16 Nov 2026;
+///   - UNI is held on days 8 to 33 and OP from day 31;
 ///   - on day 41 Base receives 0.0094 ETH;
-///   - days 3, 10, 17, 24, 31 and 38 have no scan.
+///   - `skippedDays` have no scan.
 enum ChartFixture {
   static let bitcoinAddress = "1BoatSLRHtKNngkdXEeobR76b53LETtpyT"
   static let evmAddress = "0x0000000000000000000000000000000000000001"
@@ -42,11 +44,13 @@ enum ChartFixture {
     switch symbol {
     case "BTC": return 66_000 * (1 + 0.030 * d / 41) + 900 * sin(d * 0.45)
     case "ETH": return 3_050 * (1 + 0.050 * d / 41) + 70 * sin(d * 0.9 + 1)
-    case "SOL": return 138 * (1 - 0.040 * d / 41) + 6 * sin(d * 0.6 + 2)
+    case "SOL": return 138 * (1 - 0.040 * d / 41) + 6 * sin(d * 0.6 - 2.3)
     case "ATOM": return 6.5 * (1 + 0.040 * d / 41) + 0.25 * sin(d * 0.7 + 3)
-    case "LINK": return 15.2 * (1 + 0.020 * d / 41) + 0.5 * sin(d * 0.8)
+    case "LINK": return 15.2 * (1 + 0.300 * d / 41) + 0.5 * sin(d * 0.8)
     case "ARB": return 0.82 * (1 - 0.050 * d / 41) + 0.03 * sin(d * 1.1)
-    case "DOGE": return 0.16 + 0.006 * sin(d * 0.5 + 4)
+    case "DOGE": return 0.16 * (1 + d / 41) + 0.012 * sin(d * 0.5 + 1.74)
+    case "UNI": return 7.5 + 0.4 * sin(d * 0.3)
+    case "OP": return 1.9 + 0.1 * sin(d * 0.4)
     case "USDC": return 1
     default: return 1
     }
@@ -93,7 +97,7 @@ enum ChartFixture {
         address: evmAddress, label: "Main"),
       kraken("ETH", amount: 0.5, day: day),
       wallet(
-        "LINK", amount: 120, day: day, source: .erc20, family: .evm, chainId: "ethereum",
+        "LINK", amount: 110, day: day, source: .erc20, family: .evm, chainId: "ethereum",
         chainName: "Ethereum", address: evmAddress, label: "Main"),
       wallet(
         "ARB", amount: 900, day: day, source: .erc20, family: .evm, chainId: "arbitrum",
@@ -117,6 +121,19 @@ enum ChartFixture {
       kraken("USDC", amount: 920.05, day: day),
       kraken("DOGE", amount: 2_400, day: day),
     ]
+    // UNI is bought on day 8 and sold on day 34; OP arrives on day 31.
+    if (8...33).contains(day) {
+      holdings.append(
+        wallet(
+          "UNI", amount: 80, day: day, source: .erc20, family: .evm, chainId: "ethereum",
+          chainName: "Ethereum", address: evmAddress, label: "Main"))
+    }
+    if day >= 31 {
+      holdings.append(
+        wallet(
+          "OP", amount: 600, day: day, source: .erc20, family: .evm, chainId: "optimism",
+          chainName: "Optimism", address: evmAddress, label: "Main"))
+    }
     if unstaked {
       holdings.append(
         wallet(
@@ -146,10 +163,13 @@ enum ChartFixture {
 
   // MARK: Runs
 
+  /// Days without a scan.
+  static let skippedDays: Set<Int> = [3, 6, 12, 17, 24, 25, 33, 38]
+
   /// Days with a scan, oldest first (day index, hour of the scan).
   static var scanSchedule: [(day: Int, hour: Int)] {
     var schedule: [(Int, Int)] = []
-    for day in 0..<dayCount where day % 7 != 3 {
+    for day in 0..<dayCount where !skippedDays.contains(day) {
       schedule.append((day, 0))
       if day % 10 == 0 && day > 0 { schedule.append((day, 10)) }
     }

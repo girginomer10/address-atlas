@@ -74,6 +74,34 @@ final class PowerDiagramTreemapTests: XCTestCase {
     XCTAssertEqual(result.cells.map(\.key), ["A", "E"])
   }
 
+  /// Different sizes, skews, and seeds: every cell stays non-empty and close to
+  /// its share. A seed that puts two sites on top of each other used to leave
+  /// one cell swallowed whole by its neighbour.
+  func testManyShapesConvergeAndNoCellVanishes() {
+    for count in [4, 9, 16, 30] {
+      for skew in [0.7, 1.2] {
+        let raw = (0..<count).map { 1 / pow(Double($0 + 1), skew) }
+        let total = raw.reduce(0, +)
+        guard (raw.last ?? 0) / total >= 0.008 else { continue }
+        let items = raw.enumerated().map {
+          PowerDiagramItem(key: "item-\($0.offset)", value: $0.element)
+        }
+        for seed in 0..<6 {
+          var config = PowerDiagramConfig()
+          config.seed = UInt64(seed)
+          let result = PowerDiagramTreemap.layout(
+            items: items, boundary: boundary(), config: config)
+          XCTAssertEqual(result.cells.count, count)
+          XCTAssertLessThanOrEqual(
+            result.maximumError, 0.05, "n \(count) skew \(skew) seed \(seed)")
+          for cell in result.cells {
+            XCTAssertGreaterThan(cell.area, 0, "empty \(cell.key): n \(count) seed \(seed)")
+          }
+        }
+      }
+    }
+  }
+
   func testSmallCountsConverge() {
     for count in 2...6 {
       let result = PowerDiagramTreemap.layout(items: items(count: count), boundary: boundary())

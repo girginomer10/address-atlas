@@ -21,6 +21,8 @@ final class ChartRenderTests: XCTestCase {
     let name: String
     /// Coin widgets render one coin of the fixture.
     let coinKey: String?
+    /// Height at full density; text-led coin widgets are shorter than charts.
+    var fullHeight: CGFloat = 400
     let make: (PortfolioChartInput, Date) -> AnyView
   }
 
@@ -34,17 +36,17 @@ final class ChartRenderTests: XCTestCase {
     Entry(name: "slope", coinKey: nil) { input, _ in AnyView(SlopeChartView(input: input)) },
     Entry(name: "concentration", coinKey: nil) { input, _ in AnyView(ConcentrationChartView(input: input)) },
     Entry(name: "calendar", coinKey: nil) { input, _ in AnyView(CalendarChartView(input: input)) },
-    Entry(name: "coin-state-strip", coinKey: "ATOM") { input, _ in
+    Entry(name: "coin-state-strip", coinKey: "ATOM", fullHeight: 290) { input, _ in
       AnyView(CoinStateStripView(input: input))
     },
-    Entry(name: "coin-unlock-timeline", coinKey: "ATOM") { input, now in
+    Entry(name: "coin-unlock-timeline", coinKey: "ATOM", fullHeight: 230) { input, now in
       AnyView(CoinUnlockTimelineView(input: input, now: now))
     },
     Entry(name: "coin-amount-history", coinKey: "ATOM") { input, _ in
       AnyView(CoinAmountHistoryView(input: input))
     },
-    Entry(name: "coin-change", coinKey: "ETH") { input, _ in AnyView(CoinChangeView(input: input)) },
-    Entry(name: "coin-custody", coinKey: "BTC") { input, _ in AnyView(CoinCustodyView(input: input)) },
+    Entry(name: "coin-change", coinKey: "ETH", fullHeight: 250) { input, _ in AnyView(CoinChangeView(input: input)) },
+    Entry(name: "coin-custody", coinKey: "BTC", fullHeight: 270) { input, _ in AnyView(CoinCustodyView(input: input)) },
   ]
 
   // MARK: Matrix
@@ -125,6 +127,25 @@ final class ChartRenderTests: XCTestCase {
     }
   }
 
+  /// The largest accessibility text size must not break any layout: every view
+  /// still draws something. (Pictures are written with the rest when asked.)
+  func testLargestTextSizeStillRendersEveryView() throws {
+    let look = Look(theme: .chainColors, variant: .light)
+    for entry in Self.entries {
+      for density in [PortfolioChartDensity.full, .compact] {
+        let image = try render(entry, look: look, density: density, textSize: .accessibility5)
+        XCTAssertGreaterThan(
+          Self.distinctColors(in: image), 3, "\(entry.name) \(density) at accessibility5")
+        if writesScreenshots, selectedViews.map({ $0.contains(entry.name) }) ?? true {
+          let directory = screenshotDirectory
+          try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+          let name = "\(entry.name)-text-xxxl-\(density == .full ? "full" : "compact").png"
+          try Self.pngData(image).write(to: directory.appendingPathComponent(name))
+        }
+      }
+    }
+  }
+
   /// Renders the whole matrix; writes PNGs only when asked to.
   func testWriteScreenshotsWhenRequested() throws {
     guard writesScreenshots else {
@@ -151,20 +172,23 @@ final class ChartRenderTests: XCTestCase {
 
   func render(
     _ entry: Entry, look: Look, density: PortfolioChartDensity,
-    input customInput: PortfolioChartInput? = nil
+    input customInput: PortfolioChartInput? = nil,
+    textSize: DynamicTypeSize = .large
   ) throws -> CGImage {
     let tokens = AtlasThemeTokens(theme: look.theme, variant: look.variant)
-    let size = density == .full ? Self.fullSize : Self.compactSize
+    let size = density == .full ? CGSize(width: Self.fullSize.width, height: entry.fullHeight) : Self.compactSize
     let input =
       customInput
       ?? ChartFixture.input(coinKey: entry.coinKey, density: density)
     return try Self.renderImage(
-      entry.make(input, Self.now), tokens: tokens, colorScheme: look.colorScheme, size: size)
+      entry.make(input, Self.now), tokens: tokens, colorScheme: look.colorScheme, size: size,
+      textSize: textSize)
   }
 
   /// A view inside a card on the theme's canvas, as a screen would show it.
   static func renderImage(
-    _ view: AnyView, tokens: AtlasThemeTokens, colorScheme: ColorScheme, size: CGSize
+    _ view: AnyView, tokens: AtlasThemeTokens, colorScheme: ColorScheme, size: CGSize,
+    textSize: DynamicTypeSize = .large
   ) throws -> CGImage {
     let padding: CGFloat = size.width > 400 ? 16 : 10
     let card = RoundedRectangle(cornerRadius: tokens.shape.radiusCard, style: .continuous)
@@ -181,7 +205,7 @@ final class ChartRenderTests: XCTestCase {
       .background(tokens.color(.canvas))
       .environment(\.atlasTheme, tokens)
       .environment(\.colorScheme, colorScheme)
-      .environment(\.dynamicTypeSize, .large)
+      .environment(\.dynamicTypeSize, textSize)
       .font(tokens.font(.body, .body))
     let renderer = ImageRenderer(content: content)
     renderer.scale = 2

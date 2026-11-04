@@ -52,6 +52,12 @@ enum HistoryChartFormat {
     return (value > 0 ? "+" : "\u{2212}") + magnitude
   }
 
+  /// A change in value: `+$410`, `+$4.52`. Cents only under $10, where they
+  /// are not noise.
+  static func delta(_ value: Double) -> String {
+    signedUsd(value, cents: abs(value) < 10 && value != value.rounded())
+  }
+
   /// `57%`, `<1%` for a positive share under one percent.
   static func percent(_ fraction: Double) -> String {
     guard fraction.isFinite, fraction > 0 else { return "0%" }
@@ -102,15 +108,20 @@ enum HistoryChartFormat {
         .locale(locale))
   }
 
-  /// `4 Nov 2026`.
-  static func fullDay(_ date: Date, timeZone: TimeZone) -> String {
-    date.formatted(
-      Date.FormatStyle(timeZone: timeZone).day().month(.abbreviated).year().locale(locale))
+  /// `Nov` for month 11, in the display locale.
+  static func monthName(_ month: Int) -> String? {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.locale = locale
+    let symbols = calendar.shortStandaloneMonthSymbols
+    return symbols.indices.contains(month - 1) ? symbols[month - 1] : nil
   }
 
-  /// `Nov`.
-  static func month(_ date: Date, timeZone: TimeZone) -> String {
-    date.formatted(Date.FormatStyle(timeZone: timeZone).month(.abbreviated).locale(locale))
+  /// `Mon` for weekday index 1 (0 is Sunday), in the display locale.
+  static func weekdayName(_ weekday: Int) -> String {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.locale = locale
+    let symbols = calendar.shortStandaloneWeekdaySymbols
+    return symbols.indices.contains(weekday) ? symbols[weekday] : ""
   }
 
   /// "1 coin", "2 coins".
@@ -180,12 +191,6 @@ struct HistoryChartStyle {
     let pastel = tokens.palette.onPastel
     if pastel.contrast(with: background) >= 4.5 { return pastel.color }
     return background.readableInk.color
-  }
-
-  func rgbInk(on background: AtlasRGB) -> AtlasRGB {
-    let pastel = tokens.palette.onPastel
-    if pastel.contrast(with: background) >= 4.5 { return pastel }
-    return background.readableInk
   }
 
   /// Series colour for one slice of a grouping.
@@ -525,6 +530,12 @@ enum HistoryChartMath {
     value.isFinite ? value : fallback
   }
 
+  /// Sum that does not depend on the order of the terms (smallest first), like
+  /// the analytics sums.
+  static func sum(_ values: [Double]) -> Double {
+    values.sorted().reduce(0, +)
+  }
+
   /// A "nice" axis maximum at or above `value`: 1, 2, 2.5, 5 times a power of
   /// ten.
   static func niceCeiling(_ value: Double) -> Double {
@@ -543,27 +554,40 @@ enum HistoryChartMath {
     return nice * base
   }
 
+  /// An axis from 0 that reaches `maximum` in steps of 1, 2, 2.5, 5 or 10 times
+  /// a power of ten, using about `intervals` steps. The top is the first step
+  /// at or above `maximum`, so the data fills most of the height.
+  static func axis(maximum: Double, intervals: Int) -> (top: Double, step: Double) {
+    guard maximum.isFinite, maximum > 0, intervals > 0 else { return (1, 1) }
+    // Among nice steps that need between 2 and `intervals + 2` ticks, take the
+    // one whose top is closest above the data (fewer ticks on a tie).
+    let exponent = floor(log10(maximum / Double(intervals + 2)))
+    var best: (top: Double, step: Double, count: Int)?
+    for decade in 0...3 {
+      let base = pow(10, exponent + Double(decade))
+      for multiple in [1.0, 2.0, 2.5, 5.0] {
+        let step = base * multiple
+        let count = Int((maximum / step - 1e-9).rounded(.up))
+        guard count >= 2, count <= intervals + 2 else { continue }
+        let top = Double(count) * step
+        if let current = best {
+          if top < current.top - 1e-9 || (abs(top - current.top) <= 1e-9 && count < current.count) {
+            best = (top, step, count)
+          }
+        } else {
+          best = (top, step, count)
+        }
+      }
+    }
+    if let best { return (best.top, best.step) }
+    let step = niceCeiling(maximum / Double(intervals))
+    return (max((maximum / step - 1e-9).rounded(.up) * step, step), step)
+  }
+
   /// Evenly spaced axis ticks from 0 to `maximum` (inclusive).
   static func ticks(maximum: Double, count: Int) -> [Double] {
     guard count > 0, maximum.isFinite, maximum > 0 else { return [0] }
     return (0...count).map { maximum * Double($0) / Double(count) }
-  }
-
-  /// Folds the smallest entries beyond `maximumCount - 1` into one remainder,
-  /// keeping the largest first. `value` must be non-negative.
-  static func foldingSmallest<T>(
-    _ items: [T], keeping maximumCount: Int, value: (T) -> Double
-  ) -> (kept: [T], folded: [T]) {
-    guard maximumCount >= 1, items.count > maximumCount else { return (items, []) }
-    let ordered = items.enumerated().sorted { lhs, rhs in
-      let left = value(lhs.element)
-      let right = value(rhs.element)
-      if left != right { return left > right }
-      return lhs.offset < rhs.offset
-    }
-    let kept = ordered.prefix(maximumCount - 1).sorted { $0.offset < $1.offset }.map(\.element)
-    let folded = ordered.dropFirst(maximumCount - 1).sorted { $0.offset < $1.offset }.map(\.element)
-    return (kept, folded)
   }
 }
 
@@ -633,8 +657,11 @@ enum HistoryEffects {
   }
 }
 
-/// Draws signed effect rows: a label on the left, a bar growing from a shared
-/// zero line to the right (gain) or left (loss), and the amount.
+
+/// Draws signed effect rows: a label, a bar growing from a shared zero line to
+/// the right (gain) or left (loss), and the amount. The label column takes the
+/// width of its longest label (up to a limit, then wraps), so wide theme fonts
+/// and large text sizes never cut a label short.
 struct HistoryEffectsBar: View {
   @Environment(\.atlasTheme) private var tokens
   let effects: [HistoryEffect]
@@ -642,40 +669,46 @@ struct HistoryEffectsBar: View {
 
   var body: some View {
     let style = HistoryChartStyle(tokens: tokens, density: density)
+    let compact = density == .compact
     let maximum = max(effects.map { abs($0.valueUsd) }.max() ?? 0, 0.01)
-    VStack(alignment: .leading, spacing: density == .compact ? 4 : 7) {
+    Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: compact ? 4 : 8) {
       ForEach(effects) { effect in
-        HStack(spacing: 8) {
+        GridRow {
           Text(verbatim: effect.title)
             .font(style.captionFont)
             .foregroundStyle(style.ink2)
-            .lineLimit(1)
-            .frame(width: density == .compact ? 86 : 118, alignment: .leading)
-          GeometryReader { proxy in
-            let half = proxy.size.width / 2
-            let length = half * CGFloat(abs(effect.valueUsd) / maximum)
-            ZStack(alignment: .center) {
-              Rectangle().fill(style.ruleSoft).frame(width: 1)
-              Rectangle()
-                .fill(effect.valueUsd >= 0 ? style.gain : style.loss)
-                .frame(width: max(length, effect.valueUsd == 0 ? 0 : 2), height: proxy.size.height)
-                .offset(x: effect.valueUsd >= 0 ? length / 2 : -length / 2)
-            }
-            .frame(width: proxy.size.width, height: proxy.size.height)
-          }
-          .frame(height: density == .compact ? 10 : 14)
-          Text(verbatim: HistoryChartFormat.signedUsd(effect.valueUsd))
-            .font(style.numberFont(density == .compact ? 10.5 : 12, relativeTo: .caption))
+            .lineLimit(2)
+            .frame(maxWidth: compact ? 120 : 190, alignment: .leading)
+          bar(for: effect, maximum: maximum, style: style)
+            .frame(height: compact ? 10 : 14)
+          Text(verbatim: HistoryChartFormat.delta(effect.valueUsd))
+            .font(style.numberFont(compact ? 10.5 : 12, relativeTo: .caption))
             .foregroundStyle(
               effect.valueUsd == 0 ? style.ink2 : (effect.valueUsd > 0 ? style.gain : style.loss)
             )
             .lineLimit(1)
-            .frame(minWidth: 52, alignment: .trailing)
+            .gridColumnAlignment(.trailing)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(
-          "\(effect.title): \(HistoryChartFormat.signedUsd(effect.valueUsd))")
+        .accessibilityLabel("\(effect.title): \(HistoryChartFormat.delta(effect.valueUsd))")
       }
+    }
+  }
+
+  private func bar(for effect: HistoryEffect, maximum: Double, style: HistoryChartStyle)
+    -> some View
+  {
+    GeometryReader { proxy in
+      let half = proxy.size.width / 2
+      let length = half * CGFloat(abs(effect.valueUsd) / maximum)
+      ZStack {
+        Rectangle().fill(style.ruleSoft).frame(width: 1)
+        Rectangle()
+          .fill(effect.valueUsd >= 0 ? style.gain : style.loss)
+          .frame(width: max(length, effect.valueUsd == 0 ? 0 : 2), height: proxy.size.height)
+          .offset(x: effect.valueUsd >= 0 ? length / 2 : -length / 2)
+      }
+      .frame(width: proxy.size.width, height: proxy.size.height)
     }
   }
 }

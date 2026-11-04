@@ -61,6 +61,12 @@ struct PowerDiagramConfig: Equatable {
   /// Mixed into the item hash; change it to get a different (still
   /// deterministic) arrangement.
   var seed: UInt64 = 0
+  /// Arrangements tried, each from a different seed, when one does not reach
+  /// the target error; the best is kept.
+  var maximumAttempts: Int = 4
+  /// A cell smaller than this fraction of the boundary is too small to read,
+  /// so its error is measured against that size instead of its own.
+  static let readableAreaFraction = 0.002
 }
 
 // MARK: - Solver
@@ -74,6 +80,27 @@ enum PowerDiagramTreemap {
     config: PowerDiagramConfig = PowerDiagramConfig()
   ) -> PowerDiagramResult {
     let items = items.filter { $0.value.isFinite && $0.value > 0 }
+    var best: PowerDiagramResult?
+    var evaluations = 0
+    for attempt in 0..<max(1, config.maximumAttempts) {
+      // A different (still deterministic) arrangement for each retry.
+      let seed = config.seed &+ UInt64(attempt) &* 0x9E37_79B9
+      let result = solve(items: items, boundary: boundary, config: config, seed: seed)
+      evaluations += result.evaluations
+      if best == nil || result.maximumError < (best?.maximumError ?? .infinity) { best = result }
+      if result.maximumError <= config.targetError { break }
+    }
+    guard let best else { return PowerDiagramResult(cells: [], maximumError: 0, evaluations: 0) }
+    return PowerDiagramResult(
+      cells: best.cells, maximumError: best.maximumError, evaluations: evaluations)
+  }
+
+  private static func solve(
+    items: [PowerDiagramItem],
+    boundary: [CGPoint],
+    config: PowerDiagramConfig,
+    seed: UInt64
+  ) -> PowerDiagramResult {
     let boundaryArea = ConvexPolygon.area(boundary)
     guard boundary.count >= 3, boundaryArea > 0, !items.isEmpty else {
       return PowerDiagramResult(cells: [], maximumError: 0, evaluations: 0)
@@ -92,7 +119,10 @@ enum PowerDiagramTreemap {
     let totalValue = items.map(\.value).sorted().reduce(0, +)
     let targets = items.map { boundaryArea * $0.value / totalValue }
     let typicalRadiusSquared = boundaryArea / Double(items.count)
-    var sites = initialSites(items: items, boundary: boundary, seed: config.seed)
+    // Cells smaller than this are too small to read, so an error on them is
+    // measured against this size rather than their own.
+    let errorFloor = boundaryArea * PowerDiagramConfig.readableAreaFraction
+    var sites = initialSites(items: items, boundary: boundary, seed: seed)
     var weights = [Double](repeating: 0, count: items.count)
     var evaluations = 0
 
@@ -104,7 +134,7 @@ enum PowerDiagramTreemap {
     func maximumError(_ geometry: [CellGeometry]) -> Double {
       var worst = 0.0
       for (index, cell) in geometry.enumerated() {
-        worst = max(worst, abs(cell.area - targets[index]) / targets[index])
+        worst = max(worst, abs(cell.area - targets[index]) / max(targets[index], errorFloor))
       }
       return worst
     }
@@ -130,13 +160,34 @@ enum PowerDiagramTreemap {
         let limit = typicalRadiusSquared * 1.5
         delta[index] = min(max(delta[index], -limit), limit)
       }
-      var mean = 0.0
-      for index in 0..<weights.count {
-        weights[index] += delta[index]
-        mean += weights[index]
-      }
-      mean /= Double(weights.count)
+      for index in 0..<weights.count { weights[index] += delta[index] }
+      keepSitesInsideTheirCells()
+      let mean = weights.reduce(0, +) / Double(weights.count)
       for index in 0..<weights.count { weights[index] -= mean }
+    }
+
+    /// A site lies inside its own power cell when its weight is at least that
+    /// of every other site less their squared distance. Holding each weight a
+    /// little above that floor means no cell can be swallowed whole by a heavy
+    /// neighbour, which a plain area correction cannot undo.
+    func keepSitesInsideTheirCells() {
+      let count = weights.count
+      for _ in 0..<count {
+        var changed = false
+        for i in 0..<count {
+          var floor = -Double.infinity
+          for j in 0..<count where j != i {
+            let dx = Double(sites[i].x - sites[j].x)
+            let dy = Double(sites[i].y - sites[j].y)
+            floor = max(floor, weights[j] - 0.97 * (dx * dx + dy * dy))
+          }
+          if weights[i] < floor {
+            weights[i] = floor
+            changed = true
+          }
+        }
+        if !changed { break }
+      }
     }
 
     var geometry = evaluate()
@@ -152,6 +203,7 @@ enum PowerDiagramTreemap {
       for index in 0..<sites.count where geometry[index].area > 0 {
         sites[index] = geometry[index].centroid
       }
+      keepSitesInsideTheirCells()
       geometry = evaluate()
     }
     for _ in 0..<config.finalSteps {

@@ -35,7 +35,7 @@ struct CoinChangeView: View {
               .foregroundStyle(style.ink)
               .fixedSize(horizontal: false, vertical: true)
           }
-          CoinChangeEffectRows(effects: model.effects, density: input.density)
+          HistoryEffectsBar(effects: model.effects, density: input.density)
           VStack(alignment: .leading, spacing: compact ? 3 : 6) {
             if let price = model.priceSentence { sentence(price, style: style) }
             if let amount = model.amountSentence { sentence(amount, style: style) }
@@ -58,59 +58,5 @@ struct CoinChangeView: View {
       .foregroundStyle(style.ink2)
       .lineLimit(input.density == .compact ? 2 : nil)
       .fixedSize(horizontal: false, vertical: true)
-  }
-}
-
-/// Price and amount effects as signed bars from a shared zero line. The label
-/// column takes the width of its longest label (up to a limit, then wraps), so
-/// wide theme fonts and large text sizes never cut a label short.
-private struct CoinChangeEffectRows: View {
-  @Environment(\.atlasTheme) private var tokens
-  let effects: [HistoryEffect]
-  let density: PortfolioChartDensity
-
-  var body: some View {
-    let style = HistoryChartStyle(tokens: tokens, density: density)
-    let compact = density == .compact
-    let maximum = max(effects.map { abs($0.valueUsd) }.max() ?? 0, 0.01)
-    Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: compact ? 4 : 8) {
-      ForEach(effects) { effect in
-        GridRow {
-          Text(verbatim: effect.title)
-            .font(style.captionFont)
-            .foregroundStyle(style.ink2)
-            .lineLimit(2)
-            .frame(maxWidth: compact ? 120 : 190, alignment: .leading)
-          bar(for: effect, maximum: maximum, style: style)
-            .frame(height: compact ? 10 : 14)
-          Text(verbatim: HistoryChartFormat.signedUsd(effect.valueUsd))
-            .font(style.numberFont(compact ? 10.5 : 12, relativeTo: .caption))
-            .foregroundStyle(
-              effect.valueUsd == 0 ? style.ink2 : (effect.valueUsd > 0 ? style.gain : style.loss)
-            )
-            .lineLimit(1)
-            .gridColumnAlignment(.trailing)
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(effect.title): \(HistoryChartFormat.signedUsd(effect.valueUsd))")
-      }
-    }
-  }
-
-  private func bar(for effect: HistoryEffect, maximum: Double, style: HistoryChartStyle)
-    -> some View
-  {
-    GeometryReader { proxy in
-      let half = proxy.size.width / 2
-      let length = half * CGFloat(abs(effect.valueUsd) / maximum)
-      ZStack {
-        Rectangle().fill(style.ruleSoft).frame(width: 1)
-        Rectangle()
-          .fill(effect.valueUsd >= 0 ? style.gain : style.loss)
-          .frame(width: max(length, effect.valueUsd == 0 ? 0 : 2), height: proxy.size.height)
-          .offset(x: effect.valueUsd >= 0 ? length / 2 : -length / 2)
-      }
-      .frame(width: proxy.size.width, height: proxy.size.height)
-    }
   }
 }
