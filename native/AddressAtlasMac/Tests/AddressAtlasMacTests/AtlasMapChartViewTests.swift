@@ -223,11 +223,15 @@ final class AtlasMapChartViewTests: XCTestCase {
     let layout = AtlasMapModel.layout(plan: plan, size: full, cornerRadius: 24)
     let elapsed = Date().timeIntervalSince(start)
     XCTAssertEqual(layout.cells.count, 24)
-    #if DEBUG
-      XCTAssertLessThan(elapsed, 1.5)
-    #else
-      XCTAssertLessThan(elapsed, 0.05)
-    #endif
+    // Thread Sanitizer slows a debug build several times over, so the timing
+    // check is skipped there; the cell count above still runs.
+    if !TestSanitizer.isThreadSanitizerActive {
+      #if DEBUG
+        XCTAssertLessThan(elapsed, 1.5)
+      #else
+        XCTAssertLessThan(elapsed, 0.05)
+      #endif
+    }
     print("atlas map layout, 24 cells: \(Int(elapsed * 1000)) ms")
   }
 

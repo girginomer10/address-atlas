@@ -125,11 +125,15 @@ final class PowerDiagramTreemapTests: XCTestCase {
     XCTAssertEqual(result.cells.count, 30)
     // The budget is 50 ms in a release build. Debug builds are an order of
     // magnitude slower, so this only guards against an accidental blow-up.
-    #if DEBUG
-      XCTAssertLessThan(elapsed, 1.5)
-    #else
-      XCTAssertLessThan(elapsed, 0.05)
-    #endif
+    // Thread Sanitizer slows a debug build further (about 2 s on CI), so the
+    // timing check is skipped there; the cell count above still runs.
+    if !TestSanitizer.isThreadSanitizerActive {
+      #if DEBUG
+        XCTAssertLessThan(elapsed, 1.5)
+      #else
+        XCTAssertLessThan(elapsed, 0.05)
+      #endif
+    }
     print(
       "power diagram, 30 items: \(Int(elapsed * 1000)) ms, \(result.evaluations) evaluations, error \(result.maximumError)"
     )
