@@ -25,7 +25,7 @@
   <a href="#coverage">Coverage</a> ·
   <a href="#build-from-source">Build from source</a> ·
   <a href="#privacy">Privacy</a> ·
-  <a href="#how-it-was-built">How it was built</a>
+  <a href="#author">Author</a>
 </p>
 
 <p align="center">
@@ -386,16 +386,11 @@ This creates `.env` with owner-only permissions and replaces the session-secret 
 
 </details>
 
-## How it was built
+## Author
 
-Ömer Girgin designed Address Atlas, directed the work and reviewed every change. The product boundary (read-only, no seed phrases, no signing, local-first), the privacy model and the direction of the six-theme redesign are Ömer's decisions. AI coding agents wrote much of the code, in separate sessions. Each session has a dated entry in [`docs/handoff`](docs/handoff) that says which agent did what; both tools touched both apps at different times.
+Designed and built by **Ömer Girgin** ([@girginomer10](https://github.com/girginomer10)).
 
-| Agent | Main work |
-| --- | --- |
-| OpenAI Codex (GPT-5.6) | The first native Mac app, the sync service, threat modeling of the read-only and encryption boundaries, hardening and adversarial review, and the first App Store Connect and TestFlight setup. |
-| Anthropic Claude (Claude Code) | Review audits and fixes, the start of the iPhone and iPad app and its October polish passes, and the November redesign: the theme engine, the 14 views, the coin widgets, Cosmos unbonding and Solana stake scanning, and the plain-language copy. The November redesign and the November 5 TestFlight build were done with Claude Opus 5.5 directing Claude Sonnet 5.5 agents. |
-
-Neither tool is part of the app. Address Atlas has no AI runtime dependency and does not send portfolio data to an AI provider. A human reviewed every suggested change, and the repository tests (more than 850 XCTest cases in the native packages, plus the legacy service's tests) and CI run on all of it, whichever agent wrote it.
+I used AI coding assistants (OpenAI Codex and Claude Code) for parts of the implementation and for review. The product, the read-only and privacy model, the design direction and the final review of every change are mine. The app has no AI dependency and never sends portfolio data to an AI provider.
 
 ## Contributing
 
