@@ -388,7 +388,7 @@ This creates `.env` with owner-only permissions and replaces the session-secret 
 
 ## How it was built
 
-Ömer Girgin designed Address Atlas and directed the work. He chose the product boundary (read-only, no seed phrases, no signing, local-first), the privacy model, and the direction of the six-theme redesign, and he reviewed every change. AI coding agents wrote much of the code, in separate sessions. Each session has a dated entry in [`docs/handoff`](docs/handoff) that says which agent did what; both tools touched both apps at different times.
+Ömer Girgin designed Address Atlas, directed the work and reviewed every change. The product boundary (read-only, no seed phrases, no signing, local-first), the privacy model and the direction of the six-theme redesign are Ömer's decisions. AI coding agents wrote much of the code, in separate sessions. Each session has a dated entry in [`docs/handoff`](docs/handoff) that says which agent did what; both tools touched both apps at different times.
 
 | Agent | Main work |
 | --- | --- |
