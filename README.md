@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/github-social-preview.png" alt="Address Atlas: a read-only crypto portfolio for Mac and iPhone. 20 networks, 3 exchanges, 6 themes, 14 views. Six maps of one synthetic portfolio, each in a different theme." width="100%">
+  <img src="docs/assets/github-social-preview.png" alt="Address Atlas: a read-only crypto portfolio for Mac and iPhone. 20 networks, 3 exchanges, 6 themes, 14 views. Six views of one synthetic portfolio, each in a different theme: a map in Chain colours, a ring in Candy brutal, a calendar heat map in Heatmap, a flow diagram in Pixel, an atlas map in Acid and bubbles in Riso zine." width="100%">
 </p>
 
 <h1 align="center">Address Atlas</h1>
@@ -29,9 +29,9 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/hero-themes.gif" alt="The Mac portfolio screen cycling through six themes: Chain colours, Candy brutal, Riso zine, Heatmap, Pixel and Acid. Each frame is the same synthetic portfolio: a total value, the view tabs, and a map of BTC, ETH, SOL and other coins sized by value." width="100%">
+  <img src="docs/assets/hero-themes.gif" alt="The Mac portfolio screen cycling through six themes, each showing a different view of the same synthetic portfolio: Map in Chain colours, Ring in Candy brutal, Bubbles in Riso zine, Calendar in Heatmap, Flow in Pixel and Atlas map in Acid. Every frame has the total value, the view tabs and the chart." width="100%">
   <br>
-  <sub>One synthetic portfolio in all six themes. Switch in <b>Settings → Theme</b>.</sub>
+  <sub>One synthetic portfolio in six themes and six different views. Switch in <b>Settings → Theme</b>.</sub>
 </p>
 
 Add public wallet addresses and read-only exchange API keys. Address Atlas reads balances and tokens on 20 networks, plus staking and unbonding on Cosmos chains and Solana and rewards on Cosmos chains. It adds USD prices and shows the result in 14 views and six themes. It never asks for a seed phrase and never needs permission to sign, trade, or withdraw.
@@ -104,9 +104,9 @@ Prefer to build it yourself? See [Build from source](#build-from-source). The fi
 Choose a theme in **Settings → Theme**; the app restyles without a relaunch. Previews are in [`docs/design/themes.html`](docs/design/themes.html).
 
 <p align="center">
-  <img src="docs/assets/iphone-themes.png" alt="Six iPhone screens of one synthetic portfolio, one per theme: Chain colours, Candy brutal, Riso zine, Heatmap, Pixel and Acid. Each shows the total value, a scan warning, the view switcher and the start of a map." width="100%">
+  <img src="docs/assets/iphone-themes.png" alt="Six iPhone screens of one synthetic portfolio, one per theme and each a different view: Map in Chain colours, Ring in Candy brutal, Bubbles in Riso zine, Over time in Heatmap, Flow in Pixel and Atlas map in Acid. Each shows the view switcher, the chart and the start of the holdings list." width="100%">
   <br>
-  <sub>The same six themes on iPhone.</sub>
+  <sub>The same six themes on iPhone, each with a different view.</sub>
 </p>
 
 ### 14 views

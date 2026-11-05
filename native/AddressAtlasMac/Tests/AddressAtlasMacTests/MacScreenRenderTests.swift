@@ -13,7 +13,7 @@ import XCTest
 /// It never touches a real vault or Keychain.
 ///
 /// A default run renders a few screens as a smoke test. With
-/// `ATLAS_WRITE_SCREENSHOTS=1` it writes the review set (about 25 files) to
+/// `ATLAS_WRITE_SCREENSHOTS=1` it writes the review set (about 30 files) to
 /// `docs/design/screenshots/phase3/mac/`; `=all` writes every screen in every
 /// theme. `ATLAS_SCREENSHOT_DIR` overrides the folder and
 /// `ATLAS_SCREENSHOT_NAMES=coin-atom,settings` limits which files are written.
@@ -67,6 +67,14 @@ final class MacScreenRenderTests: XCTestCase {
     "\(base)-\(theme.rawValue).png"
   }
 
+  /// `atlasMap` becomes `atlas-map`, matching the other file names.
+  static func kebab(_ camel: String) -> String {
+    camel.reduce(into: "") { result, character in
+      if character.isUppercase { result += "-" }
+      result += character.lowercased()
+    }
+  }
+
   /// Every screen in every theme.
   static var allShots: [Shot] {
     var shots: [Shot] = []
@@ -92,6 +100,15 @@ final class MacScreenRenderTests: XCTestCase {
             name: fileName(name, theme), theme: theme, screen: screen,
             size: size(for: screen)))
       }
+      // Every other view on Portfolio, grouped by asset (the README images pick from these).
+      for visualization in PortfolioVisualization.allCases
+      where ![.map, .list, .overTime].contains(visualization) {
+        let screen = ScreenKind.portfolio(visualization, .asset)
+        shots.append(
+          Shot(
+            name: fileName("portfolio-\(kebab(visualization.rawValue))", theme), theme: theme,
+            screen: screen, size: size(for: screen)))
+      }
     }
     // The smallest window (900 wide, sidebar included), in the two themes with
     // the widest controls.
@@ -107,7 +124,7 @@ final class MacScreenRenderTests: XCTestCase {
     return shots
   }
 
-  /// About 25 files that show every theme on Portfolio, coin detail, Assets,
+  /// About 30 files that show every theme on Portfolio, coin detail, Assets,
   /// History, Wallets and Settings, and the other views in a few themes.
   static var reviewShots: [Shot] {
     func shot(_ base: String, _ theme: AtlasThemeID, _ screen: ScreenKind) -> Shot {
@@ -123,6 +140,11 @@ final class MacScreenRenderTests: XCTestCase {
     shots.append(shot("portfolio-ring-network", .chainColors, .portfolio(.ring, .network)))
     shots.append(shot("portfolio-flow", .candy, .portfolio(.flow, .asset)))
     shots.append(shot("portfolio-bubbles", .riso, .portfolio(.bubbles, .asset)))
+    // The README banner and hero GIF show one different view per theme.
+    shots.append(shot("portfolio-ring", .candy, .portfolio(.ring, .asset)))
+    shots.append(shot("portfolio-calendar", .heatmap, .portfolio(.calendar, .asset)))
+    shots.append(shot("portfolio-flow", .pixel, .portfolio(.flow, .asset)))
+    shots.append(shot("portfolio-atlas-map", .acid, .portfolio(.atlasMap, .asset)))
     shots.append(shot("coin-eth", .chainColors, .coin("ETH", .ring, .network)))
     shots.append(shot("coin-eth", .heatmap, .coin("ETH", .map, .source)))
     for theme in [AtlasThemeID.chainColors, .candy, .acid] {
