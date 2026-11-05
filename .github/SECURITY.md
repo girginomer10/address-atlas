@@ -2,11 +2,13 @@
 
 ## Supported versions
 
-Address Atlas is currently a source-first preview with no signed and notarized
-public macOS release and no iOS TestFlight or App Store release. Security fixes
-land on `main`. Once public releases begin, only the latest signed release on
-each platform and the currently deployed sync service will receive fixes; older
-builds will not be supported after a replacement is published.
+Address Atlas is a preview. There is no signed and notarized public download and
+no App Store release. TestFlight beta builds for Mac and for iPhone and iPad
+exist (0.2.0, build 175). Security fixes land on `main`. Once public releases begin, only the latest
+release on each platform and the currently deployed sync service will receive
+fixes; older builds will not be supported after a replacement is published. The
+root Next.js service and `server/sync` are legacy code that the apps no longer
+use.
 
 ## Reporting a vulnerability
 

@@ -15,7 +15,7 @@ Address Atlas is deliberately read-only. Changes must not request or store seed 
 
 - `native/AddressAtlasMac` — native SwiftUI macOS product plus the shared core model, scanners, encryption, recovery, export, iCloud client, and state layer.
 - `native/AddressAtlasiOS` — native SwiftUI iOS app (iPhone and iPad) that compiles the shared core and state layer from the Mac package; the generated Xcode project is committed.
-- `src` and `server/sync` — optional passkey-authenticated, client-encrypted sync service.
+- `src` and `server/sync` — legacy passkey-authenticated sync service. The apps no longer use it; it is kept for reference and regression tests.
 - `docs/DEVELOPMENT.md` — architectural invariants, local setup, and the complete verification gate.
 - `docs/OPERATIONS.md` — production sync operations.
 - `docs/RELEASE_CHECKLIST.md` — signed and notarized release contract.
@@ -30,8 +30,8 @@ cd native/AddressAtlasMac
 swift run AddressAtlasMac
 ```
 
-For the optional sync service, install Node.js `>=22.17 <23`, npm
-`>=10.9.2 <11`, and Docker with Compose:
+For the legacy sync service (the apps do not need it), install Node.js
+`>=22.17 <23`, npm `>=10.9.2 <11`, and Docker with Compose:
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
